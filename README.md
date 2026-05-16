@@ -31,7 +31,7 @@ A decision tree on the live page resolves which one fits.
 2. Pick a bundle, fill the project specification, set toggles.
 3. Click **Bind volume & download**.
 4. Unzip at your project root.
-5. Commit the result: `chore: install claude-code-templates v18 (<bundle>)`.
+5. Commit the result: `chore: install claude-code-templates v1.0.0 (<bundle>)`.
 
 The page runs entirely in your browser. No JSON, configuration, or telemetry is transmitted anywhere — the binder fetches template files from this domain and assembles the zip client-side.
 
@@ -55,7 +55,7 @@ claude-code-templates/
 ├── CHANGELOG.md            ← version history
 ├── CONTRIBUTING.md         ← how to PR / what's in scope
 ├── LICENSE                 ← MIT
-├── VERSION                 ← current edition (v18)
+├── VERSION                 ← current edition (v1.0.0)
 ├── COMPARISON.md           ← bundle feature matrix (mirrored in Folio II)
 ├── TOGGLES.md              ← full toggle reference (mirrored in Folio III)
 ├── SETUP.md                ← orchestration prompt Claude follows
@@ -74,9 +74,13 @@ The `.md` files mirror what the live page renders — readable as git-diff fodde
 
 ## Versioning
 
-Ascending integer editions (`v17 → v18 → v19 …`). A breaking change to the toggle / bundle / manifest surface bumps the integer; everything else is implicit minor. See [CHANGELOG.md](CHANGELOG.md) for what shipped when.
+[SemVer](https://semver.org/) from v1.0.0 onward.
 
-`v17` was a conversational mention only and never shipped as a versioned artifact — `v18` is the first file-tracked release.
+- **Major** (`v1 → v2`): breaking change to the toggle catalog, the bundle keys, the manifest schema, or the SETUP.md contract that a previously-rendered project depends on.
+- **Minor** (`v1.0 → v1.1`): new bundle, new toggle, new tool slot, new UI capability — additive, fully backward-compatible.
+- **Patch** (`v1.0.0 → v1.0.1`): bug fixes, copy edits, design polish without behavior change.
+
+Earlier conversational `v17` and `v18` mentions never shipped as standalone artifacts — they're consolidated into the v1.0.0 release. See [CHANGELOG.md](CHANGELOG.md) for what shipped when.
 
 ## Privacy
 
