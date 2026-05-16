@@ -84,8 +84,14 @@ function TogglesFolio() {
       <style>{`
         .tg-controls { display: grid; grid-template-columns: 1fr 280px; gap: 12px; margin-bottom: 18px; }
         @media (max-width: 640px) { .tg-controls { grid-template-columns: 1fr; } }
-        .catalog-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); }
+        .catalog-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); -webkit-overflow-scrolling: touch; }
+        .catalog-wrap::-webkit-scrollbar { height: 10px; }
+        .catalog-wrap::-webkit-scrollbar-track { background: var(--paper-sunken); border-radius: 0 0 var(--r-lg) var(--r-lg); }
+        .catalog-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 5px; border: 2px solid var(--paper-sunken); background-clip: padding-box; }
         .catalog { min-width: 800px; }
+        @media (max-width: 800px) {
+          .catalog-wrap::after { content: "← swipe horizontally to see bundle defaults →"; display: block; padding: 8px 14px; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: center; border-top: 1px solid var(--rule-soft); }
+        }
         .cat-row {
           display: grid;
           grid-template-columns: 1.4fr 1.2fr 56px 56px 56px 56px;

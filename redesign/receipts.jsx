@@ -218,7 +218,7 @@ function ReceiptsFolio() {
           }
           .bar-l { font-size: 10.5px; color: var(--ink); }
           .bar-n { font-size: 9.5px; color: var(--ink-soft); letter-spacing: 0.2px; }
-          .bar-note { font-size: 9.5px; color: var(--ink-faint); letter-spacing: 0.2px; max-width: 90px; }
+          .bar-note { font-size: 9.5px; color: var(--ink-faint); letter-spacing: 0.1px; max-width: 100px; line-height: 1.3; word-break: normal; overflow-wrap: anywhere; }
           .bars-foot { font-size: 12.5px; line-height: 1.55; margin-top: 14px; color: var(--ink-soft); }
           .bars-foot strong { color: var(--accent); }
         `}</style>

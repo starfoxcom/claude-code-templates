@@ -71,7 +71,8 @@ function BindFolio() {
   const [tools, setTools] = bUseState(() =>
     Object.fromEntries(window.TOOL_SLOTS.map(s => [s.id, s.default]))
   );
-  const [otherTools, setOtherTools] = bUseState({}); // for "Other" specify
+  const [otherTools, setOtherTools] = bUseState({}); // for "Other" specify: { slotId: customName }
+  const [otherToolUrls, setOtherToolUrls] = bUseState({}); // optional canonical URL: { slotId: "https://..." }
   const [toggleState, setToggleState] = bUseState(() => bundleDefaults("1-solo-personal"));
   const [activeGroup, setActiveGroup] = bUseState(window.TOGGLE_GROUPS[0].id);
   const stepRefs = bUseRef({});
@@ -149,12 +150,17 @@ function BindFolio() {
           v === "Other" ? `other: ${otherTools[k] || "unspecified"}` : v,
         ])
       ),
+      tool_urls: Object.fromEntries(
+        Object.entries(tools)
+          .filter(([k, v]) => v === "Other" && otherToolUrls[k])
+          .map(([k]) => [k, otherToolUrls[k]])
+      ),
       toggles: Object.fromEntries(
         Object.entries(toggleState).map(([k, v]) => {
           if (mode === "discovery") {
             const t = window.TOGGLE_GROUPS
               .flatMap(g => g.toggles).find(x => x.id === k);
-            if (t && t.d.every(d => d === 0)) return [k, "ask"];
+            if (t && Object.values(t.d).every(d => d === 0)) return [k, "ask"];
           }
           return [k, ["off", "on", "ask"][v]];
         })
@@ -533,9 +539,16 @@ can copy them into your project root during step 2 apply.
                     <option>Other</option>
                   </select>
                   {isCustom && (
-                    <input className="input" style={{ marginTop: 8 }} placeholder="name your tool"
-                      value={otherTools[slot.id] || ""}
-                      onChange={e => setOtherTools(o => ({ ...o, [slot.id]: e.target.value }))} />
+                    <>
+                      <input className="input" style={{ marginTop: 8 }} placeholder="name your tool"
+                        value={otherTools[slot.id] || ""}
+                        onChange={e => setOtherTools(o => ({ ...o, [slot.id]: e.target.value }))} />
+                      <input className="input" style={{ marginTop: 6, fontSize: "12.5px" }}
+                        type="url"
+                        placeholder="canonical URL (optional — saves Claude a web search)"
+                        value={otherToolUrls[slot.id] || ""}
+                        onChange={e => setOtherToolUrls(o => ({ ...o, [slot.id]: e.target.value }))} />
+                    </>
                   )}
                 </div>
                 <div className="tool-info">
@@ -621,7 +634,11 @@ can copy them into your project root during step 2 apply.
             if (pick) return pick;
             // Custom-named tool: synthesize a stub
             if (tools.code_research && tools.code_research !== "none") {
-              return { name: otherTools.code_research || tools.code_research, desc: null, url: null };
+              return {
+                name: otherTools.code_research || tools.code_research,
+                desc: null,
+                url: otherToolUrls.code_research || null,
+              };
             }
             return null;
           })()}
@@ -891,11 +908,11 @@ can copy them into your project root during step 2 apply.
             box-shadow: var(--shadow-card);
           }
           .bind-card.fast {
-            background: var(--surface-ink); color: var(--surface-ink-fg);
-            border: 1px solid var(--surface-ink);
+            background: var(--paper-card); color: var(--ink);
+            border: 1.5px solid var(--accent);
           }
           .bind-card.careful {
-            background: var(--paper-card); border: 1.5px solid var(--ink);
+            background: var(--paper-card); border: 1px solid var(--rule);
           }
           .bind-card-head {
             display: grid;
@@ -913,9 +930,8 @@ can copy them into your project root during step 2 apply.
             font-family: var(--f-mono);
             font-size: 10.5px;
             letter-spacing: 0.8px;
-            color: var(--surface-ink-fg-soft);
+            color: var(--ink-soft);
           }
-          .bind-card.careful .bind-tag { color: var(--ink-soft); }
           .bind-title {
             font-family: var(--f-display);
             font-size: 26px;
@@ -923,19 +939,19 @@ can copy them into your project root during step 2 apply.
             letter-spacing: -0.4px;
             line-height: 1.05;
           }
-          .bind-sub { font-size: 13.5px; opacity: 0.85; line-height: 1.5; max-width: 540px; }
-          .bind-card.fast .bind-sub { color: var(--surface-ink-fg-soft); opacity: 1; }
+          .bind-sub { font-size: 13.5px; opacity: 0.85; line-height: 1.5; max-width: 540px; color: var(--ink-soft); }
           .bind-filename {
             font-size: 11.5px; padding: 8px 12px;
             border-radius: var(--r-sm);
-            background: var(--surface-ink-wash-1);
-            border: 1px dashed var(--surface-ink-rule-hi);
+            background: var(--paper-sunken);
+            border: 1px dashed var(--rule-strong);
             align-self: flex-start;
+            color: var(--ink-soft);
           }
           .bind-preview-label {
             margin-top: 4px;
+            color: var(--ink-soft);
           }
-          .bind-card.fast .bind-preview-label { color: var(--surface-ink-fg-soft); }
           .bind-preview {
             margin: 0;
             padding: 14px 16px;
@@ -946,22 +962,14 @@ can copy them into your project root during step 2 apply.
             white-space: pre;
             tab-size: 2;
           }
-          .bind-preview.fast {
-            background: var(--surface-ink-wash-1);
-            border: 1px solid var(--surface-ink-rule);
-            color: var(--surface-ink-fg);
-          }
+          .bind-preview.fast,
           .bind-preview.careful {
-            background: var(--paper);
+            background: var(--paper-sunken);
             border: 1px solid var(--rule);
             color: var(--ink);
           }
           .bind-preview::-webkit-scrollbar { width: 10px; height: 10px; }
-          .bind-preview.fast::-webkit-scrollbar-thumb {
-            background: var(--surface-ink-rule); border-radius: 5px;
-            border: 2px solid transparent; background-clip: padding-box;
-          }
-          .bind-preview.careful::-webkit-scrollbar-thumb {
+          .bind-preview::-webkit-scrollbar-thumb {
             background: var(--rule-strong); border-radius: 5px;
             border: 2px solid transparent; background-clip: padding-box;
           }

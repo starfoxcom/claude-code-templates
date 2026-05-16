@@ -287,6 +287,10 @@ function HowFolio() {
           .fe .fe-path { font-family: var(--f-mono); font-size: 12.5px; color: var(--ink); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
           .fe.dir .fe-path { color: var(--ink-strong); font-weight: 500; }
           .fe .fe-desc { font-size: 12px; color: var(--ink-soft); line-height: 1.5; }
+          @media (max-width: 720px) {
+            .fe { grid-template-columns: 24px minmax(0, 1fr); row-gap: 2px; padding: 8px 14px; }
+            .fe .fe-desc { grid-column: 2 / -1; font-size: 11px; padding-top: 2px; }
+          }
           .filelist-foot { font-size: 12.5px; line-height: 1.6; margin-top: 12px; padding: 12px 16px; background: var(--paper-tint); border: 1px solid var(--accent-soft); border-radius: var(--r-md); }
           .filelist-foot em { font-style: italic; color: var(--accent); }
         `}</style>
