@@ -332,10 +332,14 @@ a:hover { text-decoration: underline; }
   border-radius: var(--r-sm);
   display: inline-flex; align-items: center; justify-content: center;
 }
-.mb-brand { display: flex; align-items: baseline; gap: 6px; font-family: var(--f-display); font-size: 14px; font-weight: 600; min-width: 0; }
+.mb-brand { display: flex; align-items: baseline; gap: 6px; font-family: var(--f-display); font-size: 14px; font-weight: 600; min-width: 0; flex: 1; }
 .mb-brand .brand-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mb-rev { font-size: 10px; color: var(--surface-ink-fg-muted); letter-spacing: 0.4px; }
 .mb-now { margin-left: auto; font-size: 11px; color: var(--surface-ink-fg-soft); letter-spacing: 0.4px; }
+@media (max-width: 560px) {
+  .mobile-bar { flex-wrap: wrap; align-items: center; row-gap: 4px; }
+  .mb-now { flex-basis: 100%; margin-left: 46px; font-size: 10.5px; opacity: 0.85; }
+}
 
 .sb-scrim {
   display: none;
@@ -375,11 +379,15 @@ a:hover { text-decoration: underline; }
   margin: 0 auto;
   padding: 36px 32px 120px;
   width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 @media (max-width: 900px) {
   .page { padding: 24px 16px 80px; }
 }
+
+.step { min-width: 0; }
 
 /* ───────────────────────────────────────────────────────────────────────
    FOLIO HEADERS

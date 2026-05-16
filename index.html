@@ -332,10 +332,14 @@ a:hover { text-decoration: underline; }
   border-radius: var(--r-sm);
   display: inline-flex; align-items: center; justify-content: center;
 }
-.mb-brand { display: flex; align-items: baseline; gap: 6px; font-family: var(--f-display); font-size: 14px; font-weight: 600; min-width: 0; }
+.mb-brand { display: flex; align-items: baseline; gap: 6px; font-family: var(--f-display); font-size: 14px; font-weight: 600; min-width: 0; flex: 1; }
 .mb-brand .brand-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mb-rev { font-size: 10px; color: var(--surface-ink-fg-muted); letter-spacing: 0.4px; }
 .mb-now { margin-left: auto; font-size: 11px; color: var(--surface-ink-fg-soft); letter-spacing: 0.4px; }
+@media (max-width: 560px) {
+  .mobile-bar { flex-wrap: wrap; align-items: center; row-gap: 4px; }
+  .mb-now { flex-basis: 100%; margin-left: 46px; font-size: 10.5px; opacity: 0.85; }
+}
 
 .sb-scrim {
   display: none;
@@ -375,11 +379,15 @@ a:hover { text-decoration: underline; }
   margin: 0 auto;
   padding: 36px 32px 120px;
   width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 @media (max-width: 900px) {
   .page { padding: 24px 16px 80px; }
 }
+
+.step { min-width: 0; }
 
 /* ───────────────────────────────────────────────────────────────────────
    FOLIO HEADERS
@@ -1965,8 +1973,8 @@ can copy them into your project root during step 2 apply.
                       value={project.license_holder}
                       onChange={e => setProject(p => ({ ...p, license_holder: e.target.value }))} />
                   </Field>
-                  <Field label="Timezone (IANA)" full
-                    hint="For session-close timestamps. e.g. America/Mazatlan · Europe/Madrid · Asia/Tokyo.">
+                  <Field label="Timezone (IANA name)" full
+                    hint={<>For session-close timestamps. IANA is the canonical world-clock identifier list (e.g. <code className="mono">America/Mazatlan</code>, <code className="mono">Europe/Madrid</code>, <code className="mono">Asia/Tokyo</code>). Full list: <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noreferrer" style={{color: "var(--accent)"}}>tz database time zones ↗</a>.</>}>
                     <input className="input" placeholder="America/Mazatlan"
                       value={project.timezone}
                       onChange={e => setProject(p => ({ ...p, timezone: e.target.value }))} />
@@ -2052,8 +2060,8 @@ can copy them into your project root during step 2 apply.
                   value={project.conversation_language}
                   onChange={e => setProject(p => ({ ...p, conversation_language: e.target.value }))} />
               </Field>
-              <Field label="Timezone (IANA)"
-                hint="For session-close timestamps. Leave blank and Claude will ask during the audit.">
+              <Field label="Timezone (IANA name)"
+                hint={<>For session-close timestamps. IANA = canonical world-clock list (e.g. <code className="mono">America/Mazatlan</code>). Full list: <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noreferrer" style={{color: "var(--accent)"}}>tz database time zones ↗</a>. Leave blank and Claude will ask during the audit.</>}>
                 <input className="input" placeholder="America/Mazatlan"
                   value={project.timezone}
                   onChange={e => setProject(p => ({ ...p, timezone: e.target.value }))} />
@@ -2454,11 +2462,13 @@ can copy them into your project root during step 2 apply.
             color: var(--ink-soft);
             border: 1px solid var(--rule);
           }
+          .bind-paths { min-width: 0; }
           .bind-card {
             border-radius: var(--r-lg);
             padding: 22px 22px 22px;
             display: flex; flex-direction: column; gap: 12px;
             box-shadow: var(--shadow-card);
+            min-width: 0;
           }
           .bind-card.fast {
             background: var(--paper-card); color: var(--ink);
@@ -3808,10 +3818,12 @@ function CompareFolio() {
                 <div className="cmp-cell cmp-rowlabel mono">{row[0]}</div>
                 {row.slice(1).map((c, j) => {
                   const colId = cols[j].id;
+                  const colLabel = cols[j].label;
                   const empty = c === "—";
                   return (
                     <div key={j}
-                      className={"cmp-cell" + (activeCol === colId ? " on" : "") + (empty ? " empty" : "")}>
+                      className={"cmp-cell" + (activeCol === colId ? " on" : "") + (empty ? " empty" : "")}
+                      data-bundle={colLabel}>
                       {c}
                     </div>
                   );
@@ -3821,14 +3833,8 @@ function CompareFolio() {
           </div>
         </div>
         <style>{`
-          .cmp-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); -webkit-overflow-scrolling: touch; }
-          .cmp-wrap::-webkit-scrollbar { height: 10px; }
-          .cmp-wrap::-webkit-scrollbar-track { background: var(--paper-sunken); border-radius: 0 0 var(--r-lg) var(--r-lg); }
-          .cmp-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 5px; border: 2px solid var(--paper-sunken); background-clip: padding-box; }
-          .cmp { min-width: 800px; }
-          @media (max-width: 800px) {
-            .cmp-wrap::after { content: "← swipe horizontally to compare →"; display: block; padding: 8px 14px; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: center; border-top: 1px solid var(--rule-soft); }
-          }
+          .cmp-wrap { border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); overflow: hidden; }
+          .cmp { min-width: 0; }
           .cmp-row { display: grid; grid-template-columns: 220px repeat(4, 1fr); border-bottom: 1px solid var(--rule-soft); }
           .cmp-row:last-child { border-bottom: none; }
           .cmp-cell { padding: 12px 14px; font-size: 13px; border-right: 1px solid var(--rule-soft); transition: background var(--dur) var(--ease); }
@@ -3842,6 +3848,32 @@ function CompareFolio() {
           .cch-l { font-family: var(--f-display); font-size: 15px; font-weight: 500; margin-top: 2px; letter-spacing: -0.2px; }
           .cmp-colhead { cursor: pointer; }
           .cmp-colhead.on { background: var(--accent-soft); color: var(--accent); }
+          @media (max-width: 640px) {
+            .cmp-head { display: none; }
+            .cmp-row { grid-template-columns: 1fr; padding: 12px 16px 14px; border-bottom: 1px solid var(--rule); }
+            .cmp-cell { border-right: none; padding: 6px 0; }
+            .cmp-rowlabel {
+              background: transparent;
+              font-family: var(--f-display);
+              font-size: 15px;
+              font-weight: 500;
+              color: var(--ink);
+              padding: 0 0 8px;
+              border-bottom: 1px dashed var(--rule);
+              margin-bottom: 4px;
+            }
+            .cmp-row .cmp-cell:not(.cmp-rowlabel)::before {
+              content: attr(data-bundle);
+              display: block;
+              font-family: var(--f-mono);
+              font-size: 9.5px;
+              color: var(--ink-faint);
+              letter-spacing: 0.4px;
+              text-transform: uppercase;
+              margin-bottom: 2px;
+            }
+            .cmp-cell.empty { opacity: 0.65; }
+          }
         `}</style>
       </section>
       {/* ── Decision tree ──────────────────────────────────────────── */}
@@ -4036,14 +4068,8 @@ function TogglesFolio() {
       <style>{`
         .tg-controls { display: grid; grid-template-columns: 1fr 280px; gap: 12px; margin-bottom: 18px; }
         @media (max-width: 640px) { .tg-controls { grid-template-columns: 1fr; } }
-        .catalog-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); -webkit-overflow-scrolling: touch; }
-        .catalog-wrap::-webkit-scrollbar { height: 10px; }
-        .catalog-wrap::-webkit-scrollbar-track { background: var(--paper-sunken); border-radius: 0 0 var(--r-lg) var(--r-lg); }
-        .catalog-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 5px; border: 2px solid var(--paper-sunken); background-clip: padding-box; }
-        .catalog { min-width: 800px; }
-        @media (max-width: 800px) {
-          .catalog-wrap::after { content: "← swipe horizontally to see bundle defaults →"; display: block; padding: 8px 14px; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: center; border-top: 1px solid var(--rule-soft); }
-        }
+        .catalog-wrap { border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); overflow: hidden; }
+        .catalog { min-width: 0; }
         .cat-row {
           display: grid;
           grid-template-columns: 1.4fr 1.2fr 56px 56px 56px 56px;
@@ -4058,6 +4084,48 @@ function TogglesFolio() {
         .cat-group { font-size: 10px; color: var(--ink-faint); margin-top: 4px; letter-spacing: 0.4px; text-transform: uppercase; }
         .cat-controls { font-size: 11px; color: var(--ink-soft); line-height: 1.45; }
         .cat-empty { padding: 28px; text-align: center; font-size: 12px; }
+        @media (max-width: 640px) {
+          .cat-head { display: none; }
+          .cat-row {
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px; padding: 14px 16px;
+          }
+          .cat-toggle { grid-column: 1 / -1; }
+          .cat-controls {
+            grid-column: 1 / -1;
+            padding: 6px 8px;
+            background: var(--paper-sunken);
+            border: 1px solid var(--rule-soft);
+            border-radius: var(--r-sm);
+            margin: 4px 0 0;
+          }
+          .cat-row > div:nth-child(3),
+          .cat-row > div:nth-child(4),
+          .cat-row > div:nth-child(5),
+          .cat-row > div:nth-child(6) {
+            padding-top: 8px;
+            border-top: 1px dashed var(--rule-soft);
+            margin-top: 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+          }
+          .cat-row > div:nth-child(3)::before,
+          .cat-row > div:nth-child(4)::before,
+          .cat-row > div:nth-child(5)::before,
+          .cat-row > div:nth-child(6)::before {
+            display: block;
+            font-family: var(--f-mono);
+            font-size: 9px;
+            color: var(--ink-faint);
+            letter-spacing: 0.4px;
+          }
+          .cat-row > div:nth-child(3)::before { content: "SOLO"; }
+          .cat-row > div:nth-child(4)::before { content: "OSS"; }
+          .cat-row > div:nth-child(5)::before { content: "CLI·SOLO"; }
+          .cat-row > div:nth-child(6)::before { content: "CLI·TEAM"; }
+        }
       `}</style>
     </>
   );
