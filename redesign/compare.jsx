@@ -55,10 +55,12 @@ function CompareFolio() {
                 <div className="cmp-cell cmp-rowlabel mono">{row[0]}</div>
                 {row.slice(1).map((c, j) => {
                   const colId = cols[j].id;
+                  const colLabel = cols[j].label;
                   const empty = c === "—";
                   return (
                     <div key={j}
-                      className={"cmp-cell" + (activeCol === colId ? " on" : "") + (empty ? " empty" : "")}>
+                      className={"cmp-cell" + (activeCol === colId ? " on" : "") + (empty ? " empty" : "")}
+                      data-bundle={colLabel}>
                       {c}
                     </div>
                   );
@@ -68,14 +70,8 @@ function CompareFolio() {
           </div>
         </div>
         <style>{`
-          .cmp-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); -webkit-overflow-scrolling: touch; }
-          .cmp-wrap::-webkit-scrollbar { height: 10px; }
-          .cmp-wrap::-webkit-scrollbar-track { background: var(--paper-sunken); border-radius: 0 0 var(--r-lg) var(--r-lg); }
-          .cmp-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 5px; border: 2px solid var(--paper-sunken); background-clip: padding-box; }
-          .cmp { min-width: 800px; }
-          @media (max-width: 800px) {
-            .cmp-wrap::after { content: "← swipe horizontally to compare →"; display: block; padding: 8px 14px; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: center; border-top: 1px solid var(--rule-soft); }
-          }
+          .cmp-wrap { border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); overflow: hidden; }
+          .cmp { min-width: 0; }
           .cmp-row { display: grid; grid-template-columns: 220px repeat(4, 1fr); border-bottom: 1px solid var(--rule-soft); }
           .cmp-row:last-child { border-bottom: none; }
           .cmp-cell { padding: 12px 14px; font-size: 13px; border-right: 1px solid var(--rule-soft); transition: background var(--dur) var(--ease); }
@@ -88,6 +84,32 @@ function CompareFolio() {
           .cch-n { font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.5px; }
           .cch-l { font-family: var(--f-display); font-size: 15px; font-weight: 500; margin-top: 2px; letter-spacing: -0.2px; }
           .cmp-colhead { cursor: pointer; }
+          @media (max-width: 640px) {
+            .cmp-head { display: none; }
+            .cmp-row { grid-template-columns: 1fr; padding: 12px 16px 14px; border-bottom: 1px solid var(--rule); }
+            .cmp-cell { border-right: none; padding: 6px 0; }
+            .cmp-rowlabel {
+              background: transparent;
+              font-family: var(--f-display);
+              font-size: 15px;
+              font-weight: 500;
+              color: var(--ink);
+              padding: 0 0 8px;
+              border-bottom: 1px dashed var(--rule);
+              margin-bottom: 4px;
+            }
+            .cmp-row .cmp-cell:not(.cmp-rowlabel)::before {
+              content: attr(data-bundle);
+              display: block;
+              font-family: var(--f-mono);
+              font-size: 9.5px;
+              color: var(--ink-faint);
+              letter-spacing: 0.4px;
+              text-transform: uppercase;
+              margin-bottom: 2px;
+            }
+            .cmp-cell.empty { opacity: 0.65; }
+          }
           .cmp-colhead.on { background: var(--accent-soft); color: var(--accent); }
         `}</style>
       </section>

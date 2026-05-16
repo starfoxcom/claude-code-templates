@@ -84,14 +84,8 @@ function TogglesFolio() {
       <style>{`
         .tg-controls { display: grid; grid-template-columns: 1fr 280px; gap: 12px; margin-bottom: 18px; }
         @media (max-width: 640px) { .tg-controls { grid-template-columns: 1fr; } }
-        .catalog-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); -webkit-overflow-scrolling: touch; }
-        .catalog-wrap::-webkit-scrollbar { height: 10px; }
-        .catalog-wrap::-webkit-scrollbar-track { background: var(--paper-sunken); border-radius: 0 0 var(--r-lg) var(--r-lg); }
-        .catalog-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 5px; border: 2px solid var(--paper-sunken); background-clip: padding-box; }
-        .catalog { min-width: 800px; }
-        @media (max-width: 800px) {
-          .catalog-wrap::after { content: "← swipe horizontally to see bundle defaults →"; display: block; padding: 8px 14px; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: center; border-top: 1px solid var(--rule-soft); }
-        }
+        .catalog-wrap { border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); overflow: hidden; }
+        .catalog { min-width: 0; }
         .cat-row {
           display: grid;
           grid-template-columns: 1.4fr 1.2fr 56px 56px 56px 56px;
@@ -106,6 +100,48 @@ function TogglesFolio() {
         .cat-group { font-size: 10px; color: var(--ink-faint); margin-top: 4px; letter-spacing: 0.4px; text-transform: uppercase; }
         .cat-controls { font-size: 11px; color: var(--ink-soft); line-height: 1.45; }
         .cat-empty { padding: 28px; text-align: center; font-size: 12px; }
+        @media (max-width: 640px) {
+          .cat-head { display: none; }
+          .cat-row {
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px; padding: 14px 16px;
+          }
+          .cat-toggle { grid-column: 1 / -1; }
+          .cat-controls {
+            grid-column: 1 / -1;
+            padding: 6px 8px;
+            background: var(--paper-sunken);
+            border: 1px solid var(--rule-soft);
+            border-radius: var(--r-sm);
+            margin: 4px 0 0;
+          }
+          .cat-row > div:nth-child(3),
+          .cat-row > div:nth-child(4),
+          .cat-row > div:nth-child(5),
+          .cat-row > div:nth-child(6) {
+            padding-top: 8px;
+            border-top: 1px dashed var(--rule-soft);
+            margin-top: 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+          }
+          .cat-row > div:nth-child(3)::before,
+          .cat-row > div:nth-child(4)::before,
+          .cat-row > div:nth-child(5)::before,
+          .cat-row > div:nth-child(6)::before {
+            display: block;
+            font-family: var(--f-mono);
+            font-size: 9px;
+            color: var(--ink-faint);
+            letter-spacing: 0.4px;
+          }
+          .cat-row > div:nth-child(3)::before { content: "SOLO"; }
+          .cat-row > div:nth-child(4)::before { content: "OSS"; }
+          .cat-row > div:nth-child(5)::before { content: "CLI·SOLO"; }
+          .cat-row > div:nth-child(6)::before { content: "CLI·TEAM"; }
+        }
       `}</style>
     </>
   );
