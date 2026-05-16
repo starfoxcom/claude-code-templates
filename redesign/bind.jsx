@@ -412,8 +412,8 @@ can copy them into your project root during step 2 apply.
                       value={project.license_holder}
                       onChange={e => setProject(p => ({ ...p, license_holder: e.target.value }))} />
                   </Field>
-                  <Field label="Timezone (IANA)" full
-                    hint="For session-close timestamps. e.g. America/Mazatlan · Europe/Madrid · Asia/Tokyo.">
+                  <Field label="Timezone (IANA name)" full
+                    hint={<>For session-close timestamps. IANA is the canonical world-clock identifier list (e.g. <code className="mono">America/Mazatlan</code>, <code className="mono">Europe/Madrid</code>, <code className="mono">Asia/Tokyo</code>). Full list: <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noreferrer" style={{color: "var(--accent)"}}>tz database time zones ↗</a>.</>}>
                     <input className="input" placeholder="America/Mazatlan"
                       value={project.timezone}
                       onChange={e => setProject(p => ({ ...p, timezone: e.target.value }))} />
@@ -499,8 +499,8 @@ can copy them into your project root during step 2 apply.
                   value={project.conversation_language}
                   onChange={e => setProject(p => ({ ...p, conversation_language: e.target.value }))} />
               </Field>
-              <Field label="Timezone (IANA)"
-                hint="For session-close timestamps. Leave blank and Claude will ask during the audit.">
+              <Field label="Timezone (IANA name)"
+                hint={<>For session-close timestamps. IANA = canonical world-clock list (e.g. <code className="mono">America/Mazatlan</code>). Full list: <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noreferrer" style={{color: "var(--accent)"}}>tz database time zones ↗</a>. Leave blank and Claude will ask during the audit.</>}>
                 <input className="input" placeholder="America/Mazatlan"
                   value={project.timezone}
                   onChange={e => setProject(p => ({ ...p, timezone: e.target.value }))} />
@@ -901,11 +901,13 @@ can copy them into your project root during step 2 apply.
             color: var(--ink-soft);
             border: 1px solid var(--rule);
           }
+          .bind-paths { min-width: 0; }
           .bind-card {
             border-radius: var(--r-lg);
             padding: 22px 22px 22px;
             display: flex; flex-direction: column; gap: 12px;
             box-shadow: var(--shadow-card);
+            min-width: 0;
           }
           .bind-card.fast {
             background: var(--paper-card); color: var(--ink);
