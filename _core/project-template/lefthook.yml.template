@@ -1,0 +1,52 @@
+# Lefthook — fast, language-agnostic git hooks runner
+# https://github.com/evilmartians/lefthook
+# Install: brew install lefthook  (or npm/cargo/go/scoop equivalents)
+# Activate in this repo: lefthook install
+#
+# This template is generic. Tighten the commands to your project's actual lint/test/format.
+# Stack-specific commands get auto-suggested by the setup form's stack-commands chip selector;
+# what you see here is the structural skeleton.
+
+pre-commit:
+  parallel: true
+  commands:
+    lint-staged:
+      glob: "*.{ext-from-your-stack}"   # e.g., "*.{ts,tsx,js,jsx}" or "*.py" or "*.rs"
+      run: "{{LINT_COMMAND}} {staged_files}"
+      # Examples:
+      #   npm:       npx eslint --fix {staged_files}
+      #   python:    ruff check --fix {staged_files}
+      #   rust:      cargo fmt -- {staged_files}
+      #   flutter:   dart format {staged_files}
+    typecheck:
+      run: "{{TYPECHECK_COMMAND}}"
+      # Examples:
+      #   ts:        npx tsc --noEmit
+      #   python:    mypy .
+      #   rust:      cargo check --all-targets
+
+commit-msg:
+  commands:
+    conventional-commits:
+      # Enforce conventional commit format: type(scope): subject
+      # Allowed types align with .claude/rules/git.md (feat / fix / refactor / perf / test / docs / chore / style)
+      run: |
+        grep -qE '^(feat|fix|refactor|perf|test|docs|chore|style|data)(\([a-z0-9_\-]+\))?: .{1,72}$' {1} || {
+          echo "❌ Commit message must follow: <type>(<scope>): <imperative description>"
+          echo "   Types: feat, fix, refactor, perf, test, docs, chore, style, data"
+          echo "   See .claude/rules/git.md for details."
+          exit 1
+        }
+
+pre-push:
+  commands:
+    tests:
+      run: "{{TEST_COMMAND}}"
+      # Examples:
+      #   npm:       npm test
+      #   python:    pytest
+      #   rust:      cargo test
+      # Comment out if test suite is too slow for pre-push; rely on CI instead.
+
+# Add more hooks as needed. Lefthook supports: pre-commit, prepare-commit-msg,
+# commit-msg, post-commit, pre-rebase, pre-push, post-checkout, post-merge.

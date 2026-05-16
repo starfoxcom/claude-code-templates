@@ -1,0 +1,127 @@
+# Routine PR review — Sonnet 4.6, binary 🔴/🟢 verdict
+# Renamed from .yml.template → .yml after SETUP fills placeholders.
+# Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
+
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [{{DEFAULT_BRANCH}}]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.claude/**'
+      - '.github/workflows/claude*.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  triage:
+    name: Diff triage
+    runs-on: ubuntu-latest
+    outputs:
+      reviewable: ${{ steps.classify.outputs.reviewable }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Classify diff
+        id: classify
+        run: |
+          BASE=${{ github.event.pull_request.base.sha }}
+          HEAD=${{ github.event.pull_request.head.sha }}
+          CHANGED=$(git diff --name-only $BASE..$HEAD)
+          # Reviewable extensions — customize for your stack
+          if echo "$CHANGED" | grep -qE '\.(py|ts|tsx|js|jsx|rs|go|java|cpp|h|hpp|c|gd|dart|rb|kt|swift|cs)$'; then
+            echo "reviewable=true" >> $GITHUB_OUTPUT
+          else
+            echo "reviewable=false" >> $GITHUB_OUTPUT
+          fi
+
+  claude-review:
+    name: Claude review
+    needs: triage
+    if: needs.triage.outputs.reviewable == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pre-screen
+        id: prescreen
+        run: |
+          BASE=${{ github.event.pull_request.base.sha }}
+          HEAD=${{ github.event.pull_request.head.sha }}
+          mkdir -p /tmp
+          echo "# Pre-screen report for PR #${{ github.event.pull_request.number }}" > /tmp/review_context.md
+          echo "" >> /tmp/review_context.md
+          echo "## Files changed" >> /tmp/review_context.md
+          git diff --name-only $BASE..$HEAD >> /tmp/review_context.md
+          # Add project-specific mechanical checks here (e.g., raw thread usage,
+          # hardcoded strings in wrong language, missing doc class XML, etc.)
+
+      - name: Claude routine review
+        uses: anthropics/claude-code-action@beta
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          model: claude-sonnet-4-6
+          allowed_tools: "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(cat /tmp/review_context.md)"
+          direct_prompt: |
+            You are reviewing a PR for {{PROJECT_NAME}}.
+
+            Read /tmp/review_context.md for the pre-screen output.
+            Read the PR diff: `gh pr diff ${{ github.event.pull_request.number }}`.
+
+            Post ONE comment titled "## Code Review — {{PROJECT_NAME}}" ending with EXACTLY one of:
+              - "🟢 LGTM" — when zero real findings exist (zero caveats, zero "non-blocking", zero "minor nits").
+              - "🔴 Blocking — must fix" — when ANY real finding exists.
+
+            BINARY VERDICT RULE:
+            - 🟢 only when fully clean.
+            - 🔴 when ANY real finding exists, regardless of framing.
+            - DROP style preferences, micro-optimizations, "consider extracting" — never label them non-blocking.
+
+            <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+            UNCERTAINTY ESCALATION (independent of verdict):
+            If the diff touches the deep-review trigger surface (parsing/codec/serialization,
+            threading/locking, scheduler/DAG/graph algorithms, new public API/interface,
+            save-load format, schema migrations, auth/authz/crypto, trust-boundary crossings),
+            apply the `needs-deep-review` label AND post a structured follow-up comment:
+            `@claude review this PR — depth pass on <focus area>`
+            with: one-line framing, one-paragraph context, numbered priority-ranked invariants
+            with file:line, explicit out-of-scope list.
+            <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+
+  evaluate-outcome:
+    name: Evaluate review outcome
+    needs: claude-review
+    if: always() && needs.triage.outputs.reviewable == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read latest review verdict
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          # Find the latest "## Code Review — {{PROJECT_NAME}}" comment posted in last 15 min
+          COMMENT=$(gh api repos/${{ github.repository }}/issues/$PR/comments \
+            --jq '[.[] | select(.body | startswith("## Code Review — {{PROJECT_NAME}}"))] | last | .body')
+          if [ -z "$COMMENT" ]; then
+            echo "::error::No review comment found — Claude failed to post."
+            exit 1
+          fi
+          if echo "$COMMENT" | grep -q "🔴"; then
+            echo "::error::Review verdict: 🔴 Blocking — must fix."
+            exit 1
+          fi
+          if echo "$COMMENT" | grep -q "🟢"; then
+            echo "Review verdict: 🟢 LGTM."
+            exit 0
+          fi
+          echo "::error::Review comment has no clear 🔴/🟢 verdict line."
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

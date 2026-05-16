@@ -1,0 +1,152 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+<!-- TOGGLE:tokensave_entry_point START -->
+---
+
+## 🚨 BEFORE ANY CODE RESEARCH — read this first
+
+**The first tool for any "where is X / what calls Y / find usages of Z / locate the implementation of W" task MUST be `tokensave_search` or `tokensave_context`. NOT `Grep`. NOT `Glob`. NOT raw `grep`/`rg` in Bash.**
+
+This rule is enforced by a hook at `~/.claude/hooks/tokensave-first.py` (installed **globally**, never project-local — see `SETUP.md` § Phase 7a for the procedure and the tokensave template-inheritance bug that makes per-project installation unsafe) — Grep/Glob/raw-grep calls are **blocked** when a tokensave index is detected in the project. Use the `/find` skill (`.claude/skills/find.md`) as the canonical entry point.
+
+Fallback to Grep/Glob is allowed ONLY when:
+1. You've tried tokensave with 2+ keyword variants and got nothing usable
+2. You're searching non-code content (markdown, binaries, `.gitignored`)
+3. `tokensave_status` returns `unavailable` for the scope you need
+
+Bypass for Bash `grep`/`rg`: include `# TOKENSAVE_BYPASS: <reason>` in the command. For Grep/Glob tools: briefly explain in chat and re-issue.
+
+The session-close skill ends each session by reporting your tokensave-adherence ratio — that metric is the score the discipline is graded on.
+<!-- TOGGLE:tokensave_entry_point END -->
+
+---
+
+## CONVERSATION LANGUAGE
+
+Always respond in **{{CONVERSATION_LANGUAGE}}**.
+
+---
+
+## PROJECT CONTEXT
+
+**{{PROJECT_NAME}}** — {{ONE_LINE_DESCRIPTION}}
+
+- **Stack:** {{LANGUAGE_AND_FRAMEWORK}}
+- **Repo:** {{REPO_URL}}
+- **Production branch:** `{{MAIN_BRANCH}}`
+- **Default (dev) branch:** `{{DEFAULT_BRANCH}}`
+- **Branching model:** {{GITFLOW_OR_TRUNK}}
+
+Before starting any task, skim the project-level `ROADMAP.md` (if it exists) and any sub-module ROADMAPs relevant to the work.
+
+---
+
+## CODE LANGUAGE
+
+All code in the repo is in **{{CODE_LANGUAGE}}**: comments, variable/class/function names, intermediate UI strings, manifest descriptions, ROADMAPs, and technical text in code files.
+
+**Exceptions** (if any) must be enumerated here. By default, user-visible strings go through a localization layer, not hardcoded.
+
+---
+
+<!-- TOGGLE:tokensave_entry_point START -->
+## TOKENSAVE ENTRY POINT
+
+Code-research entry point is **tokensave MCP**, not Explore/Grep/Glob first. Default exploration:
+
+- `tokensave_context` — natural-language query, returns symbols + relationships
+- `tokensave_search` — symbol-by-name
+- `tokensave_callers` / `tokensave_callees` / `tokensave_impact` — call graph traversal
+- `tokensave_commit_context` / `tokensave_pr_context` — before writing a commit message or PR body
+
+The full rule (and the rationale) lives in `~/.claude/CLAUDE.md`. If `tokensave_status` reports unavailable, fall back to Grep/Read.
+
+---
+<!-- TOGGLE:tokensave_entry_point END -->
+
+## SESSION START
+
+Every work session begins with this ritual. On prompt like "session start" or "ready to work":
+
+1. **Project status** — current milestone / focus, open epics, blockers (read `ROADMAP.md` if it exists).
+2. **Git status** — current branch + commits ahead/behind, existing branches, what's active. If Gitflow, create a branch if applicable:
+   - Feature work → `feature/<short-name>`
+   - Hotfix to `{{MAIN_BRANCH}}` → `hotfix/<short-name>`
+   - Release prep → `release/<version>`
+3. **Modules touched this session** — which directories the planned work mutates. Flag prerequisite branches.
+4. **Session steps** — ordered list of work items, with dependencies called out.
+
+Do not start code work until I approve or correct the plan.
+
+---
+
+## SESSION CLOSE
+
+At the end of each session where project work was done, or when the conversation is near saturation:
+
+<!-- TOGGLE:definition_of_done_verification START -->
+### Definition-of-done verification (mandatory before any "feature complete" claim)
+
+Before claiming a feature / milestone / task complete, verify the DoD against observable behavior — not just CI green. For each DoD bullet:
+
+- ✅ **verified** — reproduced in running app, with commit SHA + scene/route/page + (where applicable) screenshot or log evidence
+- ⚠️ **partial** — works in some scenarios, not others — list the gaps
+- ❌ **unmet** — does not work — open a follow-up branch, do not mark complete
+
+The "compiles + CI green" bar is **not** the feature-complete bar. The bar is **observable behavior in a running app**. If a DoD bullet has become out-of-scope mid-feature, revise the DoD on its own commit before claiming complete — never silently rationalize a gap as deferred.
+<!-- TOGGLE:definition_of_done_verification END -->
+
+### Commit / PR — decision tree
+
+Evaluate in order — apply the first row that matches:
+
+| Condition | Action |
+|---|---|
+| No code changes (context refresh only) | Generate context file + commit + PR + paths-ignore fast-path auto-merge + branch cleanup. |
+| Changes exist, branch objective **incomplete** | Commit with work done. No PR. |
+| Changes exist, branch objective **complete** | Commit + PR to `{{DEFAULT_BRANCH}}` + standard polling-loop merge + branch cleanup. |
+| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEFAULT_BRANCH}}` is managed from GitHub). |
+| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEFAULT_BRANCH}}`. |
+
+Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — never `&&`-chain post-merge cleanup steps.
+
+<!-- TOGGLE:context_refresh_files START -->
+### Update context
+
+Generate or refresh `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` at the repo root. **Current state only** — decisions and implementation details not derivable from the code. Conventions and rules already live in `.claude/rules/` — do not duplicate.
+
+**Uniqueness rule:** exactly **one** context file in the root at all times. When creating a new one, delete the previous with `git rm`. Never leave two context files coexisting.
+<!-- TOGGLE:context_refresh_files END -->
+
+### Update derived docs
+
+If applicable, update `CLAUDE.md`, `README.md`, and the touched module's `ROADMAP.md` with relevant changes. Clearly indicate which sections changed.
+
+---
+
+## Skills
+
+Invokable via `/<skill-name>`:
+
+- `/session-start` — runs the session-start ritual end-to-end.
+- `/session-close` — runs the session-close ritual end-to-end (DoD verification → commit → PR → polling → merge → cleanup).
+
+See `.claude/skills/` for definitions.
+
+---
+
+<!-- TOGGLE:lazy_rules_folder START -->
+## Lazy-loaded rules
+
+Rules that only matter at specific milestones live under `docs/lazy/` and are NOT eager-loaded. Pull them in when the milestone goes active. See `docs/lazy/README.md` for the list.
+
+---
+<!-- TOGGLE:lazy_rules_folder END -->
+
+<!-- TOGGLE:memory_system START -->
+## Memory system
+
+Per-project memory is at `~/.claude/projects/<project-slug>/memory/`. Four memory types: **user**, **feedback**, **project**, **reference**. `MEMORY.md` is the index, always loaded into the session context; per-memory files live alongside it. See your home `~/.claude/CLAUDE.md` for the canonical body structure of each memory type.
+<!-- TOGGLE:memory_system END -->

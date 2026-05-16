@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Claude Code statusLine script — reads JSON from stdin, prints a one-line status.
+# Shows: model · last-two-segments-of-cwd · git branch (copper, +* if dirty) · context % used
+# Install: copy to ~/.claude/statusline-command.sh + register in ~/.claude/settings.json:
+#   "statusLine": { "type": "command", "command": "bash \"~/.claude/statusline-command.sh\"" }
+
+input=$(cat)
+
+# --- Extract fields (jq preferred, grep/sed fallback) ---
+if command -v jq >/dev/null 2>&1; then
+  model=$(echo "$input" | jq -r '.model.display_name // empty')
+  cwd=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
+  ctx_used=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
+else
+  model=$(echo "$input" | grep -o '"display_name":"[^"]*"' | head -1 | sed 's/"display_name":"//;s/"//')
+  cwd=$(echo "$input" | grep -o '"current_dir":"[^"]*"' | head -1 | sed 's/"current_dir":"//;s/"//')
+  ctx_used=$(echo "$input" | grep -o '"used_percentage":[0-9.]*' | head -1 | sed 's/"used_percentage"://')
+fi
+
+# --- Last 2 path segments of cwd ---
+if [ -n "$cwd" ]; then
+  cwd_norm="${cwd//\\//}"   # Windows backslash → forward slash
+  cwd_norm="${cwd_norm%/}"
+  seg2="${cwd_norm##*/}"
+  rest="${cwd_norm%/*}"
+  seg1="${rest##*/}"
+  if [ -n "$seg1" ] && [ "$seg1" != "$seg2" ]; then
+    dir_display="$seg1/$seg2"
+  else
+    dir_display="$seg2"
+  fi
+else
+  dir_display=""
+fi
+
+# --- Git branch + dirty flag (run against cwd) ---
+git_part=""
+if [ -n "$cwd" ]; then
+  branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ -n "$branch" ] && [ "$branch" != "HEAD" ]; then
+    dirty=$(git -C "$cwd" status --porcelain 2>/dev/null)
+    [ -n "$dirty" ] && branch="${branch}*"
+    git_part="$branch"
+  fi
+fi
+
+# --- Assemble output ---
+# Copper color for git branch: \033[38;2;181;86;31m
+COPPER='\033[38;2;181;86;31m'
+RESET='\033[0m'
+
+parts=()
+[ -n "$model" ] && parts+=("$model")
+[ -n "$dir_display" ] && parts+=("$dir_display")
+if [ -n "$git_part" ]; then
+  parts+=("${COPPER}${git_part}${RESET}")
+fi
+if [ -n "$ctx_used" ]; then
+  ctx_int=$(printf '%.0f' "$ctx_used" 2>/dev/null || echo "$ctx_used")
+  parts+=("ctx:${ctx_int}%")
+fi
+
+result=""
+for part in "${parts[@]}"; do
+  if [ -z "$result" ]; then
+    result="$part"
+  else
+    result="${result} | ${part}"
+  fi
+done
+
+printf "%b\n" "$result"

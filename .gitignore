@@ -1,0 +1,30 @@
+# Build outputs
+*.zip
+_site/
+dist/
+build/
+
+# OS / IDE noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python (any tooling scripts we add)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node (when the bundler ships)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Logs + scratch
+*.log
+*.tmp
+.local/

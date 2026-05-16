@@ -1,0 +1,57 @@
+# {{PROJECT_NAME}}
+
+{{ONE_LINE_DESCRIPTION}}
+
+**Stack:** {{LANGUAGE_AND_FRAMEWORK}}
+
+---
+
+## Quick start
+
+> _Replace this section with the actual setup steps. Examples below — pick what fits your stack._
+
+```bash
+# Clone
+git clone https://github.com/{{REPO_URL}}.git
+cd $(basename {{REPO_URL}})
+
+# Install dependencies
+# (substitute the right command for your stack)
+
+# Run locally
+# (substitute the right command for your stack)
+```
+
+## Development
+
+- **Default branch:** `{{DEFAULT_BRANCH}}` (work-in-progress)
+- **Production branch:** `{{MAIN_BRANCH}}` (stable releases)
+- **Branching model:** {{GITFLOW_OR_TRUNK}}
+
+See `.claude/rules/git.md` for the full atomic-commits + Gitflow conventions.
+
+## Testing
+
+> _Add your test commands here._
+
+## Project structure
+
+> _Sketch the directory tree once it stabilizes. Don't write it before the code is real — it'll rot._
+
+## Contributing
+
+<!-- TOGGLE:contributing_md START -->
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the contributor guide.
+<!-- TOGGLE:contributing_md END -->
+
+<!-- TOGGLE:contributing_md:off START -->
+Open an issue describing the change you want to make before opening a PR.
+<!-- TOGGLE:contributing_md:off END -->
+
+## License
+
+See [`LICENSE`](./LICENSE).
+
+---
+
+_This README was scaffolded from a `claude-code-templates` setup. Edit freely._

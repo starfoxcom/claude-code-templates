@@ -1,0 +1,36 @@
+# CODEOWNERS — auto-request reviewers for matching files
+# Rename .template → CODEOWNERS after SETUP. No file extension.
+# https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners — get review requests on every PR unless overridden below.
+*       @{{TEAM_OR_USER}}
+
+# Examples — uncomment and adapt to your tree.
+#
+# # Frontend
+# /apps/web/                    @frontend-team
+# /packages/ui/                 @frontend-team
+#
+# # Backend
+# /apps/api/                    @backend-team
+# /packages/db/                 @db-owner @backend-team
+#
+# # Infrastructure / deploys
+# /.github/workflows/           @devops-team
+# /infra/                       @devops-team
+# /Dockerfile                   @devops-team
+#
+# # Security-sensitive paths
+# /apps/api/src/auth/           @security-team @backend-team
+# /packages/crypto/             @security-team
+#
+# # Docs / rules
+# /CLAUDE.md                    @{{LEAD_USER}}
+# /.claude/rules/               @{{LEAD_USER}}
+# /docs/                        @{{LEAD_USER}}
+
+# Notes:
+# - Path patterns follow .gitignore syntax.
+# - Last matching pattern wins.
+# - Owners must have push access to the repo.
+# - Combine with branch protection "Require review from Code Owners" for enforcement.
