@@ -68,8 +68,14 @@ function CompareFolio() {
           </div>
         </div>
         <style>{`
-          .cmp-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); }
+          .cmp-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--r-lg); background: var(--paper-card); box-shadow: var(--shadow-card); -webkit-overflow-scrolling: touch; }
+          .cmp-wrap::-webkit-scrollbar { height: 10px; }
+          .cmp-wrap::-webkit-scrollbar-track { background: var(--paper-sunken); border-radius: 0 0 var(--r-lg) var(--r-lg); }
+          .cmp-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 5px; border: 2px solid var(--paper-sunken); background-clip: padding-box; }
           .cmp { min-width: 800px; }
+          @media (max-width: 800px) {
+            .cmp-wrap::after { content: "← swipe horizontally to compare →"; display: block; padding: 8px 14px; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: center; border-top: 1px solid var(--rule-soft); }
+          }
           .cmp-row { display: grid; grid-template-columns: 220px repeat(4, 1fr); border-bottom: 1px solid var(--rule-soft); }
           .cmp-row:last-child { border-bottom: none; }
           .cmp-cell { padding: 12px 14px; font-size: 13px; border-right: 1px solid var(--rule-soft); transition: background var(--dur) var(--ease); }
