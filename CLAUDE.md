@@ -100,7 +100,7 @@ The page IS a visual artifact. Per `_core/project-template/.claude/rules/visual.
 
 ## Session ritual
 
-Skills `/session-start` and `/session-close` (in `~/.claude/skills/` global) run the standard ritual. Local skills aren't duplicated here — the global versions handle this repo correctly because the workflow is the same.
+Skills `/session-start` and `/session-close` (and `/find`, `/architecture-graph`) live at `.claude/skills/` — this repo is self-bound from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` with Discovery-mode resolution for null toggles. See `.claude/BIND.md` for the full audit trail (placeholders, toggle decisions, evidence). When templates evolve in `_core/`, re-resolve and replace the corresponding `.claude/skills/*.md` files; once issue #3 (v1.2.0 Audit mode) ships, that flow becomes automated.
 
 ---
 
