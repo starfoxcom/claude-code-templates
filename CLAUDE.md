@@ -14,7 +14,7 @@ If you bind a downstream project from this repo, your `.claude/rules/` gets a *r
 
 This rule is enforced by a hook at `~/.claude/hooks/tokensave-first.py` (installed **globally**, never project-local — see `reference_tokensave_hook_global_install` memory for why). Grep/Glob/raw-grep calls are **blocked** when tokensave is available.
 
-**This repo does not currently have a tokensave index** (no `.tokensave/` at the root) — the codebase is small enough that the hook auto-passes when grep is the right tool. If we ever cross the threshold where symbol-graph lookups become useful, run `tokensave init` at the project root and the hook starts enforcing.
+**This repo has a tokensave index** at `.tokensave/` (32 files / 287 nodes, schema v9). The hook routes code-research through tokensave MCP tools by default. Re-sync incrementally with `tokensave sync` after edits; full rebuild via `tokensave sync -f` after schema migrations or large refactors.
 
 Fallback to Grep/Glob is allowed when:
 1. You've tried tokensave with 2+ keyword variants and got nothing usable
@@ -106,7 +106,6 @@ Skills `/session-start` and `/session-close` (in `~/.claude/skills/` global) run
 
 ## What's intentionally NOT here
 
-- **No tokensave index** — the codebase is small enough that grep works fine when needed.
 - **No `.claude/rules/` duplication** — rules live canonically in `_core/project-template/.claude/rules/` and are referenced from here. A downstream bind copies them out with toggle blocks resolved.
 - **Routine + deep review workflows not yet installed** — the workflows exist canonically in `_core/project-template/.github/workflows/` but haven't been copied to this project's own `.github/workflows/` yet. Tracked follow-up.
 
