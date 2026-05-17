@@ -44,28 +44,28 @@ One logical change per commit. No mixing features with refactors or fixes with c
 | Branch | Prefix | Purpose |
 |---|---|---|
 | Production | `{{MAIN_BRANCH}}` | Stable releases only |
-| Development | `{{DEFAULT_BRANCH}}` | Base for all work |
-| Feature | `feature/<n>` | From `{{DEFAULT_BRANCH}}`, merges back to `{{DEFAULT_BRANCH}}` |
-| Release | `release/<v>` | From `{{DEFAULT_BRANCH}}`, merges to `{{MAIN_BRANCH}}` + `{{DEFAULT_BRANCH}}` |
-| Hotfix | `hotfix/<n>` | From `{{MAIN_BRANCH}}`, merges to `{{MAIN_BRANCH}}` + `{{DEFAULT_BRANCH}}` |
+| Development | `{{DEV_BRANCH}}` | Base for all work |
+| Feature | `feature/<n>` | From `{{DEV_BRANCH}}`, merges back to `{{DEV_BRANCH}}` |
+| Release | `release/<v>` | From `{{DEV_BRANCH}}`, merges to `{{MAIN_BRANCH}}` + `{{DEV_BRANCH}}` |
+| Hotfix | `hotfix/<n>` | From `{{MAIN_BRANCH}}`, merges to `{{MAIN_BRANCH}}` + `{{DEV_BRANCH}}` |
 
 - Kebab-case branch names: `feature/user-auth-flow`
-- **Always** `gh pr create --base {{DEFAULT_BRANCH}}` — repo default may be `{{MAIN_BRANCH}}`, override explicitly
+- **Always** `gh pr create --base {{DEV_BRANCH}}` — repo default may be `{{MAIN_BRANCH}}`, override explicitly
 - **Always** merge commit — never squash or rebase
-- **Never** push directly to `{{MAIN_BRANCH}}` or `{{DEFAULT_BRANCH}}`
+- **Never** push directly to `{{MAIN_BRANCH}}` or `{{DEV_BRANCH}}`
 
 ### Scope discipline
 
 If a branch is `feature/<name>`, only files within that feature's directory tree should change. Cross-cutting changes (shared utilities, core layers) need their own branch and a merged-to-dev pre-requisite.
 
-### When `{{DEFAULT_BRANCH}}` advances
+### When `{{DEV_BRANCH}}` advances
 
 Cascade to all open feature branches before resuming work on them:
 
 ```bash
 git fetch origin
 git checkout feature/<n>
-git merge origin/{{DEFAULT_BRANCH}}
+git merge origin/{{DEV_BRANCH}}
 git push origin feature/<n>
 ```
 <!-- TOGGLE:branching_model_gitflow END -->
