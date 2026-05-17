@@ -1,0 +1,1428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>claude-code-templates · v1.0.0</title>
+<meta name="description" content="Compose a custom edition of Claude Code rules, skills, memory, and workflows. Pick a bundle, set toggles, download a ready-to-unzip volume.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   claude-code-templates · v1.0.0
+   Aesthetic: layered shades + depth + smooth motion
+   Color: OKLCH neutrals with warm coral accent · dark default
+   Type: Geist (sans + mono) · Spacing: 0.25rem increments
+   ============================================================ */
+
+:root {
+  /* ── Color system — dark edition (default) ───────────────── */
+  --bg:           oklch(0.16 0.005 60);
+  --bg-1:         oklch(0.20 0.007 60);
+  --bg-2:         oklch(0.24 0.009 60);
+  --bg-3:         oklch(0.29 0.011 60);
+  --bg-4:         oklch(0.34 0.013 60);
+
+  --border:       oklch(0.30 0.012 60);
+  --border-2:     oklch(0.40 0.015 60);
+  --border-3:     oklch(0.52 0.020 60);
+
+  --text:         oklch(0.94 0.012 60);
+  --text-2:       oklch(0.72 0.015 60);
+  --text-3:       oklch(0.55 0.020 60);
+  --text-4:       oklch(0.42 0.018 60);
+
+  --highlight:    oklch(1.00 0 0 / 0.07);
+  --highlight-2:  oklch(1.00 0 0 / 0.12);
+
+  --accent:       oklch(0.72 0.16 38);
+  --accent-2:     oklch(0.78 0.17 38);
+  --accent-soft:  oklch(0.72 0.16 38 / 0.14);
+  --accent-edge:  oklch(0.72 0.16 38 / 0.40);
+
+  --good:         oklch(0.74 0.16 145);
+  --bad:          oklch(0.66 0.20 25);
+  --warn:         oklch(0.82 0.14 85);
+
+  --sh-card:
+    0 0 0 1px var(--border),
+    inset 0 1px 0 0 var(--highlight),
+    0 1px 1px oklch(0 0 0 / 0.30),
+    0 4px 12px oklch(0 0 0 / 0.22);
+  --sh-raised:
+    0 0 0 1px var(--border-2),
+    inset 0 1px 0 0 var(--highlight-2),
+    0 1px 2px oklch(0 0 0 / 0.40),
+    0 8px 28px oklch(0 0 0 / 0.32);
+  --sh-glow:
+    0 0 0 1px var(--accent-edge),
+    inset 0 1px 0 0 var(--highlight-2),
+    0 0 32px var(--accent-soft),
+    0 8px 24px oklch(0 0 0 / 0.30);
+
+  --s-1: 0.25rem; --s-2: 0.5rem; --s-3: 0.75rem; --s-4: 1rem;
+  --s-5: 1.25rem; --s-6: 1.5rem; --s-8: 2rem; --s-10: 2.5rem;
+  --s-12: 3rem; --s-16: 4rem; --s-20: 5rem;
+
+  --r-1: 4px; --r-2: 8px; --r-3: 12px; --r-4: 16px;
+
+  --font:  'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono:  'Geist Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+
+  --ease:        cubic-bezier(0.2, 0.6, 0.2, 1);
+  --ease-out:    cubic-bezier(0.18, 0.85, 0.32, 1);
+  --t-fast: 120ms; --t-med: 200ms; --t-slow: 320ms;
+}
+
+:root.light {
+  --bg:           oklch(0.99 0.003 60);
+  --bg-1:         oklch(0.97 0.005 60);
+  --bg-2:         oklch(0.94 0.007 60);
+  --bg-3:         oklch(0.90 0.009 60);
+  --bg-4:         oklch(0.85 0.011 60);
+  --border:       oklch(0.86 0.010 60);
+  --border-2:     oklch(0.74 0.014 60);
+  --border-3:     oklch(0.58 0.020 60);
+  --text:         oklch(0.18 0.015 60);
+  --text-2:       oklch(0.40 0.018 60);
+  --text-3:       oklch(0.55 0.018 60);
+  --text-4:       oklch(0.66 0.018 60);
+  --highlight:    oklch(1.00 0 0 / 0.55);
+  --highlight-2:  oklch(1.00 0 0 / 0.85);
+  --accent:       oklch(0.58 0.18 32);
+  --accent-2:     oklch(0.52 0.20 32);
+  --accent-soft:  oklch(0.58 0.18 32 / 0.10);
+  --accent-edge:  oklch(0.58 0.18 32 / 0.45);
+  --good:         oklch(0.50 0.16 145);
+  --bad:          oklch(0.50 0.22 25);
+  --warn:         oklch(0.62 0.16 80);
+  --sh-card:
+    0 0 0 1px var(--border),
+    inset 0 1px 0 0 var(--highlight),
+    0 1px 1px oklch(0 0 0 / 0.04),
+    0 6px 14px oklch(0 0 0 / 0.06);
+  --sh-raised:
+    0 0 0 1px var(--border-2),
+    inset 0 1px 0 0 var(--highlight-2),
+    0 1px 2px oklch(0 0 0 / 0.06),
+    0 12px 28px oklch(0 0 0 / 0.10);
+  --sh-glow:
+    0 0 0 1px var(--accent-edge),
+    inset 0 1px 0 0 var(--highlight-2),
+    0 0 28px var(--accent-soft),
+    0 8px 24px oklch(0 0 0 / 0.08);
+}
+
+/* ============================================================ Base */
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font);
+  background: var(--bg); color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  line-height: 1.55; min-height: 100vh; overflow-x: hidden;
+  transition: background var(--t-med) var(--ease), color var(--t-med) var(--ease);
+}
+::selection { background: var(--accent-soft); color: var(--text); }
+a { color: var(--accent); text-decoration: none; transition: color var(--t-fast) var(--ease); }
+a:hover { color: var(--accent-2); }
+h1, h2, h3, h4 { margin: 0; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+p { margin: 0; color: var(--text-2); }
+ul { margin: 0; padding: 0; list-style: none; }
+code, .mono, pre { font-family: var(--mono); font-variant-ligatures: none; -webkit-font-feature-settings: 'liga' off, 'calt' off; font-feature-settings: 'liga' off, 'calt' off; }
+code, .mono { font-size: 0.92em; }
+code:not(pre code) { background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-1); padding: 1px 6px; font-size: 0.86em; color: var(--text); }
+
+/* ============================================================ App shell */
+.shell { display: grid; grid-template-columns: 1fr; grid-template-rows: auto 1fr; min-height: 100vh; }
+
+.topbar {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  background: oklch(from var(--bg) calc(l + 0.02) c h / 0.85);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  backdrop-filter: blur(14px) saturate(120%);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 40; min-height: 56px;
+}
+.brand { display: flex; align-items: center; gap: var(--s-2); font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--text); letter-spacing: -0.01em; }
+.brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(140deg, var(--accent) 0%, oklch(0.55 0.18 25) 100%); box-shadow: inset 0 1px 0 0 oklch(1 0 0 / 0.30), 0 2px 6px var(--accent-soft); display: inline-flex; align-items: center; justify-content: center; color: var(--bg); font-weight: 700; font-size: 11px; }
+.brand .ver { font-size: 11px; color: var(--text-3); padding: 2px 7px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-1); margin-left: var(--s-1); letter-spacing: 0.02em; }
+.brand-sep { color: var(--text-4); margin: 0 var(--s-1); }
+.topbar-actions { display: flex; align-items: center; gap: var(--s-2); margin-left: auto; }
+
+.iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-2); color: var(--text-2); font-family: var(--mono); font-size: 14px; cursor: pointer; transition: all var(--t-fast) var(--ease); }
+.iconbtn:hover { background: var(--bg-2); color: var(--text); border-color: var(--border-2); transform: translateY(-1px); }
+.iconbtn:active { transform: translateY(0); background: var(--bg-3); }
+.iconbtn svg { width: 16px; height: 16px; }
+
+.body-grid { display: grid; grid-template-columns: 1fr; max-width: 1480px; margin: 0 auto; width: 100%; }
+@media (min-width: 1024px) { .body-grid { grid-template-columns: 240px 1fr; gap: 0; } }
+
+.nav { padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--border); overflow-x: auto; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; position: sticky; top: 56px; z-index: 30; background: oklch(from var(--bg) calc(l + 0.01) c h / 0.90); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.nav-list { display: flex; gap: var(--s-1); min-width: max-content; }
+.nav-link { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); font-family: var(--font); font-size: 13px; font-weight: 500; color: var(--text-3); background: transparent; border: 1px solid transparent; border-radius: var(--r-2); cursor: pointer; white-space: nowrap; scroll-snap-align: start; transition: all var(--t-fast) var(--ease); }
+.nav-link .nav-num { font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--text-4); letter-spacing: 0.06em; }
+.nav-link:hover { color: var(--text); background: var(--bg-1); }
+.nav-link.active { color: var(--text); background: var(--bg-2); border-color: var(--border); box-shadow: inset 0 1px 0 0 var(--highlight); }
+.nav-link.active .nav-num { color: var(--accent); }
+
+@media (min-width: 1024px) {
+  .nav { position: sticky; top: 56px; align-self: start; height: calc(100vh - 56px); border-bottom: 0; border-right: 1px solid var(--border); padding: var(--s-6) var(--s-4); overflow-x: visible; overflow-y: auto; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .nav-list { flex-direction: column; gap: var(--s-1); min-width: 0; }
+  .nav-link { width: 100%; justify-content: flex-start; padding: var(--s-2) var(--s-3); }
+}
+
+.main { padding: var(--s-6) var(--s-4) var(--s-12); max-width: 1100px; }
+@media (min-width: 768px) { .main { padding: var(--s-10) var(--s-8) var(--s-16); } }
+@media (min-width: 1024px) { .main { padding: var(--s-10) var(--s-10) var(--s-20); } }
+
+.folio { display: none; animation: rise var(--t-slow) var(--ease); }
+.folio.active { display: block; }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+.folio-head { margin-bottom: var(--s-8); }
+.folio-eyebrow { display: inline-flex; align-items: center; gap: var(--s-2); font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--accent); letter-spacing: 0.06em; margin-bottom: var(--s-3); }
+.folio-eyebrow::before { content: ''; width: 18px; height: 1px; background: var(--accent); display: inline-block; }
+.folio-title { font-size: clamp(28px, 4.5vw, 44px); line-height: 1.1; font-weight: 600; letter-spacing: -0.02em; margin-bottom: var(--s-3); }
+.folio-lede { font-size: clamp(15px, 1.6vw, 17px); line-height: 1.55; color: var(--text-2); max-width: 64ch; }
+
+h2.sec { font-size: clamp(18px, 2vw, 22px); margin-top: var(--s-12); margin-bottom: var(--s-2); letter-spacing: -0.015em; }
+h2.sec:first-child { margin-top: 0; }
+.sec-sub { color: var(--text-3); margin-bottom: var(--s-5); font-size: 14px; }
+h3.sub { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); margin-top: var(--s-8); margin-bottom: var(--s-3); font-weight: 500; }
+
+/* ============================================================ FOLIO I — Bind */
+.step-stack { display: flex; flex-direction: column; gap: var(--s-6); }
+.step { position: relative; padding: var(--s-5); background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); }
+.step-head { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-2); flex-wrap: wrap; }
+.step-num { font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--accent); letter-spacing: 0.06em; padding: 2px 7px; background: var(--accent-soft); border: 1px solid var(--accent-edge); border-radius: var(--r-1); }
+.step-title { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.step-helper { font-size: 13px; color: var(--text-3); margin-bottom: var(--s-4); line-height: 1.5; max-width: 60ch; }
+
+.mode-row { display: grid; grid-template-columns: 1fr; gap: var(--s-3); }
+@media (min-width: 640px) { .mode-row { grid-template-columns: 1fr 1fr; } }
+.mode { position: relative; padding: var(--s-4) var(--s-5); background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); cursor: pointer; transition: all var(--t-med) var(--ease); display: flex; flex-direction: column; gap: var(--s-1); }
+.mode:hover { transform: translateY(-2px); box-shadow: var(--sh-raised); }
+.mode.selected { background: linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow: var(--sh-glow); }
+.mode-tag { font-family: var(--mono); font-size: 10px; color: var(--text-4); letter-spacing: 0.12em; text-transform: uppercase; }
+.mode.selected .mode-tag { color: var(--accent); }
+.mode-name { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.mode-desc { font-size: 13px; color: var(--text-3); line-height: 1.5; margin-top: var(--s-1); }
+
+.bundle-grid { display: grid; grid-template-columns: 1fr; gap: var(--s-3); }
+@media (min-width: 560px) { .bundle-grid { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 1180px) { .bundle-grid { grid-template-columns: repeat(4, 1fr); } }
+.bundle { position: relative; padding: var(--s-4); background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); cursor: pointer; transition: all var(--t-med) var(--ease); display: flex; flex-direction: column; gap: var(--s-2); min-height: 130px; }
+.bundle:hover { transform: translateY(-2px); box-shadow: var(--sh-raised); }
+.bundle.selected { background: linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow: var(--sh-glow); }
+.bundle-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.bundle-num { font-family: var(--mono); font-size: 11px; color: var(--text-4); letter-spacing: 0.04em; }
+.bundle.selected .bundle-num { color: var(--accent); }
+.bundle-tag { font-family: var(--mono); font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.10em; padding: 2px 7px; background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-1); color: var(--text-3); }
+.bundle.selected .bundle-tag { background: var(--accent-soft); border-color: var(--accent-edge); color: var(--accent); }
+.bundle-name { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.bundle.selected .bundle-name { color: var(--text); }
+.bundle-desc { font-size: 12.5px; color: var(--text-3); line-height: 1.5; flex: 1; }
+
+.field-grid { display: grid; grid-template-columns: 1fr; gap: var(--s-4); }
+@media (min-width: 640px) { .field-grid { grid-template-columns: 1fr 1fr; } }
+.field { display: flex; flex-direction: column; gap: var(--s-1); }
+.field.full { grid-column: 1 / -1; }
+.field label { font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--text-3); letter-spacing: 0.10em; text-transform: uppercase; }
+.field input, .field select { background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-2); padding: var(--s-2) var(--s-3); color: var(--text); font-family: var(--font); font-size: 14px; height: 38px; outline: none; transition: all var(--t-fast) var(--ease); box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.20); }
+.field select { appearance: none; -webkit-appearance: none; padding-right: 36px; background-image: linear-gradient(45deg, transparent 50%, var(--text-2) 50%), linear-gradient(135deg, var(--text-2) 50%, transparent 50%); background-position: calc(100% - 18px) 16px, calc(100% - 13px) 16px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+.field input::placeholder { color: var(--text-4); }
+.field input:hover, .field select:hover { border-color: var(--border-2); }
+.field input:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), inset 0 1px 2px oklch(0 0 0 / 0.20); }
+.field .hint { font-size: 11.5px; color: var(--text-4); line-height: 1.4; }
+
+.toggle-group { display: flex; flex-direction: column; gap: var(--s-1); }
+.toggle-group-label { font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--accent); letter-spacing: 0.12em; text-transform: uppercase; margin-top: var(--s-5); margin-bottom: var(--s-1); padding-bottom: var(--s-1); border-bottom: 1px dashed var(--border); }
+.toggle-group-label:first-child { margin-top: 0; }
+.toggle { position: relative; display: grid; grid-template-columns: 22px 1fr auto; gap: var(--s-3); padding: var(--s-3); padding-left: calc(var(--s-3) + 6px); background: transparent; border: 1px solid transparent; border-radius: var(--r-2); cursor: pointer; align-items: start; transition: all var(--t-fast) var(--ease); }
+.toggle:hover { background: var(--bg-1); border-color: var(--border); }
+.toggle.checked { background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-color: var(--border-2); box-shadow: inset 0 1px 0 0 var(--highlight); }
+.toggle.ask { background: linear-gradient(180deg, oklch(from var(--accent-soft) calc(l + 0.04) c h / 0.7) 0%, oklch(from var(--accent-soft) l c h / 0.5) 100%); border-color: var(--accent-edge); }
+.toggle.modified::after { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; background: var(--accent); border-radius: 0 2px 2px 0; }
+.toggle-check { width: 20px; height: 20px; border: 1.5px solid var(--border-2); border-radius: 5px; background: var(--bg); display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; transition: all var(--t-fast) var(--ease); box-sizing: border-box; }
+.toggle.checked .toggle-check { background: var(--accent); border-color: var(--accent); box-shadow: inset 0 1px 0 0 oklch(1 0 0 / 0.30), 0 0 8px var(--accent-soft); }
+.toggle.checked .toggle-check::after { content: ''; width: 5px; height: 9px; border: solid oklch(0.10 0 0); border-width: 0 2px 2px 0; transform: rotate(45deg) translate(0, -1px); }
+.toggle.ask .toggle-check { background: var(--accent-soft); border: 1.5px dashed var(--accent); }
+.toggle.ask .toggle-check::after { content: '?'; font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--accent); }
+.toggle-text { min-width: 0; }
+.toggle-label { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 2px; }
+.toggle.ask .toggle-label { color: var(--text); }
+.toggle-key { font-family: var(--mono); font-size: 10.5px; color: var(--text-4); letter-spacing: 0.02em; margin-bottom: 4px; }
+.toggle.ask .toggle-key { color: var(--text-2); }
+.toggle-desc { font-size: 12.5px; color: var(--text-3); line-height: 1.45; }
+.toggle.ask .toggle-desc { color: var(--text); }
+.toggle.checked .toggle-desc { color: var(--text-2); }
+.toggle-mark { font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--text-4); letter-spacing: 0.10em; text-transform: uppercase; padding: 3px 7px; border-radius: var(--r-1); background: var(--bg-1); border: 1px solid var(--border); height: fit-content; margin-top: 1px; }
+.toggle.checked .toggle-mark { background: var(--accent-soft); border-color: var(--accent-edge); color: var(--accent); }
+.toggle.ask .toggle-mark { color: var(--text); background: var(--bg); border: 1px solid var(--accent-edge); font-weight: 600; }
+.toggle-modified-badge { display: none; font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); margin-left: var(--s-2); }
+.toggle.modified .toggle-modified-badge { display: inline; }
+.tool-custom { margin-top: var(--s-2); width: 100%; }
+.tool-custom.hidden { display: none; }
+
+/* Mode-aware inline text */
+.mt, .dt { display: none; }
+html.is-manual .mt { display: revert; }
+html.is-discovery .dt { display: revert; }
+
+.bind-row { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; margin-top: var(--s-6); padding-top: var(--s-5); border-top: 1px dashed var(--border); }
+.bind-stat { font-family: var(--mono); font-size: 11px; color: var(--text-3); display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--r-2); }
+.bind-stat strong { color: var(--accent); font-weight: 600; }
+
+/* Path cards (step 5 Path A / Path B) */
+.paths-grid { display: grid; grid-template-columns: 1fr; gap: var(--s-4); margin-top: var(--s-4); }
+@media (min-width: 820px) { .paths-grid { grid-template-columns: 1fr 1fr; } }
+.path { display: grid; grid-template-columns: 40px 1fr; gap: var(--s-3); padding: var(--s-5); background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); }
+.path.recommended { box-shadow: var(--sh-glow); }
+.path-mark { font-family: var(--font); font-size: 18px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-edge); border-radius: var(--r-2); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 1px 0 0 var(--highlight); }
+.path-body { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
+.path-head-row { display: flex; align-items: baseline; gap: var(--s-2); flex-wrap: wrap; }
+.path-name { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+.path-tag { font-family: var(--mono); font-size: 9.5px; font-weight: 500; letter-spacing: 0.10em; text-transform: uppercase; color: var(--accent); padding: 2px 6px; background: var(--accent-soft); border: 1px solid var(--accent-edge); border-radius: var(--r-1); }
+.path-tag.muted { color: var(--text-3); background: var(--bg); border-color: var(--border); }
+.path-text { font-size: 13px; color: var(--text-2); line-height: 1.55; margin: 0; }
+.path-text strong { color: var(--accent); font-weight: 600; }
+.path-prereq { padding: var(--s-3); background: var(--bg); border-left: 2px solid var(--accent); border-radius: 0 var(--r-2) var(--r-2) 0; font-size: 12.5px; color: var(--text-2); line-height: 1.55; }
+.path-prereq strong { color: var(--text); font-weight: 600; display: block; margin-bottom: 4px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--accent); }
+.path-prereq code { font-family: var(--mono); font-size: 11.5px; color: var(--text); background: var(--bg-2); border: 1px solid var(--border); padding: 1px 6px; border-radius: var(--r-1); white-space: nowrap; }
+.path-steps { list-style: decimal; padding-left: 20px; margin: 0; }
+.path-steps li { font-size: 12.5px; color: var(--text-2); line-height: 1.55; margin: var(--s-1) 0; }
+.path-steps li strong { color: var(--text); }
+.path-steps li code { font-family: var(--mono); font-size: 11px; color: var(--accent); background: transparent; border: 0; padding: 0; }
+.path .btn { align-self: flex-start; margin-top: var(--s-2); }
+.path-bind-stat-row { margin-top: var(--s-5); display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; padding-top: var(--s-4); border-top: 1px dashed var(--border); }
+.path-bind-stat-row .label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--text-3); }
+
+/* Discovery-mode notice */
+.discovery-notice { padding: var(--s-5); background: linear-gradient(180deg, oklch(from var(--accent-soft) calc(l + 0.04) c h) 0%, var(--accent-soft) 100%); border-radius: var(--r-3); border: 1px solid var(--accent-edge); box-shadow: var(--sh-glow); }
+.discovery-notice .nh { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); }
+.discovery-notice .nh-tag { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--accent); letter-spacing: 0.10em; text-transform: uppercase; padding: 2px 8px; background: var(--bg); border: 1px solid var(--accent-edge); border-radius: var(--r-1); }
+.discovery-notice .nh-title { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+.discovery-notice .nd { font-size: 14px; color: var(--text-2); line-height: 1.6; max-width: 60ch; margin-bottom: var(--s-4); }
+.discovery-notice .nd strong { color: var(--text); }
+.discovery-notice ol { list-style: decimal; padding-left: 22px; margin: 0; }
+.discovery-notice ol li { font-size: 13.5px; color: var(--text-2); line-height: 1.65; margin: var(--s-2) 0; }
+.discovery-notice ol li strong { color: var(--text); font-weight: 600; }
+.discovery-notice ol li code { font-family: var(--mono); font-size: 11.5px; color: var(--text); background: var(--bg); border: 1px solid var(--border); padding: 1px 6px; border-radius: var(--r-1); white-space: nowrap; }
+
+/* Visibility classes for mode switching */
+.manual-only.hidden, .discovery-only.hidden { display: none; }
+
+.btn { display: inline-flex; align-items: center; gap: var(--s-2); font-family: var(--font); font-size: 14px; font-weight: 500; padding: var(--s-3) var(--s-5); border-radius: var(--r-2); cursor: pointer; border: 1px solid transparent; transition: all var(--t-fast) var(--ease); position: relative; white-space: nowrap; letter-spacing: -0.005em; }
+.btn svg { width: 14px; height: 14px; }
+.btn::before { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; box-shadow: inset 0 1px 0 0 var(--highlight-2); }
+.btn-primary { color: oklch(0.12 0 0); background: linear-gradient(180deg, var(--accent-2) 0%, var(--accent) 100%); box-shadow: 0 0 0 1px var(--accent-edge), 0 1px 2px oklch(0 0 0 / 0.30), 0 6px 18px var(--accent-soft); }
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px var(--accent), 0 2px 4px oklch(0 0 0 / 0.35), 0 10px 24px var(--accent-soft); filter: brightness(1.05); }
+.btn-primary:active { transform: translateY(0); filter: brightness(0.96); }
+.btn-primary.success { background: linear-gradient(180deg, oklch(from var(--good) calc(l + 0.05) c h) 0%, var(--good) 100%); color: oklch(0.10 0 0); }
+.btn-ghost { color: var(--text); background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); box-shadow: var(--sh-card); }
+.btn-ghost:hover { transform: translateY(-1px); background: linear-gradient(180deg, var(--bg-3) 0%, var(--bg-2) 100%); box-shadow: var(--sh-raised); }
+.btn-ghost:active { transform: translateY(0); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+.code-out { margin-top: var(--s-5); padding: 0; background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); overflow: hidden; }
+.code-out-head { display: flex; justify-content: space-between; align-items: center; padding: var(--s-3) var(--s-4); background: var(--bg-1); border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--text-3); letter-spacing: 0.06em; text-transform: uppercase; }
+.code-out-head .dot-row { display: flex; gap: 6px; }
+.code-out-head .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bg-3); border: 1px solid var(--border-2); }
+.code-out pre { margin: 0; padding: var(--s-4) var(--s-5); font-family: var(--mono); font-size: 12px; line-height: 1.65; color: var(--text-2); overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* ============================================================ FOLIO II — Compare */
+.table-wrap { overflow-x: auto; background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); }
+.table-wrap table { width: 100%; min-width: 640px; border-collapse: collapse; }
+.table-wrap th, .table-wrap td { text-align: left; padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--border); }
+.table-wrap th { font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--text-3); letter-spacing: 0.08em; text-transform: uppercase; background: var(--bg-1); border-bottom: 1px solid var(--border-2); }
+.table-wrap td { font-size: 13.5px; color: var(--text-2); line-height: 1.55; }
+.table-wrap td:first-child { font-family: var(--mono); font-size: 12.5px; color: var(--text); font-weight: 500; }
+.table-wrap tbody tr { transition: background var(--t-fast) var(--ease); }
+.table-wrap tbody tr:hover { background: var(--bg-1); }
+.table-wrap tbody tr:last-child td { border-bottom: 0; }
+.table-wrap .center { text-align: center; }
+.table-wrap .yes { color: var(--good); font-weight: 500; }
+.table-wrap .no { color: var(--text-4); }
+.table-wrap .ask { color: var(--accent); }
+.table-wrap .partial { color: var(--warn); }
+
+.decisions { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-4); }
+.decision { display: grid; grid-template-columns: 36px 1fr; gap: var(--s-3); padding: var(--s-4); background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); align-items: start; }
+.decision-num { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-edge); border-radius: var(--r-1); padding: 4px 0; text-align: center; width: 36px; }
+.decision-q { font-size: 14.5px; font-weight: 600; margin-bottom: var(--s-1); letter-spacing: -0.01em; }
+.decision-a { font-size: 13.5px; color: var(--text-2); line-height: 1.55; }
+.decision-a strong { color: var(--accent); font-weight: 600; }
+
+.pullquote { margin: var(--s-10) 0; padding: var(--s-5) var(--s-6); background: linear-gradient(135deg, var(--accent-soft) 0%, transparent 100%); border-left: 3px solid var(--accent); border-radius: 0 var(--r-3) var(--r-3) 0; font-size: clamp(16px, 1.8vw, 19px); line-height: 1.45; color: var(--text); font-weight: 500; letter-spacing: -0.01em; }
+.pullquote::before { content: '\201C'; color: var(--accent); font-weight: 700; margin-right: 2px; }
+.pullquote::after { content: '\201D'; color: var(--accent); font-weight: 700; margin-left: 2px; }
+
+/* ============================================================ FOLIO V — Receipts */
+.stats-grid { display: grid; grid-template-columns: 1fr; gap: var(--s-3); margin: var(--s-4) 0; }
+@media (min-width: 560px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 900px) { .stats-grid { grid-template-columns: repeat(4, 1fr); } }
+.stat { padding: var(--s-4) var(--s-5); background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); }
+.stat-val { font-size: clamp(24px, 3vw, 32px); font-weight: 600; letter-spacing: -0.025em; line-height: 1.05; color: var(--text); font-feature-settings: 'tnum' on; }
+.stat-val.accent { color: var(--accent); }
+.stat-val.good { color: var(--good); }
+.stat-val.bad { color: var(--bad); }
+.stat-val .unit { font-size: 0.6em; font-weight: 500; color: var(--text-3); margin-left: 1px; }
+.stat-label { font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--text-3); letter-spacing: 0.08em; text-transform: uppercase; margin-top: var(--s-3); }
+.stat-meta { font-size: 11.5px; color: var(--text-4); margin-top: var(--s-1); line-height: 1.4; }
+
+.editors-note { position: relative; margin: var(--s-6) 0 var(--s-8); padding: var(--s-4) var(--s-5); background: oklch(from var(--accent-soft) l c h / 0.6); border: 1px solid var(--accent-edge); border-radius: var(--r-3); }
+.editors-note-tag { position: absolute; top: -10px; left: 16px; font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--accent); letter-spacing: 0.10em; text-transform: uppercase; padding: 2px 8px; background: var(--bg); border: 1px solid var(--accent-edge); border-radius: var(--r-1); }
+.editors-note p { font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
+.editors-note strong { color: var(--text); }
+.editors-note em { color: var(--accent); font-style: normal; }
+
+.receipts { display: flex; flex-direction: column; gap: var(--s-3); }
+.receipt { background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); overflow: hidden; }
+.receipt-head { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: baseline; padding: var(--s-3) var(--s-4); background: var(--bg-1); border-bottom: 1px solid var(--border); }
+.receipt-head .what { flex: 1; min-width: 240px; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+.receipt-head .when { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.receipt-head .burn { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--bad); }
+.receipt-body { padding: var(--s-4); font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
+.receipt-rule { display: block; margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px dashed var(--border); font-size: 12.5px; color: var(--text-3); font-style: italic; }
+.receipt-rule code { color: var(--accent); background: transparent; border: 0; padding: 0; font-style: normal; }
+
+.timeline { position: relative; margin: var(--s-5) 0; padding-left: var(--s-5); border-left: 1px dashed var(--border-2); }
+.timeline-item { position: relative; padding: var(--s-3) 0 var(--s-3) var(--s-4); }
+.timeline-item::before { content: ''; position: absolute; box-sizing: border-box; left: calc(-1 * var(--s-5)); top: var(--s-4); transform: translateX(-50%); width: 12px; height: 12px; background: var(--accent); border: 2px solid var(--bg); border-radius: 50%; box-shadow: 0 0 0 1px var(--accent-edge), 0 0 12px var(--accent-soft); }
+.timeline-when { font-family: var(--mono); font-size: 11px; color: var(--text-3); margin-bottom: 4px; letter-spacing: 0.04em; }
+.timeline-what { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 4px; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); }
+.timeline-tag { font-family: var(--mono); font-size: 9.5px; font-weight: 500; color: var(--accent); letter-spacing: 0.10em; text-transform: uppercase; padding: 2px 6px; background: var(--accent-soft); border: 1px solid var(--accent-edge); border-radius: var(--r-1); }
+.timeline-why { font-size: 13px; color: var(--text-3); line-height: 1.55; }
+
+.bars { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--s-2); height: 200px; align-items: end; margin: var(--s-4) 0; padding: var(--s-4); background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg) 100%); border-radius: var(--r-3); box-shadow: var(--sh-card); }
+.bar { display: flex; flex-direction: column; align-items: stretch; gap: var(--s-1); height: 100%; position: relative; }
+.bar-fill { background: linear-gradient(180deg, var(--accent) 0%, oklch(from var(--accent) calc(l - 0.10) calc(c - 0.04) h) 100%); border-radius: var(--r-1); position: relative; transition: all var(--t-med) var(--ease); box-shadow: inset 0 1px 0 0 var(--highlight-2); }
+.bar:hover .bar-fill { filter: brightness(1.2); }
+.bar-fill::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: var(--bg-3); color: var(--text); padding: 4px 8px; border-radius: var(--r-1); font-family: var(--mono); font-size: 10.5px; white-space: nowrap; opacity: 0; transition: opacity var(--t-fast) var(--ease); pointer-events: none; box-shadow: var(--sh-card); border: 1px solid var(--border); z-index: 10; }
+.bar:hover .bar-fill::after { opacity: 1; }
+.bar-label { font-family: var(--mono); font-size: 10px; color: var(--text-3); text-align: center; letter-spacing: 0.04em; }
+
+.method { margin-top: var(--s-8); padding: var(--s-5); background: var(--bg-1); border: 1px dashed var(--border); border-radius: var(--r-3); }
+.method ul { padding-left: var(--s-5); margin: 0; list-style: disc; }
+.method li { font-size: 13px; color: var(--text-2); line-height: 1.65; margin: var(--s-2) 0; }
+.method li strong { color: var(--text); }
+.method li code { font-family: var(--mono); font-size: 11.5px; color: var(--accent); background: transparent; border: 0; padding: 0; }
+
+/* ============================================================ FOLIO VI — About */
+.tree { font-family: var(--mono); font-size: 12.5px; line-height: 1.65; color: var(--text-2); padding: var(--s-4); background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-3); overflow-x: auto; margin: var(--s-3) 0; box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.20); white-space: pre; }
+.tree .com { color: var(--text-4); }
+.tree .file { color: var(--text); }
+
+ul.bullets { list-style: disc; padding-left: var(--s-5); margin: var(--s-3) 0; }
+ul.bullets li { font-size: 14px; color: var(--text-2); line-height: 1.6; margin: var(--s-2) 0; }
+ul.bullets li strong { color: var(--text); }
+
+.footer { padding: var(--s-10) var(--s-4) var(--s-8); border-top: 1px solid var(--border); text-align: center; font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+.footer a { color: var(--text-2); }
+.footer .sep { margin: 0 var(--s-2); color: var(--text-4); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+  <header class="topbar">
+    <a class="brand" href="#i">
+      <span class="brand-mark">c</span>
+      <span>claude-code<span class="brand-sep">·</span>templates</span>
+      <span class="ver">v1.0.0</span>
+    </a>
+    <div class="topbar-actions">
+      <button class="iconbtn" id="theme-toggle" aria-label="Toggle theme" title="Toggle theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path id="theme-icon" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+      <a class="iconbtn" href="https://github.com/starfoxcom/claude-code-templates" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.92.57.1.78-.25.78-.55v-1.92c-3.2.69-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.2-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.82 1.19 3.08 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.05.78 2.13v3.15c0 .3.21.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z"/></svg>
+      </a>
+    </div>
+  </header>
+
+  <div class="body-grid">
+
+    <nav class="nav">
+      <div class="nav-list">
+        <button class="nav-link active" data-folio="i"><span class="nav-num">I</span> Bind a volume</button>
+        <button class="nav-link" data-folio="ii"><span class="nav-num">II</span> Compare bundles</button>
+        <button class="nav-link" data-folio="iii"><span class="nav-num">III</span> Toggle catalog</button>
+        <button class="nav-link" data-folio="iv"><span class="nav-num">IV</span> How it binds</button>
+        <button class="nav-link" data-folio="v"><span class="nav-num">V</span> Receipts</button>
+        <button class="nav-link" data-folio="vi"><span class="nav-num">VI</span> About</button>
+      </div>
+    </nav>
+
+    <main class="main">
+
+      <!-- ===== Folio I — BIND ===== -->
+      <section class="folio active" data-folio="i">
+        <div class="folio-head">
+          <div class="folio-eyebrow">Setup &middot; 60 seconds</div>
+          <h1 class="folio-title">Bind your own edition.</h1>
+          <p class="folio-lede">Pick a bundle, fill the project spec, set the toggles you actually want. The page produces a downloadable zip &mdash; opinionated rules, skills, memory, and workflows configured the way you'll use them.</p>
+        </div>
+
+        <div class="step-stack">
+
+          <div class="step">
+            <div class="step-head"><span class="step-num">01</span><h2 class="step-title">Pick a mode</h2></div>
+            <p class="step-helper">Manual sets every toggle here. Discovery lets Claude inspect your repo first and recommend defaults &mdash; you confirm before files land.</p>
+            <div class="mode-row" id="mode-row">
+              <div class="mode selected" data-mode="manual">
+                <div class="mode-tag">Mode &middot; Manual</div>
+                <div class="mode-name">Set toggles yourself</div>
+                <div class="mode-desc">Best when you already know the project shape. Every toggle resolved here on this page.</div>
+              </div>
+              <div class="mode" data-mode="discovery">
+                <div class="mode-tag">Mode &middot; Discovery</div>
+                <div class="mode-name">Let Claude audit first</div>
+                <div class="mode-desc">Claude inspects the repo, names the stack, proposes a bundle + toggle defaults. You confirm before anything's written.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-head"><span class="step-num">02</span><h2 class="step-title">Choose a bundle</h2></div>
+            <p class="step-helper"><span class="mt">Four shapes. Solo &middot; personal is the loosest; Client &middot; team is the strictest. Toggles below pre-fill from this choice.</span><span class="dt">Pick the bundle that fits the project shape. In Discovery mode this is your <strong>baseline</strong> — Claude refines toggle defaults within this bundle's discipline rather than picking from scratch.</span></p>
+            <div class="bundle-grid" id="bundle-grid">
+              <div class="bundle selected" data-bundle="1-solo-personal">
+                <div class="bundle-row"><span class="bundle-num">N&deg; 01</span><span class="bundle-tag">Loosest</span></div>
+                <div class="bundle-name">Solo &middot; personal</div>
+                <div class="bundle-desc">Single-author, single-machine. Aggressive auto-merge, lean PR ritual, full personal memory.</div>
+              </div>
+              <div class="bundle" data-bundle="2-multi-dev-oss">
+                <div class="bundle-row"><span class="bundle-num">N&deg; 02</span><span class="bundle-tag">Open</span></div>
+                <div class="bundle-name">Multi-dev &middot; OSS</div>
+                <div class="bundle-desc">Public or community-collaborative. Conservative PR rituals, CODEOWNERS, contributing surface.</div>
+              </div>
+              <div class="bundle" data-bundle="3-client-solo">
+                <div class="bundle-row"><span class="bundle-num">N&deg; 03</span><span class="bundle-tag">Confidential</span></div>
+                <div class="bundle-name">Client &middot; solo</div>
+                <div class="bundle-desc">One contractor, one client. NDA-aware memory, audit-trail commits, billable handoff at session-close.</div>
+              </div>
+              <div class="bundle" data-bundle="4-client-team">
+                <div class="bundle-row"><span class="bundle-num">N&deg; 04</span><span class="bundle-tag">Strictest</span></div>
+                <div class="bundle-name">Client &middot; team</div>
+                <div class="bundle-desc">Strictest. Mandatory deep review, team-handoff notes, role-scoped isolation, full audit surface.</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Discovery-mode panel (replaces Project + Toggles when Discovery is selected) -->
+          <div class="step discovery-only hidden" id="discovery-panel">
+            <div class="step-head"><span class="step-num">03 + 05</span><h2 class="step-title">Skipped in Discovery mode</h2></div>
+            <p class="step-helper">Claude resolves project metadata (step 03) and toggle defaults (step 05) by inspecting your repo, constrained by the bundle you picked above as the baseline. Tools (step 04) stays &mdash; pre-specify them or let Claude detect them too.</p>
+            <div class="discovery-notice">
+              <div class="nh">
+                <span class="nh-tag">What Claude figures out</span>
+                <span class="nh-title">Project &amp; toggles.</span>
+              </div>
+              <p class="nd">In Discovery mode you only commit to <strong>mode</strong> (step 1), <strong>bundle</strong> (step 2), and optionally <strong>tools</strong> (step 4). Claude infers the rest from your codebase:</p>
+              <ol>
+                <li><strong>Project metadata</strong> — name, repo URL, default branch, tech stack, license &mdash; from <code>package.json</code> / <code>Cargo.toml</code> / <code>.git/config</code> / existing <code>LICENSE</code>.</li>
+                <li><strong>Toggle overrides on top of the bundle defaults</strong> — e.g. if your repo is open-source it'll suggest <code>contributing_md</code> ON; if there's a paths-ignore-eligible workflow it'll suggest <code>auto_merge</code> ON. Universally-off toggles (specialised rules like <code>clean_room_rule</code>, <code>dod_devlog_step</code>) get promoted to <strong>ask</strong> so Claude evaluates whether your project fits them.</li>
+                <li><strong>Walks you through the proposal</strong> before any file is written. You confirm; files land.</li>
+              </ol>
+            </div>
+          </div>
+
+          <div class="step manual-only">
+            <div class="step-head"><span class="step-num">03</span><h2 class="step-title">Project specification</h2></div>
+            <p class="step-helper">The five things Claude can't infer from your code. Can also be left blank and filled in chat.</p>
+            <div class="field-grid">
+              <div class="field full"><label>Project name</label><input id="f-project" placeholder="acme-billing" autocomplete="off"><div class="hint">As it should appear in <code>CLAUDE.md</code> and PR titles.</div></div>
+              <div class="field"><label>Repo URL</label><input id="f-repo" placeholder="https://github.com/acme/billing" autocomplete="off"></div>
+              <div class="field"><label>Default branch</label><select id="f-branch"><option value="main">main</option><option value="master">master</option><option value="develop">develop</option><option value="trunk">trunk</option></select></div>
+              <div class="field full"><label>Tech stack <span style="text-transform: none; letter-spacing: 0; color: var(--text-4); font-size: 11px; font-weight: 400;">&mdash; comma-separated</span></label><input id="f-stack" placeholder="TypeScript, React, Next.js, PostgreSQL" autocomplete="off"><div class="hint">Shapes the pre-approved permission list + scaffolds language rules.</div></div>
+              <div class="field full"><label>License</label><select id="f-license"><option value="MIT">MIT</option><option value="Apache-2.0">Apache-2.0</option><option value="BSD-3-Clause">BSD-3-Clause</option><option value="GPL-3.0">GPL-3.0</option><option value="proprietary">Proprietary / unlicensed</option></select></div>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-head"><span class="step-num">04</span><h2 class="step-title">Tools</h2></div>
+            <p class="step-helper"><span class="mt">Tell the templates which concrete tool you use for each role. Defaults assume the most common choice; pick <em>Other</em> to write in any tool that serves the same purpose. Files that reference these tools will use the names you provide.</span><span class="dt">Optional in Discovery mode &mdash; Claude can detect most of these by inspecting your repo (e.g. <code>.husky/</code> implies husky). Pre-specify here only when you want to override the detection or you're adopting a tool you don't yet use.</span></p>
+            <div class="field-grid">
+              <div class="field">
+                <label>Code-research tool</label>
+                <select id="t-code_research">
+                  <option value="tokensave">tokensave (MCP)</option>
+                  <option value="ast-grep">ast-grep</option>
+                  <option value="sourcegraph">Sourcegraph</option>
+                  <option value="ctags">ctags / Universal Ctags</option>
+                  <option value="semgrep">Semgrep</option>
+                  <option value="none">None &mdash; grep / glob is fine</option>
+                  <option value="other">Other (specify)</option>
+                </select>
+                <input class="tool-custom hidden" id="t-code_research-custom" placeholder="Tool name" autocomplete="off">
+                <div class="hint">"Where is X / what calls Y" lookups before reading whole files. Rules + hooks reference this name.</div>
+              </div>
+              <div class="field">
+                <label>Pre-commit framework</label>
+                <select id="t-precommit">
+                  <option value="lefthook">lefthook</option>
+                  <option value="husky">husky</option>
+                  <option value="pre-commit">pre-commit (Python)</option>
+                  <option value="simple-git-hooks">simple-git-hooks</option>
+                  <option value="none">None</option>
+                  <option value="other">Other (specify)</option>
+                </select>
+                <input class="tool-custom hidden" id="t-precommit-custom" placeholder="Tool name" autocomplete="off">
+                <div class="hint">Local hook runner for lint / typecheck / test on commit.</div>
+              </div>
+              <div class="field">
+                <label>CI provider</label>
+                <select id="t-ci">
+                  <option value="github-actions">GitHub Actions</option>
+                  <option value="gitlab-ci">GitLab CI</option>
+                  <option value="circleci">CircleCI</option>
+                  <option value="jenkins">Jenkins</option>
+                  <option value="buildkite">Buildkite</option>
+                  <option value="none">None</option>
+                  <option value="other">Other (specify)</option>
+                </select>
+                <input class="tool-custom hidden" id="t-ci-custom" placeholder="Tool name" autocomplete="off">
+                <div class="hint">Where review + build workflows run. Affects workflow YAMLs that ship.</div>
+              </div>
+              <div class="field">
+                <label>AI reviewer</label>
+                <select id="t-ai_reviewer">
+                  <option value="claude">Claude</option>
+                  <option value="coderabbit">CodeRabbit</option>
+                  <option value="bito">Bito</option>
+                  <option value="sourcery">Sourcery</option>
+                  <option value="codium">Codium / Qodo</option>
+                  <option value="none">None &mdash; human review only</option>
+                  <option value="other">Other (specify)</option>
+                </select>
+                <input class="tool-custom hidden" id="t-ai_reviewer-custom" placeholder="Tool name" autocomplete="off">
+                <div class="hint">Automated review bot on PRs. Affects review-tiers.md + CI workflow.</div>
+              </div>
+              <div class="field">
+                <label>Issue tracker</label>
+                <select id="t-issue_tracker">
+                  <option value="github">GitHub Issues</option>
+                  <option value="linear">Linear</option>
+                  <option value="jira">Jira</option>
+                  <option value="notion">Notion</option>
+                  <option value="shortcut">Shortcut</option>
+                  <option value="none">None</option>
+                  <option value="other">Other (specify)</option>
+                </select>
+                <input class="tool-custom hidden" id="t-issue_tracker-custom" placeholder="Tool name" autocomplete="off">
+                <div class="hint">Where bugs / features get tracked. Affects audit-trail PR fields + issue templates.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="step manual-only">
+            <div class="step-head"><span class="step-num">05</span><h2 class="step-title">Toggles</h2></div>
+            <p class="step-helper">Click to cycle: <strong>on</strong> &rarr; off &rarr; ask &rarr; on. <em>Ask</em> defers the decision to Claude during setup. A left accent bar marks any toggle changed from the bundle's default.</p>
+            <div id="toggle-host" class="toggle-group"></div>
+          </div>
+
+          <div class="step">
+            <div class="step-head"><span class="step-num">06</span><h2 class="step-title"><span class="mt">Bind &amp; download</span><span class="dt">Get the starter pack</span></h2></div>
+            <p class="step-helper"><span class="mt">Two paths produce the same end state. Path A is one click. Path B is optional &mdash; use it when you want Claude to walk through the changes before they land.</span><span class="dt">Two sequential actions. Step 5a downloads the templates Claude will read. Step 5b copies the discovery prompt you'll paste in Claude Code. <strong>Both are required</strong> &mdash; no <code>git clone</code> needed; the zip is the source.</span></p>
+
+            <div class="paths-grid">
+              <div class="path recommended">
+                <div class="path-mark"><span class="mt">A</span><span class="dt">5a</span></div>
+                <div class="path-body">
+                  <div class="path-head-row">
+                    <h3 class="path-name"><span class="mt">Fast &mdash; bind &amp; download</span><span class="dt">Download templates pack</span></h3>
+                    <span class="path-tag"><span class="mt">Recommended</span><span class="dt">Step 1 of 2</span></span>
+                  </div>
+                  <p class="path-text"><span class="mt">One click. The page assembles a zip containing the bundle's files, filtered to your toggle selections, and downloads it. No <code>git clone</code> required.</span><span class="dt">Zip contains the full templates source (no toggle filtering &mdash; Claude resolves them) plus a <code>bundle.json</code> that seeds Claude with your selected bundle.</span></p>
+                  <ol class="path-steps">
+                    <li>Click the button below</li>
+                    <li>Unzip at your project root</li>
+                    <li class="mt">Commit: <code>chore: install claude-code-templates v1.0.0</code></li>
+                    <li class="dt">Proceed to step 5b below</li>
+                  </ol>
+                  <button class="btn btn-primary" id="bind-volume">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    <span class="mt">Bind volume &amp; download</span><span class="dt">Download templates pack</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="path">
+                <div class="path-mark"><span class="mt">B</span><span class="dt">5b</span></div>
+                <div class="path-body">
+                  <div class="path-head-row">
+                    <h3 class="path-name"><span class="mt">Careful &mdash; paste config to Claude</span><span class="dt">Run discovery in Claude Code</span></h3>
+                    <span class="path-tag muted"><span class="mt">Optional</span><span class="dt">Step 2 of 2</span></span>
+                  </div>
+                  <p class="path-text"><span class="mt">After you've unzipped the templates pack (path A), Claude can do the apply for you &mdash; useful if you want to inspect each change. Claude reads <code>SETUP.md</code> from the unzipped folder and proposes a plan before writing.</span><span class="dt">After unzipping the pack from step 5a, paste the discovery prompt below into a fresh Claude Code session in your project root. Claude reads <code>SETUP.md</code> + <code>bundle.json</code>, inspects your repo, proposes metadata + toggle overrides, and applies on confirmation.</span></p>
+                  <ol class="path-steps">
+                    <li class="mt">Unzip the templates pack from path A first</li>
+                    <li class="dt">Make sure the pack from 5a is unzipped at your project root</li>
+                    <li>Open Claude Code in your project root</li>
+                    <li>Click <em>Copy</em> below, paste as your first message</li>
+                    <li>Claude proposes a plan, you confirm</li>
+                  </ol>
+                  <button class="btn btn-ghost" id="copy-config">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    <span class="mt">Copy config</span><span class="dt">Copy discovery prompt</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="path-bind-stat-row">
+              <span class="label">Current selection</span>
+              <span class="bind-stat" id="bind-stat"><strong>0</strong> on &middot; 0 off &middot; 0 ask</span>
+            </div>
+
+            <div class="code-out">
+              <div class="code-out-head"><span><span class="mt">Paste-to-Claude config (Path B)</span><span class="dt">Discovery prompt (Step 5b)</span></span><div class="dot-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div></div>
+              <pre id="config-output"></pre>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ===== Folio II — COMPARE ===== -->
+      <section class="folio" data-folio="ii">
+        <div class="folio-head">
+          <div class="folio-eyebrow">Side by side</div>
+          <h1 class="folio-title">Compare the four bundles.</h1>
+          <p class="folio-lede">Each bundle is a different discipline shape, tuned for the actual context the work happens in. The same rules don't fit all of these &mdash; that's the point.</p>
+        </div>
+
+        <h2 class="sec">Feature matrix</h2>
+        <p class="sec-sub">What ships by default in each bundle.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Concern</th><th>1 &middot; Solo</th><th>2 &middot; OSS</th><th>3 &middot; Client solo</th><th>4 &middot; Client team</th></tr></thead>
+          <tbody>
+            <tr><td>git.md</td><td>Atomic + Gitflow</td><td>+ team etiquette</td><td>+ audit-trail</td><td>+ role-scoped</td></tr>
+            <tr><td>token-efficiency.md</td><td>Aggressive (auto-merge)</td><td>Conservative</td><td>Aggressive on own work</td><td>Conservative</td></tr>
+            <tr><td>review-tiers.md</td><td>Routine + auto-trigger</td><td>Routine + always-deep</td><td>Routine + audit trigger</td><td>Routine + mandatory deep</td></tr>
+            <tr><td>Memory system</td><td>Rich, personal</td><td>Per dev (not in repo)</td><td>NDA-aware</td><td>NDA-aware + role-scoped</td></tr>
+            <tr><td>Global ~/.claude</td><td>Tokensave-first</td><td>Tokensave-first</td><td>+ Per-client namespace</td><td>+ Per-client isolation</td></tr>
+            <tr><td>CODEOWNERS</td><td class="center no">&mdash;</td><td class="center partial">optional</td><td class="center no">&mdash;</td><td class="center yes">required</td></tr>
+            <tr><td>CONTRIBUTING.md</td><td class="center no">&mdash;</td><td class="center yes">yes</td><td class="center no">&mdash;</td><td class="center yes">yes</td></tr>
+            <tr><td>Audit-trail commits</td><td class="center no">&mdash;</td><td class="center no">&mdash;</td><td class="center yes">yes</td><td class="center yes">yes</td></tr>
+            <tr><td>Billable handoff @ close</td><td class="center no">&mdash;</td><td class="center no">&mdash;</td><td class="center yes">yes</td><td class="center no">&mdash;</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 class="sec">Solidity tiers</h2>
+        <p class="sec-sub">Each bundle stacks tiers. Bronze is bare minimum; each successive tier adds the next discipline layer.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Tier</th><th>What lands</th><th>Pick it when</th></tr></thead>
+          <tbody>
+            <tr><td>Bronze</td><td>CLAUDE.md only</td><td>Throwaway experiments, one-week prototypes</td></tr>
+            <tr><td>Silver</td><td>+ git.md + token-efficiency.md</td><td>Baseline of any bundle. Don't go below this.</td></tr>
+            <tr><td>Gold</td><td>+ review-tiers.md + memory + skills</td><td>Solo &middot; personal default</td></tr>
+            <tr><td>Platinum</td><td>+ CODEOWNERS + collaboration.md + audit fields</td><td>OSS and Client &middot; team stack onto Gold</td></tr>
+            <tr><td>Diamond</td><td>+ confidentiality + per-client isolation</td><td>Strict client engagements; Client &middot; team default</td></tr>
+          </tbody>
+        </table></div>
+
+        <h2 class="sec">Decision tree</h2>
+        <p class="sec-sub">Walk it top-down. The first answer that branches you out is your bundle.</p>
+        <div class="decisions">
+          <div class="decision"><div class="decision-num">Q1</div><div><div class="decision-q">Is anyone else committing to this repo?</div><div class="decision-a">If no &rarr; <strong>Solo &middot; personal</strong>. If yes &rarr; Q2.</div></div></div>
+          <div class="decision"><div class="decision-num">Q2</div><div><div class="decision-q">Is the repo public-facing?</div><div class="decision-a">If yes &rarr; <strong>Multi-dev &middot; OSS</strong>. If private &rarr; Q3.</div></div></div>
+          <div class="decision"><div class="decision-num">Q3</div><div><div class="decision-q">Is the work for a paying client under contract?</div><div class="decision-a">If no &rarr; <strong>Multi-dev &middot; OSS</strong> (private mode). If yes &rarr; Q4.</div></div></div>
+          <div class="decision"><div class="decision-num">Q4</div><div><div class="decision-q">Are you the only person on the engagement?</div><div class="decision-a">If yes &rarr; <strong>Client &middot; solo</strong>. If no &rarr; <strong>Client &middot; team</strong>.</div></div></div>
+        </div>
+
+        <p class="pullquote">No bundle wins. The right bundle is the one you'll actually follow.</p>
+      </section>
+
+      <!-- ===== Folio III — CATALOG ===== -->
+      <section class="folio" data-folio="iii">
+        <div class="folio-head">
+          <div class="folio-eyebrow">Complete reference</div>
+          <h1 class="folio-title">Every toggle, plainly stated.</h1>
+          <p class="folio-lede">Each row: what the toggle does, what it controls on disk, and how each bundle defaults it. <code>&check;</code> on by default &middot; <code>&mdash;</code> off &middot; <code>?</code> bundle asks during setup.</p>
+        </div>
+
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Toggle</th>
+            <th class="center">1 &middot; Solo</th>
+            <th class="center">2 &middot; OSS</th>
+            <th class="center">3 &middot; Client solo</th>
+            <th class="center">4 &middot; Client team</th>
+            <th>Controls</th>
+          </tr></thead>
+          <tbody id="catalog-tbody"></tbody>
+        </table></div>
+
+        <h2 class="sec">Toggle marker syntax</h2>
+        <p class="sec-sub">Template files wrap toggle-controlled regions with HTML-style markers. When a toggle is off, the marker block is stripped at bind time.</p>
+        <div class="code-out">
+          <div class="code-out-head"><span>marker syntax</span><div class="dot-row"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div></div>
+          <pre>&lt;!-- TOGGLE:codeowners START --&gt;
+This text only appears if `codeowners` is ON.
+&lt;!-- TOGGLE:codeowners END --&gt;
+
+&lt;!-- TOGGLE:auto_merge:off START --&gt;
+Without auto-merge, follow this manual checklist.
+&lt;!-- TOGGLE:auto_merge:off END --&gt;</pre>
+        </div>
+        <p style="margin-top: var(--s-4); font-size: 13.5px; color: var(--text-3); line-height: 1.6;">An <code>:off</code> suffix inverts the marker &mdash; the block appears <strong>only when the toggle is off</strong>. Useful for "the manual fallback when the automation isn't enabled" prose.</p>
+      </section>
+
+      <!-- ===== Folio IV — HOW ===== -->
+      <section class="folio" data-folio="iv">
+        <div class="folio-head">
+          <div class="folio-eyebrow">Process</div>
+          <h1 class="folio-title">How the binding happens.</h1>
+          <p class="folio-lede">Two paths produce the same end state. The fast path is the in-browser binder; the careful path is Claude executing <code>SETUP.md</code> against your repo.</p>
+        </div>
+
+        <h2 class="sec">The fast path &mdash; in-browser bind</h2>
+        <ul class="bullets" style="list-style: decimal;">
+          <li><strong>You pick toggles.</strong> State lives in memory only &mdash; nothing transmitted.</li>
+          <li><strong>You click Bind volume.</strong> The page fetches template files from this domain, applies toggle filtering inline, and assembles a zip via JSZip.</li>
+          <li><strong>Download fires.</strong> Zip lands as <code>claude-code-templates-&lt;bundle&gt;-v1.0.0.zip</code>.</li>
+          <li><strong>You unzip at your project root.</strong> The bundle's <code>CLAUDE.md</code>, <code>.claude/</code>, optional <code>.github/</code>, and any other selected files appear in place.</li>
+          <li><strong>You commit.</strong> Suggested: <code>chore: install claude-code-templates v1.0.0 (&lt;bundle&gt;)</code>.</li>
+        </ul>
+
+        <h2 class="sec">The careful path &mdash; paste to Claude</h2>
+        <p>Want a planning step before files land? Copy the JSON config from Folio I and paste it into a fresh Claude Code session. Claude reads <code>SETUP.md</code> and walks four phases:</p>
+
+        <h3 class="sub">Phase 1 &middot; Validate</h3>
+        <p>Claude confirms project name, repo, branch, and stack from the JSON. Missing fields get a short interview. Toggles marked "ask" get resolved in conversation.</p>
+
+        <h3 class="sub">Phase 2 &middot; Plan</h3>
+        <p>Claude prints the file list it's about to create, with bundle resolution and toggle-default expansion shown explicitly. You review before any file is written.</p>
+
+        <h3 class="sub">Phase 3 &middot; Apply</h3>
+        <p>Files land. Each one created with toggle blocks resolved against your config. Existing files are <em>never</em> overwritten without explicit confirmation.</p>
+
+        <h3 class="sub">Phase 4 &middot; Cleanup</h3>
+        <p>If you used the fast-path zip, the <code>claude-code-templates/</code> source folder can be deleted from your project root &mdash; only the rendered output is needed. Claude asks via <code>AskUserQuestion</code> with three options: keep, delete-from-tree, or delete-from-git.</p>
+
+        <h2 class="sec">Re-running setup</h2>
+        <p>Setup is idempotent. Re-pasting the same JSON updates toggle-resolved blocks in-place without disturbing your edits &mdash; unless you've moved one of the template-controlled regions, in which case Claude pauses and asks.</p>
+      </section>
+
+      <!-- ===== Folio V — RECEIPTS ===== -->
+      <section class="folio" data-folio="v">
+        <div class="folio-head">
+          <div class="folio-eyebrow">Telemetry &middot; honest framing</div>
+          <h1 class="folio-title">Does this discipline actually move metrics?</h1>
+          <p class="folio-lede">Some numbers favour the rules; some embarrass them. Both are printed. The discipline only works when applied &mdash; and the data shows where it isn't yet.</p>
+        </div>
+
+        <div class="editors-note">
+          <span class="editors-note-tag">Editor's note</span>
+          <p>All figures below are the editor's own measured discipline across <strong>two private projects</strong> during the printed period. Numbers are real; project names are anonymised as <em>project A</em> and <em>project B</em>. Your own results will differ &mdash; sometimes meaningfully &mdash; and the methodology box at the end names the exact telemetry script and window used.</p>
+        </div>
+
+        <h2 class="sec">Headline figures</h2>
+        <div class="stats-grid">
+          <div class="stat"><div class="stat-val">143</div><div class="stat-label">Total sessions</div><div class="stat-meta">2026-04-06 &rarr; 2026-05-12 (36 days)</div></div>
+          <div class="stat"><div class="stat-val accent">18.7<span class="unit">M</span></div><div class="stat-label">Output tokens lifetime</div><div class="stat-meta">~130K avg per session</div></div>
+          <div class="stat"><div class="stat-val good">32</div><div class="stat-label">Rules in place now</div><div class="stat-meta">Across both projects combined</div></div>
+          <div class="stat"><div class="stat-val good">117</div><div class="stat-label">Memory entries</div><div class="stat-meta">All four memory types</div></div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat"><div class="stat-val good">11</div><div class="stat-label">Invokable skills</div><div class="stat-meta">Session ritual + topical</div></div>
+          <div class="stat"><div class="stat-val accent">&minus;18.4<span class="unit">%</span></div><div class="stat-label">Tool errors / session</div><div class="stat-meta">Before vs after stack-specific rules in project B</div></div>
+          <div class="stat"><div class="stat-val">131</div><div class="stat-label">Sessions on Max &times;5</div><div class="stat-meta">2026-04-25 &rarr; 2026-05-12</div></div>
+          <div class="stat"><div class="stat-val bad">~38</div><div class="stat-label">Pro ceiling-hits avoided</div><div class="stat-meta">Estimate &mdash; see methodology</div></div>
+        </div>
+
+        <h2 class="sec">The most expensive thing the rules prevent</h2>
+        <p class="sec-sub">One concrete moment &mdash; the receipt that earned the visual-slice rule.</p>
+        <div class="receipts">
+          <div class="receipt">
+            <div class="receipt-head"><div class="what">Two consecutive PRs on one visual feature, both abandoned</div><div class="when">2026-05-08</div><div class="burn">~3.1M tokens burned</div></div>
+            <div class="receipt-body"><p>Across 4 sessions in a single day, two PRs attempted to land a complex visual subsystem as a single-PR MVP dump. Both were abandoned after burning ~3.1M output tokens chasing visual iteration that never settled. The design was scrapped and replaced with a simpler approach.</p><span class="receipt-rule">Rule that prevents the repeat: <code>.claude/rules/visual.md</code> &mdash; ship one verifiable slice at a time, with a debug toggle in place from line 1, and a pause before the next slice.</span></div>
+          </div>
+          <div class="receipt">
+            <div class="receipt-head"><div class="what">Largest single-session output burn</div><div class="when">2026-05-08</div><div class="burn">1.12M out &middot; 446 min &middot; 27 files</div></div>
+            <div class="receipt-body"><p>One marathon session producing 1.12M output tokens, 4,128 lines added across 27 files. The token-efficiency "long-session signals" rule targets exactly this shape &mdash; when context is saturated, tool calls slow, and reads of the same file repeat, the rule says cut and start fresh.</p><span class="receipt-rule">Rule that prevents the repeat: <code>.claude/rules/token-efficiency.md</code> &sect; "Long-session signals &rarr; cut immediately"</span></div>
+          </div>
+          <div class="receipt">
+            <div class="receipt-head"><div class="what">Highest tool-error session</div><div class="when">2026-05-08</div><div class="burn">17 errors &middot; 887K tokens</div></div>
+            <div class="receipt-body"><p>17 tool errors in one session. Each error is a wasted round-trip and a small context burn. Root causes: <code>&amp;&amp;</code>-chained Bash commands stalling on partial permission deny, repeated reads of just-edited files, hitting denied destructive commands without a fallback.</p><span class="receipt-rule">Rule that prevents the repeat: memory <code>feedback_atomic_bash_commands</code> &mdash; one Bash call per logical step.</span></div>
+          </div>
+        </div>
+
+        <h2 class="sec">Rule adoption timeline</h2>
+        <p class="sec-sub">Each marker is a date a rule first landed. Discipline accreted bit by bit &mdash; no big-bang.</p>
+        <div class="timeline">
+          <div class="timeline-item"><div class="timeline-when">2026-03-26</div><div class="timeline-what">git.md + CLAUDE.md + code-review.md <span class="timeline-tag">project A</span></div><div class="timeline-why">Atomic commits + Gitflow + binary &#x1F534;/&#x1F7E2; verdict &mdash; made the merge gate real. CLAUDE.md added session-start ritual + DoD verification + tokensave-first directive.</div></div>
+          <div class="timeline-item"><div class="timeline-when">2026-03-29</div><div class="timeline-what">token-efficiency.md <span class="timeline-tag">project A</span></div><div class="timeline-why">Polling loops + read-before-write + paths-ignore auto-merge &mdash; cut CI cost and wasted re-reads.</div></div>
+          <div class="timeline-item"><div class="timeline-when">2026-04-07</div><div class="timeline-what">review-process.md <span class="timeline-tag">project A</span></div><div class="timeline-why">Path-triggered review rules &mdash; review depth scales to diff shape.</div></div>
+          <div class="timeline-item"><div class="timeline-when">2026-04-25</div><div class="timeline-what">stack-specific perf + API-doc rules <span class="timeline-tag">project B</span></div><div class="timeline-why">Performance rules baked in from milestone 1 &mdash; no retrofit cost. Plus an API documentation convention. Followed by &minus;18.4% drop in tool-errors-per-session.</div></div>
+          <div class="timeline-item"><div class="timeline-when">2026-05-03</div><div class="timeline-what">threading.md <span class="timeline-tag">project B</span></div><div class="timeline-why">Threading wrapper + 2-stage pipeline canonical pattern &mdash; no more raw-thread regressions.</div></div>
+          <div class="timeline-item"><div class="timeline-when">2026-05-07</div><div class="timeline-what">clean_room.md <span class="timeline-tag">project B</span></div><div class="timeline-why">Operational checklist for derived-from-prior-art legal stance &mdash; verdicts, not copies.</div></div>
+          <div class="timeline-item"><div class="timeline-when">2026-05-12</div><div class="timeline-what">visual.md <span class="timeline-tag">project B</span></div><div class="timeline-why">Ship one verifiable visual slice at a time &mdash; written as the direct retro of the abandoned-PR receipt above.</div></div>
+        </div>
+
+        <h2 class="sec">Weekly session volume</h2>
+        <p class="sec-sub">Bar height = average output tokens per session that week. Hover for detail.</p>
+        <div class="bars">
+          <div class="bar"><div class="bar-fill" style="height: 20%" data-tip="7 sessions &middot; 53K &middot; Pro"></div><div class="bar-label">Apr 06</div></div>
+          <div class="bar"><div class="bar-fill" style="height: 55%" data-tip="1 session &middot; 150K &middot; Pro ceiling hit"></div><div class="bar-label">Apr 13</div></div>
+          <div class="bar"><div class="bar-fill" style="height: 67%" data-tip="9 sessions &middot; 181K &middot; last Pro week"></div><div class="bar-label">Apr 20</div></div>
+          <div class="bar"><div class="bar-fill" style="height: 34%" data-tip="71 sessions &middot; 93K &middot; Max ×5 starts"></div><div class="bar-label">Apr 27</div></div>
+          <div class="bar"><div class="bar-fill" style="height: 65%" data-tip="52 sessions &middot; 175K"></div><div class="bar-label">May 04</div></div>
+          <div class="bar"><div class="bar-fill" style="height: 100%" data-tip="3 sessions &middot; 272K &middot; highest"></div><div class="bar-label">May 11</div></div>
+        </div>
+        <p style="font-size: 13px; color: var(--text-3); margin-top: var(--s-2);">Note the inflection at <strong>Apr 27</strong> &mdash; first full week on Max &times;5. Session count jumped ~10&times;; average per-session tokens stayed flat. The discipline absorbed Max's headroom without burning it on a few long sessions.</p>
+
+        <h2 class="sec">Tool-usage shift</h2>
+        <p class="sec-sub">First half of the dataset (71 sessions) vs second half (72 sessions). The single most damning finding is at the bottom.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Tool</th><th class="center">First half</th><th class="center">Second half</th><th class="center">&Delta;</th></tr></thead>
+          <tbody>
+            <tr><td>Read</td><td class="center">16.6%</td><td class="center">12.7%</td><td class="center bad">&minus;3.9 pp</td></tr>
+            <tr><td>Grep</td><td class="center">2.0%</td><td class="center">3.3%</td><td class="center yes">+1.3 pp</td></tr>
+            <tr><td>Glob</td><td class="center">3.9%</td><td class="center">3.7%</td><td class="center no">&minus;0.2 pp</td></tr>
+            <tr><td>Bash</td><td class="center">42.5%</td><td class="center">45.6%</td><td class="center yes">+3.1 pp</td></tr>
+            <tr><td>tokensave_*</td><td class="center">2.5%</td><td class="center">0.9%</td><td class="center bad">&minus;1.6 pp</td></tr>
+            <tr><td>Edit</td><td class="center">15.2%</td><td class="center">15.4%</td><td class="center no">+0.2 pp</td></tr>
+            <tr><td>Write</td><td class="center">6.5%</td><td class="center">4.5%</td><td class="center bad">&minus;2.0 pp</td></tr>
+          </tbody>
+        </table></div>
+
+        <p class="pullquote">The tokensave-first rule was added but adoption is still spotty (hit in only 14/86 recent sessions). This is a signal &mdash; not a win.</p>
+
+        <p>Bash usage grew because Max-period work has more shell-driven setup / git / gh activity. The rule corpus now ships a hook-enforced version of tokensave-first to invert this trend. Receipts on whether that worked will land in a future edition.</p>
+
+        <div class="method">
+          <h3 class="sub" style="margin-top: 0;">Caveats &amp; methodology</h3>
+          <ul>
+            <li><strong>Data source:</strong> per-session telemetry at <code>~/.claude/usage-data/session-meta/</code> (143 files) + <code>facets/</code> (88 files). Earliest session 2026-04-06; latest 2026-05-12. Span: 36 days.</li>
+            <li><strong>Project names anonymised</strong> as "project A" + "project B". Numbers, dates, and rule names are real; no commit-author names, no client names, no repo URLs.</li>
+            <li><strong>Pro&rarr;Max boundary detection:</strong> first date a single session exceeded 250K output tokens &mdash; 2026-04-25. Pre-boundary max single-session output: 149,532. Post-boundary jumps to 1.12M.</li>
+            <li><strong>Rule-delta comparisons</strong> use 21-day windows before/after the rule landed. Token-volume deltas are <em>confounded</em> by project scope growth, so they're directional. Tool-errors-per-session is the cleaner signal.</li>
+            <li><strong>All Pro projections are estimates.</strong> Pro's 5-hour rolling window + message-count caps aren't modelled. Treat as directional, not exact.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ===== Folio VI — ABOUT ===== -->
+      <section class="folio" data-folio="vi">
+        <div class="folio-head">
+          <div class="folio-eyebrow">Colophon</div>
+          <h1 class="folio-title">About this edition.</h1>
+          <p class="folio-lede">A short note on where the templates came from, what's bundled, and how this site is maintained.</p>
+        </div>
+
+        <h2 class="sec">Where this comes from</h2>
+        <p>These templates were extracted from two private projects &mdash; one consumer-software shop, one solo voxel-game build &mdash; across ~36 days of disciplined Claude Code work. Every rule, skill, and memory pattern bundled here was earned from a receipt: a specific moment where its absence produced a measurable cost. The receipts folio prints the most expensive of those moments verbatim.</p>
+        <p style="margin-top: var(--s-3);">The bundles are opinions, not standards. <em style="color: var(--accent); font-style: normal;">Solo &middot; personal</em> defaults aggressively because the cost of a wrong call is one developer's afternoon. <em style="color: var(--accent); font-style: normal;">Client &middot; team</em> defaults conservatively because the cost is a contract.</p>
+
+        <h2 class="sec">What's in the bundle</h2>
+        <div class="tree">claude-code-templates/
+&#9500;&#9472;&#9472; <span class="file">index.html</span>              <span class="com">&larr; this page</span>
+&#9500;&#9472;&#9472; <span class="file">README.md</span>
+&#9500;&#9472;&#9472; <span class="file">CHANGELOG.md</span>            <span class="com">&larr; version history</span>
+&#9500;&#9472;&#9472; <span class="file">CONTRIBUTING.md</span>
+&#9500;&#9472;&#9472; <span class="file">LICENSE</span>                 <span class="com">&larr; MIT</span>
+&#9500;&#9472;&#9472; <span class="file">VERSION</span>                 <span class="com">&larr; v1.0.0 (this edition)</span>
+&#9500;&#9472;&#9472; <span class="file">COMPARISON.md</span>           <span class="com">&larr; Folio II in markdown</span>
+&#9500;&#9472;&#9472; <span class="file">TOGGLES.md</span>              <span class="com">&larr; Folio III in markdown</span>
+&#9500;&#9472;&#9472; <span class="file">SETUP.md</span>                <span class="com">&larr; orchestration prompt</span>
+&#9500;&#9472;&#9472; _core/
+&#9474;   &#9500;&#9472;&#9472; project-template/   <span class="com">&larr; lands in your repo</span>
+&#9474;   &#9500;&#9472;&#9472; global-template/    <span class="com">&larr; lands in ~/.claude</span>
+&#9474;   &#9492;&#9472;&#9472; licenses/
+&#9492;&#9472;&#9472; bundles/
+    &#9500;&#9472;&#9472; 1-solo-personal/
+    &#9500;&#9472;&#9472; 2-multi-dev-oss/
+    &#9500;&#9472;&#9472; 3-client-solo/
+    &#9492;&#9472;&#9472; 4-client-team/</div>
+
+        <h2 class="sec">Privacy &amp; data</h2>
+        <p>This page runs entirely in your browser. No JSON, telemetry, or configuration is transmitted anywhere &mdash; the binder fetches template files from this domain and assembles the zip client-side via JSZip. No cookies, no analytics, no phone-home.</p>
+
+        <h2 class="sec">Maintenance</h2>
+        <p>Solo-maintained as an open-source side project. Issues + pull requests welcome on a best-effort basis. The discipline behind the templates is the priority; this site exists to make it shareable.</p>
+        <ul class="bullets">
+          <li><strong>Repository:</strong> <a href="https://github.com/starfoxcom/claude-code-templates" target="_blank" rel="noopener">github.com/starfoxcom/claude-code-templates</a></li>
+          <li><strong>License:</strong> MIT</li>
+          <li><strong>Current edition:</strong> <code>v1.0.0</code> &mdash; first file-tracked release; <code>v17</code> existed only as a conversational mention.</li>
+        </ul>
+      </section>
+
+    </main>
+  </div>
+
+  <footer class="footer">
+    <span>claude-code-templates &middot; v1.0.0</span>
+    <span class="sep">&middot;</span>
+    <a href="https://github.com/starfoxcom/claude-code-templates" target="_blank" rel="noopener">GitHub</a>
+    <span class="sep">&middot;</span>
+    <span>MIT licence</span>
+    <span class="sep">&middot;</span>
+    <span>set in Geist</span>
+  </footer>
+
+</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const BUNDLES = ['1-solo-personal', '2-multi-dev-oss', '3-client-solo', '4-client-team'];
+
+  const TOGGLES = [
+    { group: 'CI / Reviews', key: 'github_actions_routine_review', label: 'Routine PR review (Sonnet, binary verdict)', desc: 'Auto-fires on every PR. Posts a 🔴/🟢 comment. Merge gate is real.', controls: '.github/workflows/claude-code-review.yml', defaults: [true, true, null, true] },
+    { group: 'CI / Reviews', key: 'github_actions_deep_review', label: 'On-demand deep review (Opus)', desc: 'Fires when any @claude comment lands on a PR.', controls: '.github/workflows/claude.yml', defaults: [true, true, null, true] },
+    { group: 'CI / Reviews', key: 'github_actions_deep_review_auto_fire', label: 'Auto-fire deep review on trigger surface', desc: 'Routine reviewer applies needs-deep-review label + posts @claude comment for risky diffs.', controls: 'review-tiers.md', defaults: [false, true, false, true] },
+    { group: 'CI / Reviews', key: 'github_actions_paths_ignore_auto_merge', label: 'Auto-merge on paths-ignore PRs', desc: 'Docs / rules / CI-YAML-only PRs auto-merge after 90s grace.', controls: 'token-efficiency.md + git.md', defaults: [true, false, false, false] },
+    { group: 'CI / Reviews', key: 'binary_verdict_rule', label: 'Binary 🔴/🟢 verdict rule', desc: '🟢 only when fully clean. 🔴 when any finding. Stops "minor non-blocking" rot.', controls: 'review-tiers.md + git.md', defaults: [true, true, true, true] },
+    { group: 'CI / Reviews', key: 'mandatory_deep_review_before_merge', label: 'Mandatory deep review before merge', desc: 'On the trigger surface, merge blocked until Opus 🟢 lands.', controls: 'review-tiers.md + git.md', defaults: [false, true, false, true] },
+    { group: 'CI / Reviews', key: 'branch_protection_loose', label: 'Loose branch protection (self-approval)', desc: 'For solo devs.', controls: 'git.md section', defaults: [true, false, null, false] },
+    { group: 'CI / Reviews', key: 'branch_protection_strict', label: 'Strict branch protection (review required)', desc: 'For multi-human repos. Mutually exclusive with loose.', controls: 'git.md section', defaults: [false, true, null, true] },
+
+    { group: 'Project hygiene', key: 'definition_of_done_verification', label: 'Definition-of-done verification', desc: 'Session-close runs per-bullet DoD check.', controls: 'CLAUDE.md + session-close.md', defaults: [true, true, true, true] },
+    { group: 'Project hygiene', key: 'context_refresh_files', label: 'Session-context refresh files', desc: 'Regenerates PROJECT-CONTEXT_YYYY-MM-DD.md at session close.', controls: 'CLAUDE.md + session-close.md', defaults: [true, true, true, true] },
+    { group: 'Project hygiene', key: 'tokensave_entry_point', label: 'Tokensave-first code research (hook-enforced)', desc: 'Routes code research through tokensave (open-source code-graph MCP). Installs the GLOBAL PreToolUse hook + /find skill + CLAUDE.md callout + session-close adherence metric.', controls: 'CLAUDE.md + ~/.claude/hooks/tokensave-first.py + .claude/skills/find/SKILL.md', defaults: [null, null, null, null] },
+    { group: 'Project hygiene', key: 'lazy_rules_folder', label: 'Lazy-loaded rules folder', desc: 'docs/lazy/ for rules that only matter at specific milestones.', controls: 'docs/lazy/ + CLAUDE.md', defaults: [true, true, true, true] },
+    { group: 'Project hygiene', key: 'memory_system', label: 'Per-project memory system', desc: '~/.claude/projects/<slug>/memory/ with 4 memory types.', controls: 'global-template + CLAUDE.md', defaults: [true, true, true, true] },
+    { group: 'Project hygiene', key: 'language_specific_rules_scaffold', label: 'Scaffold language code-style rule', desc: 'Audit codebase, write .claude/rules/code-style.md.', controls: '.claude/rules/code-style.md', defaults: [true, true, true, true] },
+    { group: 'Project hygiene', key: 'architecture_rules_scaffold', label: 'Scaffold architecture rule', desc: 'If clear layer boundaries exist, scaffold .claude/rules/architecture.md.', controls: '.claude/rules/architecture.md', defaults: [null, null, null, null] },
+
+    { group: 'Skills', key: 'skill_session_start', label: '/session-start skill', desc: 'Project status + git status + plan ritual.', controls: '.claude/skills/session-start/SKILL.md', defaults: [true, true, true, true] },
+    { group: 'Skills', key: 'skill_session_close', label: '/session-close skill', desc: 'DoD + commit + PR + poll + merge + cleanup.', controls: '.claude/skills/session-close/SKILL.md', defaults: [true, true, true, true] },
+    { group: 'Skills', key: 'permissions_file_template', label: 'Pre-approved permissions allowlist', desc: '.claude/settings.local.json with safe commands pre-approved.', controls: '.claude/settings.local.json', defaults: [true, true, true, true] },
+
+    { group: 'Optional files', key: 'contributing_md', label: 'CONTRIBUTING.md', desc: 'Public-facing contributor guide.', controls: 'CONTRIBUTING.md', defaults: [false, true, false, true] },
+    { group: 'Optional files', key: 'pr_template', label: 'PR template', desc: '.github/PULL_REQUEST_TEMPLATE.md.', controls: '.github/PULL_REQUEST_TEMPLATE.md', defaults: [false, true, true, true] },
+    { group: 'Optional files', key: 'codeowners', label: 'CODEOWNERS', desc: 'Auto-request reviewers for matching paths.', controls: '.github/CODEOWNERS', defaults: [false, null, false, true] },
+    { group: 'Optional files', key: 'collaboration_rule', label: '.claude/rules/collaboration.md', desc: 'PR etiquette + multi-human branch hygiene.', controls: '.claude/rules/collaboration.md', defaults: [false, true, false, true] },
+
+    { group: 'Confidentiality / Audit', key: 'confidentiality_rule', label: '.claude/rules/confidentiality.md', desc: 'NDA-aware memory + on-machine isolation.', controls: '.claude/rules/confidentiality.md', defaults: [false, false, true, true] },
+    { group: 'Confidentiality / Audit', key: 'audit_trail_commits', label: 'Audit-trail commit / PR fields', desc: 'Per-PR ticket / reviewer / rollback fields.', controls: 'git.md + PR template', defaults: [false, false, true, true] },
+    { group: 'Confidentiality / Audit', key: 'billable_handoff_summary', label: 'Billable handoff summary at session-close', desc: 'Session-close emits scope + time + deliverables.', controls: 'session-close.md', defaults: [false, false, true, false] },
+    { group: 'Confidentiality / Audit', key: 'team_handoff_notes', label: 'Team handoff notes', desc: 'Next team member reads at session-start.', controls: 'session-start + session-close', defaults: [false, false, false, true] },
+    { group: 'Confidentiality / Audit', key: 'oncall_awareness', label: 'On-call awareness section', desc: 'Friday-merge discipline, on-call handoff.', controls: 'collaboration.md section', defaults: [false, null, false, null] },
+
+    { group: 'Project files', key: 'license_file', label: 'LICENSE file', desc: 'Generate a LICENSE from the selected license type (MIT / Apache-2.0 / BSD-3 / Proprietary).', controls: 'LICENSE', defaults: [true, true, null, null] },
+    { group: 'Project files', key: 'readme_scaffold', label: 'README.md scaffold', desc: 'Stub README with sections for quick-start, dev, testing, contributing, license.', controls: 'README.md', defaults: [true, true, null, null] },
+    { group: 'Project files', key: 'changelog_seed', label: 'CHANGELOG.md seed', desc: 'Keep-a-Changelog format with an empty [Unreleased] block.', controls: 'CHANGELOG.md', defaults: [false, true, false, true] },
+    { group: 'Project files', key: 'github_issue_templates', label: 'GitHub issue templates', desc: '.github/ISSUE_TEMPLATE/{bug,feature,config}.yml — guided issue forms.', controls: '.github/ISSUE_TEMPLATE/', defaults: [false, true, false, true] },
+    { group: 'Project files', key: 'precommit_hooks_scaffold', label: 'Pre-commit hooks (lefthook)', desc: 'lefthook.yml template with lint/typecheck/conventional-commit-msg/test hooks.', controls: 'lefthook.yml', defaults: [false, true, false, true] },
+
+    { group: 'Specialized', key: 'clean_room_rule', label: '.claude/rules/clean-room.md', desc: 'For spiritual-successor / derived-from-prior-art projects.', controls: '.claude/rules/clean-room.md', defaults: [false, false, false, false] },
+    { group: 'Specialized', key: 'visual_test_discipline', label: '.claude/rules/visual.md', desc: 'Small visual slices + smoke-test gate. For any project with a UI surface.', controls: '.claude/rules/visual.md', defaults: [null, null, null, null] },
+    { group: 'Specialized', key: 'dod_devlog_step', label: 'Devlog draft on milestone close', desc: 'Session-close generates devlog post draft when milestone flips ✅.', controls: 'session-close.md', defaults: [false, false, false, false] },
+    { group: 'Specialized', key: 'architecture_diagram_skill', label: '/architecture-graph skill', desc: 'Generates a clickable architecture map Claude reads in future sessions instead of grepping.', controls: '.claude/skills/architecture-graph/SKILL.md', defaults: [false, false, false, false] },
+  ];
+
+  const state = {
+    mode: 'manual',
+    bundle: '1-solo-personal',
+    project: '', repo: '', branch: 'main', stack: '', license: 'MIT',
+    toggleOverrides: {},
+    tools: {
+      code_research:  { name: 'tokensave',      custom: '' },
+      precommit:      { name: 'lefthook',       custom: '' },
+      ci:             { name: 'github-actions', custom: '' },
+      ai_reviewer:    { name: 'claude',         custom: '' },
+      issue_tracker:  { name: 'github',         custom: '' },
+    },
+  };
+
+  function showFolio(id) {
+    document.querySelectorAll('.folio').forEach(f => f.classList.toggle('active', f.dataset.folio === id));
+    document.querySelectorAll('.nav-link').forEach(b => b.classList.toggle('active', b.dataset.folio === id));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    history.replaceState(null, '', '#' + id);
+  }
+  document.querySelectorAll('.nav-link').forEach(b => b.addEventListener('click', () => showFolio(b.dataset.folio)));
+  const hash = window.location.hash.slice(1);
+  if (hash && ['i','ii','iii','iv','v','vi'].includes(hash)) showFolio(hash);
+
+  const themeBtn = document.getElementById('theme-toggle');
+  function setTheme(light) {
+    document.documentElement.classList.toggle('light', light);
+    document.getElementById('theme-icon').setAttribute('d',
+      light
+        ? 'M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42M12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10z'
+        : 'M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'
+    );
+    try { localStorage.setItem('cct.theme', light ? 'light' : 'dark'); } catch {}
+  }
+  try {
+    const saved = localStorage.getItem('cct.theme');
+    if (saved === 'light') setTheme(true);
+    else if (!saved && window.matchMedia('(prefers-color-scheme: light)').matches) setTheme(true);
+  } catch {}
+  themeBtn.addEventListener('click', () => setTheme(!document.documentElement.classList.contains('light')));
+
+  document.getElementById('bundle-grid').addEventListener('click', e => {
+    const item = e.target.closest('.bundle'); if (!item) return;
+    state.bundle = item.dataset.bundle;
+    document.querySelectorAll('.bundle').forEach(b => b.classList.toggle('selected', b === item));
+    state.toggleOverrides = {};
+    renderToggles(); renderConfig(); renderBindStat();
+  });
+
+  function applyMode() {
+    const isDiscovery = state.mode === 'discovery';
+    document.documentElement.classList.toggle('is-manual', !isDiscovery);
+    document.documentElement.classList.toggle('is-discovery', isDiscovery);
+    document.querySelectorAll('.manual-only').forEach(s => s.classList.toggle('hidden', isDiscovery));
+    document.querySelectorAll('.discovery-only').forEach(s => s.classList.toggle('hidden', !isDiscovery));
+  }
+  document.getElementById('mode-row').addEventListener('click', e => {
+    const m = e.target.closest('.mode'); if (!m) return;
+    state.mode = m.dataset.mode;
+    document.querySelectorAll('.mode').forEach(x => x.classList.toggle('selected', x === m));
+    applyMode();
+    renderConfig();
+  });
+  applyMode();
+
+  ['f-project','f-repo','f-branch','f-stack','f-license'].forEach(id => {
+    const el = document.getElementById(id);
+    const key = id.slice(2);
+    el.addEventListener('input',  () => { state[key] = el.value; renderConfig(); });
+    el.addEventListener('change', () => { state[key] = el.value; renderConfig(); });
+  });
+
+  // Tools (step 04)
+  ['code_research','precommit','ci','ai_reviewer','issue_tracker'].forEach(key => {
+    const sel = document.getElementById('t-' + key);
+    const custom = document.getElementById('t-' + key + '-custom');
+    sel.addEventListener('change', () => {
+      state.tools[key].name = sel.value;
+      const isOther = sel.value === 'other';
+      custom.classList.toggle('hidden', !isOther);
+      if (!isOther) { state.tools[key].custom = ''; custom.value = ''; }
+      renderConfig();
+    });
+    custom.addEventListener('input', () => {
+      state.tools[key].custom = custom.value;
+      renderConfig();
+    });
+  });
+
+  function toggleStateFor(t) {
+    if (t.key in state.toggleOverrides) return state.toggleOverrides[t.key];
+    // In Discovery mode, a toggle that is `false` across ALL bundles is a "specialised" rule
+    // that requires project-context inspection. Promote those to `null` (ask) so Claude
+    // evaluates them when binding. Bundle-specific `false` values stay (they're deliberate).
+    if (state.mode === 'discovery' && t.defaults.every(d => d === false)) return null;
+    return t.defaults[BUNDLES.indexOf(state.bundle)];
+  }
+  function toolName(slot) {
+    const t = state.tools[slot];
+    return t.name === 'other' ? (t.custom || 'unspecified') : t.name;
+  }
+  function renderToggles() {
+    const host = document.getElementById('toggle-host');
+    let group = null, html = '';
+    TOGGLES.forEach(t => {
+      if (t.group !== group) { group = t.group; html += `<div class="toggle-group-label">${group}</div>`; }
+      const v = toggleStateFor(t);
+      const overridden = (t.key in state.toggleOverrides);
+      let cls = v === true ? 'checked' : v === false ? '' : 'ask';
+      if (overridden) cls += ' modified';
+      const mark = v === true ? 'On' : v === false ? 'Off' : 'Ask';
+      const badge = overridden ? '<span class="toggle-modified-badge">Modified</span>' : '';
+      html += `<div class="toggle ${cls}" data-key="${t.key}" tabindex="0" role="checkbox" aria-checked="${v === true}">
+        <span class="toggle-check"></span>
+        <div class="toggle-text">
+          <div class="toggle-label">${t.label}${badge}</div>
+          <div class="toggle-key">${t.key}</div>
+          <div class="toggle-desc">${t.desc}</div>
+        </div>
+        <span class="toggle-mark">${mark}</span>
+      </div>`;
+    });
+    host.innerHTML = html;
+    host.querySelectorAll('.toggle').forEach(row => {
+      row.addEventListener('click', () => cycleToggle(row.dataset.key));
+      row.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); cycleToggle(row.dataset.key); } });
+    });
+  }
+  function cycleToggle(key) {
+    const t = TOGGLES.find(x => x.key === key); if (!t) return;
+    const cur = toggleStateFor(t);
+    const next = cur === true ? false : cur === false ? null : true;
+    const def = t.defaults[BUNDLES.indexOf(state.bundle)];
+    if (next === def) {
+      delete state.toggleOverrides[key];
+    } else {
+      state.toggleOverrides[key] = next;
+    }
+    renderToggles(); renderConfig(); renderBindStat();
+  }
+
+  function renderCatalog() {
+    const tbody = document.getElementById('catalog-tbody');
+    let group = null, html = '';
+    TOGGLES.forEach(t => {
+      if (t.group !== group) {
+        group = t.group;
+        html += `<tr><td colspan="6" style="background: var(--bg-2); font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--accent); letter-spacing: 0.10em; text-transform: uppercase; padding: 10px 16px; border-bottom: 1px solid var(--border-2);">${group}</td></tr>`;
+      }
+      const cell = v => v === true ? '<td class="center yes">&check;</td>' : v === false ? '<td class="center no">&mdash;</td>' : '<td class="center ask">?</td>';
+      html += `<tr>
+        <td style="font-family: var(--font); font-weight: 500;">
+          <div style="font-family: var(--font); font-size: 13.5px; color: var(--text); margin-bottom: 2px;">${t.label}</div>
+          <div style="font-family: var(--mono); font-size: 10.5px; color: var(--text-4);">${t.key}</div>
+          <div style="font-family: var(--font); font-size: 12px; color: var(--text-3); margin-top: 4px; line-height: 1.5;">${t.desc}</div>
+        </td>
+        ${cell(t.defaults[0])}${cell(t.defaults[1])}${cell(t.defaults[2])}${cell(t.defaults[3])}
+        <td style="font-family: var(--mono); font-size: 11px; color: var(--text-3);">${t.controls}</td>
+      </tr>`;
+    });
+    tbody.innerHTML = html;
+  }
+
+  function buildToolsObject() {
+    const result = {};
+    Object.keys(state.tools).forEach(k => { result[k] = { name: toolName(k) }; });
+    return result;
+  }
+  function renderConfig() {
+    const out = document.getElementById('config-output');
+    const tools = buildToolsObject();
+    if (state.mode === 'discovery') {
+      const bundleName = ({
+        '1-solo-personal': 'Solo · personal',
+        '2-multi-dev-oss': 'Multi-dev · OSS',
+        '3-client-solo': 'Client · solo consultant',
+        '4-client-team': 'Client · team',
+      })[state.bundle] || state.bundle;
+      // Highlight tool slots that are intentionally non-default so Claude doesn't second-guess them.
+      const toolLines = Object.entries(tools)
+        .map(([slot, v]) => `   - ${slot}: \`${v.name}\``)
+        .join('\n');
+      out.textContent =
+`I just unzipped claude-code-templates at my project root. I selected the **${bundleName}** bundle (key: \`${state.bundle}\`) as the baseline. My declared tool stack:
+
+${toolLines}
+
+Run discovery mode against this project:
+
+1. Read \`claude-code-templates/SETUP.md\` for the orchestration procedure.
+2. Read \`claude-code-templates/bundle.json\` for the selected bundle key and tool slots.
+3. Inspect the repository to determine:
+   - Project name, repo URL, default branch, license
+   - Tech stack (languages, frameworks, build tools)
+   - Confirm or override the tool slot names above by inspecting the repo (e.g. \`.husky/\` implies husky, \`.gitlab-ci.yml\` implies gitlab-ci). If you find conflicting signals, ask.
+   - Toggle overrides on top of the bundle defaults — e.g. \`contributing_md\` if public, \`auto_merge\` if a paths-ignore workflow is present, \`codeowners\` if multiple maintainers. Universally-off toggles (clean-room, devlog, etc.) are pre-flagged for inspection on my side.
+4. Present the full proposal as a single message: bundle + tool confirmations + project metadata + every non-default toggle decision with a one-line rationale.
+5. Wait for my "apply" before writing any file.
+
+If anything is ambiguous (mixed signals on public/private, multiple licenses, no clear default branch), ask before guessing.`;
+    } else {
+      const toggles = {};
+      TOGGLES.forEach(t => { toggles[t.key] = toggleStateFor(t); });
+      const config = {
+        version: 'v1.0.0', mode: state.mode, bundle: state.bundle,
+        project: {
+          name: state.project || null,
+          repo_url: state.repo || null,
+          default_branch: state.branch || 'main',
+          stack: state.stack ? state.stack.split(',').map(s => s.trim()).filter(Boolean) : [],
+          license: state.license,
+        },
+        tools,
+        toggles,
+      };
+      out.textContent =
+        'Read claude-code-templates/SETUP.md and render this config:\n\n' +
+        JSON.stringify(config, null, 2);
+    }
+  }
+  function renderBindStat() {
+    let on = 0, off = 0, ask = 0;
+    TOGGLES.forEach(t => { const v = toggleStateFor(t); if (v === true) on++; else if (v === false) off++; else ask++; });
+    document.getElementById('bind-stat').innerHTML = `<strong>${on}</strong> on &middot; ${off} off &middot; ${ask} ask`;
+  }
+
+  document.getElementById('copy-config').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    try {
+      await navigator.clipboard.writeText(document.getElementById('config-output').textContent);
+      const origHTML = btn.innerHTML;
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied — paste to Claude';
+      setTimeout(() => { btn.innerHTML = origHTML; }, 2200);
+    } catch {
+      alert('Copy failed. Select the JSON manually.');
+    }
+  });
+
+  let _jszip = null;
+  function loadJSZip() {
+    if (_jszip) return Promise.resolve(_jszip);
+    return new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+      s.onload = () => { _jszip = window.JSZip; res(_jszip); };
+      s.onerror = () => rej(new Error('JSZip failed to load.'));
+      document.head.appendChild(s);
+    });
+  }
+  function filterTogglesInText(text, resolved) {
+    return text.replace(/<!--\s*TOGGLE:([a-z0-9_]+)(:off)?\s+START\s*-->([\s\S]*?)<!--\s*TOGGLE:\1\2?\s+END\s*-->/g,
+      (_, key, off, body) => {
+        const on = resolved[key] === true;
+        return off ? (on ? '' : body) : (on ? body : '');
+      });
+  }
+  async function fetchText(p)   { const r = await fetch(p, { cache: 'no-cache' }); if (!r.ok) throw new Error(`${p} → ${r.status}`); return await r.text(); }
+  async function fetchBinary(p) { const r = await fetch(p, { cache: 'no-cache' }); if (!r.ok) throw new Error(`${p} → ${r.status}`); return await r.arrayBuffer(); }
+
+  // Resolved-mode manifest — used in Manual: toggle-filtered files ready to commit.
+  const FALLBACK_MANIFEST_RESOLVED = {
+    files: [
+      { path: '_core/project-template/CLAUDE.md',                                  toggle: null, dest: 'CLAUDE.md' },
+      { path: '_core/project-template/.claude/rules/git.md',                       toggle: null, dest: '.claude/rules/git.md' },
+      { path: '_core/project-template/.claude/rules/token-efficiency.md',          toggle: null, dest: '.claude/rules/token-efficiency.md' },
+      { path: '_core/project-template/.claude/rules/review-tiers.md',              toggle: null, dest: '.claude/rules/review-tiers.md' },
+      { path: '_core/project-template/.claude/rules/visual.md',                    toggle: 'visual_test_discipline',  dest: '.claude/rules/visual.md' },
+      { path: '_core/project-template/.claude/rules/collaboration.md',             toggle: 'collaboration_rule',      dest: '.claude/rules/collaboration.md' },
+      { path: '_core/project-template/.claude/rules/confidentiality.md',           toggle: 'confidentiality_rule',    dest: '.claude/rules/confidentiality.md' },
+      { path: '_core/project-template/.claude/skills/session-start/SKILL.md',      toggle: 'skill_session_start',     dest: '.claude/skills/session-start/SKILL.md' },
+      { path: '_core/project-template/.claude/skills/session-close/SKILL.md',      toggle: 'skill_session_close',     dest: '.claude/skills/session-close/SKILL.md' },
+      { path: '_core/project-template/.claude/skills/find/SKILL.md',               toggle: 'tokensave_entry_point',   dest: '.claude/skills/find/SKILL.md' },
+      { path: '_core/project-template/.github/PULL_REQUEST_TEMPLATE.md',           toggle: 'pr_template',             dest: '.github/PULL_REQUEST_TEMPLATE.md' },
+      { path: '_core/project-template/CONTRIBUTING.md',                            toggle: 'contributing_md',         dest: 'CONTRIBUTING.md' },
+      { path: '_core/project-template/CHANGELOG.md',                               toggle: 'changelog_seed',          dest: 'CHANGELOG.md' },
+      { path: '_core/global-template/CLAUDE.md.additions',                         toggle: null, dest: 'global-template/CLAUDE.md.additions' },
+      { path: '_core/global-template/README.md',                                   toggle: null, dest: 'global-template/README.md' },
+      { path: '_core/global-template/hooks/tokensave-first.py',                    toggle: 'tokensave_entry_point',   dest: 'global-template/hooks/tokensave-first.py' },
+      { path: 'bundles/{bundle}/README.md',                                        toggle: null, dest: 'bundle-README.md' },
+      { path: 'bundles/{bundle}/bundle.toggles.md',                                toggle: null, dest: 'bundle.toggles.md' },
+      { path: 'VERSION',                                                           toggle: null, dest: 'VERSION' },
+    ],
+  };
+  // Source-mode manifest — used in Discovery: ships SETUP.md + full _core/ + selected bundle dir, no filtering.
+  const FALLBACK_MANIFEST_SOURCE = {
+    files: [
+      { path: 'SETUP.md',                                                          toggle: null, dest: 'claude-code-templates/SETUP.md' },
+      { path: 'TOGGLES.md',                                                        toggle: null, dest: 'claude-code-templates/TOGGLES.md' },
+      { path: 'COMPARISON.md',                                                     toggle: null, dest: 'claude-code-templates/COMPARISON.md' },
+      { path: 'VERSION',                                                           toggle: null, dest: 'claude-code-templates/VERSION' },
+      { path: '_core/project-template/CLAUDE.md',                                  toggle: null, dest: 'claude-code-templates/_core/project-template/CLAUDE.md' },
+      { path: '_core/project-template/.claude/rules/git.md',                       toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/rules/git.md' },
+      { path: '_core/project-template/.claude/rules/token-efficiency.md',          toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/rules/token-efficiency.md' },
+      { path: '_core/project-template/.claude/rules/review-tiers.md',              toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/rules/review-tiers.md' },
+      { path: '_core/project-template/.claude/rules/visual.md',                    toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/rules/visual.md' },
+      { path: '_core/project-template/.claude/rules/collaboration.md',             toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/rules/collaboration.md' },
+      { path: '_core/project-template/.claude/rules/confidentiality.md',           toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/rules/confidentiality.md' },
+      { path: '_core/project-template/.claude/rules/clean-room.md',                toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/rules/clean-room.md' },
+      { path: '_core/project-template/.claude/skills/session-start/SKILL.md',      toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/skills/session-start/SKILL.md' },
+      { path: '_core/project-template/.claude/skills/session-close/SKILL.md',      toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/skills/session-close/SKILL.md' },
+      { path: '_core/project-template/.claude/skills/find/SKILL.md',               toggle: null, dest: 'claude-code-templates/_core/project-template/.claude/skills/find/SKILL.md' },
+      { path: '_core/project-template/.github/PULL_REQUEST_TEMPLATE.md',           toggle: null, dest: 'claude-code-templates/_core/project-template/.github/PULL_REQUEST_TEMPLATE.md' },
+      { path: '_core/project-template/CONTRIBUTING.md',                            toggle: null, dest: 'claude-code-templates/_core/project-template/CONTRIBUTING.md' },
+      { path: '_core/project-template/CHANGELOG.md',                               toggle: null, dest: 'claude-code-templates/_core/project-template/CHANGELOG.md' },
+      { path: '_core/global-template/CLAUDE.md.additions',                         toggle: null, dest: 'claude-code-templates/_core/global-template/CLAUDE.md.additions' },
+      { path: '_core/global-template/README.md',                                   toggle: null, dest: 'claude-code-templates/_core/global-template/README.md' },
+      { path: '_core/global-template/hooks/tokensave-first.py',                    toggle: null, dest: 'claude-code-templates/_core/global-template/hooks/tokensave-first.py' },
+      { path: 'bundles/{bundle}/README.md',                                        toggle: null, dest: 'claude-code-templates/bundles/{bundle}/README.md' },
+      { path: 'bundles/{bundle}/bundle.toggles.md',                                toggle: null, dest: 'claude-code-templates/bundles/{bundle}/bundle.toggles.md' },
+    ],
+  };
+  async function getManifest(kind) {
+    const fname = kind === 'source' ? 'manifest.source.json' : 'manifest.resolved.json';
+    try { const r = await fetch(fname, { cache: 'no-cache' }); if (r.ok) return await r.json(); } catch {}
+    return kind === 'source' ? FALLBACK_MANIFEST_SOURCE : FALLBACK_MANIFEST_RESOLVED;
+  }
+
+  document.getElementById('bind-volume').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const origHTML = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite;"><circle cx="12" cy="12" r="10" stroke-dasharray="32" stroke-dashoffset="16"/></svg> Binding...';
+    try {
+      const JSZip = await loadJSZip();
+      const isDiscovery = state.mode === 'discovery';
+      const manifest = await getManifest(isDiscovery ? 'source' : 'resolved');
+      const zip = new JSZip();
+      const resolved = {};
+      TOGGLES.forEach(t => { resolved[t.key] = toggleStateFor(t); });
+
+      let added = 0, skipped = 0;
+      for (const entry of manifest.files) {
+        if (!isDiscovery && entry.toggle && resolved[entry.toggle] === false) { skipped++; continue; }
+        const src = entry.path.replace('{bundle}', state.bundle);
+        const dest = entry.dest.replace('{bundle}', state.bundle);
+        try {
+          const isText = /\.(md|html|json|yml|yaml|txt|gitignore|additions|py|js|css|toml|ts|tsx|jsx|sh|template)$/i.test(src) || src.endsWith('VERSION') || src.endsWith('LICENSE');
+          if (isText) {
+            const text = await fetchText(src);
+            // In manual mode, resolve TOGGLE markers per user's toggle state. In discovery, ship as-is (Claude resolves).
+            zip.file(dest, isDiscovery ? text : filterTogglesInText(text, resolved));
+          } else {
+            zip.file(dest, await fetchBinary(src));
+          }
+          added++;
+        } catch (err) { console.warn('Skip', src, err); skipped++; }
+      }
+      const toggles = {};
+      TOGGLES.forEach(t => { toggles[t.key] = toggleStateFor(t); });
+      if (isDiscovery) {
+        // Seed Claude with the bundle choice + a copy of the discovery prompt
+        zip.file('claude-code-templates/bundle.json', JSON.stringify({
+          version: 'v1.0.0',
+          mode: 'discovery',
+          bundle: state.bundle,
+          generated_at: new Date().toISOString(),
+        }, null, 2));
+        zip.file('claude-code-templates/DISCOVERY-PROMPT.md', '# Discovery prompt\n\nPaste this as your first message in Claude Code (run from your project root):\n\n---\n\n' + document.getElementById('config-output').textContent);
+      } else {
+        zip.file('bound-config.json', JSON.stringify({
+          version: 'v1.0.0', mode: 'manual', bundle: state.bundle, bound_at: new Date().toISOString(),
+          project: { name: state.project || null, repo_url: state.repo || null, default_branch: state.branch || 'main', stack: state.stack ? state.stack.split(',').map(s => s.trim()).filter(Boolean) : [], license: state.license },
+          toggles,
+        }, null, 2));
+      }
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `claude-code-templates-${state.bundle}-${isDiscovery ? 'discovery-' : ''}v1.0.0.zip`;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      btn.classList.add('success');
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Bound — ${added} files (${skipped} skipped)`;
+      setTimeout(() => { btn.innerHTML = origHTML; btn.classList.remove('success'); }, 3200);
+    } catch (err) {
+      console.error(err);
+      btn.innerHTML = '⚠ Bind failed — see console';
+      setTimeout(() => { btn.innerHTML = origHTML; }, 2800);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  renderToggles();
+  renderCatalog();
+  renderConfig();
+  renderBindStat();
+
+  const sk = document.createElement('style');
+  sk.textContent = '@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }';
+  document.head.appendChild(sk);
+})();
+</script>
+
+</body>
+</html>
