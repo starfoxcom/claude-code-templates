@@ -140,7 +140,7 @@ function HowFolio() {
           <Phase n="1" name="Validate">
             <ul>
               <li><strong>Locate templates.</strong> Claude expects them at <code className="mono">./claude-code-templates/</code>. If absent, the run aborts with instructions.</li>
-              <li><strong>Parse the manifest.</strong> Required fields: bundle, project.name, project.repo_url, project.default_branch, toggles. Missing → short interview.</li>
+              <li><strong>Parse the manifest.</strong> Required fields: bundle, project.name, project.repo_url, project.main_branch, project.dev_branch, toggles. Missing → short interview.</li>
               <li><strong>Cross-check toggles</strong> against the catalog. Unknown keys → reject.</li>
               <li><strong>Resolve <em>ask</em> toggles</strong>: the code-research toggle resolves to ON only if your selected tool reports ready via its status probe; architecture scaffold only if clear layers exist.</li>
             </ul>
