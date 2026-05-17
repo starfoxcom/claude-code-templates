@@ -452,7 +452,8 @@ can copy them into your project root during step 2 apply.
           </div>
           <style>{`
             .proj-grid { display: grid; grid-template-columns: 1fr 1fr; column-gap: 20px; row-gap: 18px; }
-            .proj-grid .field-full { grid-column: 1 / -1; }
+            .proj-grid .field-full { grid-column: 1 / -1; min-width: 0; }
+            .proj-grid > * { min-width: 0; }
             @media (max-width: 640px) { .proj-grid { grid-template-columns: 1fr; } }
 
             .adv-details {
@@ -745,7 +746,9 @@ can copy them into your project root during step 2 apply.
               display: grid; grid-template-columns: 1fr auto;
               align-items: center; gap: 18px;
               padding: 14px 20px;
+              min-width: 0;
             }
+            .tg-row > * { min-width: 0; }
             .tg-key-line { display: flex; align-items: center; gap: 8px; }
             .tg-key { font-size: 12.5px; color: var(--ink); }
             .tg-divot {
@@ -1397,12 +1400,12 @@ function PatternCarousel({ label, hint, catalog, selected, onToggle, customPlace
       </div>
 
       <style>{`
-        .chip-pick { display: flex; flex-direction: column; gap: 12px; }
+        .chip-pick { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
         .chip-pick-label { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.5px; color: var(--ink-soft); text-transform: uppercase; }
         .chip-count { color: var(--accent); margin-left: 6px; text-transform: none; letter-spacing: 0.3px; }
         .chip-pick-hint { font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
 
-        .hcar-wrap { position: relative; }
+        .hcar-wrap { position: relative; min-width: 0; }
         .hcar-strip {
           display: flex; gap: 12px;
           overflow-x: auto;
@@ -1589,7 +1592,7 @@ function CardCarousel({ label, hint, catalog, selected, onToggle, customPlacehol
       </div>
 
       <style>{`
-        .chip-pick { display: flex; flex-direction: column; gap: 12px; }
+        .chip-pick { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
         .chip-pick-label { font-family: var(--f-mono); font-size: 10.5px; letter-spacing: 0.5px; color: var(--ink-soft); text-transform: uppercase; }
         .chip-count { color: var(--accent); margin-left: 6px; text-transform: none; letter-spacing: 0.3px; }
         .chip-pick-hint { font-size: 12px; color: var(--ink-faint); line-height: 1.5; }
