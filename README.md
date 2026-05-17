@@ -31,7 +31,7 @@ A decision tree on the live page resolves which one fits.
 2. Pick a bundle, fill the project specification, set toggles.
 3. Click **Bind volume & download**.
 4. Unzip at your project root.
-5. Commit the result: `chore: install claude-code-templates v1.0.0 (<bundle>)`.
+5. Commit the result: `chore: install claude-code-templates v1.1.0 (<bundle>)`.
 
 The page runs entirely in your browser. No JSON, configuration, or telemetry is transmitted anywhere — the binder fetches template files from this domain and assembles the zip client-side.
 
@@ -51,11 +51,13 @@ The careful path is best when you want to inspect what'll be written *before* it
 ```
 claude-code-templates/
 ├── index.html              ← the live page (also the GitHub Pages root)
+├── index.legacy.html       ← previous edition (v1.0.0), retained as fallback
+├── redesign/               ← dev source for the React UI (9 .jsx modules)
 ├── README.md               ← this file
 ├── CHANGELOG.md            ← version history
 ├── CONTRIBUTING.md         ← how to PR / what's in scope
 ├── LICENSE                 ← MIT
-├── VERSION                 ← current edition (v1.0.0)
+├── VERSION                 ← current edition (v1.1.0)
 ├── COMPARISON.md           ← bundle feature matrix (mirrored in Folio II)
 ├── TOGGLES.md              ← full toggle reference (mirrored in Folio III)
 ├── SETUP.md                ← orchestration prompt Claude follows
