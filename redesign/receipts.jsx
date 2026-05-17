@@ -157,6 +157,7 @@ function ReceiptsFolio() {
       <section className="step">
         <StepHead step="D" title="Weekly session volume + intensity" annot="APR 06 → MAY 11 2026 · AVG K-TOKENS / SESSION" />
         <div className="bars">
+          <div className="bars-scroll-wrap">
           <div className="bars-grid">
             <div className="bars-y">
               <span>300K</span><span>225</span><span>150</span><span>75</span><span>0</span>
@@ -179,6 +180,7 @@ function ReceiptsFolio() {
               ))}
             </div>
           </div>
+          </div>
           <div className="bars-foot dim">
             Each bar: average output tokens per session in that week. Note the inflection at <strong>Apr 27</strong> — first full week on Max x5. Session count jumped ~10×; average per-session tokens stayed flat. The discipline absorbed Max's headroom without burning it on a few long sessions.
           </div>
@@ -192,6 +194,14 @@ function ReceiptsFolio() {
             box-shadow: var(--shadow-card);
           }
           .bars-grid { display: grid; grid-template-columns: 50px 1fr; gap: 14px; height: 280px; }
+          .bars-scroll-wrap { min-width: 0; }
+          @media (max-width: 720px) {
+            .bars-scroll-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+            .bars-scroll-wrap::-webkit-scrollbar { height: 8px; }
+            .bars-scroll-wrap::-webkit-scrollbar-track { background: var(--paper-sunken); border-radius: 4px; }
+            .bars-scroll-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 4px; }
+            .bars-grid { min-width: 560px; }
+          }
           .bars-y { display: flex; flex-direction: column; justify-content: space-between; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: right; padding-top: 2px; padding-bottom: 56px; }
           .bars-plot { position: relative; display: flex; justify-content: space-around; align-items: flex-end; gap: 14px; padding-bottom: 56px; border-bottom: 1px solid var(--rule); }
           .bars-grid-lines { position: absolute; inset: 0 0 56px 0; }
