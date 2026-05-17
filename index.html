@@ -2328,7 +2328,8 @@ can copy them into your project root during step 2 apply.
             .tg-controls { font-size: 10.5px; color: var(--ink-faint); margin-top: 4px; letter-spacing: 0.3px; }
 
             @media (max-width: 640px) {
-              .tg-row { grid-template-columns: 1fr; }
+              .tg-row { grid-template-columns: 1fr; padding: 12px 14px; }
+              .tg-row .tri { justify-self: start; max-width: 100%; }
             }
           `}</style>
         </section>
@@ -3009,6 +3010,10 @@ function PatternCarousel({ label, hint, catalog, selected, onToggle, customPlace
         .hcar-arrow-next { right: -8px; }
         .hcar-arrow:hover { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
         .hcar-arrow.disabled { opacity: 0; pointer-events: none; transition: opacity var(--dur) var(--ease); }
+        @media (max-width: 640px) {
+          .hcar-arrow { display: none; }
+          .hcar-strip { scroll-padding-left: 0; }
+        }
 
         .patt-strip .patt-card {
           flex: 0 0 280px;
@@ -3189,6 +3194,10 @@ function CardCarousel({ label, hint, catalog, selected, onToggle, customPlacehol
           padding: 12px;
           display: flex; flex-direction: column; gap: 10px;
           transition: border-color var(--dur) var(--ease);
+        }
+        @media (max-width: 640px) {
+          .ccar-strip .ccar-card { flex: 0 0 calc(100% - 8px); }
+          .patt-strip .patt-card { flex: 0 0 calc(100% - 8px); min-height: auto; }
         }
         .ccar-card.has-on { border-color: var(--accent-soft); }
         .ccar-card-head {
