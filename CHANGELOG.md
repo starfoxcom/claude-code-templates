@@ -70,4 +70,17 @@ First public release. Toggle-driven configurator, in-browser bind generator, Git
 
 ## [Unreleased]
 
-Nothing yet. Open an issue or PR — see [CONTRIBUTING.md](CONTRIBUTING.md).
+### Changed
+- **Template placeholder rename: `{{DEFAULT_BRANCH}}` → `{{DEV_BRANCH}}`** (#14). The old name collided with GitHub's UI "default branch" setting concept — template uses it to mean "the dev integration branch where day-to-day work targets" (`develop` for Gitflow, `main` for trunk-based), which is the opposite of what GitHub's UI labels "default". Renamed for clarity. SETUP.md retains a backwards-compat shim that accepts `developer_branch` / `default_branch` in older manifests and warns.
+- **Configurator form: branch fields simplified** (#14). The previous three-field setup ("Default branch" + "Developer branch" + optional "Production branch" override) collapsed into two clearer fields:
+  - **Main branch** (required) — production / release branch. Tagged versions live here. Default `main`.
+  - **Dev branch** (Gitflow only) — where day-to-day work targets and PRs base from. Default `develop`. Hidden when Branching model = Trunk-based (which mirrors the main branch).
+
+  State variables renamed in `index.html` + `redesign/bind.jsx`: `default_branch` removed, `developer_branch` → `dev_branch`. Manifest schema emits `main_branch` + `dev_branch`.
+
+### Fixed
+- **Configurator produced incoherent binds for Gitflow projects** (#14). Bundle 2 (OSS, Gitflow) bundles rules that say "branch from develop / PR to develop", but the configurator's `default_branch` field carried the release-branch value, and SETUP.md substituted `{{DEFAULT_BRANCH}}` from it — so resolved skills would have said "PR to main" even though the rules said "PR to develop". Fixed by the rename + UI restructure above.
+- **Session-start now reads the CONTEXT handoff file** (#9). The template's session-close skill writes `{{PROJECT_NAME_UPPER}}-CONTEXT_*.md`, but session-start ignored it — the read/write loop was broken on the read side. Gated by `context_refresh_files: true` (OSS bundle default).
+
+### Self-bind
+- **This repo is now self-bound** (#12). `.claude/skills/{session-start,session-close,find,architecture-graph}/SKILL.md` resolved from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` + Discovery for null toggles. `.claude/BIND.md` documents the audit trail. The templates' own project finally dogfoods itself.
