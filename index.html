@@ -1898,6 +1898,14 @@ can copy them into your project root during step 2 apply.
                   value={project.repo_url}
                   onChange={e => setProject(p => ({ ...p, repo_url: e.target.value }))} />
               </Field>
+              <Field label="Branching model" hint="Gitflow = separate main + dev branches. Trunk-based = single branch.">
+                <select className="select"
+                  value={project.branching_model}
+                  onChange={e => setProject(p => ({ ...p, branching_model: e.target.value }))}>
+                  <option value="trunk">Trunk-based</option>
+                  <option value="gitflow">Gitflow</option>
+                </select>
+              </Field>
               <Field label="Main branch" hint="Production / release branch. Tagged versions live here, GitHub's UI 'default branch' usually points here too. Usually main.">
                 <input className="input" placeholder="main"
                   value={project.main_branch}
@@ -1915,14 +1923,6 @@ can copy them into your project root during step 2 apply.
                   value={project.license}
                   onChange={e => setProject(p => ({ ...p, license: e.target.value }))}>
                   {["MIT", "Apache-2.0", "BSD-3-Clause", "GPL-3.0", "Proprietary", "None"].map(l => <option key={l}>{l}</option>)}
-                </select>
-              </Field>
-              <Field label="Branching model" hint="Gitflow = separate default + developer branches. Trunk = single branch.">
-                <select className="select"
-                  value={project.branching_model}
-                  onChange={e => setProject(p => ({ ...p, branching_model: e.target.value }))}>
-                  <option value="trunk">Trunk-based</option>
-                  <option value="gitflow">Gitflow</option>
                 </select>
               </Field>
               <div className="field-full">
