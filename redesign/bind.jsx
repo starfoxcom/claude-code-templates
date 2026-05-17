@@ -483,6 +483,12 @@ can copy them into your project root during step 2 apply.
             .adv-summary-meta { font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.4px; }
             .adv-body { padding-top: 14px; display: flex; flex-direction: column; gap: 24px; }
             .adv-lede { font-size: 12.5px; margin: 0 0 -4px; }
+            @media (max-width: 640px) {
+              .adv-details summary { flex-wrap: wrap; gap: 4px 10px; }
+              .adv-summary-text { flex-basis: 100%; order: 1; }
+              .adv-summary-meta { order: 2; }
+              .adv-summary-caret { order: 3; margin-left: auto; }
+            }
           `}</style>
         </section>
       )}

@@ -189,6 +189,16 @@ function App() {
     window.location.hash = folio;
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [folio]);
+  useEffect(() => {
+    const onHashChange = () => {
+      const h = (window.location.hash || "").replace("#", "");
+      if (FOLIOS.find(f => f.id === h)) {
+        setFolio(prev => prev === h ? prev : h);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [theme, toggleTheme] = useTheme();
