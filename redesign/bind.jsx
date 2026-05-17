@@ -761,7 +761,6 @@ can copy them into your project root during step 2 apply.
 
             @media (max-width: 640px) {
               .tg-row { grid-template-columns: 1fr; padding: 12px 14px; }
-              .tg-row .tri { justify-self: start; max-width: 100%; }
             }
           `}</style>
         </section>
@@ -1185,6 +1184,9 @@ function TriToggle({ state, onSet }) {
           background: var(--paper-sunken);
           border: 1px solid var(--rule);
           border-radius: var(--r-md);
+          justify-self: start;
+          align-self: start;
+          max-width: 100%;
         }
         .tri-seg {
           background: transparent;
