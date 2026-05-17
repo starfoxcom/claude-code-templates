@@ -31,9 +31,9 @@ Evaluate in order — apply the first row that matches:
 |---|---|
 | No code changes (context refresh only) | Generate context file (if `context_refresh_files` is ON) + commit + PR + paths-ignore fast-path auto-merge (if enabled) + branch cleanup. |
 | Changes exist, branch objective **incomplete** | Commit with work done. No PR. |
-| Changes exist, branch objective **complete** | Commit (if uncommitted) + PR to `{{DEFAULT_BRANCH}}` + standard polling loop + merge + branch cleanup. |
-| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEFAULT_BRANCH}}` managed from GitHub). |
-| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEFAULT_BRANCH}}`. |
+| Changes exist, branch objective **complete** | Commit (if uncommitted) + PR to `{{DEV_BRANCH}}` + standard polling loop + merge + branch cleanup. |
+| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEV_BRANCH}}` managed from GitHub). |
+| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`. |
 
 Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — never `&&`-chain post-merge cleanup; permission rules match the full command string and chained calls stall on partial deny.
 
