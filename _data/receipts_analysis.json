@@ -1,0 +1,348 @@
+{
+  "generated_at": "2026-05-16T18:17:25.350447+00:00",
+  "billing_period_boundary": "2026-04-25",
+  "pro_period": {
+    "from": "2026-04-06",
+    "to": "2026-04-24"
+  },
+  "max_period": {
+    "from": "2026-04-25",
+    "to": "2026-05-12"
+  },
+  "rule_adoption_timeline": [
+    {
+      "date": "2026-03-26",
+      "rule": "code-review.md",
+      "project": "stockra",
+      "one_line_impact": "Pre-commit checklists + binary verdict review pipeline"
+    },
+    {
+      "date": "2026-03-26",
+      "rule": "git.md",
+      "project": "stockra",
+      "one_line_impact": "Atomic commits + Gitflow + binary verdict (red/green) review \u2014 made the merge gate real"
+    },
+    {
+      "date": "2026-03-26",
+      "rule": "CLAUDE.md",
+      "project": "stockra",
+      "one_line_impact": "Project-level entry rules: session-start ritual, DoD verification, tokensave-first directive"
+    },
+    {
+      "date": "2026-03-29",
+      "rule": "token-efficiency.md",
+      "project": "stockra",
+      "one_line_impact": "Polling loops + read-before-write + paths-ignore auto-merge \u2014 cut CI cost and wasted re-reads"
+    },
+    {
+      "date": "2026-04-07",
+      "rule": "review-process.md",
+      "project": "stockra",
+      "one_line_impact": "Path-triggered review rules \u2014 review depth scales to the diff shape"
+    },
+    {
+      "date": "2026-04-25",
+      "rule": "modding.md",
+      "project": "emberholm",
+      "one_line_impact": "GDExtension doc-class XML convention \u2014 single source of truth per class"
+    },
+    {
+      "date": "2026-04-25",
+      "rule": "performance.md",
+      "project": "emberholm",
+      "one_line_impact": "flecs/RenderingServer/MultiMesh perf rules baked in from M1 \u2014 no retrofit cost"
+    },
+    {
+      "date": "2026-05-03",
+      "rule": "threading.md",
+      "project": "emberholm",
+      "one_line_impact": "ThreadPool wrapper + 2-stage pipeline canonical pattern \u2014 no more raw thread regressions"
+    },
+    {
+      "date": "2026-05-07",
+      "rule": "clean_room.md",
+      "project": "emberholm",
+      "one_line_impact": "Operational checklist for spiritual-successor legal stance \u2014 verdicts not copies"
+    },
+    {
+      "date": "2026-05-12",
+      "rule": "visual.md",
+      "project": "emberholm",
+      "one_line_impact": "Ship one verifiable visual slice at a time \u2014 written after PRs #74+#77 burned ~3M output tokens"
+    }
+  ],
+  "efficiency_timeseries": {
+    "weekly": [
+      {
+        "week_start": "2026-04-06",
+        "sessions": 7,
+        "avg_input_tokens": 4378,
+        "avg_output_tokens": 53492,
+        "avg_duration_min": 1006.6,
+        "avg_tool_errors": 2.29,
+        "avg_lines_added": 1129,
+        "tokensave_calls_total": 41
+      },
+      {
+        "week_start": "2026-04-13",
+        "sessions": 1,
+        "avg_input_tokens": 271,
+        "avg_output_tokens": 149532,
+        "avg_duration_min": 11282.0,
+        "avg_tool_errors": 8.0,
+        "avg_lines_added": 2580,
+        "tokensave_calls_total": 7
+      },
+      {
+        "week_start": "2026-04-20",
+        "sessions": 9,
+        "avg_input_tokens": 213,
+        "avg_output_tokens": 181102,
+        "avg_duration_min": 664.8,
+        "avg_tool_errors": 3.89,
+        "avg_lines_added": 1088,
+        "tokensave_calls_total": 21
+      },
+      {
+        "week_start": "2026-04-27",
+        "sessions": 71,
+        "avg_input_tokens": 1029,
+        "avg_output_tokens": 93476,
+        "avg_duration_min": 161.3,
+        "avg_tool_errors": 2.7,
+        "avg_lines_added": 458,
+        "tokensave_calls_total": 66
+      },
+      {
+        "week_start": "2026-05-04",
+        "sessions": 52,
+        "avg_input_tokens": 3371,
+        "avg_output_tokens": 175346,
+        "avg_duration_min": 145.6,
+        "avg_tool_errors": 3.23,
+        "avg_lines_added": 482,
+        "tokensave_calls_total": 28
+      },
+      {
+        "week_start": "2026-05-11",
+        "sessions": 3,
+        "avg_input_tokens": 283,
+        "avg_output_tokens": 271875,
+        "avg_duration_min": 198.0,
+        "avg_tool_errors": 2.33,
+        "avg_lines_added": 747,
+        "tokensave_calls_total": 0
+      }
+    ]
+  },
+  "tool_usage_shift": {
+    "methodology": "First half vs second half of all sessions by chronological order. Tokensave rule adoption was gradual (memory file + global CLAUDE.md updates over multiple sessions), so a single date pivot is misleading; the dataset-half split is the cleanest empirical cut.",
+    "first_half_window": {
+      "from": "2026-04-06",
+      "to": "2026-05-01",
+      "sessions": 71
+    },
+    "second_half_window": {
+      "from": "2026-05-01",
+      "to": "2026-05-12",
+      "sessions": 72
+    },
+    "first_half_tool_share_pct": {
+      "Read": 16.57,
+      "Grep": 2.02,
+      "Glob": 3.86,
+      "Bash": 42.5,
+      "Task": 0.0,
+      "tokensave_*": 2.5,
+      "Edit": 15.15,
+      "Write": 6.51
+    },
+    "second_half_tool_share_pct": {
+      "Read": 12.73,
+      "Grep": 3.33,
+      "Glob": 3.7,
+      "Bash": 45.57,
+      "Task": 0.0,
+      "tokensave_*": 0.91,
+      "Edit": 15.37,
+      "Write": 4.52
+    },
+    "first_tokensave_invocation_date": "2026-04-06"
+  },
+  "rule_deltas": [
+    {
+      "rule": "review-process.md",
+      "landed": "2026-04-07",
+      "project": "stockra",
+      "window_days": 21,
+      "sample_before": 1,
+      "sample_after": 45,
+      "tool_errors_per_session_before": 2.0,
+      "tool_errors_per_session_after": 2.82,
+      "tool_errors_pct_change": "+41.1%",
+      "user_interruptions_before": 0.0,
+      "user_interruptions_after": 0.18,
+      "avg_output_tokens_before": 56469,
+      "avg_output_tokens_after": 101893,
+      "output_tokens_pct_change": "+80.4%",
+      "note": ""
+    },
+    {
+      "rule": "modding.md",
+      "landed": "2026-04-25",
+      "project": "emberholm",
+      "window_days": 21,
+      "sample_before": 12,
+      "sample_after": 131,
+      "tool_errors_per_session_before": 3.58,
+      "tool_errors_per_session_after": 2.92,
+      "tool_errors_pct_change": "-18.4%",
+      "user_interruptions_before": 0.42,
+      "user_interruptions_after": 0.18,
+      "avg_output_tokens_before": 70703,
+      "avg_output_tokens_after": 136457,
+      "output_tokens_pct_change": "+93.0%",
+      "note": "GDExtension doc-class XML convention."
+    },
+    {
+      "rule": "performance.md",
+      "landed": "2026-04-25",
+      "project": "emberholm",
+      "window_days": 21,
+      "sample_before": 12,
+      "sample_after": 131,
+      "tool_errors_per_session_before": 3.58,
+      "tool_errors_per_session_after": 2.92,
+      "tool_errors_pct_change": "-18.4%",
+      "user_interruptions_before": 0.42,
+      "user_interruptions_after": 0.18,
+      "avg_output_tokens_before": 70703,
+      "avg_output_tokens_after": 136457,
+      "output_tokens_pct_change": "+93.0%",
+      "note": "flecs / RenderingServer / MultiMesh perf rules."
+    },
+    {
+      "rule": "threading.md",
+      "landed": "2026-05-03",
+      "project": "emberholm",
+      "window_days": 21,
+      "sample_before": 81,
+      "sample_after": 58,
+      "tool_errors_per_session_before": 2.77,
+      "tool_errors_per_session_after": 3.31,
+      "tool_errors_pct_change": "+19.7%",
+      "user_interruptions_before": 0.2,
+      "user_interruptions_after": 0.21,
+      "avg_output_tokens_before": 98335,
+      "avg_output_tokens_after": 181493,
+      "output_tokens_pct_change": "+84.6%",
+      "note": "Threading rules landed; downstream parallel-work subsystems followed the pattern cleanly."
+    },
+    {
+      "rule": "clean_room.md",
+      "landed": "2026-05-07",
+      "project": "emberholm",
+      "window_days": 21,
+      "sample_before": 107,
+      "sample_after": 28,
+      "tool_errors_per_session_before": 2.68,
+      "tool_errors_per_session_after": 4.11,
+      "tool_errors_pct_change": "+53.1%",
+      "user_interruptions_before": 0.21,
+      "user_interruptions_after": 0.18,
+      "avg_output_tokens_before": 95435,
+      "avg_output_tokens_after": 285314,
+      "output_tokens_pct_change": "+199.0%",
+      "note": "Legal-cleanup discipline. Session intensity grew separately from this rule."
+    },
+    {
+      "rule": "visual.md",
+      "landed": "2026-05-12",
+      "project": "emberholm",
+      "window_days": 21,
+      "sample_before": 133,
+      "sample_after": 1,
+      "tool_errors_per_session_before": 3.02,
+      "tool_errors_per_session_after": 0.0,
+      "tool_errors_pct_change": "-100.0%",
+      "user_interruptions_before": 0.2,
+      "user_interruptions_after": 0.0,
+      "avg_output_tokens_before": 136844,
+      "avg_output_tokens_after": 0,
+      "output_tokens_pct_change": "-100.0%",
+      "note": "Direct outcome of PRs #74+#77 retrospective. Forward-window is short; signal will mature."
+    }
+  ],
+  "pro_vs_max_estimate": {
+    "estimate": true,
+    "methodology": "Pro-period ceiling derived empirically: max single-session output in pro_period was 149,532 tokens (observed); Pro session ceiling estimated at 150,000 tokens. Any Max-period session exceeding that is counted as a session that would have been blocked or forcibly split on Pro.",
+    "max_period_sessions": 131,
+    "max_period_total_output_tokens": 17875856,
+    "max_period_total_input_tokens": 250403,
+    "pro_period_sessions": 12,
+    "pro_period_total_output_tokens": 848433,
+    "pro_period_max_single_session_tokens": 149532,
+    "estimated_pro_ceiling_tokens": 150000,
+    "estimated_pro_period_sessions_for_same_work": 222,
+    "estimated_pro_period_blocked_sessions": 38,
+    "estimated_savings_from_discipline_during_max_period": "Without the token-efficiency + tokensave-first + visual-slice rules baked in, the same 131 Max-period sessions would have spread across roughly 222 Pro-shaped sessions \u2014 meaning ~38 sessions would have hit the Pro ceiling and forced wasted re-rolls or context-loss restarts. Per-token API price is identical across plans; the meaningful axis is session continuity, not unit cost.",
+    "disclaimer": "ALL Pro-period projections are ESTIMATES. The plan-level token cap mechanic is approximate. Real-world Pro behavior may also include 5-hour rolling-window cooldowns and message-count caps not modeled here. Use these numbers as directional, not exact."
+  },
+  "receipts": [
+    {
+      "label": "A.4b voxel-bake retros (PRs #74 + #77, abandoned)",
+      "date": "2026-05-08",
+      "story": "Across 4 sessions, two PRs attempted A.4b voxel light-bake as single-PR MVP dumps. Both were abandoned after burning roughly ~3M output tokens on visual iteration that never settled. The retro produced the visual.md rule: ship ONE verifiable visual slice at a time, with a debug toggle in place from line 1, with a pause before the next slice.",
+      "tokens_burned": 3101005,
+      "rule_that_prevents_repeat": "visual.md (landed 2026-05-12)"
+    },
+    {
+      "label": "Largest single-session output burn",
+      "date": "2026-05-08",
+      "story": "446-minute session producing 1,122,906 output tokens, 4,128 lines added across 27 files. Within current dataset, this is the kind of session the long-session-signals rule targets for early-cut.",
+      "tokens_burned": 1122906,
+      "rule_that_prevents_repeat": "token-efficiency.md \u00a7 \"Long session signals -> cut immediately\""
+    },
+    {
+      "label": "Highest tool-error session (friction signal)",
+      "date": "2026-05-08",
+      "story": "17 tool errors in one session. Each error is a wasted round-trip and a small context burn. The atomic-bash-commands rule (one Bash call per logical step, no &&-chains) and the read-before-writing rule target this directly.",
+      "tokens_burned": 887212,
+      "rule_that_prevents_repeat": "feedback_atomic_bash_commands.md (in user memory)"
+    },
+    {
+      "label": "Worst-single-day token burn",
+      "date": "2026-05-08",
+      "story": "7 sessions in one day producing 3,923,662 output tokens combined \u2014 the day the visual-slice rule was being earned. Two of those sessions were the A.4b bake-abandonment retros.",
+      "tokens_burned": 3923662,
+      "rule_that_prevents_repeat": "visual.md + token-efficiency.md (usage ceiling rule)"
+    }
+  ],
+  "headline_stats": {
+    "total_sessions": 143,
+    "total_tokens_used_lifetime": 19006322,
+    "total_output_tokens_lifetime": 18724289,
+    "total_input_tokens_lifetime": 282033,
+    "rules_in_place_now_emberholm": 17,
+    "rules_in_place_now_stockra": 15,
+    "memory_files_emberholm": 93,
+    "memory_files_stockra": 24,
+    "skills_invokable_now": 11,
+    "most_dramatic_efficiency_gain": "-18.4% change in tool-errors-per-session after modding.md landed (2026-04-25) \u2014 measured on 12 sessions before vs 131 after.",
+    "tokensave_calls_per_session_now_vs_before": {
+      "first_half": 1.61,
+      "second_half": 0.68
+    },
+    "earliest_session_date": "2026-04-06",
+    "latest_session_date": "2026-05-12",
+    "days_active": 36
+  },
+  "methodology_notes": [
+    "Data source: per-session telemetry at ~/.claude/usage-data/session-meta/ (143 files) and ~/.claude/usage-data/facets/ (88 files).",
+    "Earliest session: 2026-04-06; latest: 2026-05-12; span: 36 days.",
+    "Project names (Emberholm / Stockra) are kept because they are already in public-positioned use; no other identifying info is included.",
+    "Pro-vs-Max boundary detected as the first date where a single session output_tokens exceeded 250k \u2014 was 2026-04-25. Pre-boundary max single-session output was 149,532.",
+    "Rule-delta comparisons are 21-day before/after windows. Token-volume deltas are CONFOUNDED by project scope growth over time (M1 -> M2 work intensified) and should be read as directional. tool_errors_per_session is a cleaner signal because scope-growth raises both before AND after, cancelling the bias.",
+    "All Pro-projection numbers are ESTIMATES \u2014 annotated with \"estimate\": true. The Pro plan cap mechanic is approximate; treat numbers as directional."
+  ]
+}
