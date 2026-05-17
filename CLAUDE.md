@@ -46,7 +46,12 @@ Per `_core/project-template/.claude/rules/git.md`:
 - **Atomic commits.** One logical change per commit. Format: `<type>(<scope>): <imperative description>` (max 72 chars).
 - **Conventional types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `data`.
 - **No AI-attribution markers** anywhere — not in commit messages, PR titles, PR bodies, or issue comments. No `Co-Authored-By: Claude`, no `Generated with Claude Code`, no `claude.com` links in footers. The discipline is the work; the tool is a detail.
-- **Branches:** `feature/<name>`, `fix/<name>`, `chore/<name>` off `main`. No Gitflow `develop` branch on this repo — the simpler model fits a solo-maintained OSS project.
+- **Gitflow branching model.** Per the project's own `_core/project-template/.claude/rules/git.md`:
+  - `main` — stable releases only, tag every release commit
+  - `develop` — base for all in-flight work
+  - `feature/<n>` — branches from `develop`, merges back to `develop`
+  - `release/<v>` — branches from `develop`, merges to `main` AND `develop`
+  - `hotfix/<n>` — branches from `main`, merges to `main` AND `develop`
 - **Always merge commit** on PR merge — never squash or rebase. Keep merge history visible.
 
 ---
@@ -63,15 +68,23 @@ Per `_core/project-template/.claude/rules/token-efficiency.md`:
 
 ---
 
-## Review discipline
+## Review discipline — strict because supply-chain matters
 
-Per `_core/project-template/.claude/rules/review-tiers.md`:
+This project ships templates that downstream users install verbatim. A malicious PR landing on `main` could inject hidden code into the bundle that every future bind ships to every user. That makes the review surface load-bearing in a way ordinary OSS isn't.
+
+Per `_core/project-template/.claude/rules/review-tiers.md`, applied with extra strictness here:
 
 - **Two tiers.** Routine review (Sonnet, every PR) + on-demand deep review (Opus, fired by `@claude review` comment).
 - **Binary verdict rule.** `🟢 LGTM` only when fully clean. `🔴 Blocking` when *any* real finding exists. No "minor non-blocking" rot. This applies to both tiers.
 - **Auto-fire deep review** on the trigger surface (parsing/codec/serialization, threading, scheduling, save/load formats, mod-loader DAG changes — full list in `git.md`). The routine reviewer applies the `needs-deep-review` label automatically.
+- **Strict OSS review posture on `main` AND `develop`:**
+  - Required-status-checks: routine-review verdict MUST be 🟢 before merge
+  - Required approvals: 1 (the maintainer manually approves after reading the AI verdict)
+  - Bypass: admin role only (the maintainer can self-merge their own PRs without the approval; that's their accountability)
+  - Every external contribution: AI routine review verdict + maintainer eyes-on review + approval = three signals before merge
+  - Deep review fires automatically on any PR touching `_core/`, the bundled `index.html`, `_core/project-template/.claude/hooks/`, or `redesign/*.jsx`. These are the highest-blast-radius surfaces.
 
-The templates project itself doesn't yet have the routine-review workflow configured. That's a tracked follow-up (open issue #1 when this lands).
+The routine-review + deep-review workflows are tracked-follow-up for installation here (issue #1) — they exist canonically in `_core/project-template/.github/workflows/` and need to be copied to the project's own `.github/workflows/` to self-host the same discipline the templates ship.
 
 ---
 
@@ -95,8 +108,7 @@ Skills `/session-start` and `/session-close` (in `~/.claude/skills/` global) run
 
 - **No tokensave index** — the codebase is small enough that grep works fine when needed.
 - **No `.claude/rules/` duplication** — rules live canonically in `_core/project-template/.claude/rules/` and are referenced from here. A downstream bind copies them out with toggle blocks resolved.
-- **No `develop` branch** — single-branch (`main`) workflow per the OSS bundle default.
-- **No required-status-checks ruleset yet** — the routine review workflow isn't installed in CI yet (tracked follow-up).
+- **Routine + deep review workflows not yet installed** — the workflows exist canonically in `_core/project-template/.github/workflows/` but haven't been copied to this project's own `.github/workflows/` yet. Tracked follow-up.
 
 ---
 
