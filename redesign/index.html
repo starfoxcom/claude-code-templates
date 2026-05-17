@@ -480,6 +480,8 @@ a:hover { text-decoration: underline; }
   border: 1px solid var(--rule);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-card);
+  max-width: 100%;
+  min-width: 0;
 }
 .card.flush { padding: 0; }
 .card.pad { padding: 20px; }
@@ -510,6 +512,7 @@ a:hover { text-decoration: underline; }
 .input, .select, .textarea {
   display: block;
   width: 100%;
+  min-width: 0;
   background: var(--paper);
   border: 1px solid var(--rule);
   border-radius: var(--r-md);
@@ -517,8 +520,10 @@ a:hover { text-decoration: underline; }
   font-family: var(--f-mono);
   font-size: 13.5px;
   color: var(--ink);
+  text-overflow: ellipsis;
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), background var(--dur) var(--ease);
 }
+.input::placeholder, .textarea::placeholder { text-overflow: ellipsis; overflow: hidden; }
 .input:hover, .select:hover { border-color: var(--rule-strong); }
 .input:focus, .select:focus, .textarea:focus {
   outline: none;
