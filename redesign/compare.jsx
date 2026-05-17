@@ -171,6 +171,19 @@ function CompareFolio() {
           .ind-1 { padding-left: 28px; }
           .ind-2 { padding-left: 56px; }
           .ind-3 { padding-left: 84px; }
+          @media (max-width: 640px) {
+            .tl {
+              display: flex;
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 4px;
+            }
+            .tl .tl-r { margin-left: 0; }
+            .tn span:last-child { line-height: 1.4; }
+            .ind-1 { padding-left: 14px; }
+            .ind-2 { padding-left: 28px; }
+            .ind-3 { padding-left: 42px; }
+          }
         `}</style>
       </section>
     </>
