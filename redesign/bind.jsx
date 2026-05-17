@@ -372,7 +372,7 @@ can copy them into your project root during step 2 apply.
                       ? p.tech_stack.filter(x => x !== item)
                       : [...p.tech_stack, item],
                   }))}
-                  customPlaceholder="Add a tech not in the catalog (e.g. Roc, Gleam, Hyperscript)"
+                  customPlaceholder="Add custom tech…"
                 />
               </div>
             </div>
@@ -431,7 +431,7 @@ can copy them into your project root during step 2 apply.
                       ? p.architecture.filter(x => x !== item)
                       : [...p.architecture, item],
                   }))}
-                  customPlaceholder="Add a pattern not in the list — Claude researches it via web during setup"
+                  customPlaceholder="Add custom pattern…"
                 />
 
                 <CardCarousel
@@ -445,7 +445,7 @@ can copy them into your project root during step 2 apply.
                       ? p.stack_commands.filter(x => x !== item)
                       : [...p.stack_commands, item],
                   }))}
-                  customPlaceholder="Add a custom command (e.g. mise · just · task)"
+                  customPlaceholder="Add custom command…"
                 />
               </div>
             </details>
@@ -552,7 +552,7 @@ can copy them into your project root during step 2 apply.
                         onChange={e => setOtherTools(o => ({ ...o, [slot.id]: e.target.value }))} />
                       <input className="input" style={{ marginTop: 6, fontSize: "12.5px" }}
                         type="url"
-                        placeholder="canonical URL (optional — saves Claude a web search)"
+                        placeholder="canonical URL (optional)"
                         value={otherToolUrls[slot.id] || ""}
                         onChange={e => setOtherToolUrls(o => ({ ...o, [slot.id]: e.target.value }))} />
                     </>
