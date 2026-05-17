@@ -209,7 +209,6 @@ function TreeBranch({ label, inset = 0 }) {
 function TreeLeaf({ bundle, inset = 0, reason }) {
   return (
     <div className={"tl ind-" + inset}>
-      <span className="tl-arrow">→</span>
       <b>{bundle.key}</b>
       <span className="tl-r">— {reason}</span>
     </div>

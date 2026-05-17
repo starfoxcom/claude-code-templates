@@ -202,8 +202,8 @@ function ReceiptsFolio() {
             .bars-scroll-wrap::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 4px; }
             .bars-grid { min-width: 560px; }
           }
-          .bars-y { display: flex; flex-direction: column; justify-content: space-between; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: right; padding-top: 2px; padding-bottom: 56px; }
-          .bars-plot { position: relative; display: flex; justify-content: space-around; align-items: flex-end; gap: 14px; padding-bottom: 56px; border-bottom: 1px solid var(--rule); }
+          .bars-y { display: flex; flex-direction: column; justify-content: space-between; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-faint); text-align: right; padding-top: 2px; padding-bottom: 76px; }
+          .bars-plot { position: relative; display: flex; justify-content: space-around; align-items: flex-end; gap: 14px; padding-bottom: 76px; border-bottom: 1px solid var(--rule); }
           .bars-grid-lines { position: absolute; inset: 0 0 56px 0; }
           .bgl { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--rule-soft); }
           .bar-col {
@@ -222,8 +222,8 @@ function ReceiptsFolio() {
             margin-bottom: 4px;
           }
           .bar-meta {
-            position: absolute; bottom: -52px;
-            display: flex; flex-direction: column; align-items: center; gap: 1px;
+            position: absolute; bottom: -70px;
+            display: flex; flex-direction: column; align-items: center; gap: 2px;
             text-align: center; width: 100%;
           }
           .bar-l { font-size: 10.5px; color: var(--ink); }
