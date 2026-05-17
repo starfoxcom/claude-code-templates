@@ -17,7 +17,7 @@ Run claude-code-templates SETUP with this configuration:
     "code_language": "English",
     "repo_url": "<owner/repo>",
     "main_branch": "<main|master>",
-    "default_branch": "<develop|main|...>",
+    "dev_branch": "<develop|main|...>",
     "branching_model": "<gitflow|trunk>",
     "timezone": "<IANA timezone like America/Mazatlan>"
   },
@@ -44,7 +44,7 @@ The templates live at ./claude-code-templates/ (or wherever the user unzipped th
 ### Phase 1 — Validate
 
 1. **Locate templates.** Expect them at `./claude-code-templates/` by default. If not there, ask the user where they unzipped (don't assume).
-2. **Parse the JSON.** Validate required fields: `bundle`, `project.name`, `project.repo_url`, `project.default_branch`, `toggles`. If any field is `null` or missing, run a short interview to fill it — never assume.
+2. **Parse the JSON.** Validate required fields: `bundle`, `project.name`, `project.repo_url`, `project.main_branch`, `project.dev_branch`, `toggles`. If any field is `null` or missing, run a short interview to fill it — never assume. For backwards-compat with manifests produced before the v1.x rename: if `dev_branch` is missing but `developer_branch` or `default_branch` is present, accept it and warn.
 3. **Cross-check bundle.** Read `claude-code-templates/bundles/<bundle>/bundle.toggles.md` to confirm the bundle exists and to know its expected toggle set. For any toggle in the catalog NOT present in the user's JSON, fall back to the bundle default.
 4. **Cross-check toggles.** Every key in `toggles` must be in `TOGGLES.md`'s catalog. Unknown keys → reject with the offending names.
 5. **Resolve derived toggles** from `project.branching_model`:
@@ -169,8 +169,8 @@ On `apply`:
    - `{{CONVERSATION_LANGUAGE}}` ← `project.conversation_language`
    - `{{CODE_LANGUAGE}}` ← `project.code_language`
    - `{{REPO_URL}}` ← `project.repo_url`
-   - `{{MAIN_BRANCH}}` ← `project.main_branch` (production branch; usually `main`)
-   - `{{DEFAULT_BRANCH}}` ← `project.default_branch` (development branch; `develop` for Gitflow, `main` for trunk)
+   - `{{MAIN_BRANCH}}` ← `project.main_branch` (production / release branch; tagged versions live here. Usually `main`.)
+   - `{{DEV_BRANCH}}` ← `project.dev_branch` (development / integration branch where day-to-day work targets and PRs base from. `develop` for Gitflow, same as `main_branch` for trunk-based.)
    - `{{GITFLOW_OR_TRUNK}}` ← `project.branching_model`
    - `{{TIMEZONE}}` ← `project.timezone`
    - `{{STACK_COMMANDS_ALLOWLIST}}` ← see step 5 below
