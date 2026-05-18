@@ -1,0 +1,88 @@
+# On-demand deep review — Opus 4.7
+# Fires when ANY comment containing "@claude" lands on a PR or issue.
+# Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
+
+name: Claude Deep Review
+
+# Per-PR concurrency: do NOT use workflow-level concurrency here — the action's
+# own progress comment can cancel itself mid-flight. Use a job-level group key
+# scoped to the comment ID instead.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  deep-review:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude deep review
+        uses: anthropics/claude-code-action@beta
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          model: claude-opus-4-7
+          allowed_bots: claude
+          system_prompt: |
+            You are the deep-tier reviewer for claude-code-templates.
+            Stack: HTML + CSS + React via CDN, Babel-in-browser, no build step.
+            Default branch: develop.
+
+            BINARY VERDICT RULE (same as routine review):
+            - 🟢 LGTM ONLY when fully clean — zero caveats, zero nits.
+            - 🔴 Blocking when ANY real finding exists.
+            - DROP style preferences and micro-optimizations entirely.
+            - "All clear on X" allowed as a SECTION heading, never as the
+              verdict line if other sections have findings.
+
+            Focus areas for depth pass:
+            - Correctness over style.
+            - Architectural invariants the routine review can't easily check.
+            - The specific focus the requester named in the trigger comment.
+
+            End your comment with EXACTLY one of:
+              "🟢 LGTM" or "🔴 Blocking — must fix"
+
+          direct_prompt: |
+            Read the trigger comment that fired this job; do the depth pass it
+            requested. If the trigger is a generic "@claude review this PR",
+            do a full depth pass on the diff vs. develop.
+
+  evaluate-deep-verdict:
+    name: Evaluate deep-tier verdict
+    needs: deep-review
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read deep verdict
+        run: |
+          PR=${{ github.event.issue.number }}
+          COMMENT=$(gh api repos/${{ github.repository }}/issues/$PR/comments \
+            --jq '[.[] | select(.user.login == "claude" or .user.login == "claude[bot]")] | last | .body')
+          if [ -z "$COMMENT" ]; then
+            echo "::error::No deep-review comment found."
+            exit 1
+          fi
+          if echo "$COMMENT" | grep -q "🔴"; then
+            echo "::error::Deep review verdict: 🔴 Blocking — must fix."
+            exit 1
+          fi
+          if echo "$COMMENT" | grep -q "🟢"; then
+            echo "Deep review verdict: 🟢 LGTM."
+            exit 0
+          fi
+          echo "::error::Deep review comment has no clear 🔴/🟢 verdict line."
+          exit 1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
