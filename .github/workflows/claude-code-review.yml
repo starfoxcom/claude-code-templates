@@ -150,6 +150,10 @@ jobs:
               echo "::error::Routine review verdict: 🔴 Blocking"
               exit 1
             fi
+            if ! echo "$ROUTINE_COMMENT" | grep -q "🟢"; then
+              echo "::error::Routine review comment has no clear 🔴/🟢 verdict line"
+              exit 1
+            fi
             echo "✅ Routine review verdict: 🟢 LGTM"
           fi
 
@@ -170,6 +174,10 @@ jobs:
           if echo "$DEEP_VERDICT" | grep -q "🔴"; then
             echo "::error::Latest deep tier verdict: 🔴 Blocking"
             echo "::error::Re-trigger with '@claude review this PR — depth pass on <focus>', OR remove 'needs-deep-review' label"
+            exit 1
+          fi
+          if ! echo "$DEEP_VERDICT" | grep -q "🟢"; then
+            echo "::error::Deep tier comment has no clear 🔴/🟢 verdict line"
             exit 1
           fi
           echo "✅ Routine 🟢 + deep 🟢 — gate passes"
