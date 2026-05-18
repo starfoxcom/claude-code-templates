@@ -56,11 +56,22 @@ done
 
 When the PR's diff will not produce a routine review (the workflow `triage` job classifies the diff as non-reviewable because no source-extension files changed — typically docs-only, rules-only, `.claude/**`, manifest tweaks), the gate auto-passes without Sonnet running. Don't sit on a 7-minute polling loop — the workflow runs but completes in ~30 seconds.
 
-1. **Sleep 90 seconds** as a grace period to let `triage` + `evaluate-review-outcome` finish.
-2. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Claude review: SKIPPED`, `Evaluate review outcome: SUCCESS`.
-3. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
-4. **Auto-merge** with `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate that maintainers can self-clear).
-5. **Delete branches** (local + remote) per standing authorization.
+**Run the grace + check in the background.** Use the Bash tool with `run_in_background: true` so the conversation stays unblocked; the harness notifies when the command exits. Do not foreground-sleep.
+
+```bash
+# Background pattern:
+until [ "$(gh run list --branch <branch> --workflow=claude-code-review.yml --limit 1 --json status --jq '.[0].status')" = "completed" ]; do
+  sleep 90
+done
+gh pr view <pr> --json statusCheckRollup
+```
+
+After the notification:
+
+1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Claude review: SKIPPED`, `Evaluate review outcome: SUCCESS`.
+2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
+3. **Auto-merge** with `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate that maintainers can self-clear).
+4. **Delete branches** (local + remote) per standing authorization.
 
 This fast path is **only** for PRs the routine reviewer will skip — if `Claude review` ran instead of skipping, fall back to the standard 7-minute polling loop and read the verdict comment.
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
