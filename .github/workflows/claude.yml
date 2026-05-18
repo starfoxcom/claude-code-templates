@@ -1,66 +1,133 @@
 # On-demand deep review — Opus 4.7
-# Fires when ANY comment containing "@claude" lands on a PR or issue.
+# Filters on body SIGNATURE (`@claude review this PR`), not author. Mirrors
+# Emberholm's proven shape: the routine review's structured trigger comment
+# (claude-code-review.yml Step 4.B) is posted by GITHUB_TOKEN — author =
+# `claude[bot]`. So is the action's own progress comment. Body content
+# distinguishes the two cleanly:
+#   • Trigger comment body STARTS with `@claude review this PR — depth pass`.
+#   • Progress comment body is `Claude Code is working…` and contains
+#     `@claude` only inside backticks — never the literal substring
+#     `@claude review this PR`.
+#
 # Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
 
-name: Claude Deep Review
-
-# Per-PR concurrency: do NOT use workflow-level concurrency here — the action's
-# own progress comment can cancel itself mid-flight. Use a job-level group key
-# scoped to the comment ID instead.
+name: Claude On-Demand
 
 on:
   issue_comment:
     types: [created]
   pull_request_review_comment:
     types: [created]
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-  id-token: write
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
 
 jobs:
-  deep-review:
-    if: contains(github.event.comment.body, '@claude')
+  claude:
+    name: On-demand (@claude → Opus 4.7)
+    # Filter: accept comments whose body contains `@claude review this PR`
+    # AND does NOT contain `Claude Code is working`. Both conditions are
+    # cheap string contains checks; defence-in-depth catches edge cases
+    # like a future progress-comment template change that mentions both.
+    #
+    # Note for humans triggering manually: the body must contain the exact
+    # phrase `@claude review this PR` (not just `@claude review`). Matches
+    # the canonical structured trigger format documented in `_core/project-
+    # template/.claude/rules/review-tiers.md`.
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !contains(github.event.review.body, 'Claude Code is working')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude review this PR') || contains(github.event.issue.title, '@claude review this PR')))
+    # CRITICAL: this MUST live at the job level (not workflow level). The
+    # action's own progress comment ("Claude Code is working…") contains the
+    # `@claude` substring, so workflow-level concurrency would accept it and
+    # cancel the in-flight deep-tier review *before* the job-level `if:` had
+    # a chance to filter it out. Job-level concurrency is evaluated AFTER
+    # the job-level `if:`, so bot-comment runs that get filtered never enter
+    # the concurrency group and can't preempt anything. The fallback to
+    # `github.run_id` keeps the group unique for non-PR/issue events.
+    concurrency:
+      group: claude-on-demand-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Claude deep review
-        uses: anthropics/claude-code-action@beta
+      - name: Run Claude
+        # Pinned to v1's resolved SHA (resolved 2026-05-04). The bare `@v1`
+        # floats — silent behavior changes from auto-updates burned other
+        # projects already. Update via
+        #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
+        # and bump the SHA here AND in `.github/workflows/claude-code-review.yml`.
+        uses: anthropics/claude-code-action@8c196b2f61a66bfdf93322bde3a3e668669089ed  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          model: claude-opus-4-7
-          allowed_bots: claude
-          system_prompt: |
-            You are the deep-tier reviewer for claude-code-templates.
-            Stack: HTML + CSS + React via CDN, Babel-in-browser, no build step.
-            Default branch: develop.
+          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-opus-4-7'
+          # Allow the routine review's `claude[bot]` to trigger this workflow.
+          # The bare action defaults to "humans only" as a bot-loop safety;
+          # we explicitly opt in to claude → claude because the routine tier
+          # is the canonical caller for deep-review escalations per
+          # `_core/project-template/.claude/rules/review-tiers.md`.
+          allowed_bots: "claude"
+          # NOTE on context: this action does NOT support a `system_prompt:`
+          # input (warns "Unexpected input"). Project context is auto-loaded
+          # by Claude Code itself from `CLAUDE.md` + `.claude/rules/*.md` at
+          # repo root once the runner checks out. The structured `@claude`
+          # comment from the routine review provides the per-PR focus,
+          # invariants, and out-of-scope list, including the binary verdict
+          # rule the deep tier must follow.
 
-            BINARY VERDICT RULE (same as routine review):
-            - 🟢 LGTM ONLY when fully clean — zero caveats, zero nits.
-            - 🔴 Blocking when ANY real finding exists.
-            - DROP style preferences and micro-optimizations entirely.
-            - "All clear on X" allowed as a SECTION heading, never as the
-              verdict line if other sections have findings.
+      - name: Evaluate deep-tier verdict
+        # Mirrors the routine tier's `Evaluate review outcome` step. Without
+        # this, the binary verdict rule is half-enforced: routine 🔴 blocks
+        # merge, deep 🔴 doesn't. Making the deep tier advisory while routine
+        # gates is backwards — Opus is the more authoritative reviewer.
+        #
+        # The action posts a comment starting with "**Claude finished
+        # @claude[bot]'s task in <duration>**" when Opus completes its review.
+        # We re-read that comment and exit red on 🔴.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.issue.number || github.event.pull_request.number }}"
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::notice::Not on a PR/issue — gate inapplicable"
+            exit 0
+          fi
 
-            Focus areas for depth pass:
-            - Correctness over style.
-            - Architectural invariants the routine review can't easily check.
-            - The specific focus the requester named in the trigger comment.
+          # 10-min cutoff so we only consider comments posted by THIS workflow
+          # run, not stale completions from earlier runs. Opus typically takes
+          # 3–4 min, so 10 min is generous.
+          CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)
 
-            End your comment with EXACTLY one of:
-              "🟢 LGTM" or "🔴 Blocking — must fix"
+          COMMENT=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            | jq -r --arg cutoff "$CUTOFF" \
+              '[.[] | select(.body | contains("Claude finished")) | select(.user.login == "claude[bot]") | select(.created_at >= $cutoff)] | last | .body // ""')
 
-          direct_prompt: |
-            Read the trigger comment that fired this job; do the depth pass it
-            requested. If the trigger is a generic "@claude review this PR",
-            do a full depth pass on the diff vs. develop.
+          if [ -z "$COMMENT" ]; then
+            echo "::notice::No deep-tier completion comment in this run window — action skipped or fired on a non-review @claude mention; gate inapplicable"
+            exit 0
+          fi
 
-# Note: the deep-tier verdict is folded into the routine workflow's
-# `Evaluate review outcome` gate (claude-code-review.yml). When this job
-# posts its "Claude finished" comment, that gate re-evaluates via the
-# `issue_comment` trigger and reads the deep verdict from the comment body.
+          # Verdict is the LAST line containing 🔴 or 🟢. Robust to recap text.
+          VERDICT_LINE=$(printf '%s\n' "$COMMENT" | grep -E "🔴|🟢" | tail -n 1)
+          if [ -z "$VERDICT_LINE" ]; then
+            echo "::error::Deep-tier comment has no 🔴/🟢 verdict at all"
+            exit 1
+          fi
+          if echo "$VERDICT_LINE" | grep -qF "🔴"; then
+            echo "::error::Deep-tier verdict: 🔴 Blocking — merge blocked"
+            exit 1
+          fi
+          echo "✅ Deep-tier verdict clean"
+          exit 0
