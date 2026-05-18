@@ -169,8 +169,8 @@ PRs whose diff the routine reviewer will skip (no source-extension files changed
 1. **Background-poll** with `run_in_background: true` and an until-loop that sleeps 90 s per check (see `token-efficiency.md` § "Fast-path / auto-pass" for the exact pattern). The harness notifies on exit; work on the next thing in the meantime.
 2. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Claude review: SKIPPED`, `Evaluate review outcome: SUCCESS`.
 3. **Verify mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approval gate, which `--admin` resolves for the maintainer).
-4. `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate maintainers can self-clear).
-5. Delete local + remote branch.
+4. `gh pr merge <pr> --merge --admin --delete-branch` (merge commit; `--admin` bypasses the required-approval gate maintainers can self-clear; `--delete-branch` removes the remote branch).
+5. **Delete the local branch too** — `git checkout <base>; git pull --ff-only; git branch -D <merged-branch>`. `--delete-branch` only handles the remote; the local copy persists otherwise and clutters `git branch -a` fast.
 
 User authorization for this fast path is implied by approval to open the PR; it's part of the same task. Do not ask per-PR.
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->

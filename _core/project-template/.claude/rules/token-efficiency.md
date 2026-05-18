@@ -47,7 +47,9 @@ print(sum(1 for r in runs if r['status'] != 'completed'))
 done
 ```
 
-**On all-green (🟢 verdict):** merge with `gh pr merge --merge` — a true merge commit. Never `--squash` or `--rebase`; merge history matters for GUI git clients.
+**On all-green (🟢 verdict):** merge with `gh pr merge --merge --delete-branch` — a true merge commit, and `--delete-branch` removes the REMOTE branch as part of the merge. Never `--squash` or `--rebase`; merge history matters for GUI git clients.
+
+**Then delete the local branch too** — `--delete-branch` does not touch the local copy. Chain `git checkout <base>; git pull --ff-only; git branch -D <merged-branch>` after the merge call. Stale local branches accumulate fast (five+ after a session's worth of merges) and clutter `git branch -a`. The remote-only delete is half the cleanup.
 
 **On any-red (🔴 verdict or workflow failure):** fetch failing logs with `gh run view <id> --log-failed`, identify the offending job + step, propose the fix in one sentence, apply it, push. The push triggers a fresh polling loop on the new SHA. Don't ask permission for routine breakages (compile errors, missing-file paths, lint, dependency-version pins) — fix and push. Ask only when the failure is genuinely ambiguous (flaky test, infra outage, behavior-change-vs-test disagreement).
 
@@ -70,8 +72,8 @@ After the notification:
 
 1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Claude review: SKIPPED`, `Evaluate review outcome: SUCCESS`.
 2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
-3. **Auto-merge** with `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate that maintainers can self-clear).
-4. **Delete branches** (local + remote) per standing authorization.
+3. **Auto-merge** with `gh pr merge <pr> --merge --admin --delete-branch` (merge commit; `--admin` bypasses the required-approval gate maintainers can self-clear; `--delete-branch` removes the remote).
+4. **Delete the local branch too** — `git checkout <base>; git pull --ff-only; git branch -D <merged-branch>`. The `--delete-branch` flag only handles the remote; the local copy persists otherwise.
 
 This fast path is **only** for PRs the routine reviewer will skip — if `Claude review` ran instead of skipping, fall back to the standard 7-minute polling loop and read the verdict comment.
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
