@@ -18,7 +18,7 @@ Run this skill at the beginning of every work session, or whenever the user asks
 2. **Git status** — run these in parallel:
    - `git status` (uncommitted changes)
    - `git log --oneline -10` (recent commits for context)
-   - `git branch --show-current` + `git rev-list --count HEAD..origin/{{DEFAULT_BRANCH}}` (commits behind dev)
+   - `git branch --show-current` + `git rev-list --count HEAD..origin/{{DEV_BRANCH}}` (commits behind dev)
    - `gh pr list --author @me --state open` (your open PRs)
 
 3. **Branch decision** — based on the task and the Gitflow model:
@@ -26,7 +26,7 @@ Run this skill at the beginning of every work session, or whenever the user asks
    - Hotfix → propose `hotfix/<short-name>` off `main`
    - Release prep → propose `release/<version>`
    - If a relevant branch already exists, suggest checking it out
-   - If `{{DEFAULT_BRANCH}}` has advanced since the last session, propose the cascade merge into open feature branches before resuming
+   - If `{{DEV_BRANCH}}` has advanced since the last session, propose the cascade merge into open feature branches before resuming
 
 4. **Modules touched this session** — which directories the planned work mutates. Flag any prerequisite branches (e.g., a frontend change that depends on a backend signal not yet merged → backend branch goes first).
 

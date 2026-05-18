@@ -6,11 +6,11 @@ This rule applies when multiple humans push to the repo — open-source, team pr
 
 ## Branch hygiene
 
-- **Pull `{{DEFAULT_BRANCH}}` before starting** — `git fetch && git merge origin/{{DEFAULT_BRANCH}}` so you don't waste a PR on an already-fixed bug.
+- **Pull `{{DEV_BRANCH}}` before starting** — `git fetch && git merge origin/{{DEV_BRANCH}}` so you don't waste a PR on an already-fixed bug.
 - **Rebase or merge dev INTO your feature branch** when dev advances, never the other way (the PR's merge commit handles dev). The cascade is:
   ```bash
   git checkout feature/<n>
-  git merge origin/{{DEFAULT_BRANCH}}
+  git merge origin/{{DEV_BRANCH}}
   git push origin feature/<n>
   ```
 - **Don't push to other people's branches** without coordinating in the PR. Force-push to a shared branch is a hard no.

@@ -35,8 +35,8 @@ Always respond in **{{CONVERSATION_LANGUAGE}}**.
 
 - **Stack:** {{LANGUAGE_AND_FRAMEWORK}}
 - **Repo:** {{REPO_URL}}
-- **Production branch:** `{{MAIN_BRANCH}}`
-- **Default (dev) branch:** `{{DEFAULT_BRANCH}}`
+- **Production branch:** `{{MAIN_BRANCH}}` (stable releases only — tagged)
+- **Dev (integration) branch:** `{{DEV_BRANCH}}` (where day-to-day work targets; same as the production branch when branching model is trunk-based)
 - **Branching model:** {{GITFLOW_OR_TRUNK}}
 
 Before starting any task, skim the project-level `ROADMAP.md` (if it exists) and any sub-module ROADMAPs relevant to the work.
@@ -106,9 +106,9 @@ Evaluate in order — apply the first row that matches:
 |---|---|
 | No code changes (context refresh only) | Generate context file + commit + PR + paths-ignore fast-path auto-merge + branch cleanup. |
 | Changes exist, branch objective **incomplete** | Commit with work done. No PR. |
-| Changes exist, branch objective **complete** | Commit + PR to `{{DEFAULT_BRANCH}}` + standard polling-loop merge + branch cleanup. |
-| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEFAULT_BRANCH}}` is managed from GitHub). |
-| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEFAULT_BRANCH}}`. |
+| Changes exist, branch objective **complete** | Commit + PR to `{{DEV_BRANCH}}` + standard polling-loop merge + branch cleanup. |
+| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEV_BRANCH}}` is managed from GitHub). |
+| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`. |
 
 Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — never `&&`-chain post-merge cleanup steps.
 
