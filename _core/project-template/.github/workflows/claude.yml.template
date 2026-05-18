@@ -1,7 +1,14 @@
 # On-demand deep review — Opus 4.7
 # Fires when ANY comment containing "@claude" lands on a PR or issue.
-# Renamed from .yml.template → .yml after SETUP fills placeholders.
-# Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
+#
+# POST-BIND PREREQUISITES (workflow is a no-op until BOTH are done):
+#   1. Add CLAUDE_CODE_OAUTH_TOKEN to repo secrets
+#      (GitHub UI: Settings → Secrets and variables → Actions → New repository secret).
+#   2. This file must live on the repo's GITHUB DEFAULT BRANCH for GitHub Actions to
+#      trigger it on future PRs / comments. If your repo's default branch is not where
+#      day-to-day PRs target (e.g., Gitflow: default=main, PRs target develop), land
+#      this file on main first via a hotfix/* branch, then cascade main → {{DEFAULT_BRANCH}}.
+#      Workflow files installed only on a non-default branch will NEVER fire.
 
 name: Claude Deep Review
 
