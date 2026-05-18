@@ -4,8 +4,23 @@
 
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
-| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment** + uncertainty auto-escalation. Final step exits red on 🔴 → **merge gate is real**. |
-| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** |
+| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment** + uncertainty auto-escalation. Verdict is folded into the combined gate. |
+| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict re-evaluates the combined gate via `issue_comment`. |
+
+## The combined gate
+
+There is **one** required status check: `Evaluate review outcome` (from `claude-code-review.yml`). It folds both tiers:
+
+- **Routine path** — fires on `pull_request`. Reads the latest `## Code Review — <project>` comment's last non-empty line. Verdict is 🔴 → exits 1; 🟢 → continues to deep tier check; non-reviewable diff → auto-passes the routine check.
+- **Deep path** — re-fires on `issue_comment` when the deep tier's `Claude finished` comment posts. Reads the latest deep verdict's last non-empty line. Only enforced when the `needs-deep-review` label is applied.
+
+Configure the `develop-protection` / `main-protection` rulesets to require ONLY `Evaluate review outcome` — never list a separate `Evaluate deep-tier verdict`.
+
+## Workflow-touching PRs require admin-bypass
+
+The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token. Any PR that edits `.github/workflows/claude*.yml` therefore fails the token exchange and the routine review action cannot post a verdict. The gate has no comment to read, exits 1, and the only path forward is `gh pr merge --admin`.
+
+Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (Sonnet posted 🔴, missing verdict line, etc.), fix the underlying issue — do not bypass.
 
 ---
 

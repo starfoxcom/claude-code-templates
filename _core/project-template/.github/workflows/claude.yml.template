@@ -6,9 +6,15 @@
 #      (GitHub UI: Settings → Secrets and variables → Actions → New repository secret).
 #   2. This file must live on the repo's GITHUB DEFAULT BRANCH for GitHub Actions to
 #      trigger it on future PRs / comments. If your repo's default branch is not where
-#      day-to-day PRs target (e.g., Gitflow: default=main, PRs target develop), land
-#      this file on main first via a hotfix/* branch, then cascade main → {{DEFAULT_BRANCH}}.
-#      Workflow files installed only on a non-default branch will NEVER fire.
+#      day-to-day PRs target (e.g., Gitflow: default={{MAIN_BRANCH}}, PRs target
+#      {{DEV_BRANCH}}), land this file on {{MAIN_BRANCH}} first via a hotfix/* branch,
+#      then cascade {{MAIN_BRANCH}} → {{DEV_BRANCH}}. Workflow files installed only on
+#      a non-default branch will NEVER fire.
+#
+# Note: the deep-tier verdict is folded into the routine workflow's
+# `Evaluate review outcome` gate (claude-code-review.yml). When this job
+# posts its "Claude finished" comment, that gate re-evaluates via the
+# `issue_comment` trigger and reads the deep verdict from the comment body.
 
 name: Claude Deep Review
 
@@ -26,6 +32,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  id-token: write
 
 jobs:
   deep-review:
@@ -47,7 +54,7 @@ jobs:
           system_prompt: |
             You are the deep-tier reviewer for {{PROJECT_NAME}}.
             Stack: {{LANGUAGE_AND_FRAMEWORK}}.
-            Default branch: {{DEFAULT_BRANCH}}.
+            Default branch: {{MAIN_BRANCH}}.
 
             BINARY VERDICT RULE (same as routine review):
             - 🟢 LGTM ONLY when fully clean — zero caveats, zero nits.
@@ -67,32 +74,4 @@ jobs:
           direct_prompt: |
             Read the trigger comment that fired this job; do the depth pass it
             requested. If the trigger is a generic "@claude review this PR",
-            do a full depth pass on the diff vs. {{DEFAULT_BRANCH}}.
-
-  evaluate-deep-verdict:
-    name: Evaluate deep-tier verdict
-    needs: deep-review
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Read deep verdict
-        run: |
-          PR=${{ github.event.issue.number }}
-          COMMENT=$(gh api repos/${{ github.repository }}/issues/$PR/comments \
-            --jq '[.[] | select(.user.login == "claude" or .user.login == "claude[bot]")] | last | .body')
-          if [ -z "$COMMENT" ]; then
-            echo "::error::No deep-review comment found."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🔴"; then
-            echo "::error::Deep review verdict: 🔴 Blocking — must fix."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🟢"; then
-            echo "Deep review verdict: 🟢 LGTM."
-            exit 0
-          fi
-          echo "::error::Deep review comment has no clear 🔴/🟢 verdict line."
-          exit 1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            do a full depth pass on the diff vs. {{MAIN_BRANCH}}.
