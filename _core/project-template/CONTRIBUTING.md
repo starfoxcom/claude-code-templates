@@ -7,12 +7,12 @@ Thanks for your interest. This document is the **public-facing** contributor gui
 ## Quick start
 
 1. Fork the repo (or clone if you have push access).
-2. Create a branch off `{{DEFAULT_BRANCH}}` following the Gitflow naming:
+2. Create a branch off `{{DEV_BRANCH}}` following the Gitflow naming:
    - Feature work → `feature/<short-kebab-case-name>`
    - Bug fix → `feature/fix-<short-name>` (or `hotfix/<n>` if it must skip to main)
 3. Set up the dev environment per `README.md`.
 4. Make your change. **Atomic commits** — one logical change per commit.
-5. Open a PR against `{{DEFAULT_BRANCH}}`.
+5. Open a PR against `{{DEV_BRANCH}}`.
 
 ---
 

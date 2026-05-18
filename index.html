@@ -1623,9 +1623,8 @@ function BindFolio() {
     name: "",
     repo_url: "",
     description: "",
-    default_branch: "main",
-    developer_branch: "develop",
-    main_branch: "",  // empty = mirror default_branch; explicit value overrides
+    main_branch: "main",      // production / release branch — tagged versions live here
+    dev_branch: "develop",    // dev integration branch; mirrors main_branch for trunk-based
     branching_model: "trunk",
     tech_stack: [],                // selected tech-stack chips
     license: "MIT",
@@ -1705,8 +1704,10 @@ function BindFolio() {
       bundle: bundleId,
       project: showProject ? {
         ...project,
-        // main_branch is optional: when blank it mirrors default_branch.
-        main_branch: project.main_branch || project.default_branch,
+        // For trunk-based projects, dev_branch mirrors main_branch (single-branch model).
+        dev_branch: project.branching_model === "gitflow"
+          ? (project.dev_branch || "develop")
+          : project.main_branch,
       } : {
         discovery: true,
         conversation_language: project.conversation_language,
@@ -1897,21 +1898,13 @@ can copy them into your project root during step 2 apply.
                   value={project.repo_url}
                   onChange={e => setProject(p => ({ ...p, repo_url: e.target.value }))} />
               </Field>
-              <Field label="Default branch" hint="Where shipped/released versions live. Usually main.">
-                <input className="input" placeholder="main"
-                  value={project.default_branch}
-                  onChange={e => setProject(p => ({ ...p, default_branch: e.target.value }))} />
-              </Field>
-              <Field label="Developer branch" hint="Where day-to-day work lands. Gitflow: develop. Trunk: same as default.">
-                <input className="input" placeholder="develop"
-                  value={project.developer_branch}
-                  onChange={e => setProject(p => ({ ...p, developer_branch: e.target.value }))} />
-              </Field>
-              <Field label="Production branch"
-                hint="Optional. Defaults to the default branch above. Only set if you keep a separate production line — used for audit-trail / strict branch protection.">
-                <input className="input" placeholder={project.default_branch || "main"}
-                  value={project.main_branch}
-                  onChange={e => setProject(p => ({ ...p, main_branch: e.target.value }))} />
+              <Field label="Branching model" hint="Gitflow = separate main + dev branches. Trunk-based = single branch.">
+                <select className="select"
+                  value={project.branching_model}
+                  onChange={e => setProject(p => ({ ...p, branching_model: e.target.value }))}>
+                  <option value="trunk">Trunk-based</option>
+                  <option value="gitflow">Gitflow</option>
+                </select>
               </Field>
               <Field label="License">
                 <select className="select"
@@ -1920,14 +1913,18 @@ can copy them into your project root during step 2 apply.
                   {["MIT", "Apache-2.0", "BSD-3-Clause", "GPL-3.0", "Proprietary", "None"].map(l => <option key={l}>{l}</option>)}
                 </select>
               </Field>
-              <Field label="Branching model" hint="Gitflow = separate default + developer branches. Trunk = single branch.">
-                <select className="select"
-                  value={project.branching_model}
-                  onChange={e => setProject(p => ({ ...p, branching_model: e.target.value }))}>
-                  <option value="trunk">Trunk-based</option>
-                  <option value="gitflow">Gitflow</option>
-                </select>
+              <Field label="Main branch" hint="Production / release branch. Tagged versions live here, GitHub's UI 'default branch' usually points here too. Usually main.">
+                <input className="input" placeholder="main"
+                  value={project.main_branch}
+                  onChange={e => setProject(p => ({ ...p, main_branch: e.target.value }))} />
               </Field>
+              {project.branching_model === "gitflow" && (
+                <Field label="Dev branch" hint="Where day-to-day work targets and PRs base from. Gitflow only — trunk-based mirrors the main branch.">
+                  <input className="input" placeholder="develop"
+                    value={project.dev_branch}
+                    onChange={e => setProject(p => ({ ...p, dev_branch: e.target.value }))} />
+                </Field>
+              )}
               <div className="field-full">
                 <CardCarousel
                   label="Tech stack"
@@ -2807,9 +2804,9 @@ function SubRow({ k, v, accent }) {
 // Counts how many of the advanced fields the user has filled, for the
 // disclosure summary label.
 function advancedFilledCount(p) {
-  const n = ["description", "main_branch", "branching_model", "license_holder", "timezone", "code_language"]
+  const n = ["description", "dev_branch", "branching_model", "license_holder", "timezone", "code_language"]
     .filter(k => {
-      if (k === "main_branch") return p.main_branch && p.main_branch !== p.default_branch;
+      if (k === "dev_branch") return p.branching_model === "gitflow" && p.dev_branch && p.dev_branch !== "develop";
       return p[k] && p[k] !== "trunk" && p[k] !== "English" && p[k] !== "main";
     }).length
     + (p.architecture?.length || 0)
@@ -3562,8 +3559,8 @@ function buildSetupMd(manifest, bundleId) {
    abort with: "Run step 1 first: download + unzip the configurator output
    into the project root."
 2. Parse \`./claude-code-templates/manifest.json\`. Required fields:
-   \`bundle\`, \`project.name\`, \`project.repo_url\`, \`project.default_branch\`,
-   \`toggles\`. Missing fields → run a short interview to fill them.
+   \`bundle\`, \`project.name\`, \`project.repo_url\`, \`project.main_branch\`,
+   \`project.dev_branch\`, \`toggles\`. Missing fields → run a short interview to fill them.
 3. Cross-check every toggle key against the catalog. Unknown keys → reject.
 4. Resolve \`ask\` toggles based on project signals (e.g. the code_research
    toggle resolves to ON only if the selected tool reports ready via its
@@ -3575,7 +3572,7 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
 
 - Selected bundle and final toggle state (defaults + overrides + ask fills)
 - Substituted placeholders (\`{{PROJECT_NAME}}\`, \`{{REPO_URL}}\`,
-  \`{{MAIN_BRANCH}}\`, \`{{DEFAULT_BRANCH}}\`, etc.)
+  \`{{MAIN_BRANCH}}\`, \`{{DEV_BRANCH}}\`, etc.)
 - Per-toggle ON/OFF and what files/sections it affects
 - Every file that will be created, every section that will be stripped,
   every file that will be deleted
@@ -4348,7 +4345,7 @@ function HowFolio() {
           <Phase n="1" name="Validate">
             <ul>
               <li><strong>Locate templates.</strong> Claude expects them at <code className="mono">./claude-code-templates/</code>. If absent, the run aborts with instructions.</li>
-              <li><strong>Parse the manifest.</strong> Required fields: bundle, project.name, project.repo_url, project.default_branch, toggles. Missing → short interview.</li>
+              <li><strong>Parse the manifest.</strong> Required fields: bundle, project.name, project.repo_url, project.main_branch, project.dev_branch, toggles. Missing → short interview.</li>
               <li><strong>Cross-check toggles</strong> against the catalog. Unknown keys → reject.</li>
               <li><strong>Resolve <em>ask</em> toggles</strong>: the code-research toggle resolves to ON only if your selected tool reports ready via its status probe; architecture scaffold only if clear layers exist.</li>
             </ul>

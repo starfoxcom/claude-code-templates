@@ -21,7 +21,7 @@ The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x impr
 | `{{LANGUAGE_AND_FRAMEWORK}}` | `HTML + CSS + React via CDN, Babel-in-browser, no build step` | from CHANGELOG v1.1.0 + CLAUDE.md "Project conventions" |
 | `{{REPO_URL}}` | `https://github.com/starfoxcom/claude-code-templates` | `gh repo view` |
 | `{{MAIN_BRANCH}}` | `main` | Gitflow production branch (tagged releases only) |
-| `{{DEFAULT_BRANCH}}` | `develop` | Gitflow dev integration branch — where day-to-day work targets and PRs base from. Distinct from GitHub's UI "default branch" setting (which is `main` for this repo). |
+| `{{DEV_BRANCH}}` | `develop` | Gitflow dev integration branch — where day-to-day work targets and PRs base from. Renamed from `{{DEFAULT_BRANCH}}` in #14 because the old name collided with GitHub's UI "default branch" setting (which is `main` for this repo). |
 | `{{GITFLOW_OR_TRUNK}}` | `Gitflow` | from CLAUDE.md "Git workflow" + CONTRIBUTING.md "Branch from develop" |
 | `{{CONVERSATION_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
 | `{{CODE_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
