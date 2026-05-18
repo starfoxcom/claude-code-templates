@@ -70,6 +70,20 @@ First public release. Toggle-driven configurator, in-browser bind generator, Git
 
 ## [Unreleased]
 
+_Nothing yet._
+
+---
+
+## [v1.2.0] — 2026-05-18
+
+End-to-end review-gate hardening. Workflows installed on this repo, refactored to a single combined gate, then propagated to the canonical templates. Self-bind landed. Configurator form + placeholder semantics aligned with the Gitflow / trunk distinction.
+
+### Added
+- **Routine + deep review workflows installed at `.github/workflows/`** (#17). The templates project now self-hosts the same gate it ships. `Evaluate review outcome` is the single required status check on `develop-protection` + `main-protection`.
+- **Combined-gate model in canonical workflow templates** (#26). `_core/project-template/.github/workflows/claude-code-review.yml.template` now owns the gate end-to-end: folds in the deep tier via `issue_comment` re-evaluation when the `needs-deep-review` label is applied, extracts the verdict from the last non-empty line, branches on Gitflow vs trunk via `<!-- TOGGLE:branching_model_gitflow|trunk -->` blocks, declares `id-token: write` for OIDC. `claude.yml.template` strips the redundant `evaluate-deep-verdict` job (verdict folds into routine gate) and adds `id-token: write`. Both template headers document the workflow-PR admin-bypass limitation.
+- **Workflow post-bind prerequisites** documented in template header comments (#18). Set `CLAUDE_CODE_OAUTH_TOKEN` secret + land the workflow on the GitHub default branch first if PRs target a non-default branch (the action won't fire on files installed only on a non-default branch).
+- **This repo is now self-bound** (#12, #13). `.claude/skills/{session-start,session-close,find,architecture-graph}/SKILL.md` resolved from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` + Discovery for null toggles. `.claude/BIND.md` documents the audit trail. The templates' own project finally dogfoods itself.
+
 ### Changed
 - **Template placeholder rename: `{{DEFAULT_BRANCH}}` → `{{DEV_BRANCH}}`** (#14). The old name collided with GitHub's UI "default branch" setting concept — template uses it to mean "the dev integration branch where day-to-day work targets" (`develop` for Gitflow, `main` for trunk-based), which is the opposite of what GitHub's UI labels "default". Renamed for clarity. SETUP.md retains a backwards-compat shim that accepts `developer_branch` / `default_branch` in older manifests and warns.
 - **Configurator form: branch fields simplified** (#14). The previous three-field setup ("Default branch" + "Developer branch" + optional "Production branch" override) collapsed into two clearer fields:
@@ -77,10 +91,22 @@ First public release. Toggle-driven configurator, in-browser bind generator, Git
   - **Dev branch** (Gitflow only) — where day-to-day work targets and PRs base from. Default `develop`. Hidden when Branching model = Trunk-based (which mirrors the main branch).
 
   State variables renamed in `index.html` + `redesign/bind.jsx`: `default_branch` removed, `developer_branch` → `dev_branch`. Manifest schema emits `main_branch` + `dev_branch`.
+- **Workflow refactor: paths-ignore dropped, single gate model** (#21, #22). The earlier design had two required checks (`Evaluate review outcome` + `Evaluate deep-tier verdict`) and a `paths-ignore` set that caused docs / rules / no-comment PRs to never report the required check — admin-bypass was the only path. The refactor folds both tiers into one `Evaluate review outcome` check that resolves cleanly on every PR. The deep tier is gated by the `needs-deep-review` label and re-evaluates the routine gate via `issue_comment`. Rulesets for `develop-protection` and `main-protection` should list only `Evaluate review outcome` going forward.
+- **Verdict extraction: last non-empty line only** (#23, #24). Earlier code grepped the whole comment body for 🔴 / 🟢, which false-fired when a 🟢 review recapped a prior 🔴 finding. The gate now reads only the last non-empty line per the prompt's "ending with EXACTLY one of" rule, and explicitly asserts 🟢 — closing a robustness regression in an earlier patch.
+- **`github_actions_paths_ignore_auto_merge` toggle semantics** (#28). Toggle ID kept stable for backward-compatibility but the underlying mechanism shifted from "diff under `paths-ignore` → no runs" to "diff classified non-reviewable by triage → gate auto-passes". 90s grace + auto-merge sequence preserved. Configurator blurb in `index.html` (#27) updated to drop the now-incorrect "CI-YAML-only" claim — workflow-touching PRs now fail App-token validation rather than auto-merging.
+- **CI polling cadence discipline made binding** (#28). Both the 90s grace (fast-path) and the 7-minute loop (normal review) must run with `run_in_background: true` per the canonical rules and this repo's CLAUDE.md. Foreground sleeps freeze the agent unnecessarily; background polling lets the agent stack a cascade or open the next PR while CI runs.
 
 ### Fixed
+- **`id-token: write` permission** added to both workflows (#21). `anthropics/claude-code-action@beta` requires an OIDC-exchanged token; without the permission the action errors at setup before posting any review.
 - **Configurator produced incoherent binds for Gitflow projects** (#14). Bundle 2 (OSS, Gitflow) bundles rules that say "branch from develop / PR to develop", but the configurator's `default_branch` field carried the release-branch value, and SETUP.md substituted `{{DEFAULT_BRANCH}}` from it — so resolved skills would have said "PR to main" even though the rules said "PR to develop". Fixed by the rename + UI restructure above.
 - **Session-start now reads the CONTEXT handoff file** (#9). The template's session-close skill writes `{{PROJECT_NAME_UPPER}}-CONTEXT_*.md`, but session-start ignored it — the read/write loop was broken on the read side. Gated by `context_refresh_files: true` (OSS bundle default).
+- **Auto-merge toggle blurb factual accuracy** in `index.html` (#27). The "CI-YAML-only PRs auto-merge" claim was true under v1.1.0's paths-ignore design but stopped being true after the workflow refactor.
 
-### Self-bind
-- **This repo is now self-bound** (#12). `.claude/skills/{session-start,session-close,find,architecture-graph}/SKILL.md` resolved from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` + Discovery for null toggles. `.claude/BIND.md` documents the audit trail. The templates' own project finally dogfoods itself.
+### Documented
+- **Workflow-touching PR admin-bypass limitation** (#25). The Anthropic Claude Code GitHub App's anti-tamper check rejects the OIDC token exchange when the head branch's workflow file differs from the default branch's, so PRs editing `.github/workflows/claude*.yml` cannot get a routine review verdict pre-merge. `gh pr merge --admin` is the only path. Documented in canonical rules + workflow template header comments + this repo's CLAUDE.md.
+
+### Known follow-ups
+- **Community metrics (issue #2).** Opt-in, anonymised, PR-submitted before/after metrics aggregate. Promised for v1.2 in the v1.1.0 release notes; reslipped to v1.3.0 in this release because the workflow refactor took priority.
+- **`manifest.json` build script.** Still hand-curated; auto-generation from the repo tree is roadmap.
+- **`/find` skill parametrisation.** Currently names tokensave explicitly; should read `tools.code_research.name` from the bound config.
+- **Triage regex doesn't include `.md` or `.template`** in the canonical workflow. PRs touching only those files auto-pass without Sonnet input. Worth revisiting if a downstream incident shows that's too permissive.

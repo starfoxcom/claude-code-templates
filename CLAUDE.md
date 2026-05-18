@@ -112,7 +112,6 @@ Skills `/session-start` and `/session-close` (and `/find`, `/architecture-graph`
 ## What's intentionally NOT here
 
 - **No `.claude/rules/` duplication** — rules live canonically in `_core/project-template/.claude/rules/` and are referenced from here. A downstream bind copies them out with toggle blocks resolved.
-- **No `_core/project-template/.github/workflows/` canonical copies yet** — the review workflows live only at the project root for now. Promoting them to `_core/` so downstream binds inherit them is tracked follow-up.
 
 ---
 
