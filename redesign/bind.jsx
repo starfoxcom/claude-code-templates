@@ -338,6 +338,13 @@ can copy them into your project root during step 2 apply.
                   <option value="gitflow">Gitflow</option>
                 </select>
               </Field>
+              <Field label="License">
+                <select className="select"
+                  value={project.license}
+                  onChange={e => setProject(p => ({ ...p, license: e.target.value }))}>
+                  {["MIT", "Apache-2.0", "BSD-3-Clause", "GPL-3.0", "Proprietary", "None"].map(l => <option key={l}>{l}</option>)}
+                </select>
+              </Field>
               <Field label="Main branch" hint="Production / release branch. Tagged versions live here, GitHub's UI 'default branch' usually points here too. Usually main.">
                 <input className="input" placeholder="main"
                   value={project.main_branch}
@@ -350,13 +357,6 @@ can copy them into your project root during step 2 apply.
                     onChange={e => setProject(p => ({ ...p, dev_branch: e.target.value }))} />
                 </Field>
               )}
-              <Field label="License">
-                <select className="select"
-                  value={project.license}
-                  onChange={e => setProject(p => ({ ...p, license: e.target.value }))}>
-                  {["MIT", "Apache-2.0", "BSD-3-Clause", "GPL-3.0", "Proprietary", "None"].map(l => <option key={l}>{l}</option>)}
-                </select>
-              </Field>
               <div className="field-full">
                 <CardCarousel
                   label="Tech stack"
