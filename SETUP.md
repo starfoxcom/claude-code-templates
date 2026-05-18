@@ -291,6 +291,17 @@ On `apply`:
 
 12. **Report a summary** to the user: files created, sections stripped, files deleted/skipped, files scaffolded, the commit SHA, and the `~/.claude/` merge result.
 
+12a. **Surface post-bind GitHub configuration** (only if `github_actions_routine_review` OR `github_actions_deep_review` is ON). The installed workflow files are no-ops until the user does both of the following via the GitHub UI — these steps Claude **cannot** perform during setup, so they MUST be enumerated explicitly in the summary (do not bury them in "see the workflow file's header comment"):
+
+    > **⚠️ Workflow setup is not complete yet.** The following two GitHub-UI steps are required before the workflows you just installed will actually run. Without them, every future PR will silently skip review.
+    >
+    > 1. **Add the `CLAUDE_CODE_OAUTH_TOKEN` secret** — GitHub → repo Settings → Secrets and variables → Actions → New repository secret. Generate the token from your Claude Code subscription per Anthropic's docs. Until this secret exists, the `anthropics/claude-code-action@beta` step fails with a missing-token error on every PR.
+    > 2. **Push the workflows to the repo's DEFAULT branch first.** GitHub Actions only triggers workflows that live on the repo's default branch. The setup just committed the workflow files locally on your current branch (`<branch-name>`) — but if your default branch is different (common in Gitflow: default=`{{MAIN_BRANCH}}`, day-to-day PRs target `{{DEV_BRANCH}}`), the workflows won't fire until they land on `{{MAIN_BRANCH}}`. Recommended path: open this commit as a `hotfix/*` PR against `{{MAIN_BRANCH}}` first, merge, then cascade-merge `{{MAIN_BRANCH}}` → `{{DEV_BRANCH}}`. Pushing directly to your dev branch leaves the workflows installed-but-inert.
+    >
+    > Optionally also add `Evaluate review outcome` (and `Evaluate deep-tier verdict` if deep review is ON) as required status checks under your branch protection rules — this is what makes the binary 🔴/🟢 verdict an actual merge gate.
+
+    Substitute `<branch-name>` with the user's current `git branch --show-current` value. Substitute `{{MAIN_BRANCH}}` and `{{DEV_BRANCH}}` with the resolved values from the user's config. If trunk-based (`branching_model: trunk`), simplify step 2 to *"Push the commit to your default branch — workflows installed only on feature branches won't fire."*
+
 13. **Mandatory session-reload disclosure.** Tell the user — using bold and an attention-grabbing format — that the new rules / skills / CLAUDE.md are NOT loaded in the current session. They MUST close it (`/exit`) and start a fresh Claude Code session in the same project root before continuing any work, otherwise Claude won't follow the rules they just configured. Exact wording to use (or close equivalent):
 
     > **⚠️ IMPORTANT — reload the session before continuing.** The new rules, skills, and `CLAUDE.md` you just installed are NOT loaded in this current session. To activate them:
