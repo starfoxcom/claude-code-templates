@@ -63,7 +63,10 @@ Per `_core/project-template/.claude/rules/token-efficiency.md`:
 - **Read before writing.** Locate the relevant function/class before reading whole files. Use `tokensave_body <symbol>` to pull a single symbol's source when reading the whole file would be wasteful.
 - **Command timeout scaling.** Default starting timeout for builds: 420 000 ms. Each retry escalates by 120 000 ms.
 - **Never use `gh run watch`.** Always poll `gh run list` with a background loop — see the canonical pattern in the rule file.
-- **Auto-merge on paths-ignore PRs is OFF** for this repo. The OSS bundle defaults this off because a public repo deserves a human eyeball on every PR.
+- **CI polling cadence is fixed by PR class:**
+  - **Fast-path / auto-pass PRs** (docs-only, rules-only, anything `triage` classifies non-reviewable) — `sleep 90` ONCE as a grace period, then check `gh pr view <pr> --json statusCheckRollup`. Expect `Claude review: SKIPPED`, `Evaluate review outcome: SUCCESS`. Auto-merge with `gh pr merge <pr> --merge --admin` (the `--admin` flag clears the required-approval gate maintainers self-clear on their own PRs).
+  - **Normal-review PRs** — `sleep 420` (7 minutes) between checks. Read the routine reviewer's verdict comment via `gh pr view <pr> --json comments` and act on the last non-empty 🟢/🔴 line. On 🟢, merge with `--merge --admin`; on 🔴, fix on the PR branch and push.
+  - **Workflow-touching PRs** (`.github/workflows/claude*.yml`) — App auth blocks the routine review action. No verdict can post. Confirm the failure mode via `gh run view --job <id> --log-failed` (look for `Workflow validation failed`), then `--admin` merge. This is the ONLY scenario where `--admin` is justified pre-verdict; for all other PRs, wait for the comment.
 - **Usage ceiling:** at ≥80%, commit locally and stop. Don't push to PR (CI run costs 10–15% of remaining capacity).
 
 ---
