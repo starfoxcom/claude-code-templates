@@ -146,12 +146,17 @@ jobs:
                 exit 0
               fi
             fi
-            if echo "$ROUTINE_COMMENT" | grep -q "🔴"; then
+            # Verdict is the last non-empty line per the prompt's
+            # 'ending with EXACTLY one of' rule — checking the whole body
+            # would false-fire when a 🟢 review recaps a prior 🔴 finding.
+            ROUTINE_VERDICT_LINE=$(printf '%s\n' "$ROUTINE_COMMENT" | sed '/^[[:space:]]*$/d' | tail -n 1)
+            if echo "$ROUTINE_VERDICT_LINE" | grep -qF "🔴"; then
               echo "::error::Routine review verdict: 🔴 Blocking"
               exit 1
             fi
-            if ! echo "$ROUTINE_COMMENT" | grep -q "🟢"; then
-              echo "::error::Routine review comment has no clear 🔴/🟢 verdict line"
+            if ! echo "$ROUTINE_VERDICT_LINE" | grep -qF "🟢"; then
+              echo "::error::Routine review comment has no clear 🔴/🟢 verdict on its last line"
+              echo "::error::Last line was: $ROUTINE_VERDICT_LINE"
               exit 1
             fi
             echo "✅ Routine review verdict: 🟢 LGTM"
@@ -171,13 +176,15 @@ jobs:
             echo "::error::Wait for deep tier, OR remove 'needs-deep-review' label to dismiss"
             exit 1
           fi
-          if echo "$DEEP_VERDICT" | grep -q "🔴"; then
+          DEEP_VERDICT_LINE=$(printf '%s\n' "$DEEP_VERDICT" | sed '/^[[:space:]]*$/d' | tail -n 1)
+          if echo "$DEEP_VERDICT_LINE" | grep -qF "🔴"; then
             echo "::error::Latest deep tier verdict: 🔴 Blocking"
             echo "::error::Re-trigger with '@claude review this PR — depth pass on <focus>', OR remove 'needs-deep-review' label"
             exit 1
           fi
-          if ! echo "$DEEP_VERDICT" | grep -q "🟢"; then
-            echo "::error::Deep tier comment has no clear 🔴/🟢 verdict line"
+          if ! echo "$DEEP_VERDICT_LINE" | grep -qF "🟢"; then
+            echo "::error::Deep tier comment has no clear 🔴/🟢 verdict on its last line"
+            echo "::error::Last line was: $DEEP_VERDICT_LINE"
             exit 1
           fi
           echo "✅ Routine 🟢 + deep 🟢 — gate passes"
