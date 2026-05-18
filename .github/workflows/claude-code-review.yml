@@ -1,4 +1,5 @@
 # Routine PR review — Sonnet 4.6, binary 🔴/🟢 verdict
+# Also owns the combined gate: routine + (when escalated) deep tier.
 # Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
 
 name: Claude Code Review
@@ -7,11 +8,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [develop]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.claude/**'
-      - '.github/workflows/claude*.yml'
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: claude-review-pr-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -21,6 +23,7 @@ permissions:
 jobs:
   triage:
     name: Diff triage
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       reviewable: ${{ steps.classify.outputs.reviewable }}
@@ -44,7 +47,7 @@ jobs:
   claude-review:
     name: Claude review
     needs: triage
-    if: needs.triage.outputs.reviewable == 'true'
+    if: github.event_name == 'pull_request' && needs.triage.outputs.reviewable == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -94,30 +97,79 @@ jobs:
             Include: one-line framing, one-paragraph context, numbered priority-ranked invariants
             with file:line, explicit out-of-scope list.
 
-  evaluate-outcome:
+  evaluate-review-outcome:
     name: Evaluate review outcome
-    needs: claude-review
-    if: always() && needs.triage.outputs.reviewable == 'true'
+    needs: [triage, claude-review]
+    if: |
+      always() && (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, 'Claude finished'))
+      )
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
     steps:
-      - name: Read latest review verdict
+      - name: Resolve combined verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          PR=${{ github.event.pull_request.number }}
-          COMMENT=$(gh api repos/${{ github.repository }}/issues/$PR/comments \
-            --jq '[.[] | select(.body | startswith("## Code Review — claude-code-templates"))] | last | .body')
-          if [ -z "$COMMENT" ]; then
-            echo "::error::No review comment found — Claude failed to post."
-            exit 1
+          PR_NUMBER="${{ github.event.pull_request.number || github.event.issue.number }}"
+          IS_PR_EVENT="${{ github.event_name == 'pull_request' }}"
+
+          # --- Routine tier ---------------------------------------------------
+          if [ "$IS_PR_EVENT" = "true" ]; then
+            if [ "${{ needs.triage.outputs.reviewable }}" != "true" ]; then
+              echo "::notice::Triage classified diff as non-reviewable — skipping routine read"
+              ROUTINE_STATUS=skip
+            elif [ "${{ needs.claude-review.result }}" != "success" ]; then
+              echo "::error::Claude review job did not complete (result: ${{ needs.claude-review.result }})"
+              exit 1
+            else
+              ROUTINE_STATUS=eval
+            fi
+          else
+            ROUTINE_STATUS=eval
           fi
-          if echo "$COMMENT" | grep -q "🔴"; then
-            echo "::error::Review verdict: 🔴 Blocking — must fix."
-            exit 1
+
+          if [ "$ROUTINE_STATUS" = "eval" ]; then
+            ROUTINE_COMMENT=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+              | jq -r '[.[] | select(.body | contains("## Code Review — claude-code-templates"))] | last | .body // ""')
+            if [ -z "$ROUTINE_COMMENT" ]; then
+              if [ "$IS_PR_EVENT" = "true" ]; then
+                echo "::error::No routine review comment found"
+                exit 1
+              else
+                echo "::notice::No routine review comment yet — issue_comment re-eval skipped"
+                exit 0
+              fi
+            fi
+            if echo "$ROUTINE_COMMENT" | grep -q "🔴"; then
+              echo "::error::Routine review verdict: 🔴 Blocking"
+              exit 1
+            fi
+            echo "✅ Routine review verdict: 🟢 LGTM"
           fi
-          if echo "$COMMENT" | grep -q "🟢"; then
-            echo "Review verdict: 🟢 LGTM."
+
+          # --- Deep tier — folded in only when needs-deep-review label is set -
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '[.labels[].name] | join(",")')
+          if ! echo "$LABELS" | grep -q "needs-deep-review"; then
+            echo "✅ Deep tier not required (no needs-deep-review label) — gate passes"
             exit 0
           fi
-          echo "::error::Review comment has no clear 🔴/🟢 verdict line."
-          exit 1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          DEEP_VERDICT=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+            | jq -r '[.[] | select(.user.login == "claude[bot]") | select(.body | contains("Claude finished"))] | last | .body // ""')
+          if [ -z "$DEEP_VERDICT" ]; then
+            echo "::error::Deep tier escalated but verdict not yet posted — gate pending"
+            echo "::error::Wait for deep tier, OR remove 'needs-deep-review' label to dismiss"
+            exit 1
+          fi
+          if echo "$DEEP_VERDICT" | grep -q "🔴"; then
+            echo "::error::Latest deep tier verdict: 🔴 Blocking"
+            echo "::error::Re-trigger with '@claude review this PR — depth pass on <focus>', OR remove 'needs-deep-review' label"
+            exit 1
+          fi
+          echo "✅ Routine 🟢 + deep 🟢 — gate passes"
+          exit 0

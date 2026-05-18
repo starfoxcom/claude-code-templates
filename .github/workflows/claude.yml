@@ -59,30 +59,7 @@ jobs:
             requested. If the trigger is a generic "@claude review this PR",
             do a full depth pass on the diff vs. develop.
 
-  evaluate-deep-verdict:
-    name: Evaluate deep-tier verdict
-    needs: deep-review
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Read deep verdict
-        run: |
-          PR=${{ github.event.issue.number }}
-          COMMENT=$(gh api repos/${{ github.repository }}/issues/$PR/comments \
-            --jq '[.[] | select(.user.login == "claude" or .user.login == "claude[bot]")] | last | .body')
-          if [ -z "$COMMENT" ]; then
-            echo "::error::No deep-review comment found."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🔴"; then
-            echo "::error::Deep review verdict: 🔴 Blocking — must fix."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🟢"; then
-            echo "Deep review verdict: 🟢 LGTM."
-            exit 0
-          fi
-          echo "::error::Deep review comment has no clear 🔴/🟢 verdict line."
-          exit 1
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# Note: the deep-tier verdict is folded into the routine workflow's
+# `Evaluate review outcome` gate (claude-code-review.yml). When this job
+# posts its "Claude finished" comment, that gate re-evaluates via the
+# `issue_comment` trigger and reads the deep verdict from the comment body.
