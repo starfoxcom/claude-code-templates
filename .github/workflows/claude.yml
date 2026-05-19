@@ -20,8 +20,6 @@ on:
     types: [created]
   pull_request_review:
     types: [submitted]
-  issues:
-    types: [opened, assigned]
 
 jobs:
   claude:
@@ -38,8 +36,7 @@ jobs:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !contains(github.event.review.body, 'Claude Code is working')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude review this PR') || contains(github.event.issue.title, '@claude review this PR')))
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !contains(github.event.review.body, 'Claude Code is working'))
     # CRITICAL: this MUST live at the job level (not workflow level). The
     # action's own progress comment ("Claude Code is working…") contains the
     # `@claude` substring, so workflow-level concurrency would accept it and
@@ -87,10 +84,17 @@ jobs:
           # rule the deep tier must follow.
 
       - name: Evaluate deep-tier verdict
-        # Mirrors the routine tier's `Evaluate review outcome` step. Without
-        # this, the binary verdict rule is half-enforced: routine 🔴 blocks
-        # merge, deep 🔴 doesn't. Making the deep tier advisory while routine
-        # gates is backwards — Opus is the more authoritative reviewer.
+        # Advisory enforcement. The routine tier's `Evaluate review outcome`
+        # (in claude-code-review.yml) is the single REQUIRED status check that
+        # gates merge. This step exits 1 on Opus 🔴, which fails the
+        # `Claude On-Demand` check run and makes the red verdict visible in the
+        # PR status panel — but that check is not in the required-checks
+        # ruleset, so merge is not automatically blocked.
+        #
+        # What this means operationally: a deep-tier 🔴 is a hard stop for
+        # the maintainer. Read the finding before any admin-bypass; never
+        # bypass on a deep 🔴 without documenting why the finding is not
+        # applicable or will be addressed in a follow-up.
         #
         # The action posts a comment starting with "**Claude finished
         # @claude[bot]'s task in <duration>**" when Opus completes its review.
