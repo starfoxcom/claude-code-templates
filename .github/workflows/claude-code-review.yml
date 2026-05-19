@@ -1,123 +1,414 @@
 # Routine PR review — Sonnet 4.6, binary 🔴/🟢 verdict
+# Verdict resolution lives inside the same job as the review action — no
+# issue_comment re-evaluation. Deep-tier escalation is owned by claude.yml.
 # Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
+#
+# PERMANENT LIMITATION — workflow-touching PRs require admin-bypass:
+#   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
+#   head ref is byte-identical to the version on the default branch before granting
+#   an OIDC-exchanged token. Any PR that edits .github/workflows/claude*.yml therefore
+#   fails the token exchange and the routine review action cannot post a verdict.
+#   Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
 
 name: Claude Code Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [develop]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.claude/**'
-      - '.github/workflows/claude*.yml'
+    branches: [develop, main]
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
+concurrency:
+  group: claude-review-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   triage:
     name: Diff triage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
-      reviewable: ${{ steps.classify.outputs.reviewable }}
+      run_review: ${{ steps.classify.outputs.run_review }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Classify diff
         id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          BASE=${{ github.event.pull_request.base.sha }}
-          HEAD=${{ github.event.pull_request.head.sha }}
-          CHANGED=$(git diff --name-only $BASE..$HEAD)
+          PR=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+          gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
           # Reviewable extensions — claude-code-templates surface
-          if echo "$CHANGED" | grep -qE '\.(html|jsx|js|json|yml|yaml|py)$'; then
-            echo "reviewable=true" >> $GITHUB_OUTPUT
-          else
-            echo "reviewable=false" >> $GITHUB_OUTPUT
+          REVIEWABLE=$(grep -E '\.(html|jsx|js|json|yml|yaml|py)$' /tmp/changed_files.txt || true)
+          if [ -z "$REVIEWABLE" ]; then
+            echo "Diff has no reviewable source / data / contract files — skipping review."
+            echo "run_review=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "Reviewable changes detected; running review."
+          echo "run_review=true" >> "$GITHUB_OUTPUT"
 
-  claude-review:
-    name: Claude review
+  evaluate-review-outcome:
+    name: Evaluate review outcome
     needs: triage
-    if: needs.triage.outputs.reviewable == 'true'
+    if: needs.triage.outputs.run_review == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Pre-screen
-        id: prescreen
-        run: |
-          BASE=${{ github.event.pull_request.base.sha }}
-          HEAD=${{ github.event.pull_request.head.sha }}
-          mkdir -p /tmp
-          echo "# Pre-screen report for PR #${{ github.event.pull_request.number }}" > /tmp/review_context.md
-          echo "" >> /tmp/review_context.md
-          echo "## Files changed" >> /tmp/review_context.md
-          git diff --name-only $BASE..$HEAD >> /tmp/review_context.md
-
-      - name: Claude routine review
-        uses: anthropics/claude-code-action@beta
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          model: claude-sonnet-4-6
-          allowed_tools: "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(cat /tmp/review_context.md)"
-          direct_prompt: |
-            You are reviewing a PR for claude-code-templates.
+          python-version: "3.11"
 
-            Read /tmp/review_context.md for the pre-screen output.
-            Read the PR diff: `gh pr diff ${{ github.event.pull_request.number }}`.
-
-            Post ONE comment titled "## Code Review — claude-code-templates" ending with EXACTLY one of:
-              - "🟢 LGTM" — when zero real findings exist (zero caveats, zero "non-blocking", zero "minor nits").
-              - "🔴 Blocking — must fix" — when ANY real finding exists.
-
-            BINARY VERDICT RULE:
-            - 🟢 only when fully clean.
-            - 🔴 when ANY real finding exists, regardless of framing.
-            - DROP style preferences, micro-optimizations, "consider extracting" — never label them non-blocking.
-
-            UNCERTAINTY ESCALATION (independent of verdict):
-            Apply the `needs-deep-review` label AND post a structured follow-up comment
-            `@claude review this PR — depth pass on <focus area>`
-            when the diff touches any of these high-blast-radius paths:
-              - `_core/**` (canonical templates that every downstream bind copies)
-              - root `index.html` (the deployed configurator)
-              - `_core/project-template/.claude/hooks/**` (hooks that run on user machines)
-              - `redesign/*.jsx` (configurator source)
-            Include: one-line framing, one-paragraph context, numbered priority-ranked invariants
-            with file:line, explicit out-of-scope list.
-
-  evaluate-outcome:
-    name: Evaluate review outcome
-    needs: claude-review
-    if: always() && needs.triage.outputs.reviewable == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Read latest review verdict
+      # ── Pre-screen: deterministic Python checks over the diff ────────────────
+      # Catches mechanical rule violations before Sonnet sees them. Sonnet then
+      # trusts the report and spends turns on judgment work — NOT re-discovering
+      # grep-able patterns. This is what makes the `Bash(gh *),Read` allowlist
+      # the right size: Sonnet doesn't need `cat`/`grep`/`wc` because the pre-
+      # screen already did that work.
+      - name: Pre-screen PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           PR=${{ github.event.pull_request.number }}
-          COMMENT=$(gh api repos/${{ github.repository }}/issues/$PR/comments \
-            --jq '[.[] | select(.body | startswith("## Code Review — claude-code-templates"))] | last | .body')
-          if [ -z "$COMMENT" ]; then
-            echo "::error::No review comment found — Claude failed to post."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🔴"; then
-            echo "::error::Review verdict: 🔴 Blocking — must fix."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🟢"; then
-            echo "Review verdict: 🟢 LGTM."
-            exit 0
-          fi
-          echo "::error::Review comment has no clear 🔴/🟢 verdict line."
-          exit 1
+          REPO=${{ github.repository }}
+
+          gh pr diff $PR --repo $REPO > /tmp/pr_diff.txt
+          gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
+
+          python3 - << 'PYEOF'
+          import os
+          import re
+          from collections import Counter
+
+          PR = os.environ.get('PR_NUMBER', '?')
+
+          with open('/tmp/pr_diff.txt') as f:
+              diff = f.read()
+          with open('/tmp/changed_files.txt') as f:
+              changed = [l.strip() for l in f if l.strip()]
+
+          # Parse the diff into per-file added-line sections.
+          per_file_added = {}
+          for sec in re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE):
+              m = re.search(r'^diff --git a/(.+?) b/', sec, re.MULTILINE)
+              if not m:
+                  continue
+              fname = m.group(1)
+              added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
+              per_file_added[fname] = added
+
+          violations = []   # rule-breakage — likely 🔴 unless the reviewer disagrees
+          warnings   = []   # likely-needs-attention — reviewer judges
+
+          # ── Check 1: Toggle marker balance ───────────────────────────────────
+          # Every `<!-- TOGGLE:name START -->` (and `name:off`) must have a
+          # matching `<!-- TOGGLE:name END -->` in the SAME file. A missing END
+          # silently swallows downstream content during SETUP-time resolution.
+          toggle_pat = re.compile(r'<!--\s*TOGGLE:([\w:_\-]+)\s+(START|END)\s*-->')
+          for fname in changed:
+              if not fname.endswith(('.md', '.template', '.yml', '.yaml', '.html')):
+                  continue
+              try:
+                  with open(fname) as f:
+                      src = f.read()
+              except OSError:
+                  continue
+              starts = Counter(m.group(1) for m in toggle_pat.finditer(src) if m.group(2) == 'START')
+              ends   = Counter(m.group(1) for m in toggle_pat.finditer(src) if m.group(2) == 'END')
+              for name in (starts | ends).keys():
+                  if starts[name] != ends[name]:
+                      violations.append(f'TOGGLE_UNBALANCED: {fname}: name={name} START={starts[name]} END={ends[name]}')
+
+          # ── Check 2: Placeholder validation in canonical templates ──────────
+          # Every `{{NAME}}` in `_core/project-template/**` must be one of the
+          # placeholders SETUP.md knows how to resolve. An unknown placeholder
+          # lands literally in the user's repo on bind.
+          CANONICAL = {
+              'MAIN_BRANCH', 'DEV_BRANCH', 'DEFAULT_BRANCH',
+              'PROJECT_NAME', 'PROJECT_NAME_UPPER',
+              'LANGUAGE_AND_FRAMEWORK',
+              'CONVERSATION_LANGUAGE', 'CODE_LANGUAGE',
+              'REPO_URL', 'ONE_LINE_DESCRIPTION',
+              'GITFLOW_OR_TRUNK',
+          }
+          placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
+          for fname in changed:
+              if not fname.startswith('_core/project-template/'):
+                  continue
+              try:
+                  with open(fname) as f:
+                      src = f.read()
+              except OSError:
+                  continue
+              for m in placeholder_pat.finditer(src):
+                  name = m.group(1)
+                  if name not in CANONICAL:
+                      violations.append(f'UNKNOWN_PLACEHOLDER: {fname}: {{{{{name}}}}} not in canonical set')
+
+          # ── Check 3: AI-attribution scan ─────────────────────────────────────
+          # Per .claude/rules/git.md — no `Co-Authored-By: Claude`, no
+          # "Generated with Claude Code" footers, no claude.com / claude.ai
+          # links, no 🤖 attribution. In ADDED lines only.
+          ai_pats = [
+              re.compile(r'Co-Authored-By:\s*Claude', re.IGNORECASE),
+              re.compile(r'Generated\s+with\s+\[?Claude\s+Code', re.IGNORECASE),
+              re.compile(r'claude\.(?:com|ai)\b', re.IGNORECASE),
+              re.compile(r'🤖\s*Generated', re.IGNORECASE),
+          ]
+          for fname, lines in per_file_added.items():
+              for line in lines:
+                  for pat in ai_pats:
+                      if pat.search(line):
+                          violations.append(f'AI_ATTRIBUTION: {fname}: {line.strip()[:120]}')
+                          break
+
+          # ── Check 4: JSX/HTML parity ─────────────────────────────────────────
+          # The redesign/*.jsx source and `index.html` production are kept in
+          # manual sync. A JSX edit without a matching HTML edit ships broken.
+          jsx_changed = [f for f in changed if f.startswith('redesign/') and f.endswith('.jsx')]
+          if jsx_changed and 'index.html' not in changed:
+              warnings.append(f'JSX_HTML_PARITY: {", ".join(jsx_changed)} touched but index.html not in diff — production may be out of sync')
+
+          # ── Check 5: Categorize files ────────────────────────────────────────
+          ARCH_PREFIXES = ('_core/', 'redesign/')
+          ARCH_FILES    = {'index.html', 'SETUP.md', 'TOGGLES.md', 'COMPARISON.md'}
+          arch_critical, docs, other_code = [], [], []
+          for f in changed:
+              if f.startswith('.github/workflows/claude') or any(f.startswith(p) for p in ARCH_PREFIXES) or f in ARCH_FILES:
+                  arch_critical.append(f)
+              elif f.endswith('.md'):
+                  docs.append(f)
+              else:
+                  other_code.append(f)
+
+          # ── Check 6: Deep-review trigger surface ─────────────────────────────
+          # MUST stay in sync with prompt § Step 2.5 and
+          # `_core/project-template/.claude/rules/review-tiers.md`.
+          DEEP_PREFIXES = ('_core/', 'redesign/')
+          DEEP_FILES    = {'index.html'}
+          DEEP_HOOKS    = '_core/project-template/.claude/hooks/'
+          DEEP_WORKFLOWS = '.github/workflows/claude'  # matches claude.yml + claude-code-review.yml
+          deep_paths = [
+              f for f in changed
+              if any(f.startswith(p) for p in DEEP_PREFIXES)
+              or f in DEEP_FILES
+              or f.startswith(DEEP_HOOKS)
+              or f.startswith(DEEP_WORKFLOWS)
+          ]
+
+          # ── Write the review context ─────────────────────────────────────────
+          with open('/tmp/review_context.md', 'w') as out:
+              out.write(f'# Pre-screen report for PR #{PR}\n\n')
+
+              if violations:
+                  out.write(f'## Pre-screen violations ({len(violations)}) — likely 🔴 unless you can refute each\n\n')
+                  for v in violations:
+                      out.write(f'- `{v}`\n')
+                  out.write('\n')
+              else:
+                  out.write('## Pre-screen violations: none\n\n')
+
+              if warnings:
+                  out.write(f'## Pre-screen warnings ({len(warnings)}) — reviewer judges\n\n')
+                  for w in warnings:
+                      out.write(f'- `{w}`\n')
+                  out.write('\n')
+
+              if deep_paths:
+                  out.write('## Deep-review trigger surface — auto-escalation REQUIRED (Step 4)\n\n')
+                  out.write('These paths are on the deep-review trigger list. You MUST apply the `needs-deep-review` label AND post the structured `@claude review this PR` comment in Step 4, no exceptions:\n\n')
+                  for p in deep_paths:
+                      out.write(f'- `{p}`\n')
+                  out.write('\n')
+              else:
+                  out.write('## Deep-review trigger surface: none (Step 4 skipped)\n\n')
+
+              out.write('## Architecture-critical files (READ THESE)\n\n')
+              if arch_critical:
+                  for f in arch_critical:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+              out.write('\n')
+
+              out.write('## Docs / markdown changes (low-risk, scan only)\n\n')
+              if docs:
+                  for f in docs:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+              out.write('\n')
+
+              out.write('## Other code changes\n\n')
+              if other_code:
+                  for f in other_code:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+
+          print(f'Pre-screen complete. Violations={len(violations)}, Warnings={len(warnings)}, Deep-trigger={len(deep_paths)}, Arch-critical={len(arch_critical)}')
+          PYEOF
+
+          echo "--- review_context.md ---"
+          cat /tmp/review_context.md
+
+      - name: Run Claude Code Review
+        id: claude-review
+        # Pinned to v1's resolved SHA (resolved 2026-05-04). The bare `@v1`
+        # or `@beta` floats — silent behavior changes from auto-updates burned
+        # other projects already. Update via
+        #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
+        # confirm the diff, then bump here AND in `.github/workflows/claude.yml`.
+        uses: anthropics/claude-code-action@8c196b2f61a66bfdf93322bde3a3e668669089ed  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: false
+          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-sonnet-4-6'
+          prompt: |
+            Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }} for **claude-code-templates** — the open-source toolkit that ships opinionated Claude Code bundles. The configurator + canonical templates here become the binds every downstream user installs verbatim, so the review surface is load-bearing in a way ordinary OSS isn't.
+
+            ## Step 1 — Read the pre-screen report
+
+            Read `/tmp/review_context.md`. It contains:
+            - **Pre-screen violations** — mechanical rule-breakage already detected (toggle marker imbalance, unknown placeholders in canonical templates, AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
+            - **Pre-screen warnings** — likely issues you should judge (JSX/HTML parity drift, etc.).
+            - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
+            - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
+
+            Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+            **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
+
+            ## Step 2 — Architectural review
+
+            Read ONLY the files most likely to contain risk. Then expand outward if the architecture review surfaces a concern.
+
+            **Project-specific invariants to verify (in priority order):**
+
+            1. **Canonical template integrity** — anything in `_core/project-template/**` lands verbatim in every downstream bind. Toggle markers (`<!-- TOGGLE:name START/END -->`) must be balanced; placeholders (`{{MAIN_BRANCH}}`, `{{DEV_BRANCH}}`, `{{PROJECT_NAME}}`, etc.) must be the canonical names that SETUP.md resolves. A missing END marker silently swallows downstream content.
+            2. **Workflow template parity** — `_core/project-template/.github/workflows/*.template` should behave like this repo's live workflows after substitution. Drift between live and canonical means downstream binds get a different gate than this repo dogfoods.
+            3. **Hook safety** — `_core/project-template/.claude/hooks/**` runs on every user's machine. Any Bash / shell / Python edit there must be cross-platform (Linux/macOS/Windows-Git-Bash), POSIX-portable, and never assume a specific PATH or interpreter.
+            4. **Configurator (`index.html` + `redesign/*.jsx`)** — JSX source and inlined production HTML are kept manually in sync. A change to `redesign/bind.jsx` that doesn't land in `index.html` ships a broken configurator. Toggle catalog edits must update both the data layer and the manifest emission.
+            5. **Bundle defaults (`bundles/<n>/bundle.toggles.md`)** — each bundle's per-toggle default must be defensible. A toggle that flips ON for OSS but OFF for client-team needs a documented reason somewhere (CLAUDE.md, TOGGLES.md, or bundle.toggles.md itself).
+            6. **Versioning policy** — major/minor/patch matches the rules in `CHANGELOG.md`. New bundle / new toggle / new tool slot = minor. Bug fix / copy edit = patch. Breaking schema change = major.
+            7. **No AI-attribution markers** — per `_core/project-template/.claude/rules/git.md`, never `Co-Authored-By: Claude`, never "Generated with Claude Code" footers, never claude.com links in PR bodies or commit messages.
+
+            ## Step 2.5 — Decide whether to escalate (do not post yet)
+
+            Escalation is *orthogonal* to the verdict — it's "deeper look requested," not a blocker. The verdict in Step 3 stays binary regardless.
+
+            **Mark for escalation when ALL hold:**
+            1. The concern is about correctness, not style.
+            2. You can articulate a *specific* reason an Opus reviewer would catch what you cannot.
+            3. You would not stake the merge on your own verdict for that concern.
+
+            **Auto-escalate (always mark) when the diff includes any of:**
+            - `_core/**` (canonical templates that every downstream bind copies)
+            - `index.html` (the deployed configurator)
+            - `_core/project-template/.claude/hooks/**` (hooks that run on user machines)
+            - `redesign/*.jsx` (configurator source)
+            - `bundles/<n>/bundle.toggles.md` defaults changes
+            - SETUP.md contract changes
+            - `_core/project-template/.github/workflows/*.template` (canonical CI)
+
+            **Do NOT mark for escalation:** docs, comments, formatting, naming nits, "consider extracting", pure refactors with no behavior change.
+
+            ## Step 3 — Post the verdict comment FIRST
+
+            Command: `gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "BODY"`
+
+            The verdict lands BEFORE the escalation comment so PR readers see the decision first.
+
+            **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
+
+            Body MUST:
+            - Be titled `## Code Review — claude-code-templates`
+            - End with EXACTLY one of these as the FINAL line of the comment (no trailing prose after):
+              - `🟢 LGTM`
+              - `🔴 Blocking — must fix`
+
+            **BINARY VERDICT RULE:**
+            - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
+            - 🔴 Blocking when ANY real finding exists, regardless of framing. "Minor nit" that suggests a real correctness improvement is 🔴. "All clear with caveats" is a contradiction — caveats make it 🔴.
+            - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
+            - "All clear on X" is allowed AS A SECTION HEADING. NEVER as the verdict line when other sections have findings.
+
+            ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
+
+            Only run Step 4 if Step 2.5 marked the PR for escalation. Skip otherwise.
+
+            Do BOTH of the following on every escalating run — the label and the comment have different lifecycles:
+
+            **A. Apply the label (idempotent — safe to re-apply if already present):**
+            ```
+            gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review
+            ```
+
+            **B. Post a fresh `@claude` comment EVERY escalating run, no exceptions:**
+            ```
+            gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "@claude review this PR — depth pass on <focus>.
+
+            <One-paragraph context: what the PR ships and why the risk surface is bigger than the diff suggests.>
+
+            **Numbered invariants ranked by priority:**
+            1. **<file:line>** — <invariant + how it could break>
+            2. ...
+
+            **Out of scope:** <list of intentional deferrals>
+
+            **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
+            - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
+            - 🔴 Blocking when ANY real finding exists, regardless of framing.
+            - DROP style preferences and micro-optimisations entirely.
+
+            **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
+            ```
+
+            **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true. If the only `@claude` in your comment is inside backticks or a code block, the deep tier silently skips.
+
+      - name: Evaluate review outcome
+        if: always()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 15-min cutoff so we only consider the comment from THIS run, not
+          # stale verdicts from earlier pushes on the same PR.
+          CUTOFF=$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-15M +%Y-%m-%dT%H:%M:%SZ)
+          COMMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            | jq -r --arg cutoff "$CUTOFF" '[.[] | select(.body | contains("## Code Review — claude-code-templates")) | select(.created_at >= $cutoff)] | last | .body // ""')
+
+          if [ -z "$COMMENT" ]; then
+            echo "::error::No review comment found in the last 15 minutes — Claude did not post a verdict this run"
+            exit 1
+          fi
+
+          # Verdict is the LAST line containing 🔴 or 🟢. This is robust to:
+          #   (a) Sonnet recapping a prior 🔴 finding mid-body in a 🟢 review,
+          #   (b) Sonnet adding a closing paragraph after the verdict line.
+          VERDICT_LINE=$(printf '%s\n' "$COMMENT" | grep -E "🔴|🟢" | tail -n 1)
+          if [ -z "$VERDICT_LINE" ]; then
+            echo "::error::Review comment has no 🔴/🟢 verdict at all"
+            exit 1
+          fi
+          if echo "$VERDICT_LINE" | grep -qF "🔴"; then
+            echo "::error::Routine review verdict: 🔴 Blocking — merge blocked"
+            exit 1
+          fi
+          if ! echo "$VERDICT_LINE" | grep -qF "🟢"; then
+            echo "::error::Last verdict-bearing line has neither 🔴 nor 🟢 (parser bug?)"
+            echo "::error::Line was: $VERDICT_LINE"
+            exit 1
+          fi
+          echo "✅ Review passed — 🟢 LGTM"
+          exit 0
