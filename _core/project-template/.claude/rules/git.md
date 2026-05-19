@@ -108,8 +108,8 @@ Two review tiers, both fully workflow-driven via `.github/workflows/`:
 
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
-| **Routine** | Auto on every PR (`claude-code-review.yml`) | Subscription-included (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Required check — exits red on 🔴, merge blocked. |
-| **On-demand deep** | `@claude review this PR` comment (`claude.yml`) | Subscription-included (Opus) | Depth pass on the focus the routine review escalated to. Same binary 🔴/🟢 rule. **Advisory** — fails the `Claude On-Demand` check but merge is not auto-blocked. |
+| **Routine** | Auto on every PR (`claude-code-review.yml`) | Subscription-included (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Merge gate is real — exits red on 🔴. |
+| **On-demand deep** | `@claude review this PR` comment (`claude.yml`) | Subscription-included (Opus) | Depth pass on the focus the routine review escalated to. Same binary 🔴/🟢 rule. |
 
 <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
 The deep review **auto-fires** when the routine review's Step 2.5 detects the diff touches the trigger surface (parsers, threading, public API, auth, migrations) — see `review-tiers.md`.
