@@ -40,7 +40,8 @@ jobs:
           REPO=${{ github.repository }}
           gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
           # Reviewable extensions — claude-code-templates surface
-          REVIEWABLE=$(grep -E '\.(html|jsx|js|json|yml|yaml|py)$' /tmp/changed_files.txt || true)
+          # .template = canonical workflow/rule templates in _core/
+          REVIEWABLE=$(grep -E '\.(html|jsx|js|json|yml|yaml|py|template)$' /tmp/changed_files.txt || true)
           if [ -z "$REVIEWABLE" ]; then
             echo "Diff has no reviewable source / data / contract files — skipping review."
             echo "run_review=false" >> "$GITHUB_OUTPUT"
