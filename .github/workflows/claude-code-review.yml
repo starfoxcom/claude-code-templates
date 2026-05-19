@@ -44,7 +44,6 @@ jobs:
           # ^_core/    = all of _core/ (rules, skills, templates) — lands verbatim in user repos
           # .additions = CLAUDE.md.additions → goes into users' ~/.claude/CLAUDE.md
           # bundle.toggles.md = bundle defaults for downstream binds
-          # .txt in _core/licenses/ = license files (legally significant)
           REVIEWABLE=$(grep -E '\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.additions$|/bundle\.toggles\.md$' /tmp/changed_files.txt || true)
           if [ -z "$REVIEWABLE" ]; then
             echo "Diff has no reviewable source / data / contract files — skipping review."
