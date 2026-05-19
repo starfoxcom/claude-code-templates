@@ -386,14 +386,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 15-min cutoff so we only consider the comment from THIS run, not
-          # stale verdicts from earlier pushes on the same PR.
-          CUTOFF=$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-15M +%Y-%m-%dT%H:%M:%SZ)
+          # 25-min cutoff so we only consider the comment from THIS run, not
+          # stale verdicts from earlier pushes on the same PR. 25 min covers
+          # Sonnet at 50 max-turns + Step-4 escalation on large diffs.
+          CUTOFF=$(date -u -d '25 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-25M +%Y-%m-%dT%H:%M:%SZ)
           COMMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
             | jq -r --arg cutoff "$CUTOFF" '[.[] | select(.body | contains("## Code Review — claude-code-templates")) | select(.created_at >= $cutoff)] | last | .body // ""')
 
           if [ -z "$COMMENT" ]; then
-            echo "::error::No review comment found in the last 15 minutes — Claude did not post a verdict this run"
+            echo "::error::No review comment found in the last 25 minutes — Claude did not post a verdict this run"
             exit 1
           fi
 
