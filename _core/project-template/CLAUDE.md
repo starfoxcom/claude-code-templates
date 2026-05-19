@@ -78,7 +78,7 @@ Every work session begins with this ritual. On prompt like "session start" or "r
 3. **Modules touched this session** — which directories the planned work mutates. Flag prerequisite branches.
 4. **Session steps as a task list** — for any session with 3+ discrete work items, call `TaskCreate` once per step in the planned order. Use `addBlockedBy` to express dependencies between tasks. The task list is the source of truth for what's in scope this session — never let it go stale.
 
-   > **Tool note:** `TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet` / `addBlockedBy` are standard Claude Code as of v2.1.142 (default-flip, May 2026); opt-in available since v2.1.16 (Jan 2026). On older builds or when `CLAUDE_CODE_ENABLE_TASKS=0` is set, the legacy `TodoWrite` (single-call full-array rewrite, no dependency chaining) is the fallback — express order via array position instead.
+   > **Tool note:** `TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet` / `addBlockedBy` are the modern Claude Code task tools. On builds that pre-date them, or when `CLAUDE_CODE_ENABLE_TASKS=0` is set, the legacy `TodoWrite` (single-call full-array rewrite, no dependency chaining) is the fallback — express order via array position instead.
 
    **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front with `addBlockedBy` chaining so the task list mirrors the merge order. A 10-PR chain treated as ad-hoc work burns hours on out-of-sequence routing — the upfront enumeration prevents that.
 
