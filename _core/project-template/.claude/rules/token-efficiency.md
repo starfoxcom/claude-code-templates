@@ -32,9 +32,9 @@ Default starting timeout for build commands (CMake, scons, cargo build, dart pub
 
 Run the polling loop with `run_in_background: true` so the conversation isn't frozen on the wait. The harness notifies when the background command exits; pick up other work or wait for the user in the meantime.
 
-> **Background shell constraint — critical:** the background Bash environment does NOT have the external `jq` binary available. Piping to `jq` (e.g. `echo "$JSON" | jq -r '.field'`) will produce `jq: command not found`, silently break the `&&` chain, and leave the loop running forever. Use **only** the two safe extraction methods:
-> - `gh`'s built-in `--jq` flag (e.g. `--jq '.[0].status'`) — no external tool needed
-> - `python3 -c "import sys,json; ..."` reading from stdin — Python3 IS available
+> **Background shell constraint — critical:** the background Bash environment **may not** have the external `jq` binary available (it's absent on Windows Git Bash, stripped-down containers, and some sandboxed harness shells; present on `ubuntu-latest` runners, Homebrew macOS, and most devcontainer images). Piping to `jq` where it's missing produces `jq: command not found`, silently breaks the `&&` chain, and leaves the loop running forever. Use a portable extraction method instead:
+> - **Preferred:** `gh`'s built-in `--jq` flag (e.g. `--jq '.[0].status'`) — no external tool, works wherever `gh` works
+> - **Fallback:** `python3 -c "import sys,json; ..."` reading from stdin — guard with `command -v python3` if you need cross-platform support (Windows Git Bash often ships `python` only, minimal containers may have neither)
 
 ```bash
 SHA=$(git rev-parse HEAD)
