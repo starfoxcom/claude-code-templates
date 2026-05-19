@@ -39,8 +39,13 @@ jobs:
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
           gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
-          # Reviewable extensions — claude-code-templates surface
-          REVIEWABLE=$(grep -E '\.(html|jsx|js|json|yml|yaml|py)$' /tmp/changed_files.txt || true)
+          # Reviewable: source/contract files OR high-blast-radius _core/ content.
+          # .template  = canonical workflow templates in _core/
+          # ^_core/    = all of _core/ (rules, skills, templates) — lands verbatim in user repos
+          # .additions = CLAUDE.md.additions → goes into users' ~/.claude/CLAUDE.md
+          # bundle.toggles.md = bundle defaults for downstream binds
+          # .txt in _core/licenses/ = license files (legally significant)
+          REVIEWABLE=$(grep -E '\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.additions$|/bundle\.toggles\.md$' /tmp/changed_files.txt || true)
           if [ -z "$REVIEWABLE" ]; then
             echo "Diff has no reviewable source / data / contract files — skipping review."
             echo "run_review=false" >> "$GITHUB_OUTPUT"
