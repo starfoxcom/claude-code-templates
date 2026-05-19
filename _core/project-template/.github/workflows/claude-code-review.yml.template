@@ -1,134 +1,370 @@
 # Routine PR review — Sonnet 4.6, binary 🔴/🟢 verdict
+# Verdict resolution lives inside the same job as the review action — no
+# issue_comment re-evaluation. Deep-tier escalation is owned by claude.yml.
 #
 # POST-BIND PREREQUISITES (workflow is a no-op until BOTH are done):
 #   1. Add CLAUDE_CODE_OAUTH_TOKEN to repo secrets
 #      (GitHub UI: Settings → Secrets and variables → Actions → New repository secret).
 #   2. This file must live on the repo's GITHUB DEFAULT BRANCH for GitHub Actions to
 #      trigger it on future PRs. If your repo's default branch is not where day-to-day
-#      PRs target (e.g., Gitflow: default=main, PRs target develop), land this file
-#      on main first via a hotfix/* branch, then cascade main → {{DEFAULT_BRANCH}}.
-#      Workflow files installed only on a non-default branch will NEVER fire.
+#      PRs target (e.g., Gitflow: default={{MAIN_BRANCH}}, PRs target {{DEV_BRANCH}}),
+#      land this file on {{MAIN_BRANCH}} first via a hotfix/* branch, then cascade
+#      {{MAIN_BRANCH}} → {{DEV_BRANCH}}. Workflow files installed only on a non-default
+#      branch will NEVER fire.
+#
+# PERMANENT LIMITATION — workflow-touching PRs require admin-bypass:
+#   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
+#   head ref is byte-identical to the version on the default branch before granting
+#   an OIDC-exchanged token. Any PR that edits .github/workflows/claude*.yml therefore
+#   fails the token exchange and the routine review action cannot post a verdict.
+#   Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
 
 name: Claude Code Review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [{{DEFAULT_BRANCH}}]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - '.claude/**'
-      - '.github/workflows/claude*.yml'
+    <!-- TOGGLE:branching_model_gitflow START -->
+    branches: [{{MAIN_BRANCH}}, {{DEV_BRANCH}}]
+    <!-- TOGGLE:branching_model_gitflow END -->
+    <!-- TOGGLE:branching_model_trunk START -->
+    branches: [{{MAIN_BRANCH}}]
+    <!-- TOGGLE:branching_model_trunk END -->
 
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
+concurrency:
+  group: claude-review-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   triage:
     name: Diff triage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
-      reviewable: ${{ steps.classify.outputs.reviewable }}
+      run_review: ${{ steps.classify.outputs.run_review }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Classify diff
         id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          BASE=${{ github.event.pull_request.base.sha }}
-          HEAD=${{ github.event.pull_request.head.sha }}
-          CHANGED=$(git diff --name-only $BASE..$HEAD)
+          PR=${{ github.event.pull_request.number }}
+          REPO=${{ github.repository }}
+          gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
           # Reviewable extensions — customize for your stack
-          if echo "$CHANGED" | grep -qE '\.(py|ts|tsx|js|jsx|rs|go|java|cpp|h|hpp|c|gd|dart|rb|kt|swift|cs)$'; then
-            echo "reviewable=true" >> $GITHUB_OUTPUT
+          if grep -qE '\.(py|ts|tsx|js|jsx|rs|go|java|cpp|h|hpp|c|gd|dart|rb|kt|swift|cs)$' /tmp/changed_files.txt; then
+            echo "Reviewable changes detected; running review."
+            echo "run_review=true" >> "$GITHUB_OUTPUT"
           else
-            echo "reviewable=false" >> $GITHUB_OUTPUT
+            echo "Diff has no reviewable source files — skipping review."
+            echo "run_review=false" >> "$GITHUB_OUTPUT"
           fi
 
-  claude-review:
-    name: Claude review
+  evaluate-review-outcome:
+    name: Evaluate review outcome
     needs: triage
-    if: needs.triage.outputs.reviewable == 'true'
+    if: needs.triage.outputs.run_review == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Pre-screen
-        id: prescreen
-        run: |
-          BASE=${{ github.event.pull_request.base.sha }}
-          HEAD=${{ github.event.pull_request.head.sha }}
-          mkdir -p /tmp
-          echo "# Pre-screen report for PR #${{ github.event.pull_request.number }}" > /tmp/review_context.md
-          echo "" >> /tmp/review_context.md
-          echo "## Files changed" >> /tmp/review_context.md
-          git diff --name-only $BASE..$HEAD >> /tmp/review_context.md
-          # Add project-specific mechanical checks here (e.g., raw thread usage,
-          # hardcoded strings in wrong language, missing doc class XML, etc.)
-
-      - name: Claude routine review
-        uses: anthropics/claude-code-action@beta
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          model: claude-sonnet-4-6
-          allowed_tools: "Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(cat /tmp/review_context.md)"
-          direct_prompt: |
-            You are reviewing a PR for {{PROJECT_NAME}}.
+          python-version: "3.11"
 
-            Read /tmp/review_context.md for the pre-screen output.
-            Read the PR diff: `gh pr diff ${{ github.event.pull_request.number }}`.
-
-            Post ONE comment titled "## Code Review — {{PROJECT_NAME}}" ending with EXACTLY one of:
-              - "🟢 LGTM" — when zero real findings exist (zero caveats, zero "non-blocking", zero "minor nits").
-              - "🔴 Blocking — must fix" — when ANY real finding exists.
-
-            BINARY VERDICT RULE:
-            - 🟢 only when fully clean.
-            - 🔴 when ANY real finding exists, regardless of framing.
-            - DROP style preferences, micro-optimizations, "consider extracting" — never label them non-blocking.
-
-            <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
-            UNCERTAINTY ESCALATION (independent of verdict):
-            If the diff touches the deep-review trigger surface (parsing/codec/serialization,
-            threading/locking, scheduler/DAG/graph algorithms, new public API/interface,
-            save-load format, schema migrations, auth/authz/crypto, trust-boundary crossings),
-            apply the `needs-deep-review` label AND post a structured follow-up comment:
-            `@claude review this PR — depth pass on <focus area>`
-            with: one-line framing, one-paragraph context, numbered priority-ranked invariants
-            with file:line, explicit out-of-scope list.
-            <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
-
-  evaluate-outcome:
-    name: Evaluate review outcome
-    needs: claude-review
-    if: always() && needs.triage.outputs.reviewable == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Read latest review verdict
+      # ── Pre-screen: deterministic Python checks over the diff ────────────────
+      # Catches mechanical rule violations before Sonnet sees them. Sonnet then
+      # trusts the report and spends turns on judgment work — NOT re-discovering
+      # grep-able patterns. This is what makes the `Bash(gh *),Read` allowlist
+      # the right size: Sonnet doesn't need `cat`/`grep`/`wc` because the pre-
+      # screen already did that work.
+      - name: Pre-screen PR diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           PR=${{ github.event.pull_request.number }}
-          # Find the latest "## Code Review — {{PROJECT_NAME}}" comment posted in last 15 min
-          COMMENT=$(gh api repos/${{ github.repository }}/issues/$PR/comments \
-            --jq '[.[] | select(.body | startswith("## Code Review — {{PROJECT_NAME}}"))] | last | .body')
-          if [ -z "$COMMENT" ]; then
-            echo "::error::No review comment found — Claude failed to post."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🔴"; then
-            echo "::error::Review verdict: 🔴 Blocking — must fix."
-            exit 1
-          fi
-          if echo "$COMMENT" | grep -q "🟢"; then
-            echo "Review verdict: 🟢 LGTM."
-            exit 0
-          fi
-          echo "::error::Review comment has no clear 🔴/🟢 verdict line."
-          exit 1
+          REPO=${{ github.repository }}
+
+          gh pr diff $PR --repo $REPO > /tmp/pr_diff.txt
+          gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
+
+          python3 - << 'PYEOF'
+          import os
+          import re
+
+          PR = os.environ.get('PR_NUMBER', '?')
+
+          with open('/tmp/pr_diff.txt') as f:
+              diff = f.read()
+          with open('/tmp/changed_files.txt') as f:
+              changed = [l.strip() for l in f if l.strip()]
+
+          # Parse the diff into per-file added-line sections.
+          per_file_added = {}
+          for sec in re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE):
+              m = re.search(r'^diff --git a/(.+?) b/', sec, re.MULTILINE)
+              if not m:
+                  continue
+              fname = m.group(1)
+              added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
+              per_file_added[fname] = added
+
+          violations = []
+          warnings   = []
+          deep_paths = []  # populated below when auto-fire is enabled
+
+          # ── Check 1: AI-attribution scan ─────────────────────────────────────
+          # Per .claude/rules/git.md — no `Co-Authored-By: Claude`, no
+          # "Generated with Claude Code" footers, no claude.com / claude.ai
+          # links, no 🤖 attribution. Checks ADDED lines only.
+          ai_pats = [
+              re.compile(r'Co-Authored-By:\s*Claude', re.IGNORECASE),
+              re.compile(r'Generated\s+with\s+\[?Claude\s+Code', re.IGNORECASE),
+              re.compile(r'claude\.(?:com|ai)\b', re.IGNORECASE),
+              re.compile(r'🤖\s*Generated', re.IGNORECASE),
+          ]
+          for fname, lines in per_file_added.items():
+              for line in lines:
+                  for pat in ai_pats:
+                      if pat.search(line):
+                          violations.append(f'AI_ATTRIBUTION: {fname}: {line.strip()[:120]}')
+                          break
+
+          # ── Check 2: Categorize files ────────────────────────────────────────
+          # Customize ARCH_PREFIXES / ARCH_FILES to flag your project's highest-
+          # blast-radius paths. Sonnet reads these files first.
+          ARCH_PREFIXES = ()  # e.g. ('src/core/', 'src/auth/')
+          ARCH_FILES    = set()  # e.g. {'schema.sql', 'openapi.yaml'}
+          arch_critical, docs, other_code = [], [], []
+          for f in changed:
+              if any(f.startswith(p) for p in ARCH_PREFIXES) or f in ARCH_FILES:
+                  arch_critical.append(f)
+              elif f.endswith('.md'):
+                  docs.append(f)
+              else:
+                  other_code.append(f)
+
+          <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+          # ── Check 3: Deep-review trigger surface ─────────────────────────────
+          # Customize DEEP_PREFIXES / DEEP_FILES for your project's highest-risk
+          # paths (auth, parsers, public API, migrations, save/load formats).
+          # See .claude/rules/review-tiers.md for the canonical trigger list.
+          DEEP_PREFIXES = ()  # e.g. ('src/auth/', 'src/parsers/')
+          DEEP_FILES    = set()  # e.g. {'migrations/'}
+          deep_paths = [
+              f for f in changed
+              if any(f.startswith(p) for p in DEEP_PREFIXES)
+              or any(f.startswith(str(d)) for d in DEEP_FILES)
+          ]
+          <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+
+          # ── Write the review context ─────────────────────────────────────────
+          with open('/tmp/review_context.md', 'w') as out:
+              out.write(f'# Pre-screen report for PR #{PR}\n\n')
+
+              if violations:
+                  out.write(f'## Pre-screen violations ({len(violations)}) — likely 🔴 unless you can refute each\n\n')
+                  for v in violations:
+                      out.write(f'- `{v}`\n')
+                  out.write('\n')
+              else:
+                  out.write('## Pre-screen violations: none\n\n')
+
+              if warnings:
+                  out.write(f'## Pre-screen warnings ({len(warnings)}) — reviewer judges\n\n')
+                  for w in warnings:
+                      out.write(f'- `{w}`\n')
+                  out.write('\n')
+
+              <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+              if deep_paths:
+                  out.write('## Deep-review trigger surface — auto-escalation REQUIRED (Step 4)\n\n')
+                  out.write('These paths are on the deep-review trigger list. Apply the `needs-deep-review` label AND post the structured `@claude review this PR` comment in Step 4:\n\n')
+                  for p in deep_paths:
+                      out.write(f'- `{p}`\n')
+                  out.write('\n')
+              else:
+                  out.write('## Deep-review trigger surface: none (Step 4 skipped)\n\n')
+              <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+
+              out.write('## Architecture-critical files (READ THESE)\n\n')
+              if arch_critical:
+                  for f in arch_critical:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+              out.write('\n')
+
+              out.write('## Docs / markdown changes (low-risk, scan only)\n\n')
+              if docs:
+                  for f in docs:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+              out.write('\n')
+
+              out.write('## Other code changes\n\n')
+              if other_code:
+                  for f in other_code:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+
+          print(f'Pre-screen complete. Violations={len(violations)}, Warnings={len(warnings)}, Deep-trigger={len(deep_paths)}, Arch-critical={len(arch_critical)}')
+          PYEOF
+
+          echo "--- review_context.md ---"
+          cat /tmp/review_context.md
+
+      - name: Run Claude Code Review
+        id: claude-review
+        # Pinned to v1's resolved SHA (resolved 2026-05-04). The bare `@v1`
+        # or `@beta` floats — silent behavior changes from auto-updates burned
+        # other projects already. Update via
+        #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
+        # confirm the diff, then bump here AND in `.github/workflows/claude.yml`.
+        uses: anthropics/claude-code-action@8c196b2f61a66bfdf93322bde3a3e668669089ed  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: false
+          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-sonnet-4-6'
+          prompt: |
+            Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }} for **{{PROJECT_NAME}}** — {{ONE_LINE_DESCRIPTION}}.
+
+            ## Step 1 — Read the pre-screen report
+
+            Read `/tmp/review_context.md`. It contains:
+            - **Pre-screen violations** — mechanical rule-breakage already detected (AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
+            - **Pre-screen warnings** — issues you should judge.
+            <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+            - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
+            <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+            - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
+
+            Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+            **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (AI-attribution scan). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
+
+            ## Step 2 — Architectural review
+
+            Read ONLY the files most likely to contain risk. Then expand outward if the architecture review surfaces a concern.
+
+            **Project-specific invariants to verify (customize this list for {{PROJECT_NAME}}):**
+
+            1. Add your project's highest-risk invariants here — e.g., API contract stability, migration safety, auth boundary correctness, schema evolution.
+            2. Cross-cutting concerns: are changes to shared utilities backward-compatible?
+            3. No AI-attribution markers in added code or commit messages (per `.claude/rules/git.md`).
+
+            ## Step 2.5 — Decide whether to escalate (do not post yet)
+
+            Escalation is *orthogonal* to the verdict — it's "deeper look requested," not a blocker.
+
+            <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+            **Auto-escalate when the pre-screen reports a non-empty deep-review trigger surface.** Otherwise apply judgment: escalate when (a) the concern is about correctness not style, (b) you can articulate a specific reason an Opus reviewer would catch what you cannot, (c) you would not stake the merge on your own verdict for that concern.
+            <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+            <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+
+            **Do NOT mark for escalation:** docs, comments, formatting, naming nits, "consider extracting", pure refactors with no behavior change.
+            <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+
+            ## Step 3 — Post the verdict comment FIRST
+
+            Command: `gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "BODY"`
+
+            The verdict lands BEFORE the escalation comment so PR readers see the decision first.
+
+            **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
+
+            Body MUST:
+            - Be titled `## Code Review — {{PROJECT_NAME}}`
+            - End with EXACTLY one of these as the FINAL line of the comment (no trailing prose after):
+              - `🟢 LGTM`
+              - `🔴 Blocking — must fix`
+
+            **BINARY VERDICT RULE:**
+            - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
+            - 🔴 Blocking when ANY real finding exists, regardless of framing.
+            - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
+
+            <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+            ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
+
+            Only run Step 4 if Step 2.5 marked the PR for escalation. Skip otherwise.
+
+            Do BOTH of the following — the label and the comment have different lifecycles:
+
+            **A. Apply the label (idempotent — safe to re-apply if already present):**
+            ```
+            gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review
+            ```
+
+            **B. Post a fresh `@claude` comment EVERY escalating run, no exceptions:**
+            ```
+            gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "@claude review this PR — depth pass on <focus>.
+
+            <One-paragraph context: what the PR ships and why the risk surface is bigger than the diff suggests.>
+
+            **Numbered invariants ranked by priority:**
+            1. **<file:line>** — <invariant + how it could break>
+            2. ...
+
+            **Out of scope:** <list of intentional deferrals>
+
+            **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
+            - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
+            - 🔴 Blocking when ANY real finding exists, regardless of framing.
+            - DROP style preferences and micro-optimisations entirely.
+
+            **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
+            ```
+
+            **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true.
+            <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+
+      - name: Evaluate review outcome
+        if: always()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 25-min cutoff so we only consider the comment from THIS run, not
+          # stale verdicts from earlier pushes on the same PR. 25 min covers
+          # Sonnet at 50 max-turns + Step-4 escalation on large diffs.
+          CUTOFF=$(date -u -d '25 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-25M +%Y-%m-%dT%H:%M:%SZ)
+          COMMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            | jq -r --arg cutoff "$CUTOFF" '[.[] | select(.body | contains("## Code Review — {{PROJECT_NAME}}")) | select(.created_at >= $cutoff)] | last | .body // ""')
+
+          if [ -z "$COMMENT" ]; then
+            echo "::error::No review comment found in the last 25 minutes — Claude did not post a verdict this run"
+            exit 1
+          fi
+
+          # Verdict is the LAST line containing 🔴 or 🟢. This is robust to:
+          #   (a) Sonnet recapping a prior 🔴 finding mid-body in a 🟢 review,
+          #   (b) Sonnet adding a closing paragraph after the verdict line.
+          VERDICT_LINE=$(printf '%s\n' "$COMMENT" | grep -E "🔴|🟢" | tail -n 1)
+          if [ -z "$VERDICT_LINE" ]; then
+            echo "::error::Review comment has no 🔴/🟢 verdict at all"
+            exit 1
+          fi
+          if echo "$VERDICT_LINE" | grep -qF "🔴"; then
+            echo "::error::Routine review verdict: 🔴 Blocking — merge blocked"
+            exit 1
+          fi
+          if ! echo "$VERDICT_LINE" | grep -qF "🟢"; then
+            echo "::error::Last verdict-bearing line has neither 🔴 nor 🟢 (parser bug?)"
+            echo "::error::Line was: $VERDICT_LINE"
+            exit 1
+          fi
+          echo "✅ Review passed — 🟢 LGTM"
+          exit 0
