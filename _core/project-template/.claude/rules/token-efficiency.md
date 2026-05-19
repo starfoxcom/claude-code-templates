@@ -32,12 +32,16 @@ Default starting timeout for build commands (CMake, scons, cargo build, dart pub
 
 Run the polling loop with `run_in_background: true` so the conversation isn't frozen on the wait. The harness notifies when the background command exits; pick up other work or wait for the user in the meantime.
 
+> **Background shell constraint — critical:** the background Bash environment does NOT have the external `jq` binary available. Piping to `jq` (e.g. `echo "$JSON" | jq -r '.field'`) will produce `jq: command not found`, silently break the `&&` chain, and leave the loop running forever. Use **only** the two safe extraction methods:
+> - `gh`'s built-in `--jq` flag (e.g. `--jq '.[0].status'`) — no external tool needed
+> - `python3 -c "import sys,json; ..."` reading from stdin — Python3 IS available
+
 ```bash
 SHA=$(git rev-parse HEAD)
 while true; do
   RUNS=$(gh run list --branch <branch> --limit 10 \
     --json databaseId,name,status,conclusion,headSha)
-  INFLIGHT=$(echo "$RUNS" | python -c "
+  INFLIGHT=$(echo "$RUNS" | python3 -c "
 import sys, json
 runs = [r for r in json.load(sys.stdin) if r['headSha'] == '$SHA']
 print(sum(1 for r in runs if r['status'] != 'completed'))
@@ -59,7 +63,7 @@ When the PR's diff will not produce a routine review (the workflow `triage` job 
 **Run the grace + check in the background.** Use the Bash tool with `run_in_background: true` so the conversation stays unblocked; the harness notifies when the command exits. Do not foreground-sleep.
 
 ```bash
-# Background pattern:
+# Background pattern — uses gh's built-in --jq; no external jq required:
 until [ "$(gh run list --branch <branch> --workflow=claude-code-review.yml --limit 1 --json status --jq '.[0].status')" = "completed" ]; do
   sleep 90
 done
