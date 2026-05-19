@@ -108,8 +108,8 @@ Two review tiers, both fully workflow-driven via `.github/workflows/`:
 
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
-| **Routine** | Auto on every PR (`claude-code-review.yml`) | Subscription-included (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Merge gate is real — exits red on 🔴. |
-| **On-demand deep** | `@claude review this PR` comment (`claude.yml`) | Subscription-included (Opus) | Depth pass on the focus the routine review escalated to. Same binary 🔴/🟢 rule. |
+| **Routine** | Auto on every PR (`claude-code-review.yml`) | Subscription-included (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Required check — exits red on 🔴, merge blocked. |
+| **On-demand deep** | `@claude review this PR` comment (`claude.yml`) | Subscription-included (Opus) | Depth pass on the focus the routine review escalated to. Same binary 🔴/🟢 rule. **Advisory** — fails the `Claude On-Demand` check but merge is not auto-blocked. |
 
 <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
 The deep review **auto-fires** when the routine review's Step 2.5 detects the diff touches the trigger surface (parsers, threading, public API, auth, migrations) — see `review-tiers.md`.
@@ -162,14 +162,14 @@ A feature is complete when it can be exercised end-to-end in the running app —
 ---
 
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
-## Auto-merge on paths-ignore PRs
+## Auto-merge on fast-path PRs
 
-PRs whose entire diff falls under the workflows' `paths-ignore` set (typically `**/*.md`, `docs/**`, `.claude/**`, CI YAML for Claude workflows) skip the routine review entirely. Don't sit on a polling loop waiting for runs that will never start:
+PRs whose diff the routine reviewer will skip (no source-extension files changed — typically docs-only, rules-only, `.claude/**`, manifest tweaks) cause the workflow to fire, `triage` to classify the diff as non-reviewable, `claude-review` to skip, and `evaluate-review-outcome` to auto-pass. The whole run completes in ~30 seconds. Don't sit on a 7-minute polling loop — but also **don't foreground-sleep**; both cadences run in the background.
 
-1. Verify the diff is fully under paths-ignore — `gh pr diff <pr> --name-only`.
-2. Sleep 90 seconds as a grace period, then `gh run list --branch <branch>` filtered to the PR's HEAD SHA. If zero runs, none will start.
-3. Verify mergeable — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN`.
-4. `gh pr merge <pr> --merge` (always merge commit, never squash/rebase).
+1. **Background-poll** with `run_in_background: true` and an until-loop that sleeps 90 s per check (see `token-efficiency.md` § "Fast-path / auto-pass" for the exact pattern). The harness notifies on exit; work on the next thing in the meantime.
+2. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Claude review: SKIPPED`, `Evaluate review outcome: SUCCESS`.
+3. **Verify mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approval gate, which `--admin` resolves for the maintainer).
+4. `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate maintainers can self-clear).
 5. Delete local + remote branch.
 
 User authorization for this fast path is implied by approval to open the PR; it's part of the same task. Do not ask per-PR.
