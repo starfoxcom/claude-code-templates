@@ -125,9 +125,11 @@ jobs:
           deep_paths = []  # populated below when auto-fire is enabled
 
           # ── Check 1: AI-attribution scan ─────────────────────────────────────
-          # Per .claude/rules/git.md — no `Co-Authored-By: Claude`, no
-          # "Generated with Claude Code" footers, no claude.com / claude.ai
-          # links, no 🤖 attribution. Checks ADDED lines only.
+          # Scans ADDED lines for the AI-attribution patterns defined in
+          # .claude/rules/git.md. The regexes are encoded in ai_pats below
+          # (kept structural — readers consult ai_pats, not this comment,
+          # to avoid the comment itself re-tripping the scanner on future
+          # edits to this workflow file).
           ai_pats = [
               re.compile(r'Co-Authored-By:\s*Claude', re.IGNORECASE),
               re.compile(r'Generated\s+with\s+\[?Claude\s+Code', re.IGNORECASE),
