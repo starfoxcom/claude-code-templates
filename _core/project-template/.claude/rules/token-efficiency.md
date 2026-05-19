@@ -39,13 +39,9 @@ Run the polling loop with `run_in_background: true` so the conversation isn't fr
 ```bash
 SHA=$(git rev-parse HEAD)
 while true; do
-  RUNS=$(gh run list --branch <branch> --limit 10 \
-    --json databaseId,name,status,conclusion,headSha)
-  INFLIGHT=$(echo "$RUNS" | python3 -c "
-import sys, json
-runs = [r for r in json.load(sys.stdin) if r['headSha'] == '$SHA']
-print(sum(1 for r in runs if r['status'] != 'completed'))
-")
+  INFLIGHT=$(gh run list --branch <branch> --limit 10 \
+    --json status,headSha \
+    --jq "[.[] | select(.headSha == \"$SHA\") | select(.status != \"completed\")] | length")
   [ "$INFLIGHT" = "0" ] && break
   sleep 420
 done
