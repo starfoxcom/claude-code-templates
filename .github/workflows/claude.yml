@@ -36,8 +36,7 @@ jobs:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !contains(github.event.review.body, 'Claude Code is working')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude review this PR') || contains(github.event.issue.title, '@claude review this PR')))
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !contains(github.event.review.body, 'Claude Code is working'))
     # CRITICAL: this MUST live at the job level (not workflow level). The
     # action's own progress comment ("Claude Code is working…") contains the
     # `@claude` substring, so workflow-level concurrency would accept it and
