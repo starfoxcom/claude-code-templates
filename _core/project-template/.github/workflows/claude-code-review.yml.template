@@ -341,7 +341,11 @@ jobs:
           # stale verdicts from earlier pushes on the same PR. 25 min covers
           # Sonnet at 50 max-turns + Step-4 escalation on large diffs.
           CUTOFF=$(date -u -d '25 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-25M +%Y-%m-%dT%H:%M:%SZ)
-          COMMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+          # --paginate walks all pages — the issue-comments endpoint defaults
+          # to per_page=30 and returns ascending order. On PRs with >30
+          # existing comments the verdict comment lands on a later page;
+          # without --paginate the gate would silently fail-red those PRs.
+          COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
             | jq -r --arg cutoff "$CUTOFF" '[.[] | select(.body | contains("## Code Review — {{PROJECT_NAME}}")) | select(.created_at >= $cutoff)] | last | .body // ""')
 
           if [ -z "$COMMENT" ]; then
