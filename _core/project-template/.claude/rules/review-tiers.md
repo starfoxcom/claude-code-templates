@@ -4,18 +4,17 @@
 
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
-| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Verdict gates the required check. |
-| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict is advisory. |
+| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment** + uncertainty auto-escalation. Verdict is folded into the combined gate. |
+| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict re-evaluates the combined gate via `issue_comment`. |
 
-## The gate model
+## The combined gate
 
-There is **one** required status check: `Evaluate review outcome` (from `claude-code-review.yml`). It covers the routine tier only:
+There is **one** required status check: `Evaluate review outcome` (from `claude-code-review.yml`). It folds both tiers:
 
-- Fires on `pull_request`. Reads the latest `## Code Review — <project>` comment posted within the last 25 minutes. Verdict is 🔴 → exits 1 (merge blocked). 🟢 → exits 0 (merge allowed). Non-reviewable diff (triage output `run_review=false`) → job skipped, gate auto-passes.
+- **Routine path** — fires on `pull_request`. Reads the latest `## Code Review — <project>` comment's last non-empty line. Verdict is 🔴 → exits 1; 🟢 → continues to deep tier check; non-reviewable diff → auto-passes the routine check.
+- **Deep path** — re-fires on `issue_comment` when the deep tier's `Claude finished` comment posts. Reads the latest deep verdict's last non-empty line. Only enforced when the `needs-deep-review` label is applied.
 
-The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) exits 1 on Opus 🔴, failing the `Claude On-Demand` check run — visible in the PR status panel. **That check is advisory, not required.** A deep-tier 🔴 is a hard stop for the maintainer: read the finding before any admin-bypass.
-
-Configure the `develop-protection` / `main-protection` rulesets to require ONLY `Evaluate review outcome`. Never list `Evaluate deep-tier verdict` as a required check — it would hang on every PR that never triggers deep review.
+Configure the `develop-protection` / `main-protection` rulesets to require ONLY `Evaluate review outcome` — never list a separate `Evaluate deep-tier verdict`.
 
 ## Workflow-touching PRs require admin-bypass
 
