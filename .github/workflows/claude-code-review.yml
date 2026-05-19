@@ -64,19 +64,204 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Pre-screen
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      # ── Pre-screen: deterministic Python checks over the diff ────────────────
+      # Catches mechanical rule violations before Sonnet sees them. Sonnet then
+      # trusts the report and spends turns on judgment work — NOT re-discovering
+      # grep-able patterns. This is what makes the `Bash(gh *),Read` allowlist
+      # the right size: Sonnet doesn't need `cat`/`grep`/`wc` because the pre-
+      # screen already did that work.
+      - name: Pre-screen PR diff
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
+
           gh pr diff $PR --repo $REPO > /tmp/pr_diff.txt
           gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
-          mkdir -p /tmp
-          echo "# Pre-screen report for PR #$PR" > /tmp/review_context.md
-          echo "" >> /tmp/review_context.md
-          echo "## Files changed" >> /tmp/review_context.md
-          cat /tmp/changed_files.txt >> /tmp/review_context.md
+
+          python3 - << 'PYEOF'
+          import os
+          import re
+          from collections import Counter
+
+          PR = os.environ.get('PR_NUMBER', '?')
+
+          with open('/tmp/pr_diff.txt') as f:
+              diff = f.read()
+          with open('/tmp/changed_files.txt') as f:
+              changed = [l.strip() for l in f if l.strip()]
+
+          # Parse the diff into per-file added-line sections.
+          per_file_added = {}
+          for sec in re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE):
+              m = re.search(r'^diff --git a/(.+?) b/', sec, re.MULTILINE)
+              if not m:
+                  continue
+              fname = m.group(1)
+              added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
+              per_file_added[fname] = added
+
+          violations = []   # rule-breakage — likely 🔴 unless the reviewer disagrees
+          warnings   = []   # likely-needs-attention — reviewer judges
+
+          # ── Check 1: Toggle marker balance ───────────────────────────────────
+          # Every `<!-- TOGGLE:name START -->` (and `name:off`) must have a
+          # matching `<!-- TOGGLE:name END -->` in the SAME file. A missing END
+          # silently swallows downstream content during SETUP-time resolution.
+          toggle_pat = re.compile(r'<!--\s*TOGGLE:([\w:_\-]+)\s+(START|END)\s*-->')
+          for fname in changed:
+              if not fname.endswith(('.md', '.template', '.yml', '.yaml', '.html')):
+                  continue
+              try:
+                  with open(fname) as f:
+                      src = f.read()
+              except OSError:
+                  continue
+              starts = Counter(m.group(1) for m in toggle_pat.finditer(src) if m.group(2) == 'START')
+              ends   = Counter(m.group(1) for m in toggle_pat.finditer(src) if m.group(2) == 'END')
+              for name in (starts | ends).keys():
+                  if starts[name] != ends[name]:
+                      violations.append(f'TOGGLE_UNBALANCED: {fname}: name={name} START={starts[name]} END={ends[name]}')
+
+          # ── Check 2: Placeholder validation in canonical templates ──────────
+          # Every `{{NAME}}` in `_core/project-template/**` must be one of the
+          # placeholders SETUP.md knows how to resolve. An unknown placeholder
+          # lands literally in the user's repo on bind.
+          CANONICAL = {
+              'MAIN_BRANCH', 'DEV_BRANCH', 'DEFAULT_BRANCH',
+              'PROJECT_NAME', 'PROJECT_NAME_UPPER',
+              'LANGUAGE_AND_FRAMEWORK',
+              'CONVERSATION_LANGUAGE', 'CODE_LANGUAGE',
+              'REPO_URL', 'ONE_LINE_DESCRIPTION',
+              'GITFLOW_OR_TRUNK',
+          }
+          placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
+          for fname in changed:
+              if not fname.startswith('_core/project-template/'):
+                  continue
+              try:
+                  with open(fname) as f:
+                      src = f.read()
+              except OSError:
+                  continue
+              for m in placeholder_pat.finditer(src):
+                  name = m.group(1)
+                  if name not in CANONICAL:
+                      violations.append(f'UNKNOWN_PLACEHOLDER: {fname}: {{{{{name}}}}} not in canonical set')
+
+          # ── Check 3: AI-attribution scan ─────────────────────────────────────
+          # Per .claude/rules/git.md — no `Co-Authored-By: Claude`, no
+          # "Generated with Claude Code" footers, no claude.com / claude.ai
+          # links, no 🤖 attribution. In ADDED lines only.
+          ai_pats = [
+              re.compile(r'Co-Authored-By:\s*Claude', re.IGNORECASE),
+              re.compile(r'Generated\s+with\s+\[?Claude\s+Code', re.IGNORECASE),
+              re.compile(r'claude\.(?:com|ai)\b', re.IGNORECASE),
+              re.compile(r'🤖\s*Generated', re.IGNORECASE),
+          ]
+          for fname, lines in per_file_added.items():
+              for line in lines:
+                  for pat in ai_pats:
+                      if pat.search(line):
+                          violations.append(f'AI_ATTRIBUTION: {fname}: {line.strip()[:120]}')
+                          break
+
+          # ── Check 4: JSX/HTML parity ─────────────────────────────────────────
+          # The redesign/*.jsx source and `index.html` production are kept in
+          # manual sync. A JSX edit without a matching HTML edit ships broken.
+          jsx_changed = [f for f in changed if f.startswith('redesign/') and f.endswith('.jsx')]
+          if jsx_changed and 'index.html' not in changed:
+              warnings.append(f'JSX_HTML_PARITY: {", ".join(jsx_changed)} touched but index.html not in diff — production may be out of sync')
+
+          # ── Check 5: Categorize files ────────────────────────────────────────
+          ARCH_PREFIXES = ('_core/', 'redesign/')
+          ARCH_FILES    = {'index.html', 'SETUP.md', 'TOGGLES.md', 'COMPARISON.md'}
+          arch_critical, docs, other_code = [], [], []
+          for f in changed:
+              if f.startswith('.github/workflows/claude') or any(f.startswith(p) for p in ARCH_PREFIXES) or f in ARCH_FILES:
+                  arch_critical.append(f)
+              elif f.endswith('.md'):
+                  docs.append(f)
+              else:
+                  other_code.append(f)
+
+          # ── Check 6: Deep-review trigger surface ─────────────────────────────
+          # MUST stay in sync with prompt § Step 2.5 and
+          # `_core/project-template/.claude/rules/review-tiers.md`.
+          DEEP_PREFIXES = ('_core/', 'redesign/')
+          DEEP_FILES    = {'index.html'}
+          DEEP_HOOKS    = '_core/project-template/.claude/hooks/'
+          DEEP_WORKFLOWS = '.github/workflows/claude'  # matches claude.yml + claude-code-review.yml
+          deep_paths = [
+              f for f in changed
+              if any(f.startswith(p) for p in DEEP_PREFIXES)
+              or f in DEEP_FILES
+              or f.startswith(DEEP_HOOKS)
+              or f.startswith(DEEP_WORKFLOWS)
+          ]
+
+          # ── Write the review context ─────────────────────────────────────────
+          with open('/tmp/review_context.md', 'w') as out:
+              out.write(f'# Pre-screen report for PR #{PR}\n\n')
+
+              if violations:
+                  out.write(f'## Pre-screen violations ({len(violations)}) — likely 🔴 unless you can refute each\n\n')
+                  for v in violations:
+                      out.write(f'- `{v}`\n')
+                  out.write('\n')
+              else:
+                  out.write('## Pre-screen violations: none\n\n')
+
+              if warnings:
+                  out.write(f'## Pre-screen warnings ({len(warnings)}) — reviewer judges\n\n')
+                  for w in warnings:
+                      out.write(f'- `{w}`\n')
+                  out.write('\n')
+
+              if deep_paths:
+                  out.write('## Deep-review trigger surface — auto-escalation REQUIRED (Step 4)\n\n')
+                  out.write('These paths are on the deep-review trigger list. You MUST apply the `needs-deep-review` label AND post the structured `@claude review this PR` comment in Step 4, no exceptions:\n\n')
+                  for p in deep_paths:
+                      out.write(f'- `{p}`\n')
+                  out.write('\n')
+              else:
+                  out.write('## Deep-review trigger surface: none (Step 4 skipped)\n\n')
+
+              out.write('## Architecture-critical files (READ THESE)\n\n')
+              if arch_critical:
+                  for f in arch_critical:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+              out.write('\n')
+
+              out.write('## Docs / markdown changes (low-risk, scan only)\n\n')
+              if docs:
+                  for f in docs:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+              out.write('\n')
+
+              out.write('## Other code changes\n\n')
+              if other_code:
+                  for f in other_code:
+                      out.write(f'- `{f}`\n')
+              else:
+                  out.write('_(none)_\n')
+
+          print(f'Pre-screen complete. Violations={len(violations)}, Warnings={len(warnings)}, Deep-trigger={len(deep_paths)}, Arch-critical={len(arch_critical)}')
+          PYEOF
+
+          echo "--- review_context.md ---"
+          cat /tmp/review_context.md
 
       - name: Run Claude Code Review
         id: claude-review
@@ -95,9 +280,15 @@ jobs:
 
             ## Step 1 — Read the pre-screen report
 
-            Read `/tmp/review_context.md` for the list of changed files. Then read the PR diff: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+            Read `/tmp/review_context.md`. It contains:
+            - **Pre-screen violations** — mechanical rule-breakage already detected (toggle marker imbalance, unknown placeholders in canonical templates, AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
+            - **Pre-screen warnings** — likely issues you should judge (JSX/HTML parity drift, etc.).
+            - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
+            - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
 
-            **Trust the pre-screen.** Spend turns on judgment work the file list can't do.
+            Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+            **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
 
             ## Step 2 — Architectural review
 
