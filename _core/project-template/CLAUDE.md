@@ -85,8 +85,8 @@ Every work session begins with this ritual. On prompt like "session start" or "r
 Do not start code work until I approve or correct the plan.
 
 **During the session:**
-- `TaskUpdate(taskId, status='in_progress')` BEFORE starting a task.
-- `TaskUpdate(taskId, status='completed')` immediately when the task is fully done — don't batch.
+- `TaskUpdate({ taskId, status: 'in_progress' })` BEFORE starting a task.
+- `TaskUpdate({ taskId, status: 'completed' })` immediately when the task is fully done — don't batch.
 - `TaskCreate` for follow-ups discovered mid-session; don't leave them in conversation memory only.
 - Sessions with one or two trivial steps can skip task tracking; the threshold is 3+ discrete work items.
 
