@@ -119,8 +119,16 @@ jobs:
           # Every `<!-- TOGGLE:name START -->` (and `name:off`) must have a
           # matching `<!-- TOGGLE:name END -->` in the SAME file. A missing END
           # silently swallows downstream content during SETUP-time resolution.
+          # Scope-guarded to _core/project-template/** — toggle markers only
+          # exist canonically inside that subtree. Without the guard, markdown
+          # documentation prose that quotes the marker syntax (e.g. CHANGELOG
+          # entries describing the pre-screen feature in backticked examples)
+          # produces false-positive TOGGLE_UNBALANCED violations because the
+          # regex is markdown-unaware and counts literal text in code spans.
           toggle_pat = re.compile(r'<!--\s*TOGGLE:([\w:_\-]+)\s+(START|END)\s*-->')
           for fname in changed:
+              if not fname.startswith('_core/project-template/'):
+                  continue
               if not fname.endswith(('.md', '.template', '.yml', '.yaml', '.html')):
                   continue
               try:
@@ -145,6 +153,7 @@ jobs:
               'CONVERSATION_LANGUAGE', 'CODE_LANGUAGE',
               'REPO_URL', 'ONE_LINE_DESCRIPTION',
               'GITFLOW_OR_TRUNK',
+              'TIMEZONE',
           }
           placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
           for fname in changed:
