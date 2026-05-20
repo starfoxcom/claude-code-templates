@@ -32,16 +32,16 @@ Default starting timeout for build commands (CMake, scons, cargo build, dart pub
 
 Run the polling loop with `run_in_background: true` so the conversation isn't frozen on the wait. The harness notifies when the background command exits; pick up other work or wait for the user in the meantime.
 
+> **Background shell constraint — critical:** the background Bash environment **may not** have the external `jq` binary available (it's absent on Windows Git Bash, stripped-down containers, and some sandboxed harness shells; present on `ubuntu-latest` runners, Homebrew macOS, and most devcontainer images). Piping to `jq` where it's missing produces `jq: command not found`, silently breaks the `&&` chain, and leaves the loop running forever. Use a portable extraction method instead:
+> - **Preferred:** `gh`'s built-in `--jq` flag (e.g. `--jq '.[0].status'`) — no external tool, works wherever `gh` works
+> - **Fallback:** `python3 -c "import sys,json; ..."` reading from stdin — guard with `command -v python3` if you need cross-platform support (Windows Git Bash often ships `python` only, minimal containers may have neither)
+
 ```bash
 SHA=$(git rev-parse HEAD)
 while true; do
-  RUNS=$(gh run list --branch <branch> --limit 10 \
-    --json databaseId,name,status,conclusion,headSha)
-  INFLIGHT=$(echo "$RUNS" | python -c "
-import sys, json
-runs = [r for r in json.load(sys.stdin) if r['headSha'] == '$SHA']
-print(sum(1 for r in runs if r['status'] != 'completed'))
-")
+  INFLIGHT=$(gh run list --branch <branch> --limit 10 \
+    --json status,headSha \
+    --jq "[.[] | select(.headSha == \"$SHA\") | select(.status != \"completed\")] | length")
   [ "$INFLIGHT" = "0" ] && break
   sleep 420
 done
@@ -52,17 +52,26 @@ done
 **On any-red (🔴 verdict or workflow failure):** fetch failing logs with `gh run view <id> --log-failed`, identify the offending job + step, propose the fix in one sentence, apply it, push. The push triggers a fresh polling loop on the new SHA. Don't ask permission for routine breakages (compile errors, missing-file paths, lint, dependency-version pins) — fix and push. Ask only when the failure is genuinely ambiguous (flaky test, infra outage, behavior-change-vs-test disagreement).
 
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
-### Paths-ignore fast path — auto-merge with no CI
+### Fast-path / auto-pass PRs
 
-When the PR's diff falls **entirely** within the workflows' `paths-ignore` set (typically `**/*.md`, `docs/**`, `.claude/**`, `.github/workflows/claude*.yml`), no workflows fire. Don't sit on a 7-minute polling loop waiting for runs that will never start.
+When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires but `triage` classifies the diff as non-reviewable, the `evaluate-review-outcome` job is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and the required check auto-passes (GitHub treats a skipped required job as passing). The whole run completes in ~30 seconds.
 
-1. **Verify the diff is fully under paths-ignore** — `gh pr diff <pr> --name-only` and confirm every file matches a pattern.
-2. **Sleep 90 seconds** as a grace period, then `gh run list --branch <branch> --limit 5 --json status,headSha` filtered to the PR's HEAD SHA. If still zero runs, none will start.
-3. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN`.
-4. **Auto-merge** with `gh pr merge <pr> --merge` (still merge commit).
-5. **Delete branches** (local + remote) per standing authorization.
+```bash
+# Background pattern — uses gh's built-in --jq; no external jq required:
+until [ "$(gh run list --branch <branch> --workflow=claude-code-review.yml --limit 1 --json status --jq '.[0].status')" = "completed" ]; do
+  sleep 90
+done
+gh pr view <pr> --json statusCheckRollup
+```
 
-This fast path is **only** for PRs entirely under paths-ignore — if even one file falls outside, fall back to the standard 7-minute polling loop.
+After the notification:
+
+1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SKIPPED`.
+2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
+3. **Auto-merge** with `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate that maintainers can self-clear).
+4. **Delete branches** (local + remote) per standing authorization.
+
+This fast path is **only** for PRs the routine reviewer skips — if `Diff triage` reports `run_review=true`, fall back to the standard 7-minute polling loop and read the verdict comment.
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
 
 ---
