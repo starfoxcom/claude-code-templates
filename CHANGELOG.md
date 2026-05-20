@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file. The format 
 
 Earlier conversational `v17` and `v18` mentions never shipped as standalone artifacts — they're consolidated into the v1.0.0 release.
 
+## [v1.2.1] — 2026-05-20
+
+Security patch on top of v1.2.0. Closes a false-green gate vulnerability introduced when v1.2.0 removed the verdict timestamp cutoffs. No user-visible UI changes; no contract changes; templates-only consumers and the live gate both get the corrected mechanism.
+
+### Security
+- **HEAD-SHA verdict correlation closes false-green gate vulnerability.** v1.2.0 removed the timestamp cutoff from both verdict-read pipelines on the assumption that `cancel-in-progress: true` + `| last` + `--paginate` provided sufficient structural prevention of stale-verdict pickup. The reasoning covered the in-flight race case but missed the failure case: `cancel-in-progress` only cancels in-flight runs — it cannot un-post a verdict that an earlier completed run already wrote to the PR.
+
+  **Attack path that shipped in v1.2.0:**
+  1. Push A clean → routine review fires → 🟢 verdict posted.
+  2. Push B: malicious `_core/` change + any trivial workflow-file touch (one-line comment edit).
+  3. Push B's run hits `Workflow validation failed` — the Anthropic Claude Code GitHub App's OIDC token exchange refuses to authenticate when workflow files differ between the PR head and the default branch. This is **expected and documented** behavior for workflow-touching PRs (see `_core/project-template/.claude/rules/review-tiers.md` § "Workflow-touching PRs require admin-bypass").
+  4. The action exits without posting any verdict comment. `Evaluate review outcome` still runs (`if: always()`), reads PR comments via `gh api --paginate | jq | last` → returns Push A's 🟢.
+  5. Gate exits 0. Required-status-check passes. The maintainer's only remaining gate is manual approval — a false-green that LOOKS like an AI review pass can bypass scrutiny.
+
+  **Fix.** Filter verdict comments by `created_at >= floor`, where `floor = min(.workflow_runs[].run_started_at)` across all workflow runs at the PR's current HEAD SHA. Mechanism:
+  - Each evaluate job captures HEAD SHA (`github.event.pull_request.head.sha` for the routine gate, via the PR API for `claude.yml`'s `issue_comment`-fired deep gate).
+  - Queries `/actions/runs?head_sha=$HEAD_SHA&per_page=100` with `--paginate`, computes the floor as `min(.workflow_runs[].run_started_at)`.
+  - Filters the issue-comments query with `select(.created_at >= $floor)`.
+  - Push A's verdict was posted under HEAD SHA A. The `actions/runs?head_sha=B` query doesn't include Run A. The floor is Run B's `run_started_at`. Push A's verdict (`created_at < floor`) is correctly rejected. Gate exits 1 with "No review comment found at or after HEAD-SHA floor". Merge blocked.
+
+  **HEAD-SHA over `$GITHUB_RUN_ID`-based correlation:** generalises to multi-tier reads where the verdict is posted by a different workflow run than the one running the gate (e.g., a deep-tier fold-in pattern where the routine gate's evaluate step reads the deep verdict). Architectural-fit improvement caught by [Emberholm's v1.2.0 port (PR #139)](https://github.com/starfoxcom/Emberholm/pull/139) and cross-ported back here. Bidirectional cross-pollination steady-state.
+
+  **Affected files** (live + canonical templates in lockstep):
+  - `.github/workflows/claude-code-review.yml`
+  - `.github/workflows/claude.yml`
+  - `_core/project-template/.github/workflows/claude-code-review.yml.template`
+  - `_core/project-template/.github/workflows/claude.yml.template`
+
+  Each evaluate job gains `actions: read` permission for the `actions/runs` API query.
+
+### Versioning policy
+- **Patch** release per the SemVer rules: security fix to the gate mechanism, no toggle catalog / bundle keys / manifest schema / SETUP.md contract changes. Downstream binds existing at v1.2.0 should re-fetch templates to pick up the corrected gate.
+
+---
+
 ## [v1.2.0] — 2026-05-20
 
 CI hardening + canonical-template parity. The routine + deep review workflows reach their final hardened shape; the templates that ship to downstream binds catch up to that shape. Configurator branch-field rename closes a Gitflow incoherence bug. No user-visible UI rework — the configurator's form layout shifts but the contract is the same.
@@ -14,8 +49,8 @@ CI hardening + canonical-template parity. The routine + deep review workflows re
 - **Task-tracking discipline with multi-PR pattern.** `_core/project-template/CLAUDE.md` documents the `TaskCreate` / `TaskUpdate({ addBlockedBy: [...] })` pattern for sessions with 3+ discrete work items. **Multi-PR workstreams** (hotfix cascades, large refactors split for review) create one task per PR up-front and chain dependencies via `addBlockedBy` so the task list mirrors the merge order — treating a 10-PR chain as ad-hoc work burns hours on out-of-sequence routing.
 
 ### Changed
-- **Verdict timestamp cutoffs removed** (PR #62). Both `claude-code-review.yml` (25-min) and `claude.yml` (10-min) dropped the `select(.created_at >= $cutoff)` filter from their verdict-read `jq` pipelines. `cancel-in-progress: true` on both concurrency blocks + `| last` selection + `--paginate` already prevent stale-verdict pickup structurally. The cutoff was pure redundancy and created a real failure mode: a slow Sonnet run on a large `_core/` diff (22 min observed) would creep toward the 25-min cap and silently fail-red the gate. Pattern verified against Emberholm's workflows — same `| last` + per-PR scoping shape, no timestamp filter. Canonical templates at `_core/project-template/.github/workflows/*.template` updated to match.
-- **Canonical workflow templates updated to live shape.** `_core/project-template/.github/workflows/{claude-code-review.yml.template, claude.yml.template}` now mirror the live workflows' final hardened form — substantive Python pre-screen, two-job structure (`triage` + `evaluate-review-outcome`), SHA-pinned `claude-code-action@8c196b2f`, `--paginate` + `| last` verdict reads, cutoff-free. Downstream binds get the same gate this repo dogfoods.
+- **Verdict timestamp cutoffs removed** (PR #62). Both `claude-code-review.yml` (25-min) and `claude.yml` (10-min) dropped the `select(.created_at >= $cutoff)` filter from their verdict-read `jq` pipelines. The original rationale held for the in-flight race case the cutoff was originally addressing (a slow Sonnet run on a large `_core/` diff creeping toward the 25-min cap and silently fail-red'ing the gate). **It missed the workflow-validation-failure case**: a later push that posts no verdict at all causes `| last` to fall back to a prior push's verdict, producing a false-green on the required gate. **v1.2.1 corrects this** with HEAD-SHA verdict correlation — see the v1.2.1 `### Security` entry for the full attack path and the floor-based fix. Canonical templates at `_core/project-template/.github/workflows/*.template` were cutoff-stripped here in v1.2.0; v1.2.1 brings the HEAD-SHA floor to all four files in lockstep.
+- **Canonical workflow templates updated to live shape.** `_core/project-template/.github/workflows/{claude-code-review.yml.template, claude.yml.template}` now mirror the live workflows' v1.2.0 form — substantive Python pre-screen, two-job structure (`triage` + `evaluate-review-outcome`), SHA-pinned `claude-code-action@8c196b2f`, `--paginate` on verdict reads. As shipped in v1.2.0, the verdict reads used `| last` with no temporal filter; v1.2.1 added the HEAD-SHA floor to close the false-green gap described above. Downstream binds get the same gate this repo dogfoods.
 - **`claude.yml` cleanup.** Removed the `issues:` trigger (the deep tier fires on PR comments only). Bot-loop guard switched from `contains` to `startsWith` on the `Claude Code is working` filter — `contains` rejected legitimate escalation comments that quoted the phrase later in the body, silently blocking the deep tier from firing on PRs that needed it. Added `allowed_bots: "claude"` to opt routine→deep escalations into the bot-trigger path explicitly. Advisory completion-evaluator step retained but corrected.
 - **`--paginate` on both `gh api` verdict reads.** Without `--paginate`, PRs with >30 existing comments would put the verdict comment on a later page; the routine gate would silently fail-red and the deep tier's advisory gate would silently pass when a real 🔴 needed to surface.
 - **AI-attribution scanner comment de-self-reference.** The pre-screen scanner's docstring previously reproduced the regex patterns from `ai_pats`, causing the scanner to flag itself on every workflow-file edit. Comment is now structural (points at `ai_pats` below); regexes remain the single source of truth.
