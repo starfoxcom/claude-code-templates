@@ -33,10 +33,15 @@ jobs:
     # phrase `@claude review this PR` (not just `@claude review`). Matches
     # the canonical structured trigger format documented in `_core/project-
     # template/.claude/rules/review-tiers.md`.
+    # Anchor the bot-loop guard to startsWith — the action's progress comment
+    # body STARTS with "Claude Code is working"; legitimate escalation
+    # comments may quote the phrase when discussing the filter itself (e.g.
+    # listing invariants for Opus to verify). Using `!contains` here would
+    # reject any such quote and silently block the deep tier from firing.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude review this PR') && !contains(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !contains(github.event.review.body, 'Claude Code is working'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !startsWith(github.event.review.body, 'Claude Code is working'))
     # CRITICAL: this MUST live at the job level (not workflow level). The
     # action's own progress comment ("Claude Code is working…") contains the
     # `@claude` substring, so workflow-level concurrency would accept it and
@@ -114,7 +119,12 @@ jobs:
           # 3–4 min, so 10 min is generous.
           CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)
 
-          COMMENT=$(gh api "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
+          # --paginate walks all pages — the issue-comments endpoint defaults
+          # to per_page=30 and returns ascending order. On PRs with >30
+          # existing comments the Opus completion comment lands on a later
+          # page; without --paginate the advisory gate would silently pass
+          # when there's actually a real 🔴 verdict to surface.
+          COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
             | jq -r --arg cutoff "$CUTOFF" \
               '[.[] | select(.body | contains("Claude finished")) | select(.user.login == "claude[bot]") | select(.created_at >= $cutoff)] | last | .body // ""')
 
