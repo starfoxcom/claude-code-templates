@@ -72,6 +72,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -339,19 +340,44 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 25-min cutoff so we only consider the comment from THIS run, not
-          # stale verdicts from earlier pushes on the same PR. 25 min covers
-          # Sonnet at 50 max-turns + Step-4 escalation on large diffs.
-          CUTOFF=$(date -u -d '25 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-25M +%Y-%m-%dT%H:%M:%SZ)
-          # --paginate walks all pages — the issue-comments endpoint defaults
-          # to per_page=30 and returns ascending order. On PRs with >30
-          # existing comments the verdict comment lands on a later page;
-          # without --paginate the gate would silently fail-red those PRs.
+          # HEAD-SHA verdict correlation. Filter verdict comments by
+          # created_at >= the earliest run_started_at across all workflow
+          # runs at the PR's current HEAD SHA. Closes the false-green gate
+          # vulnerability where a workflow-touching Push B (which fails the
+          # App OIDC token exchange and posts no verdict) would otherwise
+          # pick up Push A's prior 🟢 verdict via `| last`.
+          #
+          # cancel-in-progress on the concurrency block prevents two runs
+          # from racing in-flight, but it cannot un-post a verdict that an
+          # earlier completed run already wrote to the PR. The HEAD-SHA
+          # floor closes that gap: any verdict belonging to the current
+          # push was posted by SOME run firing on this HEAD, so its
+          # created_at is necessarily >= the earliest run_started_at at
+          # this HEAD. Push A's verdict was posted under HEAD SHA A — the
+          # actions/runs?head_sha=B query doesn't include Run A, the floor
+          # is Run B's start time, and Run A's verdict (created_at < floor)
+          # is correctly rejected.
+          #
+          # Why HEAD-SHA over $GITHUB_RUN_ID-based correlation: generalises
+          # to multi-tier reads where the verdict is posted by a different
+          # workflow run than the one running the gate. Architectural
+          # improvement cross-ported from Emberholm.
+          # --paginate walks all pages on both queries — the issue-comments
+          # endpoint defaults to per_page=30 and the actions/runs endpoint
+          # is bounded by per_page=100.
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          HEAD_SHA_FLOOR=$(gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
+            --jq '[.workflow_runs[].run_started_at] | min // empty')
+          if [ -z "$HEAD_SHA_FLOOR" ]; then
+            echo "::error::Could not determine HEAD-SHA run-started-at floor for $HEAD_SHA"
+            exit 1
+          fi
           COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
-            | jq -r --arg cutoff "$CUTOFF" '[.[] | select(.body | contains("## Code Review — {{PROJECT_NAME}}")) | select(.created_at >= $cutoff)] | last | .body // ""')
+            | jq -r --arg ts "$HEAD_SHA_FLOOR" '[.[] | select(.body | contains("## Code Review — {{PROJECT_NAME}}")) | select(.created_at >= $ts)] | last | .body // ""')
 
           if [ -z "$COMMENT" ]; then
-            echo "::error::No review comment found in the last 25 minutes — Claude did not post a verdict this run"
+            echo "::error::No review comment found at or after HEAD-SHA floor $HEAD_SHA_FLOOR — Claude did not post a verdict this run"
             exit 1
           fi
 

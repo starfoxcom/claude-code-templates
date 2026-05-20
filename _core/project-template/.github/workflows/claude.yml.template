@@ -70,6 +70,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -123,22 +124,33 @@ jobs:
             exit 0
           fi
 
-          # 10-min cutoff so we only consider comments posted by THIS workflow
-          # run, not stale completions from earlier runs. Opus typically takes
-          # 3–4 min, so 10 min is generous.
-          CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)
-
-          # --paginate walks all pages — the issue-comments endpoint defaults
-          # to per_page=30 and returns ascending order. On PRs with >30
-          # existing comments the Opus completion comment lands on a later
-          # page; without --paginate the advisory gate would silently pass
-          # when there's actually a real 🔴 verdict to surface.
+          # HEAD-SHA verdict correlation. Filter completion comments by
+          # created_at >= the earliest run_started_at across all workflow
+          # runs at the PR's current HEAD SHA. Same architectural pattern as
+          # claude-code-review.yml's routine gate (see comment block there
+          # for the rationale). Cross-ported from Emberholm.
+          #
+          # This workflow fires on issue_comment events where
+          # github.event.pull_request.head.sha is not directly populated, so
+          # we fetch HEAD SHA via the PR API. Adds one API call per gate
+          # invocation; negligible cost.
+          HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '.head.sha')
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve HEAD SHA for PR $PR_NUMBER"
+            exit 1
+          fi
+          HEAD_SHA_FLOOR=$(gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
+            --jq '[.workflow_runs[].run_started_at] | min // empty')
+          if [ -z "$HEAD_SHA_FLOOR" ]; then
+            echo "::error::Could not determine HEAD-SHA run-started-at floor for $HEAD_SHA"
+            exit 1
+          fi
           COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r --arg cutoff "$CUTOFF" \
-              '[.[] | select(.body | contains("Claude finished")) | select(.user.login == "claude[bot]") | select(.created_at >= $cutoff)] | last | .body // ""')
+            | jq -r --arg ts "$HEAD_SHA_FLOOR" '[.[] | select(.body | contains("Claude finished")) | select(.user.login == "claude[bot]") | select(.created_at >= $ts)] | last | .body // ""')
 
           if [ -z "$COMMENT" ]; then
-            echo "::notice::No deep-tier completion comment in this run window — action skipped or fired on a non-review @claude mention; gate inapplicable"
+            echo "::notice::No deep-tier completion comment at or after HEAD-SHA floor $HEAD_SHA_FLOOR — action skipped or fired on a non-review @claude mention; gate inapplicable"
             exit 0
           fi
 
