@@ -161,9 +161,11 @@ jobs:
                       violations.append(f'UNKNOWN_PLACEHOLDER: {fname}: {{{{{name}}}}} not in canonical set')
 
           # ── Check 3: AI-attribution scan ─────────────────────────────────────
-          # Per .claude/rules/git.md — no `Co-Authored-By: Claude`, no
-          # "Generated with Claude Code" footers, no claude.com / claude.ai
-          # links, no 🤖 attribution. In ADDED lines only.
+          # Scans ADDED lines for the AI-attribution patterns defined in
+          # .claude/rules/git.md. The regexes are encoded in ai_pats below
+          # (kept structural — readers consult ai_pats, not this comment,
+          # to avoid the comment itself re-tripping the scanner on future
+          # edits to this workflow file).
           ai_pats = [
               re.compile(r'Co-Authored-By:\s*Claude', re.IGNORECASE),
               re.compile(r'Generated\s+with\s+\[?Claude\s+Code', re.IGNORECASE),
@@ -390,7 +392,11 @@ jobs:
           # stale verdicts from earlier pushes on the same PR. 25 min covers
           # Sonnet at 50 max-turns + Step-4 escalation on large diffs.
           CUTOFF=$(date -u -d '25 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-25M +%Y-%m-%dT%H:%M:%SZ)
-          COMMENT=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+          # --paginate walks all pages — the issue-comments endpoint defaults
+          # to per_page=30 and returns ascending order. On PRs with >30
+          # existing comments the verdict comment lands on a later page;
+          # without --paginate the gate would silently fail-red those PRs.
+          COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
             | jq -r --arg cutoff "$CUTOFF" '[.[] | select(.body | contains("## Code Review — claude-code-templates")) | select(.created_at >= $cutoff)] | last | .body // ""')
 
           if [ -z "$COMMENT" ]; then
