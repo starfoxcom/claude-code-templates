@@ -123,22 +123,22 @@ jobs:
             exit 0
           fi
 
-          # 10-min cutoff so we only consider comments posted by THIS workflow
-          # run, not stale completions from earlier runs. Opus typically takes
-          # 3–4 min, so 10 min is generous.
-          CUTOFF=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)
-
+          # Pick the LATEST deep-tier completion comment on this PR. No
+          # timestamp cutoff needed — stale completions from earlier runs
+          # can't coexist with a fresh run because the job-level `concurrency`
+          # block above uses cancel-in-progress: true, which cancels any
+          # in-flight deep-review run before it posts a completion comment.
+          # The `| last` selector then picks the most recent matching comment.
           # --paginate walks all pages — the issue-comments endpoint defaults
           # to per_page=30 and returns ascending order. On PRs with >30
           # existing comments the Opus completion comment lands on a later
           # page; without --paginate the advisory gate would silently pass
           # when there's actually a real 🔴 verdict to surface.
           COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r --arg cutoff "$CUTOFF" \
-              '[.[] | select(.body | contains("Claude finished")) | select(.user.login == "claude[bot]") | select(.created_at >= $cutoff)] | last | .body // ""')
+            | jq -r '[.[] | select(.body | contains("Claude finished")) | select(.user.login == "claude[bot]")] | last | .body // ""')
 
           if [ -z "$COMMENT" ]; then
-            echo "::notice::No deep-tier completion comment in this run window — action skipped or fired on a non-review @claude mention; gate inapplicable"
+            echo "::notice::No deep-tier completion comment on this PR — action skipped or fired on a non-review @claude mention; gate inapplicable"
             exit 0
           fi
 
