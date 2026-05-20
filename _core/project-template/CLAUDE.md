@@ -35,8 +35,8 @@ Always respond in **{{CONVERSATION_LANGUAGE}}**.
 
 - **Stack:** {{LANGUAGE_AND_FRAMEWORK}}
 - **Repo:** {{REPO_URL}}
-- **Production branch:** `{{MAIN_BRANCH}}`
-- **Default (dev) branch:** `{{DEFAULT_BRANCH}}`
+- **Production branch:** `{{MAIN_BRANCH}}` (stable releases only — tagged)
+- **Dev (integration) branch:** `{{DEV_BRANCH}}` (where day-to-day work targets; same as the production branch when branching model is trunk-based)
 - **Branching model:** {{GITFLOW_OR_TRUNK}}
 
 Before starting any task, skim the project-level `ROADMAP.md` (if it exists) and any sub-module ROADMAPs relevant to the work.
@@ -76,9 +76,19 @@ Every work session begins with this ritual. On prompt like "session start" or "r
    - Hotfix to `{{MAIN_BRANCH}}` → `hotfix/<short-name>`
    - Release prep → `release/<version>`
 3. **Modules touched this session** — which directories the planned work mutates. Flag prerequisite branches.
-4. **Session steps** — ordered list of work items, with dependencies called out.
+4. **Session steps as a task list** — for any session with 3+ discrete work items, call `TaskCreate` once per step in the planned order. To express dependencies, capture each new task's ID from the `tool_result` and then call `TaskUpdate({ taskId, addBlockedBy: [<prereq-id>] })`. The task list is the source of truth for what's in scope this session — never let it go stale.
+
+   > **Tool note:** `TaskCreate`, `TaskUpdate`, `TaskList`, and `TaskGet` are the modern Claude Code task tools (`addBlockedBy` is a `TaskUpdate` input parameter, not a separate tool). On builds that pre-date them, or when `CLAUDE_CODE_ENABLE_TASKS=0` is set, the legacy `TodoWrite` (single-call full-array rewrite, no dependency chaining) is the fallback — express order via array position instead.
+
+   **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front and chain dependencies with `TaskUpdate({ taskId, addBlockedBy: [<prior-pr-task-id>] })` so the task list mirrors the merge order. A 10-PR chain treated as ad-hoc work burns hours on out-of-sequence routing — the upfront enumeration prevents that.
 
 Do not start code work until I approve or correct the plan.
+
+**During the session:**
+- `TaskUpdate({ taskId, status: 'in_progress' })` BEFORE starting a task.
+- `TaskUpdate({ taskId, status: 'completed' })` immediately when the task is fully done — don't batch.
+- `TaskCreate` for follow-ups discovered mid-session; don't leave them in conversation memory only.
+- Sessions with one or two trivial steps can skip task tracking; the threshold is 3+ discrete work items.
 
 ---
 
@@ -106,9 +116,9 @@ Evaluate in order — apply the first row that matches:
 |---|---|
 | No code changes (context refresh only) | Generate context file + commit + PR + paths-ignore fast-path auto-merge + branch cleanup. |
 | Changes exist, branch objective **incomplete** | Commit with work done. No PR. |
-| Changes exist, branch objective **complete** | Commit + PR to `{{DEFAULT_BRANCH}}` + standard polling-loop merge + branch cleanup. |
-| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEFAULT_BRANCH}}` is managed from GitHub). |
-| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEFAULT_BRANCH}}`. |
+| Changes exist, branch objective **complete** | Commit + PR to `{{DEV_BRANCH}}` + standard polling-loop merge + branch cleanup. |
+| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEV_BRANCH}}` is managed from GitHub). |
+| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`. |
 
 Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — never `&&`-chain post-merge cleanup steps.
 

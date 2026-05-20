@@ -4,8 +4,24 @@
 
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
-| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment** + uncertainty auto-escalation. Final step exits red on 🔴 → **merge gate is real**. |
-| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** |
+| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Verdict gates the required check. |
+| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict is advisory. |
+
+## The gate model
+
+There is **one** required status check: `Evaluate review outcome` (from `claude-code-review.yml`). It covers the routine tier only:
+
+- Fires on `pull_request`. Reads the latest `## Code Review — <project>` comment posted within the last 25 minutes. Verdict is 🔴 → exits 1 (merge blocked). 🟢 → exits 0 (merge allowed). Non-reviewable diff (triage output `run_review=false`) → job skipped, gate auto-passes.
+
+The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) exits 1 on Opus 🔴, failing the `Claude On-Demand` check run — visible in the PR status panel. **That check is advisory, not required.** A deep-tier 🔴 is a hard stop for the maintainer: read the finding before any admin-bypass.
+
+Configure the `develop-protection` / `main-protection` rulesets to require ONLY `Evaluate review outcome`. Never list `Evaluate deep-tier verdict` as a required check — it would hang on every PR that never triggers deep review.
+
+## Workflow-touching PRs require admin-bypass
+
+The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token. Any PR that edits `.github/workflows/claude*.yml` therefore fails the token exchange and the routine review action cannot post a verdict. The gate has no comment to read, exits 1, and the only path forward is `gh pr merge --admin`.
+
+Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (Sonnet posted 🔴, missing verdict line, etc.), fix the underlying issue — do not bypass.
 
 ---
 
