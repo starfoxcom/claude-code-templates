@@ -202,16 +202,7 @@ jobs:
           fi
 
           if [ -z "$COMMENT" ]; then
-            # FAIL-CLOSED: Opus errored without posting a completion comment.
-            # Setting conclusion=failure (not neutral) so branch protection
-            # blocks merge — neutral is treated as PASSING by GitHub for
-            # required status checks, which would silently let an
-            # auto-escalated PR through without a valid deep verdict. For a
-            # repo whose gate is the primary control against malicious
-            # content reaching templates installed verbatim downstream,
-            # fail-open on the deep tier is a security posture regression.
-            # Maintainers wanting to merge through a genuine Opus outage
-            # must consciously admin-bypass, leaving an audit trail.
+            # FAIL-CLOSED: neutral counts as passing in required status checks — failure blocks merge; admin-bypass required for genuine Opus outages.
             echo "::error::No deep-tier completion comment found — Opus action errored or skipped. Setting check to failure (fail-closed)."
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
