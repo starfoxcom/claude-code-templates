@@ -37,7 +37,12 @@ Install (canonical procedure in SETUP.md § Phase 7a):
           "command": "py \"~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py\"" }
       ]
     }
-  On Windows, expand ~ to the absolute path. On macOS/Linux, swap `py` for
+  On ALL platforms (Windows AND macOS/Linux), expand ~ to the absolute home
+  path before writing the command string into settings.json — e.g.
+  `C:/Users/Alice/.claude/hooks/...` or `/home/alice/.claude/hooks/...`.
+  Claude Code's hook executor does NOT auto-expand ~ in the command string;
+  a literal ~ silently disables the hook. Use `os.path.expanduser('~')` at
+  bind time. On Windows the launcher is `py`; on macOS/Linux swap to
   `python3`. NEVER install project-local — it can trigger tool-specific
   template-inheritance bugs that corrupt settings on every Stop event.
 """
