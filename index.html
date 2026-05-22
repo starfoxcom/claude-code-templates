@@ -3638,7 +3638,13 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
 6. Render tools section (\`{{STACK_COMMANDS_ALLOWLIST}}\` etc.) from
    \`manifest.tools\` and \`manifest.project.stack_commands\`.
 7. Merge global additions into \`~/.claude/CLAUDE.md\` if the memory or
-   code-research toggles are ON. Ask before overwriting existing sections.
+   code-research toggles are ON. **Before appending,** strip per-value
+   \`<!-- TOGGLE:code_research:<value> START/END -->\` blocks from
+   \`CLAUDE.md.additions\` (keep only the block matching
+   \`manifest.tools.code_research\`) and substitute residual
+   \`{{TOOLS_CODE_RESEARCH_*}}\` placeholders. \`CLAUDE.md.additions\` is in
+   \`_core/global-template/\`, so Phase 3 step 3a doesn't touch it — resolve
+   here explicitly. Ask before overwriting existing sections.
 8. Initialize per-project memory at
    \`~/.claude/projects/<slug>/memory/MEMORY.md\` from the template.
 
