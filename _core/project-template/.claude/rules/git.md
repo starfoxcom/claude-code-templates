@@ -102,6 +102,23 @@ git push origin feature/<n>
 
 ---
 
+## Branch verification before editing
+
+Verify your current branch BEFORE editing any file whose correct home depends on category. Open the editor SECOND, not first.
+
+| File category | Correct home |
+|---|---|
+| `.github/workflows/*` (live workflows) | `hotfix/<n>` from `{{MAIN_BRANCH}}` |
+| `_core/project-template/**`, `_core/global-template/**` (canonical templates) | `feature/<n>` or `chore/<n>` from `{{DEV_BRANCH}}` |
+| Release-prep fixes (reviewer findings on an open release) | `release/<v>` (already cut from `{{DEV_BRANCH}}`) |
+| Lockstep pairs (e.g. configurator JSX ↔ inlined HTML, canonical ↔ live mirror) | Whichever branch the pair already lives on; edit both |
+
+- Before the first edit of a task, run `git branch --show-current`. Switch first, branch second, then edit.
+- Never edit on the wrong branch and rely on `git stash → checkout → branch → stash pop` to recover. The stash dance works mechanically but hides the scope violation that put you on the wrong branch, and trains you to skip verification next time. If you find yourself reaching for it, pause — that's the signal that the up-front check got skipped.
+- Bolting a workflow change onto a release PR because the cursor was already on that branch tempts the App-auth OIDC failure → admin-merge bypass → mixed-scope merge on a published release. Three downstream mistakes from one missed `git branch --show-current` call. The cost of the check is ~0; the cost of the recovery can be a published revert.
+
+---
+
 ## Review tiers
 
 Two review tiers, both fully workflow-driven via `.github/workflows/`:
