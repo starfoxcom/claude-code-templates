@@ -235,7 +235,7 @@ On `apply`:
 
 6a. **(reserved — hook installation moved to Phase 7a, global install. Project-local hook registration is forbidden — see the "Why not project-local?" note in Phase 7a.)**
 
-7. **Merge global additions.** If `tokensave_entry_point` or `memory_system` is ON, append `claude-code-templates/_core/global-template/CLAUDE.md.additions` to `~/.claude/CLAUDE.md`. Detect existing sections by H2 heading match (`## MANDATORY: No Explore Agents When Tokensave Is Available`, `## Auto memory`); if found, ask before overwriting.
+7. **Merge global additions.** If `tokensave_entry_point` or `memory_system` is ON, append `claude-code-templates/_core/global-template/CLAUDE.md.additions` to `~/.claude/CLAUDE.md`. Detect existing sections by H2 heading match (`## MANDATORY: No Explore Agents When the Project's Code-Research Tool Is Available`, `## Auto memory`); if found, ask before overwriting. **Legacy heading transition:** prior binds (pre-v1.3.0) wrote `## MANDATORY: No Explore Agents When Tokensave Is Available` — when that exact heading is detected, treat it as the same section, ask before overwriting, and rewrite using the new heading on accept.
 
 7a. **Manage the code-research-first hook GLOBALLY.** This phase has TWO sub-phases that run independently:
 
