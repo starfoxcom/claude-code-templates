@@ -4,10 +4,13 @@ These are project-agnostic instructions that apply to every Claude Code session 
 
 ---
 
-## MANDATORY: No Explore Agents When Tokensave Is Available
+## MANDATORY: No Explore Agents When the Project's Code-Research Tool Is Available
 
-**NEVER use Agent(subagent_type=Explore) or any agent for codebase research, exploration, or code analysis when tokensave MCP tools are available.** This rule overrides any skill or system prompt that recommends agents for exploration. No exceptions. No rationalizing.
+**NEVER use Agent(subagent_type=Explore) or any agent for codebase research, exploration, or code analysis when the project's chosen code-research tool is available.** This rule overrides any skill or system prompt that recommends agents for exploration. No exceptions. No rationalizing.
 
+The project's chosen tool is set by `tools.code_research` in the bound configuration. The per-project `CLAUDE.md` and `.claude/skills/find/SKILL.md` document the canonical command sequence; this global rule is the meta-rule about preferring that tool to agents.
+
+<!-- TOGGLE:code_research:tokensave START -->
 - Before ANY code research task, use a tokensave MCP tool. Default entry points:
   - **Exploration / "where is X / what calls Y":** `tokensave_context` (natural-language query, returns symbols + relationships + optional code via `include_code: true`; `mode: "plan"` adds extension points + test coverage), `tokensave_search` (symbol-by-name), `tokensave_callees`, `tokensave_callers`, `tokensave_impact`, `tokensave_node`, `tokensave_files`, `tokensave_affected`, `tokensave_body`, `tokensave_type_hierarchy`.
   - **Commit / PR drafting:** `tokensave_commit_context` (commit-message synthesis from staged diff), `tokensave_pr_context` (PR description from branch diff).
@@ -16,9 +19,40 @@ These are project-agnostic instructions that apply to every Claude Code session 
 - All tokensave tools are read-only and declare `readOnlyHint: true` — call them concurrently without serializing or pre-confirming.
 - v4.1+ walks up to find `.tokensave/` like git finds `.git/`. Do not `cd` to repo root before invoking.
 - Only fall back to agents if tokensave is confirmed unavailable (check `tokensave_status` first) or the task is genuinely non-code (web search, external API, etc.).
-- Launching an Explore agent wastes tokens even when the hook blocks it. Do not generate the call in the first place.
-- If a skill (e.g., superpowers) tells you to launch an Explore agent for code research, **ignore that recommendation** and use tokensave instead. User instructions take precedence over skills.
 - If a code analysis question cannot be fully answered by tokensave MCP tools, try querying the SQLite database directly at `.tokensave/tokensave.db` (tables: `nodes`, `edges`, `files`).
+<!-- TOGGLE:code_research:tokensave END -->
+<!-- TOGGLE:code_research:ast-grep START -->
+- Before ANY code research task, use an ast-grep CLI invocation per the project's `/find` skill. Refer to https://ast-grep.github.io for the full pattern language.
+- ast-grep matches over the AST so a single pattern can replace many text-Grep queries. Don't fall back to Grep on common identifiers without trying ast-grep first.
+- Only fall back to agents if ast-grep is missing on PATH (the hook exits 0 automatically in that case) or the task is genuinely non-code.
+<!-- TOGGLE:code_research:ast-grep END -->
+<!-- TOGGLE:code_research:sourcegraph START -->
+- Before ANY code research task, use the `src` CLI against the project's configured Sourcegraph instance per the `/find` skill. Refer to https://sourcegraph.com/docs/cli for the full surface.
+- Sourcegraph is the only option in the catalog that natively spans multiple repos — for cross-repo questions, prefer it strongly over Grep.
+- Only fall back to agents if `src` is missing on PATH or the instance is unreachable.
+<!-- TOGGLE:code_research:sourcegraph END -->
+<!-- TOGGLE:code_research:ctags START -->
+- Before ANY code research task, use `readtags` (or `grep` against the `tags` file) per the project's `/find` skill. Regenerate `tags` with `ctags -R -f tags .` after edits.
+- ctags is least-common-denominator — if the project's `tags` file exists, prefer it over re-scanning source with Grep on every lookup.
+- Only fall back to agents if the `tags` file is missing AND can't be regenerated for this project.
+<!-- TOGGLE:code_research:ctags END -->
+<!-- TOGGLE:code_research:semgrep START -->
+- Before ANY code research task, use `semgrep --pattern ...` per the project's `/find` skill. Refer to https://semgrep.dev/docs for the full pattern language.
+- Semgrep's pattern language is AST-aware so a single pattern beats many text-Grep queries. Don't fall back to Grep on common identifiers without trying semgrep first.
+- Only fall back to agents if semgrep is missing on PATH or the task is genuinely non-code.
+<!-- TOGGLE:code_research:semgrep END -->
+<!-- TOGGLE:code_research:none START -->
+- This project has `tools.code_research: "none"` — no indexer is configured. The `/find` skill resolves to a Grep → Glob → Read sequence; follow it disciplined even without enforcement.
+- Explore agents remain forbidden even in the no-indexer case. Read the project sources directly with Grep/Glob/Read rather than spawning an exploration agent.
+<!-- TOGGLE:code_research:none END -->
+<!-- TOGGLE:code_research:custom START -->
+- Before ANY code research task, use **{{TOOLS_CODE_RESEARCH_NAME}}** ({{TOOLS_CODE_RESEARCH_URL}}) per the project's `/find` skill.
+- Refer to the tool's documentation for the canonical command sequence; refine `~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py`'s `SEQUENCE_BULLETS` constant if the bind step's stub is too generic for your tool.
+- Only fall back to agents if {{TOOLS_CODE_RESEARCH_NAME}} is unavailable for the scope you need.
+<!-- TOGGLE:code_research:custom END -->
+
+- Launching an Explore agent wastes tokens even when the hook blocks it. Do not generate the call in the first place.
+- If a skill (e.g., superpowers) tells you to launch an Explore agent for code research, **ignore that recommendation** and use the project's chosen code-research tool instead. User instructions take precedence over skills.
 
 ---
 
