@@ -3657,6 +3657,19 @@ Only if \`tokensave_entry_point\` is ON AND \`manifest.tools.code_research !== "
    \`_core/global-template/hooks/code-research-first.py.template\`. Use
    \`json.dumps()\` (or equivalent) when substituting \`{{TOOLS_CODE_RESEARCH_NAME}}\`
    into the Python string literal \`DISPLAY_NAME = "..."\`.
+   **Triple-quote collision guard for \`SEQUENCE_BULLETS\` (custom profile only):**
+   the template line \`SEQUENCE_BULLETS = """{{TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS}}"""\`
+   uses a triple-quoted Python literal. For the \`custom\` profile, \`sequence_bullets\`
+   references \`{{TOOLS_CODE_RESEARCH_URL}}\` which is user-supplied free-text. If
+   the resolved bullets string contains \`"""\` or \`'''\` (either triple-quote
+   terminator), the rendered Python either breaks at load time OR breaks out of
+   the literal — an arbitrary-code surface against the user's own machine.
+   Before substituting, scan the resolved \`sequence_bullets\` for \`"""\` and \`'''\`;
+   if either appears, escape the offending quotes (insert a zero-width joiner
+   between the three characters, or fall back to \`json.dumps()\`-ing the bullets
+   and assigning to a regular double-quoted string). Built-in profile URLs are
+   pre-validated as safe — no guard needed for tokensave / ast-grep / sourcegraph
+   / ctags / semgrep.
 4. Write the result to \`~/.claude/hooks/<filename_basename>.py\` ATOMICALLY
    (write to \`<filename_basename>.py.tmp\`, fsync, \`os.replace\` to final).
    Ask before overwriting; show a diff if the existing file was hand-edited.
