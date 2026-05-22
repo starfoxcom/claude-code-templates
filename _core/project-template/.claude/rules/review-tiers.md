@@ -4,18 +4,29 @@
 
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
-| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Verdict gates the required check. |
-| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict is advisory. |
+| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Verdict feeds the gate. |
+| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Folds into the merge gate **when the `needs-deep-review` label is applied** (auto-applied on auto-escalation; can also be applied manually). |
 
 ## The gate model
 
-There is **one** required status check: `Evaluate review outcome` (from `claude-code-review.yml`). It covers the routine tier only:
+There is **one** required status check: `Evaluate review outcome` (the gate job in `claude-code-review.yml`). The gate **folds both tiers into a single pass/fail**:
 
-- Fires on `pull_request`. Reads the latest `## Code Review — <project>` comment posted within the last 25 minutes. Verdict is 🔴 → exits 1 (merge blocked). 🟢 → exits 0 (merge allowed). Non-reviewable diff (triage output `run_review=false`) → job skipped, gate auto-passes.
+1. Triage classified the diff as non-reviewable → auto-pass.
+2. Routine review job didn't reach success (action errored, OIDC tripped, workflow-validation skip, runner crash) → fail.
+3. Routine verdict comment missing or 🔴 → fail.
+4. Routine 🟢:
+   - `needs-deep-review` label NOT applied → pass.
+   - Label applied + deep verdict comment 🟢 → pass.
+   - Label applied + deep verdict 🔴 → fail.
+   - Label applied + no deep verdict yet → fail (pending).
 
-The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) exits 1 on Opus 🔴, failing the `Claude On-Demand` check run — visible in the PR status panel. **That check is advisory, not required.** A deep-tier 🔴 is a hard stop for the maintainer: read the finding before any admin-bypass.
+The gate fires on `pull_request` events AND re-fires on `issue_comment` events when the deep tier posts its "Claude finished" completion comment. HEAD-SHA correlation (`created_at >= earliest run_started_at on the current HEAD`) binds both verdicts to the current push — stale verdicts from a prior HEAD are structurally rejected.
 
-Configure the `develop-protection` / `main-protection` rulesets to require ONLY `Evaluate review outcome`. Never list `Evaluate deep-tier verdict` as a required check — it would hang on every PR that never triggers deep review.
+**Dismiss path for the maintainer:** remove the `needs-deep-review` label from the PR. The next event re-evaluates the gate and step 4a applies → pass. Re-trigger with `@claude review this PR — depth pass on <focus>` if a fresh deep verdict is wanted instead.
+
+The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) also exits 1 on Opus 🔴 — that fails the `Claude On-Demand` check run for visible signal in the PR status panel, but the merge gate is owned by `Evaluate review outcome`, not the `Claude On-Demand` check.
+
+Configure the branch-protection rulesets to require ONLY `Evaluate review outcome`. Never list `Evaluate deep-tier verdict` as a required check — it would hang on every PR that never triggers deep review.
 
 ## Workflow-touching PRs require admin-bypass
 
