@@ -9,6 +9,16 @@
 #     `@claude` only inside backticks — never the literal substring
 #     `@claude review this PR`.
 #
+# Merge gate participation: this workflow PATCHes the `Claude On-Demand`
+# check-run on the PR HEAD SHA via the Checks API after Opus finishes its
+# review. The check was created at conclusion=neutral by claude-code-review.yml's
+# init-deep-check job; this workflow upgrades it to success/failure based on
+# the deep verdict. Branch protection on main/develop requires both
+# `Evaluate review outcome` (routine) AND `Claude On-Demand` (deep) — the
+# two-check architecture replaces the prior fold-in-via-issue_comment gate
+# whose check-runs failed to attach to the PR HEAD SHA. See the comment
+# block in claude-code-review.yml for the historical rationale.
+#
 # Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
 
 name: Claude On-Demand
@@ -60,10 +70,71 @@ jobs:
       issues: write
       id-token: write
       actions: read
+      # Needed to PATCH the `Claude On-Demand` check-run on the PR HEAD SHA
+      # both at job start (in_progress) and after the Opus review completes
+      # (success/failure based on verdict).
+      checks: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      # ── Resolve PR HEAD SHA once for downstream Checks API calls ──────────
+      # claude.yml fires on issue_comment events, where the PR head SHA is
+      # not directly in the event payload. Resolve it via the PR API and
+      # expose it as a step output for the upsert + finalize steps.
+      - name: Resolve PR HEAD SHA
+        id: pr-head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.issue.number || github.event.pull_request.number }}"
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::notice::Not on a PR — skipping HEAD SHA resolution"
+            echo "head_sha=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '.head.sha')
+          if [ -z "$HEAD_SHA" ]; then
+            echo "::error::Could not resolve HEAD SHA for PR $PR_NUMBER"
+            exit 1
+          fi
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "::notice::PR #$PR_NUMBER HEAD SHA = $HEAD_SHA"
+
+      # ── Upsert Claude On-Demand check to in_progress ──────────────────────
+      # claude-code-review.yml's init-deep-check job created the check at
+      # conclusion=neutral; routine auto-escalation may have flipped it to
+      # in_progress already. For manual `@claude review this PR` triggers
+      # without a prior routine run on this HEAD SHA, the check may not yet
+      # exist — create it. Either way, the PR's check rollup now shows
+      # "Claude On-Demand: in_progress" while Opus runs.
+      - name: Upsert Claude On-Demand check to in_progress
+        if: steps.pr-head.outputs.head_sha != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
+        run: |
+          REPO="${{ github.repository }}"
+          CHECK_ID=$(gh api \
+            "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+            --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
+          if [ -n "$CHECK_ID" ]; then
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="in_progress" \
+              -F "output[title]=Deep review in progress" \
+              -F "output[summary]=Opus is reviewing the PR. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment."
+            echo "::notice::Set existing Claude On-Demand check $CHECK_ID to in_progress"
+          else
+            gh api "repos/$REPO/check-runs" -X POST \
+              -F name="Claude On-Demand" \
+              -F head_sha="$HEAD_SHA" \
+              -F status="in_progress" \
+              -F "output[title]=Deep review in progress" \
+              -F "output[summary]=Manual @claude trigger fired on a HEAD SHA with no prior routine run. Opus is reviewing."
+            echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
+          fi
 
       - name: Run Claude
         # Pinned to v1's resolved SHA (resolved 2026-05-04). The bare `@v1`
@@ -90,58 +161,53 @@ jobs:
           # rule the deep tier must follow.
 
       - name: Evaluate deep-tier verdict
-        # Advisory enforcement. The routine tier's `Evaluate review outcome`
-        # (in claude-code-review.yml) is the single REQUIRED status check that
-        # gates merge. This step exits 1 on Opus 🔴, which fails the
-        # `Claude On-Demand` check run and makes the red verdict visible in the
-        # PR status panel — but that check is not in the required-checks
-        # ruleset, so merge is not automatically blocked.
+        # PATCH the `Claude On-Demand` check on the PR HEAD SHA to
+        # success/failure based on Opus's verdict comment. Branch protection
+        # on main/develop requires `Claude On-Demand` as a status check, so
+        # this PATCH is what actually gates merge for auto-escalated PRs.
         #
-        # What this means operationally: a deep-tier 🔴 is a hard stop for
-        # the maintainer. Read the finding before any admin-bypass; never
-        # bypass on a deep 🔴 without documenting why the finding is not
-        # applicable or will be addressed in a follow-up.
+        # The check was created on the PR HEAD SHA by claude-code-review.yml's
+        # init-deep-check job (or by the Upsert step above for manual triggers)
+        # — finding it by `(head_sha, name)` and PATCHing it ensures the
+        # check stays attached to the PR HEAD SHA regardless of the
+        # issue_comment-event check-run attachment quirk that historically
+        # broke the fold-in architecture.
         #
         # The action posts a comment starting with "**Claude finished
         # @claude[bot]'s task in <duration>**" when Opus completes its review.
-        # We re-read that comment and exit red on 🔴.
-        if: always()
+        # We re-read that comment and translate to check conclusion.
+        if: always() && steps.pr-head.outputs.head_sha != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr-head.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
         run: |
-          PR_NUMBER="${{ github.event.issue.number || github.event.pull_request.number }}"
-          if [ -z "$PR_NUMBER" ]; then
-            echo "::notice::Not on a PR/issue — gate inapplicable"
-            exit 0
-          fi
+          REPO="${{ github.repository }}"
 
-          # HEAD-SHA verdict correlation. Filter completion comments by
-          # created_at >= the earliest run_started_at across all workflow
-          # runs at the PR's current HEAD SHA. Same architectural pattern as
-          # claude-code-review.yml's routine gate (see comment block there
-          # for the rationale). Cross-ported from Emberholm PR #139.
-          #
-          # claude.yml fires on issue_comment events where
-          # github.event.pull_request.head.sha is not directly populated, so
-          # we fetch HEAD SHA via the PR API. Adds one API call per gate
-          # invocation; negligible cost.
-          HEAD_SHA=$(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '.head.sha')
-          if [ -z "$HEAD_SHA" ]; then
-            echo "::error::Could not resolve HEAD SHA for PR $PR_NUMBER"
+          # Read the latest claude[bot] completion comment on this PR. No
+          # HEAD-SHA-floor correlation needed: a stale completion comment on
+          # a prior HEAD SHA would have already PATCHed the check on THAT
+          # SHA, not the current one. When the PR HEAD SHA advanced (new
+          # push), init-deep-check created a fresh neutral check on the new
+          # SHA, independent of any stale comments.
+          COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+            | jq -r '[.[] | select(.user.login == "claude[bot]") | select(.body | startswith("**Claude finished"))] | last | .body // ""')
+
+          CHECK_ID=$(gh api \
+            "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+            --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
+          if [ -z "$CHECK_ID" ]; then
+            echo "::error::Claude On-Demand check not found on $HEAD_SHA — Upsert step must have failed"
             exit 1
           fi
-          HEAD_SHA_FLOOR=$(gh api --paginate \
-            "repos/${{ github.repository }}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
-            --jq '[.workflow_runs[].run_started_at] | min // empty')
-          if [ -z "$HEAD_SHA_FLOOR" ]; then
-            echo "::error::Could not determine HEAD-SHA run-started-at floor for $HEAD_SHA"
-            exit 1
-          fi
-          COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r --arg ts "$HEAD_SHA_FLOOR" '[.[] | select(.body | contains("Claude finished")) | select(.user.login == "claude[bot]") | select(.created_at >= $ts)] | last | .body // ""')
 
           if [ -z "$COMMENT" ]; then
-            echo "::notice::No deep-tier completion comment at or after HEAD-SHA floor $HEAD_SHA_FLOOR — action skipped or fired on a non-review @claude mention; gate inapplicable"
+            echo "::notice::No deep-tier completion comment found — action errored or fired on a non-review @claude mention. Setting check to neutral and exiting."
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="completed" \
+              -F conclusion="neutral" \
+              -F "output[title]=Deep review skipped" \
+              -F "output[summary]=The Opus action did not post a completion comment. Re-trigger with \`@claude review this PR — depth pass on <focus>\` or remove the \`needs-deep-review\` label to dismiss."
             exit 0
           fi
 
@@ -149,11 +215,28 @@ jobs:
           VERDICT_LINE=$(printf '%s\n' "$COMMENT" | grep -E "🔴|🟢" | tail -n 1)
           if [ -z "$VERDICT_LINE" ]; then
             echo "::error::Deep-tier comment has no 🔴/🟢 verdict at all"
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="completed" \
+              -F conclusion="failure" \
+              -F "output[title]=Deep review verdict missing" \
+              -F "output[summary]=Opus completed but did not include a 🔴/🟢 verdict line. Re-trigger and ensure the prompt mandates a binary verdict on the final line."
             exit 1
           fi
+
           if echo "$VERDICT_LINE" | grep -qF "🔴"; then
             echo "::error::Deep-tier verdict: 🔴 Blocking — merge blocked"
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="completed" \
+              -F conclusion="failure" \
+              -F "output[title]=Deep review verdict: 🔴 Blocking" \
+              -F "output[summary]=Opus returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing, or remove the \`needs-deep-review\` label to dismiss."
             exit 1
           fi
-          echo "✅ Deep-tier verdict clean"
+
+          echo "✅ Deep-tier verdict clean — PATCHing Claude On-Demand to success"
+          gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+            -F status="completed" \
+            -F conclusion="success" \
+            -F "output[title]=Deep review verdict: 🟢 LGTM" \
+            -F "output[summary]=Opus signed off. Merge gate's deep-tier requirement satisfied."
           exit 0
