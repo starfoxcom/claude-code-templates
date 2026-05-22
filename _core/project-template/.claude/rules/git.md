@@ -119,6 +119,32 @@ Verify your current branch BEFORE editing any file whose correct home depends on
 
 ---
 
+## Cascade after every merge to `{{MAIN_BRANCH}}`
+
+Gitflow's "hotfix merges to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`" is a **discipline you execute, not a GitHub feature.** No platform auto-cascades from `{{MAIN_BRANCH}}` to `{{DEV_BRANCH}}` for you. Same applies to `release/*` merges — they also need a cascade-to-`{{DEV_BRANCH}}` PR.
+
+**The merge-to-`{{MAIN_BRANCH}}` sequence is a triple, not a single:**
+
+```bash
+# 1. Land the hotfix or release PR on {{MAIN_BRANCH}}
+gh pr merge <pr> --merge [--admin] --delete-branch
+
+# 2. Open the cascade PR
+git fetch origin && git checkout {{DEV_BRANCH}} && git pull --ff-only
+git checkout -b chore/cascade-<hotfix-or-release-name>
+git merge --no-ff origin/{{MAIN_BRANCH}} -m "chore: cascade <name> into {{DEV_BRANCH}}"
+git push -u origin chore/cascade-<hotfix-or-release-name>
+gh pr create --base {{DEV_BRANCH}} --head chore/cascade-<hotfix-or-release-name> ...
+
+# 3. Close the cascade — wait for routine verdict, merge, delete branch local + remote
+```
+
+- **The hotfix/release is not "done" until step 3 completes.** Mark the task complete only after the cascade PR is merged and its branch is cleaned up. "Merged to `{{MAIN_BRANCH}}`" is half the job.
+- **Bundle multiple back-to-back hotfixes** into one cascade PR only if no `{{DEV_BRANCH}}` work landed between them. Otherwise each gets its own cascade PR — merge history stays readable.
+- **Drift is silent and compounds.** A hotfix that fixes a workflow file on `{{MAIN_BRANCH}}` but never lands on `{{DEV_BRANCH}}` means every PR off `{{DEV_BRANCH}}` runs under stale workflow logic, and the next release branch cut from `{{DEV_BRANCH}}` starts from the wrong baseline.
+
+---
+
 ## Review tiers
 
 Two review tiers, both fully workflow-driven via `.github/workflows/`:
