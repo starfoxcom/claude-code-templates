@@ -46,12 +46,21 @@ The templates live at ./claude-code-templates/ (or wherever the user unzipped th
 1. **Locate templates.** Expect them at `./claude-code-templates/` by default. If not there, ask the user where they unzipped (don't assume).
 2. **Parse the JSON.** Validate required fields: `bundle`, `project.name`, `project.repo_url`, `project.main_branch`, `project.dev_branch`, `toggles`. If any field is `null` or missing, run a short interview to fill it — never assume. For backwards-compat with manifests produced before the v1.x rename: if `dev_branch` is missing but `developer_branch` or `default_branch` is present, accept it and warn.
 3. **Cross-check bundle.** Read `claude-code-templates/bundles/<bundle>/bundle.toggles.md` to confirm the bundle exists and to know its expected toggle set. For any toggle in the catalog NOT present in the user's JSON, fall back to the bundle default.
-4. **Cross-check toggles.** Every key in `toggles` must be in `TOGGLES.md`'s catalog. Unknown keys → reject with the offending names.
+4. **Cross-check toggles + tool-slot values.** Every key in `toggles` must be in `TOGGLES.md`'s catalog. Unknown keys → reject with the offending names. Every `tools.<slot>` value must be in the configurator catalog (`redesign/data.jsx` `TOOL_SLOTS[<slot>].options[].key`) — for slots with profile-driven generation (currently `code_research`), the value must additionally match a key in the slot's profile JSON. Unknown values → reject with: "`tools.<slot>` value `<value>` is not in the catalog. Valid keys: <list>. If this was a hand-edit, pick a catalog value or use `Other` (resolves to `custom`)."
+
+   **Backward-compat alias map** (handle deprecated toggle names that downstream users may have in their manifests; mirrors the `developer_branch`/`default_branch` precedent):
+   - **Until the rename ships in v1.3.x**, `tokensave_entry_point` IS the canonical toggle name — this block is a no-op forward-compat hook documenting the future contract.
+   - **When the v1.3.x rename ships** (planned: `tokensave_entry_point` → `code_research_first`), the alias-resolution behavior is:
+     - If `tokensave_entry_point` is present in `toggles` but `code_research_first` is not, accept it as the alias and warn: *"`tokensave_entry_point` is the v1.0–v1.3.0 legacy name; v1.3.x+ uses `code_research_first` for the same toggle. Updating your manifest to the new name is recommended but not required."*
+     - If both are present, prefer `code_research_first` (the canonical name) and warn that `tokensave_entry_point` was ignored.
 5. **Resolve derived toggles** from `project.branching_model`:
    - `gitflow` → `branching_model_gitflow: true`, `branching_model_trunk: false`
    - `trunk` → `branching_model_gitflow: false`, `branching_model_trunk: true`
 6. **Resolve `null` toggles** (those the bundle marks "ask"):
-   - `tokensave_entry_point` → ask the user; if unsure, run `tokensave_status` and use `true` only if it returns "ready".
+   - `tokensave_entry_point` → ask the user "Install the code-research hook (enforces /find-first for **{tools.code_research}** via Grep/Glob/Bash interception)?". If unsure, probe availability of the chosen tool per its profile (`_core/global-template/hooks/code-research-profiles.json`):
+     - `detection_mode: walk_up` (tokensave / ctags) → check for the marker file under the project root. Use `true` if found.
+     - `detection_mode: cli_available` (ast-grep / sourcegraph / semgrep / custom) → check if the CLI is on PATH. Use `true` if found.
+     - `tools.code_research === "none"` → force `false` (no hook to install).
    - `architecture_rules_scaffold` → `true` only if the existing codebase has ≥ 2 clear layer/module boundary directories.
    - `visual_test_discipline` → ask the user if the project has a UI / visual surface.
    - All other `null`s → ask the user one at a time with a short rationale.
@@ -96,7 +105,12 @@ Read these sources, in order:
 8. **File extensions histogram** (top 5 most-common code extensions) → language chips
 9. **Manifest scripts / Makefile / Cargo bin / pyproject scripts** → stack_commands chips
 10. **Existing `.claude/` content** → don't overwrite if user already has rules / skills / memory; note in plan
-11. **`.tokensave/tokensave.db`** existence → `tokensave_entry_point: true`
+11. **Code-research tool detection** → infer `tools.code_research` AND `tokensave_entry_point`:
+    - `.tokensave/tokensave.db` present → `tools.code_research: "tokensave"`, `tokensave_entry_point: true`
+    - `tags` file at repo root → `tools.code_research: "ctags"`, `tokensave_entry_point: true`
+    - `ast-grep`, `src`, or `semgrep` binary on PATH → `tools.code_research` to the matching tool, `tokensave_entry_point: true`
+    - Multiple signals → ask the user which to use as the primary; default to tokensave > ast-grep > sourcegraph > semgrep > ctags in priority order
+    - No signal → `tools.code_research: "none"`, `tokensave_entry_point: false` (the user can still flip this in the plan-confirmation step)
 12. **`.github/workflows/`** existence → `github_actions_*: true`
 13. **`CODEOWNERS`** existence → likely multi-dev / client-team
 14. **README mentions of "team" / "client" / "we" / "I"** → bundle heuristic (not definitive — bundle is always user-confirmed)
@@ -174,12 +188,28 @@ On `apply`:
    - `{{GITFLOW_OR_TRUNK}}` ← `project.branching_model`
    - `{{TIMEZONE}}` ← `project.timezone`
    - `{{STACK_COMMANDS_ALLOWLIST}}` ← see step 5 below
+   - **Tool-slot placeholders** (for each of `code_research`, `precommit`, `ci`, `ai_reviewer`, `issue_tracker`):
+     - `{{TOOLS_<SLOT>_NAME}}` ← `tools.<slot>` if the value is one of the catalog options; if `"Other"`, substitute `otherTools.<slot>` (the user-supplied free-text name).
+     - `{{TOOLS_<SLOT>_URL}}` ← the homepage URL from the catalog (`TOOL_SLOTS[<slot>].options[<value>].url`); if `"Other"`, substitute `otherToolUrls.<slot>`; if the catalog entry has `url: null` (e.g., `"none"`), substitute the literal string `(no homepage)`.
+     - Example: `tools.code_research: "tokensave"` produces `{{TOOLS_CODE_RESEARCH_NAME}} = "tokensave"` and `{{TOOLS_CODE_RESEARCH_URL}} = "https://github.com/aovestdipaperino/tokensave"`.
+   - **Code-research profile-derived placeholders** (read from `_core/global-template/hooks/code-research-profiles.json` keyed by `tools.code_research`):
+     - `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` ← profile `bypass_marker` (e.g., `"TOKENSAVE_BYPASS:"`, `"AST_GREP_BYPASS:"`). For the `custom` profile, compute as `<NAME_UPPER_SNAKE>_BYPASS:` from the user-supplied name (see Phase 7a for the transformation).
+     - `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` ← the profile JSON key itself when `tools.code_research` is one of the built-in values (`tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep` — all already kebab-shaped, so the substituted value equals the manifest's `tools.code_research` value verbatim). For the `custom` profile, computed from the user-supplied name per Phase 7a step "Compute custom-case placeholders". **Substituted into template files** — notably `_core/project-template/CLAUDE.md`, `_core/project-template/.claude/skills/find/SKILL.md`, and `_core/global-template/CLAUDE.md.additions`, wherever the hook filename `~/.claude/hooks/<name-kebab>-first.py` appears in the shared/header sections (which apply to every bind) or inside `:tokensave_entry_point` / `:code_research:custom` blocks.
+     - `{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}` ← UPPER_SNAKE form of the same source (used inside `code-research-profiles.json` for the `custom` profile's `bypass_marker` derivation — not otherwise referenced directly in template files; the resolved `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` placeholder carries the final value into template files).
+     - For `tools.code_research === "none"`, substitute the literal string `(no hook)` for `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` — the find skill's fallback block doesn't render in any non-tokensave-entry-point case anyway.
 
-3. **Resolve toggles** in every file:
+3. **Resolve toggles + placeholders in the correct order** (strip first, then substitute — so placeholder substitution doesn't waste work on about-to-be-stripped blocks):
+
+   **3a. Strip per-value tool-slot blocks first.** For each `<!-- TOGGLE:<slot>:<value> START/END -->` block (where `<slot>` is one of `code_research`, `precommit`, `ci`, `ai_reviewer`, `issue_tracker`): keep the block whose `<value>` matches `tools.<slot>` (with markers stripped) and remove all other `:<value>` blocks for the same slot **entirely** (content + markers). The `"Other"` UI choice resolves to `:custom`. If `tools.<slot>` does not match any `:<value>` block in the file (e.g., unknown tool, or no per-tool blocks exist), strip all `:<value>` blocks for that slot — never leave unresolved markers.
+
+   **3b. Resolve boolean toggles.**
    - For **ON** toggles: remove only the `<!-- TOGGLE:NAME START -->` and `<!-- TOGGLE:NAME END -->` marker lines (keep the content between). Remove `<!-- TOGGLE:NAME:off START/END -->` blocks **entirely** (content + markers).
    - For **OFF** toggles: remove `<!-- TOGGLE:NAME START/END -->` blocks **entirely**. Remove only the `<!-- TOGGLE:NAME:off START/END -->` marker lines (keep their content).
    - For **file-scoped** OFF toggles (e.g., `contributing_md`, `confidentiality_rule`), delete the listed files entirely BEFORE the copy step (or skip during copy).
-   - After all toggle resolution, **collapse triple-or-more consecutive blank lines** into double blank lines in every text file (regex: `\n\n\n+` → `\n\n`).
+
+   **3c. Substitute placeholders** from step 2 (above). Per-tool placeholders are now guaranteed to land only inside the kept-tool block — substitute them in place.
+
+   **3d. Collapse triple-or-more consecutive blank lines** into double blank lines in every text file (regex: `\n\n\n+` → `\n\n`).
 
 4. **Strip lingering bootstrap notes (safety net).** Some templates may contain `> _Bootstrap note: ..._` blockquotes from earlier authoring iterations. Remove any lines matching `^> _Bootstrap note:.*_$` from all generated files. Belt-and-suspenders with the template cleanup.
 
@@ -207,23 +237,99 @@ On `apply`:
 
 7. **Merge global additions.** If `tokensave_entry_point` or `memory_system` is ON, append `claude-code-templates/_core/global-template/CLAUDE.md.additions` to `~/.claude/CLAUDE.md`. Detect existing sections by H2 heading match (`## MANDATORY: No Explore Agents When Tokensave Is Available`, `## Auto memory`); if found, ask before overwriting.
 
-7a. **Install the tokensave-first hook GLOBALLY** (only if `tokensave_entry_point` is ON):
-   - **Why not project-local?** Empirical finding: tokensave's own `install` / `reinstall` logic reads project-local `settings.local.json` for hook templates and inherits the executable prefix from existing entries. If a project-local hook uses `python <path>`, tokensave copies that prefix and writes its own auto-registration as `python hook-stop` / `python hook-prompt-submit` — broken commands that block every subsequent Stop / UserPromptSubmit event. Installing globally sidesteps that template-inheritance entirely.
-   - Copy `claude-code-templates/_core/global-template/hooks/tokensave-first.py` → `~/.claude/hooks/tokensave-first.py` (create the dir if missing). If the destination already exists, ask before overwriting.
-   - Merge this PreToolUse entry into `~/.claude/settings.json` under `hooks.PreToolUse` (alongside any existing entries):
+7a. **Manage the code-research-first hook GLOBALLY.** This phase has TWO sub-phases that run independently:
+
+   - **Phase 7a-Cleanup (unconditional, runs first):** orphan-hook de-duplication + cleanup of stale `~/.claude/hooks/*-first.py` files left by a prior bind with a different `tools.code_research` value. Runs whether the new bind installs a hook or not — so a switch from `tokensave` to `none` (or a decline-to-install at the CLI probe in Phase 7a-Install) still cleans up the prior `tokensave-first.py`.
+   - **Phase 7a-Install (conditional, runs only if `tokensave_entry_point` is ON AND `tools.code_research !== "none"`):** render the template + write the new hook + register the matcher entry.
+
+   ---
+
+   **Phase 7a-Cleanup (unconditional):** iterate `hooks.PreToolUse[*].hooks[*].command` in `~/.claude/settings.json` (using the atomic-write pattern below). For each command whose path ends in `-first.py`:
+   - Compute the basename. Compare against the new bind's `<filename_basename>.py` — when there is NO new hook (`tools.code_research === "none"` or `tokensave_entry_point: false`), compare against the sentinel `None` so every existing `*-first.py` is treated as orphan.
+   - If basename matches the new bind's target → leave alone (idempotent re-bind).
+   - If basename is a DIFFERENT `*-first.py` (or the new target is `None` and any `*-first.py` exists) → ask the user before removing the array element AND `os.unlink`-ing the orphan file. Never leave two code-research-first hooks racing.
+   - **If the user declines orphan removal:** leave both file + entry intact, BUT surface a prominent warning in the bind summary: ⚠️ *"Stale `<old-basename>.py` hook from a previous bind is still registered in `~/.claude/settings.json` and will fire on every Bash/Grep/Glob call — even though the current bind doesn't reference it. To remove later: edit `~/.claude/settings.json` and delete the matching `PreToolUse` entry, then `rm ~/.claude/hooks/<old-basename>.py`."* Repeat this warning at session-reload disclosure (Phase 3 step 13) so the user can't miss it.
+
+   ---
+
+   **Phase 7a-Install (conditional — `tokensave_entry_point` ON AND `tools.code_research !== "none"`):**
+
+   - **Why not project-local?** Empirical finding for the canonical tokensave case: tokensave's own `install` / `reinstall` logic reads project-local `settings.local.json` for hook templates and inherits the executable prefix from existing entries. If a project-local hook uses `python <path>`, tokensave copies that prefix and writes its own auto-registration as `python hook-stop` / `python hook-prompt-submit` — broken commands that block every subsequent Stop / UserPromptSubmit event. Installing globally sidesteps that template-inheritance entirely. The same reasoning applies preemptively to any code-research tool that ships its own hook generator: keep ours global, out of the per-project template-inheritance surface.
+
+   **⚠️ The installed hook is ADVISORY ENFORCEMENT — NOT A SECURITY BOUNDARY.** It fails open on JSON decode errors, unknown DETECTION_MODE, OSError, and any other unexpected exception. Treat it as a guidance nudge that routes Claude to the chosen code-research tool when the tool is available; don't treat it as a sandbox.
+   - **Read the profile.** `claude-code-templates/_core/global-template/hooks/code-research-profiles.json` defines per-tool profiles keyed by the value of `tools.code_research`. Pick the profile matching the user's choice. If the user picked `"Other"`, use the `custom` profile and substitute the user-supplied name into the placeholders below.
+   - **`tools.code_research === "none"`** — the profile has `_skip_install: true`. Do not render the template, do not write any hook. The unconditional Phase 7a-Cleanup above has already removed any stale `*-first.py` matcher entry + orphan hook file from a prior bind. CLAUDE.md and `/find` resolve their `:none` blocks and route through Grep/Glob/Read.
+   - **Compute custom-case placeholders** (only if the user picked `"Other"` — i.e., `tools.code_research === "custom"` in the resolved manifest):
+     - Read the user-supplied name from `tool_names.code_research` (or `otherTools.code_research` in the configurator state pre-emit).
+     - **Sanitize ASCII-only:** drop any character outside `[A-Za-z0-9 _-]` from the source name BEFORE transforming. Characters like `.`, `/`, `\`, `:`, `;`, quotes, and any Unicode letter are dropped. Unicode letters are not accepted (Windows + Python identifier limits + JSON-config sanity). If the resulting source is empty, reject and re-prompt the user.
+     - `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` ← sanitized source `.toLowerCase()` with runs of non-alphanumeric characters collapsed to single `-` and leading/trailing `-` stripped. Example: `"My Awesome Indexer"` → `"my-awesome-indexer"`.
+     - **Reject** the kebab result if ANY of the following are true (re-prompt the user for a cleaner name):
+       - empty (sanitization stripped everything)
+       - starts with a digit (Python-identifier-unfriendly)
+       - length < 2 (single-char names produce ambiguous `a-first.py` files)
+       - length > 40 (filename / settings.json sanity)
+       - collides with a built-in profile key: `tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep`, `none`, `custom` (would shadow built-in behavior)
+       - collides with a Python keyword (`if`, `for`, `class`, etc. — produces a syntactically valid filename but a confusing display name)
+       - matches a **Windows reserved device name** (case-insensitive): `con`, `prn`, `aux`, `nul`, `com1`–`com9`, `lpt1`–`lpt9`. These names produce filenames Windows refuses to open (`con-first.py` is unwritable).
+     - `{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}` ← sanitized source `.toUpperCase()` with runs of non-alphanumeric characters collapsed to single `_` and leading/trailing `_` stripped. Example: `"My Awesome Indexer"` → `"MY_AWESOME_INDEXER"`. Same reject rules.
+     - These feed `filename_basename`, `bypass_marker`, and `detection_target` in the `custom` profile.
+   - **Probe tool availability at bind time** (parity between detection modes):
+     - For `cli_available` (ast-grep / sourcegraph / semgrep / custom-by-default): run `shutil.which(detection_target)` equivalent. On Windows, confirm `PATHEXT` includes the binary's extension (`.exe` / `.cmd` / `.bat` / `.ps1`); some Scoop / npm shims register `.ps1` only and need `PATHEXT` set.
+     - For `walk_up` (tokensave / ctags): walk up from the project root looking for `detection_target` (e.g., `.tokensave/tokensave.db`, `tags`). The marker file must exist somewhere in the project's ancestor chain.
+   - **If the tool is NOT available** (CLI missing OR walk_up marker missing), do NOT silently install the hook — warn the user: "The code-research tool `<DISPLAY_NAME>` is not available for this project (`<reason>`: CLI not on PATH / no marker file found). The hook will be installed but will fail-open on every Bash/Grep/Glob call until the tool is set up (`<tip>`: install `<binary>` / run `tokensave init`). Continue anyway? [y/N]". If the user declines, set `tokensave_entry_point: false` for this bind and skip the hook install (cleanup still runs unconditionally above).
+   - **Validate the resolved profile against the inline `_schema` contract** in `code-research-profiles.json`:
+     - Required fields present (`filename_basename`, `bypass_marker`, `detection_mode`, `detection_target`, `sequence_bullets`).
+     - `detection_mode` is one of `walk_up` or `cli_available`.
+     - `bypass_marker` matches `^[A-Z][A-Z0-9_]*_BYPASS:$`.
+     - `detection_target` does NOT contain `..` (in any form — `..`, `../foo`, `..\foo`, `foo/../bar`, `foo\..\bar`; check after replacing `\` with `/` then splitting on `/`), absolute path prefixes (`/`, `\`, drive letters `X:`), or null bytes. Path-traversal guard: the hook's `detect_walk_up` also re-checks this at runtime as defense-in-depth.
+     - If validation fails, abort with a clear error message naming the offending field.
+   - **Resolve nested placeholders inside the profile FIRST.** The `custom` profile's values themselves contain `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` / `{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}` / `{{TOOLS_CODE_RESEARCH_URL}}` — substitute these INTO the profile data structure BEFORE using it to substitute placeholders into the hook template. Resolution order: (a) compute kebab/upper-snake/URL values; (b) substitute them into the `custom` profile's `filename_basename`, `bypass_marker`, `detection_target`, `sequence_bullets`, `url`; (c) THEN substitute the resulting profile values into `code-research-first.py.template`'s placeholders. Skip step (b) for built-in profiles (their values are already literal).
+   - **Python-string-escape user-flowing substitutions.** When substituting any user-derived value into a Python string literal in the hook template, use `json.dumps(value)` (or equivalent). The flowing values are:
+     - `{{TOOLS_CODE_RESEARCH_NAME}}` → `DISPLAY_NAME = "..."` literal. Apply `json.dumps` so embedded `"`, `\`, or newlines produce valid Python.
+     - `{{TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS}}` → `SEQUENCE_BULLETS = """..."""` triple-quoted literal. For the `custom` profile (where bullets reference `{{TOOLS_CODE_RESEARCH_URL}}` — itself user-supplied), additionally check the substituted result does NOT contain `"""` OR `'''` (either triple-quote terminator — defense against a future quoting refactor). If it does, escape the inner quote characters before substitution.
+     - `{{TOOLS_CODE_RESEARCH_URL}}` → embedded inside `SEQUENCE_BULLETS` for `custom`. Same triple-quote check applies; built-in profiles use static URLs (no escaping needed).
+     - Built-in profile names (`tokensave`, `ast-grep`, `Sourcegraph`, `ctags`, `Semgrep`) and built-in URLs are pre-validated as safe — escape transforms produce no-op output.
+   - **Render the template.** Read `claude-code-templates/_core/global-template/hooks/code-research-first.py.template`. Substitute:
+     - `{{TOOLS_CODE_RESEARCH_NAME}}` ← profile display name (the JSON key for built-in tools; user-supplied name for custom)
+     - `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` ← profile `bypass_marker`
+     - `{{TOOLS_CODE_RESEARCH_DETECTION_MODE}}` ← profile `detection_mode` (`walk_up` or `cli_available`)
+     - `{{TOOLS_CODE_RESEARCH_DETECTION_TARGET}}` ← profile `detection_target`
+     - `{{TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS}}` ← profile `sequence_bullets` (multi-line; embed verbatim inside the template's triple-quoted string)
+   - **Write the rendered hook ATOMICALLY.** Destination: `~/.claude/hooks/<filename_basename>.py` (from the profile). E.g., tokensave → `~/.claude/hooks/tokensave-first.py`; ast-grep → `~/.claude/hooks/ast-grep-first.py`; custom `"my-tool"` → `~/.claude/hooks/my-tool-first.py`. Create `~/.claude/hooks/` if missing. Atomic-write pattern: write the rendered content to `~/.claude/hooks/<filename_basename>.py.tmp`, `fsync`, then `os.replace(<...>.py.tmp, <...>.py)`. If the destination already exists AND its content diverges from the rendered output (user hand-edited), show the diff and ask before overwriting; preserve user customisation if they decline.
+   - **Register the hook** in `~/.claude/settings.json` under `hooks.PreToolUse` (alongside any existing entries):
      ```json
      {
        "matcher": "Grep|Glob|Bash",
        "hooks": [
-         { "type": "command", "command": "py \"~/.claude/hooks/tokensave-first.py\"" }
+         { "type": "command", "command": "py \"~/.claude/hooks/<filename_basename>.py\"" }
        ]
      }
      ```
-     On Windows, expand `~` to the absolute path (e.g., `py "C:/Users/<name>/.claude/hooks/tokensave-first.py"`). On macOS/Linux, swap `py` for `python3`.
-   - **Do NOT** add the hook entry to project-local `settings.local.json` or the project's `.claude/settings.json`. That triggers the tokensave template-inheritance bug.
-   - **Do NOT** add `python:*` to project-local permissions allowlist (no longer needed — hook runs globally with `py` launcher).
+     **Path expansion:** `~` is NOT auto-expanded by every Claude Code hook executor. On ALL platforms (Windows / macOS / Linux), expand `~` to the absolute home path (e.g., Windows: `C:/Users/<name>/...`, POSIX: `/home/<name>/...`). Use `os.path.expanduser` equivalent at bind time. On Windows, the launcher is `py`; on macOS/Linux, swap to `python3`. **ATOMIC write pattern for settings.json:** parse → mutate → write to `settings.json.tmp` → `fsync` → `os.replace`. Never write directly to `settings.json` (crash mid-write would corrupt the user's global config). **Preserve unrelated entries:** mutate only the targeted PreToolUse entry, write back with `indent=2`. Never rewrite sibling matchers (memory hook, telemetry hooks, etc.) — leave them byte-identical.
+   - **Concurrent-bind safety.** Two parallel Claude sessions binding different projects on the same machine could race on `~/.claude/settings.json`. If you suspect a concurrent bind (e.g., file mtime changed since you read it), re-read + re-mutate before writing.
+     - **mtime granularity caveat:** FAT32/exFAT external drives have 2-second mtime granularity, and Windows can return cached stat values. An mtime-only check is unreliable below 2-second resolution. For higher confidence, also compare `(size, sha256)` against the read snapshot, or apply an OS-level advisory file lock (`fcntl.flock` on POSIX, `msvcrt.locking` on Windows).
+     - For pessimistic safety, document the recommendation in the bind summary: "do not run setup in two projects simultaneously."
+   - **Pre-write settings.json validity check + shape normalization + backup.** Before any mutation:
+     - (a) If `~/.claude/settings.json` is MISSING (fresh `~/.claude/` install / first-time user), create it with the minimal baseline `{ "hooks": { "PreToolUse": [] } }` — do NOT abort, this is a normal first-run case. Skip the backup step in this branch (nothing to back up). Proceed to step (d).
+     - (b) If the file exists, parse it — if `json.JSONDecodeError`, abort with "Existing settings.json is malformed; please fix it before re-running setup" (do NOT overwrite a corrupted file).
+     - (c) Copy the parsed file to `~/.claude/settings.json.bak` using `shutil.copy2` (preserves mode bits via `copystat`) so the user can recover if the bind somehow lands a bad write. Atomic-write the backup itself (`.bak.tmp` → fsync → `os.replace` to `.bak`) to avoid a half-written snapshot.
+     - (d) **Normalize the in-memory shape before iterating.** A hand-curated `settings.json` may legitimately have any of: `{}`, `{"hooks": null}`, `{"hooks": {}}`, or `{"hooks": {"PreToolUse": null}}` — all valid JSON, all accepted by Claude Code. Coerce to the canonical shape WITHOUT clobbering other keys:
+       ```python
+       data.setdefault("hooks", {})
+       if data["hooks"] is None: data["hooks"] = {}
+       data["hooks"].setdefault("PreToolUse", [])
+       if data["hooks"]["PreToolUse"] is None: data["hooks"]["PreToolUse"] = []
+       if not isinstance(data["hooks"]["PreToolUse"], list):
+           abort with "settings.json has hooks.PreToolUse set to a non-list value; fix it manually before re-running setup"
+       ```
+       This guarantees Cleanup's iteration and Install's append don't crash with `KeyError` or `TypeError`. Run this normalization step ONCE per Phase 7a invocation, before either Cleanup or Install touches the data.
+   - **Disk-full / read-only-home handling.** Wrap the atomic-write step in a try/except. On `OSError` / `PermissionError` / `OSError(errno.ENOSPC)`: clean up any leftover `.tmp` file, name the path in the error message, and suggest a remediation ("check disk free space" / "your `~/.claude/` directory appears to be read-only — check ownership and `chmod`"). Do NOT leave orphan `.tmp` files on disk.
+   - **`cli_available` re-probe at runtime.** The bind-time `shutil.which` probe verifies the tool is installed when the hook is rendered — but PATH may differ between the bind shell and Claude Code's spawned shell (especially on Windows where `py` inherits a different env). The hook RE-probes via its own `shutil.which` at runtime, so a tool that was uninstalled between bind and hook execution will simply fail-open. Document this in the bind summary as "the hook re-checks tool availability per call; it will not block if the tool is uninstalled later."
+   - **(Orphan cleanup happens in Phase 7a-Cleanup above — runs UNCONDITIONALLY, including when `_skip_install: true` or `tokensave_entry_point: false`.)**
+   - **Do NOT** add the hook entry to project-local `settings.local.json` or the project's `.claude/settings.json`. Even for tools that don't have tokensave's template-inheritance bug, project-local hook installation is forbidden by convention so users can switch projects without per-project hook surgery.
+   - **Do NOT** add `python:*` to project-local permissions allowlist (hook runs globally with the `py` launcher).
 
-7a. **Install the status line** (only if `statusline_config` is ON):
+7b. **Install the status line** (only if `statusline_config` is ON):
    - Copy `claude-code-templates/_core/global-template/statusline-command.sh.template` → `~/.claude/statusline-command.sh` (drop the `.template` suffix). If the file already exists, ask before overwriting.
    - Make it executable: `chmod +x ~/.claude/statusline-command.sh` (no-op on Windows).
    - Merge this block into `~/.claude/settings.json`:

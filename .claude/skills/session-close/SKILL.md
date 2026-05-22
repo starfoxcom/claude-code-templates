@@ -58,17 +58,17 @@ date '+%Y-%m-%d_%H-%M'
 
 If applicable, update `CLAUDE.md`, `README.md`, `CHANGELOG.md`, or the touched bundle's `bundle.toggles.md`/README with relevant changes. Clearly indicate which sections changed.
 
-### Tokensave adherence metric
+### Code-research adherence metric
 
 Before signaling session close, count how often code-research happened through tokensave vs through Grep/Glob/raw-grep this session:
 
-- **tokensave_* calls this session:** look at your tool-use history and count any call matching `tokensave_*` (search, context, callers, callees, impact, body, files, read, outline, etc.).
+- **tokensave calls this session:** look at your tool-use history and count any call matching `tokensave_*` (search, context, callers, callees, impact, body, files, read, outline, etc.).
 - **Grep + Glob calls this session:** count `Grep` + `Glob` tool calls + any Bash command containing `grep `, `rg `, `ag `, `ack `, `ripgrep ` UNLESS the command had a `# TOKENSAVE_BYPASS:` marker.
 - **Adherence ratio** = `tokensave_calls / (tokensave_calls + grep_glob_calls)` — express as a percentage.
 
 Report it like:
 
-> **Tokensave adherence this session: 7 tokensave calls / 1 grep fallback → 87%.** (Bypass reason: <if any>.)
+> **tokensave adherence this session: 7 tokensave calls / 1 grep fallback → 87%.** (Bypass reason: <if any>.)
 
 If the ratio is under 70% AND there were no documented bypass reasons, surface that as a regression to fix next session. The hook should have prevented unjustified Grep calls; if any got through, note why.
 
