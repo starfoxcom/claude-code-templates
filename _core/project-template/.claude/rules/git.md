@@ -109,9 +109,11 @@ Verify your current branch BEFORE editing any file whose correct home depends on
 | File category | Correct home |
 |---|---|
 | `.github/workflows/*` (live workflows) | `hotfix/<n>` from `{{MAIN_BRANCH}}` |
-| `_core/project-template/**`, `_core/global-template/**` (canonical templates) | `feature/<n>` or `chore/<n>` from `{{DEV_BRANCH}}` |
+| Canonical / template files the project ships verbatim to downstream consumers (shipped config templates, reference files copy-pasted into bind output, etc.) | `feature/<n>` or `chore/<n>` from `{{DEV_BRANCH}}` |
+<!-- TOGGLE:branching_model_gitflow START -->
 | Release-prep fixes (reviewer findings on an open release) | `release/<v>` (already cut from `{{DEV_BRANCH}}`) |
-| Lockstep pairs (e.g. configurator JSX ↔ inlined HTML, canonical ↔ live mirror) | Whichever branch the pair already lives on; edit both |
+<!-- TOGGLE:branching_model_gitflow END -->
+| Lockstep pairs (e.g. UI source ↔ inlined bundle, canonical ↔ live mirror) | Whichever branch the pair already lives on; edit both |
 
 - Before the first edit of a task, run `git branch --show-current`. Switch first, branch second, then edit.
 - Never edit on the wrong branch and rely on `git stash → checkout → branch → stash pop` to recover. The stash dance works mechanically but hides the scope violation that put you on the wrong branch, and trains you to skip verification next time. If you find yourself reaching for it, pause — that's the signal that the up-front check got skipped.
@@ -119,6 +121,7 @@ Verify your current branch BEFORE editing any file whose correct home depends on
 
 ---
 
+<!-- TOGGLE:branching_model_gitflow START -->
 ## Cascade after every merge to `{{MAIN_BRANCH}}`
 
 Gitflow's "hotfix merges to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`" is a **discipline you execute, not a GitHub feature.** No platform auto-cascades from `{{MAIN_BRANCH}}` to `{{DEV_BRANCH}}` for you. Same applies to `release/*` merges — they also need a cascade-to-`{{DEV_BRANCH}}` PR.
@@ -142,6 +145,7 @@ gh pr create --base {{DEV_BRANCH}} --head chore/cascade-<hotfix-or-release-name>
 - **The hotfix/release is not "done" until step 3 completes.** Mark the task complete only after the cascade PR is merged and its branch is cleaned up. "Merged to `{{MAIN_BRANCH}}`" is half the job.
 - **Bundle multiple back-to-back hotfixes** into one cascade PR only if no `{{DEV_BRANCH}}` work landed between them. Otherwise each gets its own cascade PR — merge history stays readable.
 - **Drift is silent and compounds.** A hotfix that fixes a workflow file on `{{MAIN_BRANCH}}` but never lands on `{{DEV_BRANCH}}` means every PR off `{{DEV_BRANCH}}` runs under stale workflow logic, and the next release branch cut from `{{DEV_BRANCH}}` starts from the wrong baseline.
+<!-- TOGGLE:branching_model_gitflow END -->
 
 ---
 
