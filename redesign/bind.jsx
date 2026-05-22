@@ -129,32 +129,8 @@ function BindFolio() {
   }
 
   function buildManifest() {
-    // Resolve each tool slot to its `key` (lowercase, profile-lookup-safe form)
-    // for built-in options, or `custom` for the "Other (specify)" case.
-    // Also resolve the URL from the catalog for built-ins; user-supplied for Other.
-    const resolvedTools = {};
-    const resolvedToolUrls = {};
-    const resolvedToolNames = {}; // human-readable display name (for UI / paste prompts)
-
-    Object.entries(tools).forEach(([slotId, picked]) => {
-      const slot = window.TOOL_SLOTS.find(s => s.id === slotId);
-      const pick = slot && slot.options.find(o => (o.name === picked || o.key === picked));
-      if (pick && pick.key !== "custom") {
-        // Built-in option — emit its canonical key + URL
-        resolvedTools[slotId] = pick.key || pick.name.toLowerCase();
-        if (pick.url) resolvedToolUrls[slotId] = pick.url;
-        resolvedToolNames[slotId] = pick.name;
-      } else {
-        // "Other (specify)" — emit user-supplied name + URL
-        const userName = otherTools[slotId] || "unspecified";
-        resolvedTools[slotId] = "custom";
-        if (otherToolUrls[slotId]) resolvedToolUrls[slotId] = otherToolUrls[slotId];
-        resolvedToolNames[slotId] = userName;
-      }
-    });
-
     return {
-      version: "v1.3.0",
+      version: "1.1.0",
       generated_at: new Date().toISOString(),
       mode,
       bundle: bundleId,
@@ -169,9 +145,17 @@ function BindFolio() {
         conversation_language: project.conversation_language,
         timezone: project.timezone,
       },
-      tools: resolvedTools,
-      tool_names: resolvedToolNames,
-      tool_urls: resolvedToolUrls,
+      tools: Object.fromEntries(
+        Object.entries(tools).map(([k, v]) => [
+          k,
+          v === "Other" ? `other: ${otherTools[k] || "unspecified"}` : v,
+        ])
+      ),
+      tool_urls: Object.fromEntries(
+        Object.entries(tools)
+          .filter(([k, v]) => v === "Other" && otherToolUrls[k])
+          .map(([k]) => [k, otherToolUrls[k]])
+      ),
       toggles: Object.fromEntries(
         Object.entries(toggleState).map(([k, v]) => {
           if (mode === "discovery") {
@@ -205,26 +189,14 @@ function BindFolio() {
     }
     const zip = new window.JSZip();
     zip.file("manifest.json", JSON.stringify(manifest, null, 2));
-    zip.file("VERSION", `${manifest.version}\n`);
+    zip.file("VERSION", "v1.1.0\n");
 
     // SETUP.md — the orchestration prompt Claude reads in step 2.
-    // We TRY to fetch the canonical SETUP.md from the same origin (GitHub
-    // Pages deployment), since it's the authoritative version. If fetch
-    // fails (file:// protocol during local dev, offline, CORS), we fall
-    // back to the inline stub which captures the v1.3 contract.
-    let setupMdContent;
-    try {
-      const res = await fetch("./SETUP.md");
-      if (res.ok) {
-        setupMdContent = await res.text();
-      } else {
-        throw new Error(`fetch returned ${res.status}`);
-      }
-    } catch (e) {
-      // Inline fallback — accurate to the v1.3 agnostified contract.
-      setupMdContent = buildSetupMd(manifest, bundleId);
-    }
-    zip.file("SETUP.md", setupMdContent);
+    // This is a self-contained stub keyed off the manifest the user just
+    // composed; in production the page would fetch the canonical
+    // _core/SETUP.md from the upstream repo. The stub below carries the
+    // same contract so step 2 still works against this zip.
+    zip.file("SETUP.md", buildSetupMd(manifest, bundleId));
 
     // bundles/<bundleId>/bundle.toggles.md — per-bundle defaults Claude
     // walks during the interview.
@@ -232,7 +204,7 @@ function BindFolio() {
       buildBundleTogglesMd(bundleId, bundleDefaults(bundleId)));
 
     zip.file("README.txt",
-`claude-code-templates ${manifest.version} — bundle: ${bundleId}
+`claude-code-templates v1.1.0 — bundle: ${bundleId}
 Generated: ${manifest.generated_at}
 Toggles ON: ${onCount}    Toggles ASK: ${askCount}    Diverged from default: ${changes}
 
@@ -253,7 +225,7 @@ can copy them into your project root during step 2 apply.
     zip.file("PASTE-TO-CLAUDE.md", buildPasteText(manifest, bundleId));
 
     const blob = await zip.generateAsync({ type: "blob" });
-    triggerDownload(blob, `claude-code-templates-${bundleId}-${manifest.version}.zip`);
+    triggerDownload(blob, `claude-code-templates-${bundleId}-v1.1.0.zip`);
     toast("Bound. Volume downloaded.");
   }
 
@@ -856,7 +828,7 @@ can copy them into your project root during step 2 apply.
               </button>
             </div>
             <div className="bind-filename mono">
-              claude-code-templates-{bundleId}-{buildManifest().version}.zip
+              claude-code-templates-{bundleId}-v1.1.0.zip
             </div>
             <div className="bind-preview-label tag">Archive contents</div>
             <pre className="bind-preview mono fast">{buildZipManifestPreview(buildManifest(), fileCount)}</pre>
@@ -2007,15 +1979,11 @@ function CleanupCallout() {
 // ── Utils ───────────────────────────────────────────────────────────────
 
 function buildSetupMd(manifest, bundleId) {
-  return `# SETUP.md — claude-code-templates ${manifest.version} orchestration prompt (FALLBACK)
+  return `# SETUP.md — claude-code-templates v1.1.0 orchestration prompt
 
-> **This is the inline fallback stub.** The configurator tries to fetch the canonical
-> \`SETUP.md\` from the GitHub Pages deployment at bundle time; if that fetch fails
-> (file:// protocol, offline, CORS), you get this stub instead. The stub captures the
-> same contract as the canonical but is intentionally concise. If you can,
-> read the canonical at
-> https://github.com/starfoxcom/claude-code-templates/blob/main/SETUP.md — it's
-> the authoritative source and ships with worked examples.
+> This file is read by Claude Code at the start of step 2 (after the user
+> pastes the bootstrap brief). It tells Claude how to apply the configuration
+> in \`manifest.json\` into the user's project root atomically.
 
 ## Phase 1 — Validate
 
@@ -2026,10 +1994,9 @@ function buildSetupMd(manifest, bundleId) {
    \`bundle\`, \`project.name\`, \`project.repo_url\`, \`project.main_branch\`,
    \`project.dev_branch\`, \`toggles\`. Missing fields → run a short interview to fill them.
 3. Cross-check every toggle key against the catalog. Unknown keys → reject.
-4. Resolve \`ask\` toggles. For \`tokensave_entry_point\`, probe the chosen tool
-   per its profile in \`_core/global-template/hooks/code-research-profiles.json\`
-   (walk_up marker vs cli_available probe). Force \`false\` when
-   \`tools.code_research === "none"\` (the profile has \`_skip_install: true\`).
+4. Resolve \`ask\` toggles based on project signals (e.g. the code_research
+   toggle resolves to ON only if the selected tool reports ready via its
+   status probe; architecture scaffold only if clear layers exist).
 
 ## Phase 2 — Plan
 
@@ -2037,12 +2004,8 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
 
 - Selected bundle and final toggle state (defaults + overrides + ask fills)
 - Substituted placeholders (\`{{PROJECT_NAME}}\`, \`{{REPO_URL}}\`,
-  \`{{MAIN_BRANCH}}\`, \`{{DEV_BRANCH}}\`,
-  \`{{TOOLS_CODE_RESEARCH_NAME}}\`, \`{{TOOLS_CODE_RESEARCH_URL}}\`,
-  \`{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}\`, \`{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}\`)
+  \`{{MAIN_BRANCH}}\`, \`{{DEV_BRANCH}}\`, etc.)
 - Per-toggle ON/OFF and what files/sections it affects
-- Per-tool-slot value resolution: which \`:code_research:<value>\` blocks
-  will be KEPT in each canonical template, which STRIPPED
 - Every file that will be created, every section that will be stripped,
   every file that will be deleted
 - The proposed commit message: \`chore(claude): bootstrap Claude Code setup\`
@@ -2053,112 +2016,21 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
 
 1. Copy every file from \`./claude-code-templates/_core/project-template/\`
    into the project root, preserving the tree.
-2. **First** resolve per-value toggle blocks (so unused tool branches are
-   stripped before substitution wastes work on them):
-   - For each \`<!-- TOGGLE:<slot>:<value> START/END -->\` block (slots:
-     \`code_research\` / \`precommit\` / \`ci\` / \`ai_reviewer\` / \`issue_tracker\`):
-     keep the block whose \`<value>\` matches \`manifest.tools.<slot>\`, strip
-     all others entirely. "Other (specify)" UI choice resolves to \`:custom\`.
-3. **Then** resolve boolean toggle markers:
+2. Substitute placeholders (UPPER_SNAKE_CASE only — doesn't collide with
+   GitHub Actions \`\${{ ... }}\` expressions).
+3. Resolve toggle markers:
    - ON: keep content, strip marker lines only.
    - OFF: remove block entirely (including marker lines).
    - \`:off\` inverse markers do the opposite.
-4. **Then** substitute placeholders (UPPER_SNAKE_CASE only — doesn't collide
-   with GitHub Actions \`\${{ ... }}\` expressions). Tool-slot placeholders
-   (\`{{TOOLS_<SLOT>_NAME}}\`, \`_URL\`, \`_BYPASS_MARKER\`, \`_NAME_KEBAB\`)
-   resolve from \`manifest.tools\` + the profile JSON.
-5. After all resolution, collapse triple blank lines.
-6. Render tools section (\`{{STACK_COMMANDS_ALLOWLIST}}\` etc.) from
+   - After all resolution, collapse triple blank lines.
+4. Render tools section (\`{{STACK_COMMANDS_ALLOWLIST}}\` etc.) from
    \`manifest.tools\` and \`manifest.project.stack_commands\`.
-7. Merge global additions into \`~/.claude/CLAUDE.md\` if the memory or
+5. Merge global additions into \`~/.claude/CLAUDE.md\` if the memory or
    code-research toggles are ON. Ask before overwriting existing sections.
-8. Initialize per-project memory at
+6. Initialize per-project memory at
    \`~/.claude/projects/<slug>/memory/MEMORY.md\` from the template.
-
-## Phase 7a — Manage the code-research-first hook (GLOBAL)
-
-This phase has TWO sub-phases that run independently:
-
-- **Phase 7a-Cleanup (unconditional, runs first):** orphan-hook de-duplication
-  + cleanup of stale \`*-first.py\` hook entries from prior binds with a
-  different \`tools.code_research\` value. Runs whether the new bind installs a
-  hook or not — so a switch from \`tokensave\` to \`none\` (or a
-  decline-to-install) still cleans up the prior \`tokensave-first.py\`.
-- **Phase 7a-Install (conditional, runs only if \`tokensave_entry_point\` is
-  ON AND \`manifest.tools.code_research !== "none"\`):** render the template,
-  write the new hook, register the matcher entry.
-
----
-
-**Phase 7a-Cleanup (unconditional):** iterate
-\`hooks.PreToolUse[*].hooks[*].command\` in \`~/.claude/settings.json\`
-(atomic-write pattern: parse → mutate → write to \`.tmp\` → fsync →
-\`os.replace\`). Before iterating, normalize the in-memory shape — \`{}\`,
-\`{"hooks": null}\`, \`{"hooks": {"PreToolUse": null}}\` all coerce to the
-canonical shape without clobbering sibling keys. Missing
-\`~/.claude/settings.json\` is created with \`{"hooks": {"PreToolUse": []}}\`
-(first-time-user case; no abort, no backup). For each command whose path ends
-in \`-first.py\`:
-
-- Compute the basename. Compare against the new bind's
-  \`<filename_basename>.py\` — or against the sentinel \`None\` when there is
-  no new hook to install (\`tokensave_entry_point: false\` OR
-  \`tools.code_research === "none"\`), so every existing \`*-first.py\` is
-  treated as orphan.
-- If basename matches the new bind's target → leave alone (idempotent re-bind).
-- If basename is a DIFFERENT \`*-first.py\` (or the new target is \`None\`) →
-  ask the user before removing the array element AND \`os.unlink\`-ing the
-  orphan file. Never leave two code-research-first hooks racing.
-- **If the user declines orphan removal:** leave both file + entry intact, BUT
-  surface a prominent ⚠️ warning in the bind summary naming the stale basename
-  so the user can remove it manually later.
-
----
-
-**Phase 7a-Install (conditional — only if \`tokensave_entry_point\` is ON AND
-\`manifest.tools.code_research !== "none"\`):**
-
-1. Read the profile for \`manifest.tools.code_research\` from
-   \`_core/global-template/hooks/code-research-profiles.json\`.
-2. For the \`custom\` profile (when user picked "Other"): resolve nested
-   placeholders FIRST — compute \`NAME_KEBAB\` and \`NAME_UPPER_SNAKE\` from the
-   user-supplied name (ASCII-sanitize, reject empty / digit-leading /
-   over-40-chars / under-2-chars / collides-with-built-in-key, re-prompt on
-   failure), substitute into the profile's values.
-3. Substitute the profile's resolved values into
-   \`_core/global-template/hooks/code-research-first.py.template\`. Use
-   \`json.dumps()\` (or equivalent) when substituting \`{{TOOLS_CODE_RESEARCH_NAME}}\`
-   into the Python string literal \`DISPLAY_NAME = "..."\`.
-   **Triple-quote collision guard for \`SEQUENCE_BULLETS\` (custom profile only):**
-   the template line \`SEQUENCE_BULLETS = """{{TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS}}"""\`
-   uses a triple-quoted Python literal. For the \`custom\` profile, \`sequence_bullets\`
-   references \`{{TOOLS_CODE_RESEARCH_URL}}\` which is user-supplied free-text. If
-   the resolved bullets string contains \`"""\` or \`'''\` (either triple-quote
-   terminator), the rendered Python either breaks at load time OR breaks out of
-   the literal — an arbitrary-code surface against the user's own machine.
-   Before substituting, scan the resolved \`sequence_bullets\` for \`"""\` and \`'''\`;
-   if either appears, escape the offending quotes (insert a zero-width joiner
-   between the three characters, or fall back to \`json.dumps()\`-ing the bullets
-   and assigning to a regular double-quoted string). Built-in profile URLs are
-   pre-validated as safe — no guard needed for tokensave / ast-grep / sourcegraph
-   / ctags / semgrep.
-4. Write the result to \`~/.claude/hooks/<filename_basename>.py\` ATOMICALLY
-   (write to \`<filename_basename>.py.tmp\`, fsync, \`os.replace\` to final).
-   Ask before overwriting; show a diff if the existing file was hand-edited.
-5. Register in \`~/.claude/settings.json\` under \`hooks.PreToolUse\`. ATOMIC
-   write pattern: parse → mutate → write to \`.tmp\` → fsync → \`os.replace\`.
-   Preserve unrelated user customisation (sibling matchers + user-added hooks).
-
-**Hook is advisory, not a security boundary** — it fails open on JSON decode
-errors and unknown detection modes. Document this in the bind summary so the
-user knows the hook is best-effort enforcement.
-
----
-
-**After both sub-phases (always run):**
-
-6. Atomic commit. No \`Co-Authored-By:\` line. No push.
-7. Self-verify: zero orphaned TOGGLE markers; zero unresolved
+7. Atomic commit. No \`Co-Authored-By:\` line. No push.
+8. Self-verify: zero orphaned TOGGLE markers; zero unresolved
    \`{{PLACEHOLDERS}}\`; JSON files parse cleanly.
 
 ## Phase 4 — Cleanup
@@ -2208,9 +2080,9 @@ function buildBundleTogglesMd(bundleId, defaults) {
 }
 
 function buildPasteText(manifest, bundleId) {
-  return `# claude-code-templates ${manifest.version} — bootstrap brief
+  return `# claude-code-templates v1.1.0 — bootstrap brief
 
-Please bootstrap claude-code-templates ${manifest.version} in this project.
+Please bootstrap claude-code-templates v1.1.0 in this project.
 
 PREREQUISITE — the user has already downloaded the configured bundle and
 unzipped it at the project root, so a \`./claude-code-templates/\` folder
@@ -2233,7 +2105,7 @@ ${JSON.stringify(manifest, null, 2)}
 \`\`\`
 
 Land files atomically with a single commit:
-\`chore: install claude-code-templates ${manifest.version} (${manifest.bundle})\`
+\`chore: install claude-code-templates v1.1.0 (${manifest.bundle})\`
 `;
 }
 
@@ -2250,7 +2122,7 @@ function buildZipManifestPreview(manifest, fileCount) {
   const has = (id) => togglesOn.includes(id);
 
   const lines = [
-    `claude-code-templates-${manifest.bundle}-${manifest.version}.zip   (~${fileCount} files)`,
+    `claude-code-templates-${manifest.bundle}-v1.1.0.zip   (~${fileCount} files)`,
     `│`,
     `├── SETUP.md                          ← Claude reads this in step 2`,
     `├── README.md`,
@@ -2260,7 +2132,7 @@ function buildZipManifestPreview(manifest, fileCount) {
     `├── CHANGELOG.md`,
     `├── CONTRIBUTING.md`,
     `├── LICENSE`,
-    `├── VERSION                           ${manifest.version}`,
+    `├── VERSION                           v1.1.0`,
     `├── manifest.json                     ← resolved config from folio I`,
     `│`,
     `├── bundles/`,

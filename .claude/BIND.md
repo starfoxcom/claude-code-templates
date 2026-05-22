@@ -41,7 +41,7 @@ Bundle 2 defaults kept verbatim (22):
 
 `github_actions_routine_review: true`, `github_actions_deep_review: true`, `github_actions_deep_review_auto_fire: true`, `github_actions_paths_ignore_auto_merge: false`, `binary_verdict_rule: true`, `definition_of_done_verification: true`, `lazy_rules_folder: true`, `memory_system: true`, `skill_session_start: true`, `skill_session_close: true`, `permissions_file_template: true`, `contributing_md: true`, `pr_template: true`, `collaboration_rule: true`, `confidentiality_rule: false`, `audit_trail_commits: false`, `billable_handoff_summary: false`, `team_handoff_notes: false`, `branch_protection_loose: false`, `branch_protection_strict: true`, `mandatory_deep_review_before_merge: true`, `dod_devlog_step: false`, `language_specific_rules_scaffold: true`, `clean_room_rule: false`.
 
-Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th null toggle `tokensave_entry_point` was promoted to the User-explicit table above):
+Discovery resolutions (5 null-in-bundle, inferred from repo state):
 
 | Toggle | Value | Repo evidence |
 |---|---|---|
@@ -56,8 +56,8 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 |---|---|
 | `.claude/skills/session-start/SKILL.md` | Resolved (Step 1 reads CONTEXT file, placeholders substituted, renumbered) |
 | `.claude/skills/session-close/SKILL.md` | Resolved (DoD + context + tokensave-adherence kept, devlog step stripped, placeholders substituted) |
-| `.claude/skills/find/SKILL.md` | Resolved (per-tool blocks for tokensave / ast-grep / sourcegraph / ctags / semgrep / none / custom; this bind resolves to the tokensave block, all others stripped). Issue #10 closed by the v1.3-unreleased code_research agnostification. |
-| `.claude/skills/architecture-graph/SKILL.md` | Resolved (per-tool blocks for the enumerate + diff-coupling steps; this bind resolves to the tokensave commands). |
+| `.claude/skills/find/SKILL.md` | Verbatim (no toggles in source; tokensave-shaped — issue #10 will conditionalize for other `code_research` choices) |
+| `.claude/skills/architecture-graph/SKILL.md` | Verbatim (no toggles in source) |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Resolved (`audit_trail_commits` block stripped per bundle 2) |
 | `.claude/BIND.md` | This file |
 | `CLAUDE.md` (root) | Edited to reflect now-local skills |
@@ -68,7 +68,7 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 |---|---|
 | `.claude/rules/*` | CLAUDE.md's "What's intentionally NOT here" deliberately keeps rules pointing at `_core/project-template/.claude/rules/`. Rules are prose — duplicating them risks drift between source-of-truth and bound copies. The repo IS the templates; keeping rules canonical at `_core/` is correct here. |
 | `CODEOWNERS` | `codeowners: false` (solo-maintained) |
-| `~/.claude/hooks/tokensave-first.py` (project copy) | Hook is installed **globally**, not project-local — per CLAUDE.md's note about the tokensave template-inheritance bug that makes per-project installation unsafe. As of the v1.3-unreleased agnostification, the hook is rendered from `_core/global-template/hooks/code-research-first.py.template` + `code-research-profiles.json` → tokensave profile; the rendered filename remains `tokensave-first.py` for this bind because `tools.code_research = "tokensave"`. |
+| `~/.claude/hooks/tokensave-first.py` (project copy) | Hook is installed **globally**, not project-local — per CLAUDE.md's note about the tokensave template-inheritance bug that makes per-project installation unsafe. |
 | Devlog scaffolding (`devlog/posts/0000-template/`) | `dod_devlog_step: false` (no devlog tradition for this project — release notes live in `CHANGELOG.md` and GitHub Releases). |
 
 ## Re-bind procedure (until Audit mode lands)
@@ -81,4 +81,4 @@ When toggles change or templates evolve in `_core/`:
 4. Atomic commits per artifact category.
 5. Standard PR + merge to `develop`.
 
-Once Audit mode (issue #3, tracked as a v1.x follow-up — has not shipped as of v1.2.1) lands, that flow replaces this manual procedure.
+Once issue #3 (v1.2.0 Audit mode) ships, that flow replaces this manual procedure.

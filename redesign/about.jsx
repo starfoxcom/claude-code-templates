@@ -13,7 +13,7 @@ function AboutFolio() {
         <div className="colophon">
 
           <ColRow k="Project" v="claude-code-templates" sub="MIT licensed · solo-maintained" />
-          <ColRow k="Version" v="v1.3.0" sub="2026-05-21" />
+          <ColRow k="Version" v="v1.1.0" sub="2026-05-16" />
           <ColRow k="Source" v={<a href="https://github.com/starfoxcom/claude-code-templates" target="_blank" rel="noreferrer">github.com/starfoxcom/claude-code-templates</a>} sub="issues + PRs welcome on best-effort basis" />
           <ColRow k="Hosting" v="GitHub Pages" sub="static HTML + JavaScript · no server · no analytics" />
 

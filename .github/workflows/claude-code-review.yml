@@ -155,13 +155,6 @@ jobs:
               'REPO_URL', 'ONE_LINE_DESCRIPTION',
               'GITFLOW_OR_TRUNK',
               'TIMEZONE',
-              # v1.3.0 — `tools.code_research` slot, per-tool resolution at
-              # bind time from `manifest.tools` + `code-research-profiles.json`.
-              # See SETUP.md Phase 3 step 2 + TOGGLES.md per-value markers.
-              'TOOLS_CODE_RESEARCH_NAME',
-              'TOOLS_CODE_RESEARCH_URL',
-              'TOOLS_CODE_RESEARCH_NAME_KEBAB',
-              'TOOLS_CODE_RESEARCH_BYPASS_MARKER',
           }
           placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
           for fname in changed:

@@ -7,11 +7,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 🚨 BEFORE ANY CODE RESEARCH — read this first
 
-**Code research routes through the `/find` skill (`.claude/skills/find/SKILL.md`), NOT Grep / Glob / raw `grep`/`rg` in Bash.**
+**The first tool for any "where is X / what calls Y / find usages of Z / locate the implementation of W" task MUST be `tokensave_search` or `tokensave_context`. NOT `Grep`. NOT `Glob`. NOT raw `grep`/`rg` in Bash.**
 
-This project uses **{{TOOLS_CODE_RESEARCH_NAME}}** as its code-research tool. A PreToolUse hook at `~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py` (installed **globally**, never project-local — see `SETUP.md` § Phase 7a for the procedure) blocks Grep / Glob / raw-grep calls when {{TOOLS_CODE_RESEARCH_NAME}} is available. The `/find` skill documents the canonical sequence, the fallback conditions, and the bypass marker for genuinely-out-of-scope searches.
+This rule is enforced by a hook at `~/.claude/hooks/tokensave-first.py` (installed **globally**, never project-local — see `SETUP.md` § Phase 7a for the procedure and the tokensave template-inheritance bug that makes per-project installation unsafe) — Grep/Glob/raw-grep calls are **blocked** when a tokensave index is detected in the project. Use the `/find` skill (`.claude/skills/find.md`) as the canonical entry point.
 
-The session-close skill ends each session by reporting your code-research adherence ratio (calls through {{TOOLS_CODE_RESEARCH_NAME}} vs Grep/Glob fallbacks) — that metric is the score the discipline is graded on.
+Fallback to Grep/Glob is allowed ONLY when:
+1. You've tried tokensave with 2+ keyword variants and got nothing usable
+2. You're searching non-code content (markdown, binaries, `.gitignored`)
+3. `tokensave_status` returns `unavailable` for the scope you need
+
+Bypass for Bash `grep`/`rg`: include `# TOKENSAVE_BYPASS: <reason>` in the command. For Grep/Glob tools: briefly explain in chat and re-issue.
+
+The session-close skill ends each session by reporting your tokensave-adherence ratio — that metric is the score the discipline is graded on.
 <!-- TOGGLE:tokensave_entry_point END -->
 
 ---
@@ -45,11 +52,16 @@ All code in the repo is in **{{CODE_LANGUAGE}}**: comments, variable/class/funct
 ---
 
 <!-- TOGGLE:tokensave_entry_point START -->
-## CODE-RESEARCH ENTRY POINT
+## TOKENSAVE ENTRY POINT
 
-Code-research entry point is **{{TOOLS_CODE_RESEARCH_NAME}}** ({{TOOLS_CODE_RESEARCH_URL}}), not Explore/Grep/Glob first. The `/find` skill (`.claude/skills/find/SKILL.md`) documents the canonical command sequence for this tool, the fallback conditions, and the bypass mechanism.
+Code-research entry point is **tokensave MCP**, not Explore/Grep/Glob first. Default exploration:
 
-The full rule (and the rationale) lives in `~/.claude/CLAUDE.md`. If {{TOOLS_CODE_RESEARCH_NAME}} is unavailable for the scope you need, fall back to Grep/Read per the `/find` skill's fallback section.
+- `tokensave_context` — natural-language query, returns symbols + relationships
+- `tokensave_search` — symbol-by-name
+- `tokensave_callers` / `tokensave_callees` / `tokensave_impact` — call graph traversal
+- `tokensave_commit_context` / `tokensave_pr_context` — before writing a commit message or PR body
+
+The full rule (and the rationale) lives in `~/.claude/CLAUDE.md`. If `tokensave_status` reports unavailable, fall back to Grep/Read.
 
 ---
 <!-- TOGGLE:tokensave_entry_point END -->

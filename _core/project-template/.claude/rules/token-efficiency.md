@@ -2,31 +2,12 @@
 
 ## Read before writing
 
-Before reading any source file to understand a symbol, first locate it through this project's code-research tool, then read only the relevant function/class — never the whole file unless context genuinely requires it.
+Before reading any source file to understand a symbol, first:
 
-The canonical sequence for **{{TOOLS_CODE_RESEARCH_NAME}}** lives in `.claude/skills/find/SKILL.md`. Invoke `/find` (or follow its sequence inline) before any `Read` of a file you haven't opened yet this session. The `/find` skill also documents the fallback conditions for dropping back to plain `Grep`/`Glob`/`Read`.
-
-<!-- TOGGLE:code_research:tokensave START -->
-For this project (tokensave): start with `tokensave_search <name>` for symbol lookup, fall through to `tokensave_context <natural-language query>` for fuzzy exploration, then `tokensave_body <symbol>` to read a single function instead of the whole file.
-<!-- TOGGLE:code_research:tokensave END -->
-<!-- TOGGLE:code_research:ast-grep START -->
-For this project (ast-grep): start with `ast-grep run --pattern '<name>' --lang <lang>` for symbol lookup, then `ast-grep run --pattern '<AST pattern>' --lang <lang>` for structural search. Read sliced code via `Read <file>` with `offset`/`limit` to inspect matched ranges.
-<!-- TOGGLE:code_research:ast-grep END -->
-<!-- TOGGLE:code_research:sourcegraph START -->
-For this project (Sourcegraph): start with `src search 'r:<repo> <name>'`. For literal lookups use `patterntype:literal`; for file-name search use `type:file f:<pattern>`. Read sliced code via `Read <file>` with `offset`/`limit`.
-<!-- TOGGLE:code_research:sourcegraph END -->
-<!-- TOGGLE:code_research:ctags START -->
-For this project (ctags): regenerate `tags` after edits (`ctags -R -f tags .`), then look up symbols with `readtags -t tags -e -p '<prefix>'` (Universal Ctags) or `grep -E '^<name>\b' tags` (any ctags). Insert a `-` separator before `<prefix>` only if it starts with `-`. Read sliced code via `Read <file>` with `offset`/`limit`.
-<!-- TOGGLE:code_research:ctags END -->
-<!-- TOGGLE:code_research:semgrep START -->
-For this project (Semgrep): start with `semgrep --pattern '<name>' --lang <lang>` for symbol lookup, then `semgrep --pattern '$X = $Y' --lang <lang>` for structural search. Read sliced code via `Read <file>` with `offset`/`limit`.
-<!-- TOGGLE:code_research:semgrep END -->
-<!-- TOGGLE:code_research:none START -->
-For this project (`tools.code_research: "none"`), there is no indexer — the `/find` skill resolves to a `Grep` → `Glob` → `Read` sequence. Still invoke `/find` rather than jumping to `Grep` directly, so the discipline of "narrow before you read" stays consistent.
-<!-- TOGGLE:code_research:none END -->
-<!-- TOGGLE:code_research:custom START -->
-For this project ({{TOOLS_CODE_RESEARCH_NAME}} — see {{TOOLS_CODE_RESEARCH_URL}}): substitute the tool's symbol-lookup + structural-search commands here. Fall through to `Grep`/`Glob`/`Read` when the tool can't answer a question.
-<!-- TOGGLE:code_research:custom END -->
+1. If tokensave is installed, use `tokensave_search` / `tokensave_context` to locate the definition.
+2. Otherwise, use `grep -rn` (via Grep tool) to find the symbol.
+3. Read only the relevant function/class, not the whole file.
+4. Only read the full file if context genuinely requires it.
 
 ---
 
@@ -132,4 +113,4 @@ When triggered: prepare session close ritual immediately.
 
 ## Read review-comment verdict, not workflow conclusion
 
-`gh run list --headSha <sha>` misses issue-comment-triggered deep reviews (the deep review's workflow run won't show under the original PR commit's SHA). Always read the 🔴/🟢 verdict line directly from the latest review comment via `gh pr view <pr> --json comments` (or `gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/pulls/<pr>/comments"` if you need the lower-level API with the owner/repo slug rather than the full URL stored in `{{REPO_URL}}`).
+`gh run list --headSha <sha>` misses issue-comment-triggered deep reviews (the deep review's workflow run won't show under the original PR commit's SHA). Always read the 🔴/🟢 verdict line directly from the latest review comment via `gh api repos/{{REPO_URL}}/pulls/<pr>/comments` or `gh pr view <pr> --json comments`.

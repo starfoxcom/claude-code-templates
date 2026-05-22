@@ -223,7 +223,7 @@ function HowFolio() {
             <FileEntry kind="file" path="  TOGGLES.md" desc="catalog mirror, readable as git-diff fodder" />
             <FileEntry kind="file" path="  COMPARISON.md" desc="bundle matrix mirror" />
             <FileEntry kind="file" path="  LICENSE" />
-            <FileEntry kind="file" path="  VERSION" desc="v1.3.0" />
+            <FileEntry kind="file" path="  VERSION" desc="v1.1.0" />
             <FileEntry kind="file" path="  manifest.json" desc="resolved config baked from your folio I choices" />
 
             <FileEntry kind="dir" path="  bundles/" desc="bundle defaults Claude resolves against" />

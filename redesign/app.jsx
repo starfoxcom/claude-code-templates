@@ -104,7 +104,7 @@ function Sidebar({ folio, setFolio, theme, toggleTheme, mobileOpen, setMobileOpe
           <span className="brand-dot"></span>
           <span className="brand-name">claude-code-templates</span>
         </div>
-        <div className="brand-rev mono">v1.3.0</div>
+        <div className="brand-rev mono">v1.1.0</div>
       </div>
 
       <nav className="sb-nav" aria-label="Folios">
@@ -147,7 +147,7 @@ function MobileBar({ folio, setMobileOpen }) {
       <div className="mb-brand">
         <span className="brand-dot"></span>
         <span className="brand-name">claude-code-templates</span>
-        <span className="mono mb-rev">v1.3.0</span>
+        <span className="mono mb-rev">v1.1.0</span>
       </div>
       <div className="mb-now mono">{f && `${f.n} · ${f.label}`}</div>
     </header>

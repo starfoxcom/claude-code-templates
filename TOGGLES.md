@@ -27,7 +27,7 @@ Legend: ✅ on by default · ❌ off by default · ⚙️ asked during interview
 | `binary_verdict_rule` | Section in `review-tiers.md` + `git.md` | ✅ | ✅ | ✅ | ✅ |
 | `definition_of_done_verification` | Section in `CLAUDE.md` + `session-close.md` skill | ✅ | ✅ | ✅ | ✅ |
 | `context_refresh_files` | Section in `CLAUDE.md` + `session-close.md` skill | ✅ | ✅ | ✅ | ✅ |
-| `tokensave_entry_point` | Sections in `CLAUDE.md`, `find/SKILL.md`, `session-close/SKILL.md` + global hook install per `tools.code_research` (see SETUP.md § Phase 7a). The toggle name is legacy from the tokensave-only era; semantically it now controls "install the code-research-first hook for whichever tool is at `tools.code_research`." A rename to `code_research_first` is tracked for v1.3.x as a deferred breaking change (with backward-compat alias resolution — see CHANGELOG Known follow-ups). | ⚙️ | ⚙️ | ⚙️ | ⚙️ |
+| `tokensave_entry_point` | Section in `CLAUDE.md` + read-before-writing rule | ⚙️ | ⚙️ | ⚙️ | ⚙️ |
 | `lazy_rules_folder` | `docs/lazy/` directory + section in `CLAUDE.md` | ✅ | ✅ | ✅ | ✅ |
 | `memory_system` | `global-template/memory-template/` + section in `CLAUDE.md` | ✅ | ✅ | ✅ | ✅ |
 | `skill_session_start` | `.claude/skills/session-start/SKILL.md` | ✅ | ✅ | ✅ | ✅ |
@@ -98,58 +98,6 @@ Some sections should appear ONLY when a toggle is OFF — e.g., text explaining 
 
 Exactly one of the two blocks remains after Claude applies the toggles. Use `:off` markers sparingly — only when there's genuinely different content for the OFF state, not just absence.
 
-### Per-value markers for tool slots (`:<value>`)
-
-The five **tool slots** in the configurator (`code_research`, `precommit`, `ci`, `ai_reviewer`, `issue_tracker`) are single-select, not boolean. Their picks live in the manifest under `tools.<slot>` (e.g., `tools.code_research: "tokensave"`). Files that need per-tool prose use the same marker pattern with the chosen value as the suffix:
-
-```markdown
-<!-- TOGGLE:code_research:tokensave START -->
-Use `tokensave_search <name>` for symbol-by-name; `tokensave_context <query>` for fuzzy exploration.
-<!-- TOGGLE:code_research:tokensave END -->
-
-<!-- TOGGLE:code_research:ast-grep START -->
-Use `ast-grep run --pattern '<pattern>' --lang <lang>` for structural search.
-<!-- TOGGLE:code_research:ast-grep END -->
-
-<!-- TOGGLE:code_research:sourcegraph START -->
-Use `src search 'r:<repo> <query>'` against the configured Sourcegraph instance.
-<!-- TOGGLE:code_research:sourcegraph END -->
-
-<!-- TOGGLE:code_research:ctags START -->
-Generate `tags` with `ctags -R -f tags .` once per session; look up symbols with `readtags -t tags -e -p '<prefix>'` (Universal Ctags) or `grep -E '^<name>\b' tags` (any ctags).
-<!-- TOGGLE:code_research:ctags END -->
-
-<!-- TOGGLE:code_research:semgrep START -->
-Use `semgrep --pattern '<pattern>' --lang <lang>` for AST-aware search.
-<!-- TOGGLE:code_research:semgrep END -->
-
-<!-- TOGGLE:code_research:none START -->
-No code-research indexer is configured for this project. Use `Grep`, `Glob`, and `Read` directly; the `/find` skill documents the canonical sequence.
-<!-- TOGGLE:code_research:none END -->
-
-<!-- TOGGLE:code_research:custom START -->
-Use `{{TOOLS_CODE_RESEARCH_NAME}}` per its own documentation ({{TOOLS_CODE_RESEARCH_URL}}). Substitute the appropriate commands into the `/find` skill body.
-<!-- TOGGLE:code_research:custom END -->
-```
-
-**Resolution rule:** when binding, Claude keeps the block whose `:<value>` matches `tools.<slot>` (with markers stripped) and **removes all other `:<value>` blocks for the same slot entirely** (content + markers). The "Other (specify)" UI choice resolves to `:custom`; the placeholders `{{TOOLS_<SLOT>_NAME}}` and `{{TOOLS_<SLOT>_URL}}` substitute the user-supplied tool name and homepage URL.
-
-Tool-slot per-value markers and the boolean `:off` markers share the same family of syntax — the binder logic that handles one handles the other, parameterized by what to match against.
-
-Placeholders associated with tool slots (substituted in Phase 3 of SETUP.md):
-
-| Placeholder | Substituted with |
-|---|---|
-| `{{TOOLS_CODE_RESEARCH_NAME}}` | `tools.code_research` (for known options: the canonical name; for "Other": `otherTools.code_research` user-supplied name) |
-| `{{TOOLS_CODE_RESEARCH_URL}}` | the tool's homepage URL (from the catalog or `otherToolUrls.code_research`) |
-| `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` | the bypass marker string from `_core/global-template/hooks/code-research-profiles.json` (e.g., `TOKENSAVE_BYPASS:`, `AST_GREP_BYPASS:`); computed for `custom` from the user-supplied name |
-| `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` | lowercase + kebab form of the code-research tool name; for built-in profiles equals the JSON key (`tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep`); for `custom`, computed from the user-supplied name per SETUP.md § Phase 7a sanitization rules. Used in hook filename paths (`<name-kebab>-first.py`). |
-| `{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}` | UPPER_SNAKE form, complement to NAME_KEBAB; used only inside `code-research-profiles.json`'s `custom` profile for deriving the bypass marker (e.g., `MY_TOOL_BYPASS:`). Not substituted into other templates directly. |
-| `{{TOOLS_PRECOMMIT_NAME}}` / `{{TOOLS_PRECOMMIT_URL}}` | analogous |
-| `{{TOOLS_CI_NAME}}` / `{{TOOLS_CI_URL}}` | analogous |
-| `{{TOOLS_AI_REVIEWER_NAME}}` / `{{TOOLS_AI_REVIEWER_URL}}` | analogous |
-| `{{TOOLS_ISSUE_TRACKER_NAME}}` / `{{TOOLS_ISSUE_TRACKER_URL}}` | analogous |
-
 ### File-scoped toggles
 
 Some files are entirely toggle-controlled (e.g., `CONTRIBUTING.md` only exists if `contributing_md` is ON). Those are deleted wholesale on OFF. The toggle catalog's "What it controls" column distinguishes file-scoped from section-scoped toggles.
@@ -182,74 +130,3 @@ When you discover a pattern that varies between projects:
 4. (If needed) Update SETUP.md's interview script to ask about it.
 
 The catalog grows monotonically — toggles get added, rarely removed. Removing a toggle means deciding the feature is always-on or always-off (rare).
-
----
-
-## Adding a new value to an existing tool slot (e.g., a new `code_research` option)
-
-The five tool slots (`code_research` / `precommit` / `ci` / `ai_reviewer` / `issue_tracker`) accept user-selectable values; `code_research` ships with profile-driven hook generation in v1.3.0. To add a new option (e.g., a hypothetical `"grit"`):
-
-1. **Configurator catalog** — add `{ key: "grit", name: "Grit", desc: "...", url: "..." }` to `TOOL_SLOTS[code_research].options` in BOTH `redesign/data.jsx` AND `index.html` (and `index.legacy.html` for parity with the v1.0.0 fallback). Run `grep -n "key: \"" redesign/data.jsx index.html index.legacy.html` to confirm parity afterwards.
-2. **Profile entry** — add a `"grit": { ... }` block to `_core/global-template/hooks/code-research-profiles.json` matching the schema documented in that file's `_schema` field (required: `filename_basename`, `bypass_marker`, `detection_mode`, `detection_target`, `sequence_bullets`; optional: `url`). Validate by parsing the JSON (`python -c "import json; json.load(open('_core/global-template/hooks/code-research-profiles.json'))"`) — must succeed.
-3. **Per-value blocks** — add `<!-- TOGGLE:code_research:grit START/END -->` blocks in EVERY canonical template that already has per-value `code_research` markers. To find them all: `grep -rln "TOGGLE:code_research:" _core/`. As of v1.3.0 this enumerates:
-   - `_core/project-template/.claude/skills/find/SKILL.md` (sequence + reporting + why-this-exists)
-   - `_core/project-template/.claude/skills/architecture-graph/SKILL.md` (TWO sections — enumerate + diff-coupling)
-   - `_core/project-template/.claude/skills/session-close/SKILL.md` (adherence-metric heuristic; the `:none` value is intentionally absent — see file)
-   - `_core/project-template/.claude/rules/token-efficiency.md` (read-before-writing branch)
-   - `_core/global-template/CLAUDE.md.additions` (no-Explore-agents-for-code-research rule)
-
-   **Exemplar shape:** open the existing `<!-- TOGGLE:code_research:tokensave START -->` block in `find/SKILL.md` (lines 19-37) to see the canonical body — a `### Sequence` numbered list (5 steps), a `### Reporting` citation example, a `### Why this exists` paragraph. Use that shape for every value across every file; the adherence-metric block in `session-close/SKILL.md` is shorter (one line: how to count matching calls). Profile `detection_mode` values: `walk_up` (project-marker file) or `cli_available` (binary on PATH). No third mode exists.
-4. **Bundle file mapping** — no per-bundle change needed; `tools.code_research` is configurator-driven, not bundle-default.
-5. **CHANGELOG** — add an "Added" line under the next `[Unreleased]` section.
-6. **Verification checklist** — before opening PR, run:
-   - `grep -c "TOGGLE:code_research:grit" _core/` should equal `2 × <number of files in step 3>` (one START + one END per file; architecture-graph contributes 4 because it has two parametrised sections).
-   - Open the configurator (`index.html`), pick your new option, click "Bind a volume" — the downloaded zip's `SETUP.md` should reference your tool by name in the `tools.code_research` line of the embedded JSON.
-   - Manually substitute the placeholders in `code-research-first.py.template` against your `grit` profile and confirm the result is valid Python (`python -c "import ast; ast.parse(open('rendered-hook.py').read())"`).
-
-If you're adding a value to a different tool slot (`precommit` / `ci` / `ai_reviewer` / `issue_tracker`) those slots don't yet have profile-driven generation — they're tracked as v1.3.x / v1.4.x follow-ups. Until those slots get their own `*-profiles.json`, adding a value there is configurator-only (steps 1 + 4 + 5).
-
----
-
-## Removing a value from a tool slot
-
-The inverse operation. To retire an existing option (e.g., the project drops support for `ctags`):
-
-1. Remove the option from `TOOL_SLOTS[<slot>].options` in `redesign/data.jsx` + `index.html` + `index.legacy.html`.
-2. Remove the entry from `_core/global-template/hooks/<slot>-profiles.json` (or whichever profile file the slot uses).
-3. Remove every `<!-- TOGGLE:<slot>:<value> START/END -->` block (content + markers) across the canonical templates listed in "Adding a new value" step 3.
-4. **Downstream-bind compatibility:** existing bound projects whose manifest has the now-removed value will fail Phase 1 toggle validation. Add a SETUP.md alias entry (mirror the `dev_branch`/`default_branch` precedent) that warns the user and asks them to pick a replacement.
-5. Update CHANGELOG with a `### Removed` entry plus a `### Breaking changes` note if the removal is in a minor/major; patch releases must not remove values silently.
-
----
-
-## Promoting a configurator-only slot to profile-driven
-
-`precommit` / `ci` / `ai_reviewer` / `issue_tracker` ship configurator-only today — the manifest carries `tools.<slot>` but no canonical template branches on it. To retrofit profile-driven generation onto an existing slot (the v1.3.x / v1.4.x trajectory):
-
-1. **Build the profile JSON + template** under `_core/global-template/<slot>/<slot>-profiles.json` + `<slot>-first.<ext>.template` (or equivalent artifact for non-Python tooling — e.g., a YAML config for `ci`). Follow the schema documented inside `code-research-profiles.json` `_schema` as a model.
-2. **Add per-value blocks** to the canonical templates that should now vary per `tools.<slot>` choice. Use the same `<!-- TOGGLE:<slot>:<value> START/END -->` syntax already documented above.
-3. **Extend SETUP.md** with a new Phase 7c / 7d / etc. covering render + install for the new slot. Follow Phase 7a's structure: Cleanup (unconditional) + Install (conditional on toggle-on + tool selected).
-4. **Document new placeholders** ({{TOOLS_<SLOT>_NAME}} etc.) in the placeholder table above + in SETUP.md Phase 3 step 2.
-5. **CHANGELOG entry** stating the slot now has profile-driven generation; existing bound projects keep working (the configurator-only emission path is unchanged); re-binding picks up the new per-value templates.
-
----
-
-## Adding a new tool slot
-
-Tool slots are the broader category (`code_research`, `precommit`, etc.). The `code_research` slot is the only one with profile-driven hook rendering today; adding a sixth slot follows the same pattern. Steps:
-
-1. **Configurator catalog** — add the slot to `TOOL_SLOTS` in `redesign/data.jsx` + `index.html` (+ `index.legacy.html`). Schema: `{ id, label, hint, options: [{ key, name, desc, url }], default }`. The `key` field on each option is mandatory — it's what `tools.<slot>` emits to the manifest and what profile lookups join against.
-2. **Profile JSON + template** (only if the slot needs runtime enforcement like `code_research`'s hook):
-   - Build `_core/global-template/<slot>/<slot>-profiles.json` with the same shape as `code-research-profiles.json` (`_doc`, `_schema`, one block per built-in option, plus `none` and `custom` if they apply).
-   - Build `_core/global-template/<slot>/<slot>-first.py.template` (or whatever rendered artifact the slot needs — script, YAML, etc.) with `{{TOOLS_<SLOT>_*}}` placeholders.
-3. **Placeholders** — document the new `{{TOOLS_<SLOT>_NAME}}` / `{{TOOLS_<SLOT>_URL}}` / `{{TOOLS_<SLOT>_BYPASS_MARKER}}` / `{{TOOLS_<SLOT>_NAME_KEBAB}}` / `{{TOOLS_<SLOT>_NAME_UPPER_SNAKE}}` in the placeholder table above AND in `SETUP.md` § Phase 3 step 2. The `_KEBAB` and `_UPPER_SNAKE` variants are needed only if the slot resolves Other → custom (and the custom case feeds filenames or shell-var-like names).
-4. **Per-value blocks** — wire `<!-- TOGGLE:<slot>:<value> START/END -->` into the canonical templates that need to vary per choice. For `code_research` this was 5 files; the count for a new slot depends on how many places need per-tool prose. Use the same template list (`find/SKILL.md`, etc.) as a starting reference.
-5. **Bind procedure** — extend `SETUP.md` § Phase 7a (or add a new Phase 7c, 7d, etc.) describing the rendering + installation procedure for the new slot. Follow the `code_research` precedent: profile lookup → custom-case sanitization → nested-placeholder resolution → atomic file write → settings.json or equivalent registration → de-dup orphan cleanup.
-6. **Bundle defaults** — unlike `code_research` (configurator-only), some slots may want bundle-default opinions. For example, the `ci` slot might want OSS bundle default = `GitHub Actions`, Client-team bundle default = ASK. If so, also wire the slot into `bundles/<n>/bundle.toggles.md` as a per-bundle key.
-7. **CHANGELOG** — add an entry establishing the new slot as a stable user contract. Position it as "wires another v1.0.0 tool-slot promise through end to end, following the `code_research` precedent."
-8. **Verification checklist:**
-   - All THREE configurator copies (`redesign/data.jsx` + `index.html` + `index.legacy.html`) emit the new slot in `tools.<slot>` (paste-text + manifest preview). Run `grep -n "id: \"<new-slot>\"" redesign/data.jsx index.html index.legacy.html` — must return one match per file.
-   - Profile JSON (if applicable) parses cleanly; every `_schema` required field is populated for every built-in option.
-   - Per-value markers in all canonical files balance (each `:<value>` has matching START + END).
-   - SETUP.md describes the bind procedure unambiguously; a downstream Claude session can execute it end-to-end without inferring missing steps.
-   - Bind the dogfooded `_core/project-template/CLAUDE.md` against the new slot's options and verify the resolved output looks correct for at least 3 values (including `none` and `custom` if they apply).
