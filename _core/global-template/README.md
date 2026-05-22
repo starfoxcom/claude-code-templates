@@ -6,11 +6,14 @@ These files live OUTSIDE your project repo, in your home Claude config. They app
 
 ```
 global-template/
-├── README.md                  # (this file)
-├── CLAUDE.md.additions        # Append to ~/.claude/CLAUDE.md
-└── memory-template/
-    ├── README.md              # How the memory system works
-    └── MEMORY.md              # Empty index — copy to the per-project memory dir
+├── README.md                              # (this file)
+├── CLAUDE.md.additions                    # Append to ~/.claude/CLAUDE.md
+├── memory-template/
+│   ├── README.md                          # How the memory system works
+│   └── MEMORY.md                          # Empty index — copy to the per-project memory dir
+└── hooks/
+    ├── code-research-first.py.template    # Generic PreToolUse hook (rendered at bind time)
+    └── code-research-profiles.json        # Per-tool profiles consumed by the renderer
 ```
 
 ---
@@ -23,7 +26,7 @@ If you DO have one, append the contents of `CLAUDE.md.additions` (or have Claude
 
 The additions include:
 
-- **Tokensave-first rule** — overrides any skill recommendation to use `Agent(subagent_type=Explore)` for code research when tokensave is available. Hard rule, no exceptions.
+- **No-Explore-agents-for-code-research rule** — overrides any skill recommendation to use `Agent(subagent_type=Explore)` for code research when the project's chosen code-research tool (`tools.code_research` — tokensave / ast-grep / Sourcegraph / ctags / Semgrep / Other) is available. Hard rule, no exceptions; per-tool guidance lives in the relevant `:code_research:<tool>` blocks within `CLAUDE.md.additions`.
 - **Memory system instructions** — the four memory types, when to save each, when to access, how MEMORY.md works as an index.
 
 These are project-agnostic — they're useful for any project, which is why they live in the global config.
@@ -49,10 +52,92 @@ Claude will start populating memory entries during your normal sessions — you 
 
 ---
 
-## 3. Verify
+## 3. Install the code-research-first hook (optional, recommended)
+
+When the `tokensave_entry_point` toggle is ON and `tools.code_research` is not `none`, SETUP.md § Phase 7a renders `hooks/code-research-first.py.template` against the profile in `hooks/code-research-profiles.json` matching your chosen tool and writes the result to `~/.claude/hooks/<tool>-first.py`. The hook is then registered in `~/.claude/settings.json` under `hooks.PreToolUse` so it intercepts `Grep`/`Glob`/`Bash` calls and routes Claude through your chosen tool first.
+
+**Supported `tools.code_research` keys** (must match a key in `code-research-profiles.json`):
+
+| Key | Display name | Detection | Hook file written to |
+|---|---|---|---|
+| `tokensave` | tokensave | walks-up `.tokensave/tokensave.db` | `~/.claude/hooks/tokensave-first.py` |
+| `ast-grep` | ast-grep | `ast-grep` CLI on PATH | `~/.claude/hooks/ast-grep-first.py` |
+| `sourcegraph` | Sourcegraph | `src` CLI on PATH | `~/.claude/hooks/sourcegraph-first.py` |
+| `ctags` | ctags | walks-up `tags` file | `~/.claude/hooks/ctags-first.py` |
+| `semgrep` | Semgrep | `semgrep` CLI on PATH | `~/.claude/hooks/semgrep-first.py` |
+| `none` | (no hook) | — | not installed |
+| `custom` | (user-supplied) | user-specified CLI on PATH | `~/.claude/hooks/<name-kebab>-first.py` |
+
+**Manual install** (if you're not running SETUP.md): substitute the six placeholders in `hooks/code-research-first.py.template` against your tool's profile, save to the destination path above, register in `~/.claude/settings.json`. **Worked example for tokensave:**
+
+1. Read `hooks/code-research-profiles.json` and copy the FULL `tokensave` entry verbatim — you'll need its `sequence_bullets` (a long multi-line string with embedded `\n`s) for step 3. Do not hand-shorten the bullets; the rendered hook prints them to stderr on every block.
+
+2. Copy `hooks/code-research-first.py.template` to `~/.claude/hooks/tokensave-first.py` (expand `~` to your real home path — Windows: `C:/Users/<name>/.claude/hooks/...`, POSIX: `/home/<name>/.claude/hooks/...`).
+
+3. Substitute these SIX placeholders (every occurrence; case-sensitive):
+   - `{{TOOLS_CODE_RESEARCH_NAME}}` → `tokensave` (the DISPLAY_NAME line wraps it as `"tokensave"` — Python string literal)
+   - `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` → `tokensave`
+   - `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` → `TOKENSAVE_BYPASS:`
+   - `{{TOOLS_CODE_RESEARCH_DETECTION_MODE}}` → `walk_up`
+   - `{{TOOLS_CODE_RESEARCH_DETECTION_TARGET}}` → `.tokensave/tokensave.db`
+   - `{{TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS}}` → the multi-line bullets from the profile JSON's `sequence_bullets` field (the JSON-decoded form — `\n` characters become actual newlines inside the rendered `SEQUENCE_BULLETS = """..."""` triple-quoted block)
+
+4. Verify the substituted file is valid Python. Use the rendered absolute path (not `~`, which `open()` does not expand):
+   - macOS/Linux: `python3 -c "import ast, os; ast.parse(open(os.path.expanduser('~/.claude/hooks/tokensave-first.py')).read())"`
+   - Windows: `py -c "import ast, os; ast.parse(open(os.path.expanduser('~/.claude/hooks/tokensave-first.py')).read())"`
+   - If the file parses successfully, the command exits silently. A `SyntaxError` means a placeholder substitution failed; re-check step 3.
+
+5. Add this entry to `~/.claude/settings.json` under `hooks.PreToolUse[]`. **If the array already has entries, APPEND yours; do NOT replace the array** (you'll wipe out memory + other hooks).
+
+   The new entry you're appending is just the inner object:
+
+   ```json
+   {
+     "matcher": "Grep|Glob|Bash",
+     "hooks": [
+       { "type": "command", "command": "py \"C:/Users/<name>/.claude/hooks/tokensave-first.py\"" }
+     ]
+   }
+   ```
+
+   The full file should look like this AFTER your edit (illustrative — your file probably has more entries):
+
+   ```json
+   {
+     "hooks": {
+       "PreToolUse": [
+         { "matcher": "...", "hooks": [{ "type": "command", "command": "your existing entries stay here, unchanged" }] },
+         {
+           "matcher": "Grep|Glob|Bash",
+           "hooks": [
+             { "type": "command", "command": "py \"C:/Users/<name>/.claude/hooks/tokensave-first.py\"" }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+   (No JSON comments — JSON doesn't support them. If you need a marker in your file, use a dummy key like `"_note": "..."`.)
+
+   - Replace `py` with `python3` on macOS/Linux.
+   - Replace `<name>` with your username (Windows) or expand to your full home path (POSIX) — Claude Code does NOT auto-expand `~` in hook command strings.
+   - Trailing commas in JSON are invalid — re-check after editing.
+
+6. Reload Claude Code (`/exit` + reopen). Test by running a `Grep` in a directory with `.tokensave/` — hook should block.
+
+**For other tools**, swap the profile values from `hooks/code-research-profiles.json` keyed on `ast-grep` / `sourcegraph` / `ctags` / `semgrep` / `custom`. The substitution list is identical.
+
+**⚠️ Advisory enforcement, not a security boundary** — the hook fails open on malformed input and unknown profile fields. Treat it as a Claude-discipline nudge, not as a sandbox.
+
+**Why globally not project-local:** project-local hooks can trigger tool-specific template-inheritance bugs that corrupt `settings.local.json` on every Stop event. The global install sidesteps that. Re-binding a project with a different `tools.code_research` value replaces the registered hook + deletes the orphan file after confirmation.
+
+---
+
+## 4. Verify
 
 After merging, start a fresh Claude Code session in any project and ask:
 
-> "What's the tokensave-first rule and where is per-project memory stored?"
+> "What's the no-Explore-agents-for-code-research rule, and where is per-project memory stored?"
 
 Claude should answer from the global `~/.claude/CLAUDE.md`, not by reading files. If it answers correctly, the global setup is good.

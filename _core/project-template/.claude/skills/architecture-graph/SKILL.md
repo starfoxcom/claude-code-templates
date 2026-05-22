@@ -28,7 +28,28 @@ Maintained well, this kills the "cognitive debt" of architecture drifting silent
 
 ## Generation procedure (first time)
 
-1. **Map the high-level boundaries first** — top-level directories that represent distinct subsystems (e.g., `apps/`, `packages/`, `services/`, `src/<module>/`). Use `tokensave_files` or `Glob` (with bypass) to enumerate.
+1. **Map the high-level boundaries first** — top-level directories that represent distinct subsystems (e.g., `apps/`, `packages/`, `services/`, `src/<module>/`). Use the project's code-research tool's file-listing primitive (per `.claude/skills/find/SKILL.md`), or `Glob` (with a `# {{TOOLS_CODE_RESEARCH_BYPASS_MARKER}} <reason>` bypass marker if the hook is installed and the listing is non-code).
+   <!-- TOGGLE:code_research:tokensave START -->
+   For this project (tokensave): `tokensave_files <pattern>`.
+   <!-- TOGGLE:code_research:tokensave END -->
+   <!-- TOGGLE:code_research:ast-grep START -->
+   For this project (ast-grep): `ast-grep run --pattern '...' --globs '<dir-pattern>'` (or fall through to `Glob` for pure directory listings — ast-grep doesn't index directory structure).
+   <!-- TOGGLE:code_research:ast-grep END -->
+   <!-- TOGGLE:code_research:sourcegraph START -->
+   For this project (Sourcegraph): `src search 'r:<repo> type:file f:<dir-pattern>'` to enumerate files in matching paths; for local-only directories, fall through to `Glob`.
+   <!-- TOGGLE:code_research:sourcegraph END -->
+   <!-- TOGGLE:code_research:ctags START -->
+   For this project (ctags): ctags doesn't index directory structure — use `Glob '*/'` (top-level dirs) or walk `find . -maxdepth 2 -type d` (with a bypass marker if the hook is installed).
+   <!-- TOGGLE:code_research:ctags END -->
+   <!-- TOGGLE:code_research:semgrep START -->
+   For this project (Semgrep): Semgrep doesn't enumerate file trees — use `Glob '*/'` for top-level subsystem directories.
+   <!-- TOGGLE:code_research:semgrep END -->
+   <!-- TOGGLE:code_research:none START -->
+   For this project (no indexer): `Glob '*/'` for top-level directories; `Glob '<top>/*/' ` for second level.
+   <!-- TOGGLE:code_research:none END -->
+   <!-- TOGGLE:code_research:custom START -->
+   For this project ({{TOOLS_CODE_RESEARCH_NAME}}): refer to {{TOOLS_CODE_RESEARCH_URL}} for the file-listing command. If {{TOOLS_CODE_RESEARCH_NAME}} doesn't enumerate directories, fall through to `Glob '*/'`.
+   <!-- TOGGLE:code_research:custom END -->
 2. **Identify external boundaries** — databases, message queues, external APIs, file system, network. Read package manifests / lock files to find them.
 3. **Trace data paths** through 3–5 key user-facing features. Pick the most central ones; don't try to map everything on first pass.
 4. **Identify control-flow seams** — interface boundaries, event/message channels, dependency-injection seams.
@@ -55,7 +76,28 @@ Maintained well, this kills the "cognitive debt" of architecture drifting silent
 ## Refresh procedure
 
 1. Read existing `docs/architecture/diagram.json`.
-2. Diff against current code reality (use tokensave's `tokensave_dsm` + `tokensave_coupling` + `tokensave_files` to find new/removed modules).
+2. Diff against current code reality to find new/removed modules.
+   <!-- TOGGLE:code_research:tokensave START -->
+   Use `tokensave_dsm` (dependency-structure matrix) + `tokensave_coupling` + `tokensave_files` — fast, deterministic, no whole-tree walk.
+   <!-- TOGGLE:code_research:tokensave END -->
+   <!-- TOGGLE:code_research:ast-grep START -->
+   Use `ast-grep run --pattern '<import statement shape>' --lang <lang>` to enumerate imports per module, then aggregate to compute the coupling matrix manually. ast-grep doesn't ship a built-in DSM.
+   <!-- TOGGLE:code_research:ast-grep END -->
+   <!-- TOGGLE:code_research:sourcegraph START -->
+   Use `src search 'r:<repo> type:file f:<module>' patterntype:literal '<import statement>'` per module to count cross-module edges. Sourcegraph doesn't ship a DSM view — aggregate manually.
+   <!-- TOGGLE:code_research:sourcegraph END -->
+   <!-- TOGGLE:code_research:ctags START -->
+   ctags doesn't model coupling — walk the file tree with `Glob`, then `Grep -E '^(import|use|require|#include) ' <files>` per module to enumerate edges. Aggregate manually.
+   <!-- TOGGLE:code_research:ctags END -->
+   <!-- TOGGLE:code_research:semgrep START -->
+   Use `semgrep --pattern '<import statement>' --lang <lang>` per module to enumerate imports, then aggregate to compute coupling manually. Semgrep doesn't ship a DSM.
+   <!-- TOGGLE:code_research:semgrep END -->
+   <!-- TOGGLE:code_research:none START -->
+   Walk the file tree with `Glob`, enumerate top-level subsystem directories, then compare against the existing `diagram.json`. For coupling/dependency edges, scan import statements with `Grep` against language-appropriate patterns (`import …`, `from … import`, `require(…)`, `use …;`, etc.).
+   <!-- TOGGLE:code_research:none END -->
+   <!-- TOGGLE:code_research:custom START -->
+   Refer to {{TOOLS_CODE_RESEARCH_URL}} for {{TOOLS_CODE_RESEARCH_NAME}}'s dependency/coupling primitive (if any). Fall back to `Glob` + `Grep` for import-statement enumeration if it doesn't offer one.
+   <!-- TOGGLE:code_research:custom END -->
 3. Update nodes / edges / groups. Bump `generated_at`.
 4. Commit: `docs: refresh architecture diagram after <change>`.
 
