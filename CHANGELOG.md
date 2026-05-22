@@ -56,10 +56,41 @@ Scope intentionally exceeded Issue #10's letter — `/find` parametrisation pull
 
 **Hook is advisory, not a security boundary** — it fails open on malformed input and unknown profile fields. Don't rely on it for sandboxing; rely on it for Claude-discipline.
 
-### Known follow-ups
-- **`tokensave_entry_point` toggle rename to `code_research_first`** — the toggle's semantics are now agnostic, but its name carries the legacy. Renaming is a breaking change to existing bound projects' `bundle.toggles.md` manifests. Tracked for v1.3.x; needs a coordinated migration note in SETUP.md (with a `developer_branch`/`default_branch`-style alias resolution for backward compat) so downstream users can hand-edit their manifests on upgrade.
-- **Per-tool MCP server / CLI installation guidance.** The hook template assumes the chosen tool is already installed on the user's machine — it detects presence and blocks-or-allows accordingly, but doesn't install the tool itself. For non-tokensave tools, the setup summary should include a "to install <tool>: …" hint sourced from the profile's `url` field.
-- **Extend the per-value marker + tool-profile pattern to the other four tool slots.** `precommit` / `ci` / `ai_reviewer` / `issue_tracker` slots currently emit a chosen value but the canonical templates don't parametrise per-value. Tracked for v1.3.x / v1.4.x; the documentation precedent for adding new slots is in TOGGLES.md § "Adding a new tool slot".
+### Known follow-ups (with target releases)
+
+Consolidates open items from v1.0.0 / v1.1.0 / v1.2.x follow-ups + new items introduced in v1.3.0. Target versions reflect session-paced sequencing (AI does the code; user manages scope + design decisions); see the v1.3.0 roadmap conversation for rationale.
+
+**v1.3.1 — patch**
+- **`tokensave_entry_point` toggle rename to `code_research_first`** with backward-compat alias resolution (per `developer_branch`/`default_branch` precedent). Alias accepts the legacy name so existing bound projects keep working; future binds emit the new canonical. Shape pre-committed in SETUP.md Phase 1 step 4 — execution is mechanical.
+
+**v1.4.0 — minor**
+- **Extend per-value marker + tool-profile pattern to the `precommit` slot** (lefthook / husky / pre-commit / simple-git-hooks / none / Other). First additional slot using the v1.3.0-established pattern; derisks subsequent slot wirings + Audit mode (v1.5.0). Pattern documented in TOGGLES.md § "Adding a new tool slot".
+- **Per-tool MCP server / CLI installation guidance.** The hook template assumes the chosen tool is already installed; doesn't install it. The setup summary should include a "to install `<tool>`: see `<url>`" hint sourced from each profile's `url` field. Trivial polish; bundles naturally with v1.4.0 since the precommit slot wiring also surfaces install hints.
+
+**v1.5.0 — minor**
+- **Audit/Optimize mode** (issue #3 — tracked since v1.2.1). New third SETUP mode (alongside Manual + Discovery) that reads existing `.claude/BIND.md` + project state, diffs against current templates, surfaces drift + proposes deltas. Heavy enough to be its own release. Needs a design decision before code: what's the user-facing trigger (re-paste bootstrap brief with `mode: "audit"`? Separate paste? Auto-detect from `.claude/BIND.md` presence?).
+
+**v1.6.0 — minor**
+- **Extend per-value markers + tool profiles to the `ci` slot** (GitHub Actions / GitLab CI / CircleCI / Jenkins / Buildkite / none / Other). Heavier than precommit because CI YAMLs differ substantially per vendor — needs per-tool workflow template files, not just per-value blocks. Design decision: ship full YAML translations for non-GitHub-Actions vendors, or stub them with a "translate this GH Actions workflow yourself" pointer?
+
+**v1.7.0 — minor**
+- **Telemetry Stop hook** (issue #4 — tracked since v1.2.1). Opt-in `~/.claude/hooks/telemetry-stop.py` writing session metadata. Design decision: local-file-only (privacy-safe default) vs also opt-in remote endpoint? Complements community-metrics path (v1.9.0).
+
+**v1.8.0 — minor**
+- **Extend per-value markers to the `ai_reviewer` + `issue_tracker` slots** (Claude / CodeRabbit / Bito / Sourcery / Codium / none / Other; GitHub / Linear / Jira / Notion / Shortcut / none / Other). Both are lower-priority — most users stick with the catalog defaults (Claude + GitHub) — wire for completeness and to close out the "all 4 remaining slots" backlog from v1.0.0's "Tool slot template wiring" entry.
+- **'I want them all' bundle bypass** (issue #5 — tracked since v1.2.1). Configurator-level: add a "bypass bundle defaults — every toggle ON" mode with toggle-conflict detection. Bundles cleanly with the final slot wirings since it also touches the configurator UI.
+
+**v1.9.0 — minor**
+- **Community metrics aggregate** (issue #2 — tracked since v1.1.0). Opt-in, anonymized, PR-submitted before/after metrics. Heavy design conversation needed before code: what's collected, where it's submitted (GH issue? GH discussions? dedicated repo?), privacy review, schema versioning.
+
+**v1.9.1 or later — patch**
+- **`manifest.json` build script** (tracked since v1.1.0). `tools/build-manifest.py` autogenerates the resolved + source manifests from the repo tree on every commit; CI integration. Tooling polish — doesn't change product surface.
+
+**v2.0.0 — major**
+- **Drop the `tokensave_entry_point` alias** entirely. Time-gated, not effort-gated — wait until enough minor releases have shipped with the alias that judged-sufficient migration time has passed. No current driver.
+
+**Out-of-band (not SemVer-versioned for the public toolkit)**
+- **Routine + deep review workflows installation in this repo** (issue #1 — tracked since v1.2.1). Self-hosting CI that mirrors what the templates already ship to downstream users. Per the `workflow-changes-are-hotfixes` discipline, branches from `main` as `hotfix/install-workflows`. Lands any time independent of the public-toolkit version cadence.
 
 ### Versioning policy
 - **Minor** release per the SemVer rules: wires an existing v1.0.0 promise (`tools.code_research` slot) through the canonical templates end-to-end, adds the per-value marker syntax + tool-profile JSON pattern, no toggle catalog renames / bundle key renames / manifest schema breaking changes. Downstream binds at v1.2.1 keep working — re-fetch templates to pick up the parametrised skills + hook profile system. Existing `tools.code_research: "tokensave"` users get an equivalent hook at the same filename path.
