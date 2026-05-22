@@ -202,13 +202,14 @@ jobs:
           fi
 
           if [ -z "$COMMENT" ]; then
-            echo "::notice::No deep-tier completion comment found — action errored or fired on a non-review @claude mention. Setting check to neutral and exiting."
+            # FAIL-CLOSED: neutral counts as passing in required status checks — failure blocks merge; admin-bypass required for genuine Opus outages.
+            echo "::error::No deep-tier completion comment found — Opus action errored or skipped. Setting check to failure (fail-closed)."
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
-              -F conclusion="neutral" \
-              -F "output[title]=Deep review skipped" \
-              -F "output[summary]=The Opus action did not post a completion comment. Re-trigger with \`@claude review this PR — depth pass on <focus>\` or remove the \`needs-deep-review\` label to dismiss."
-            exit 0
+              -F conclusion="failure" \
+              -F "output[title]=Deep review errored" \
+              -F "output[summary]=The Opus action did not post a completion comment (errored or skipped). Re-trigger with \`@claude review this PR — depth pass on <focus>\` to retry. If the deep tier is genuinely broken, admin-bypass leaves an audit trail."
+            exit 1
           fi
 
           # Verdict is the LAST line containing 🔴 or 🟢. Robust to recap text.
@@ -229,7 +230,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review verdict: 🔴 Blocking" \
-              -F "output[summary]=Opus returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing, or remove the \`needs-deep-review\` label to dismiss."
+              -F "output[summary]=Opus returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing. If the finding is genuinely not applicable, admin-bypass leaves an audit trail."
             exit 1
           fi
 
