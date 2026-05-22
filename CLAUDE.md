@@ -2,9 +2,9 @@
 
 This file guides Claude Code when working in **this** repository — the templates project itself.
 
-Yes, the templates project dogfoods itself: the discipline we ship to other projects also applies to development of this repo. The rules below are the same ones a fresh **Multi-dev · OSS** bind would write to your project — except instead of duplicating them at `.claude/rules/`, they live canonically at `_core/project-template/.claude/rules/` and we reference them from here.
+Yes, the templates project dogfoods itself: the discipline we ship to other projects also applies to development of this repo. The rules at `.claude/rules/` are a *resolved bind* of the canonical sources at `_core/project-template/.claude/rules/` against this project's `.claude/BIND.md` toggle state — exactly what a fresh **Multi-dev · OSS** bind would write into a downstream project. The canonical templates never leave `_core/`; this repo's `.claude/` is the proof that the bind process produces a working setup.
 
-If you bind a downstream project from this repo, your `.claude/rules/` gets a *resolved* copy (toggle blocks stripped per your selections). The originals never leave `_core/`.
+When canonical templates evolve in `_core/project-template/.claude/rules/`, re-bind by re-resolving against `.claude/BIND.md` and replacing the corresponding `.claude/rules/*.md`. Same flow as the existing `.claude/skills/` bind.
 
 ---
 
@@ -41,7 +41,7 @@ The page itself is the deliverable. There is no separate frontend build step; `i
 
 ## Git workflow
 
-Per `_core/project-template/.claude/rules/git.md`:
+Per `.claude/rules/git.md` (resolved from canonical `_core/project-template/.claude/rules/git.md`):
 
 - **Atomic commits.** One logical change per commit. Format: `<type>(<scope>): <imperative description>` (max 72 chars).
 - **Conventional types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `data`.
@@ -58,7 +58,7 @@ Per `_core/project-template/.claude/rules/git.md`:
 
 ## Token-efficiency discipline
 
-Per `_core/project-template/.claude/rules/token-efficiency.md`:
+Per `.claude/rules/token-efficiency.md` (resolved from canonical `_core/project-template/.claude/rules/token-efficiency.md`):
 
 - **Task tracking is mandatory for 3+ step sessions.** Use the `TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet` tools (standard Claude Code as of v2.1.142, default-flip May 2026; opt-in available since v2.1.16, Jan 2026; on older builds or when `CLAUDE_CODE_ENABLE_TASKS=0` is set, `TodoWrite` is the fallback). Enumerate the planned steps with `TaskCreate` at session start. To chain dependencies, capture each new task's ID from the `tool_result` and call `TaskUpdate({ taskId, addBlockedBy: [<prereq-id>] })` (`addBlockedBy` is a `TaskUpdate` input parameter, not a separate tool). `TaskUpdate({ taskId, status: 'in_progress' })` BEFORE starting; `TaskUpdate({ taskId, status: 'completed' })` immediately when done — don't batch. New follow-ups discovered mid-session get their own `TaskCreate` call. The task list is the in-session source of truth and the basis for the session-close DoD audit. Single-task or trivial conversational work doesn't need it; the threshold is 3+ discrete items. **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front and chain dependencies with `TaskUpdate({ taskId, addBlockedBy: [<prior-pr-task-id>] })` so the task list mirrors the merge order — treating a 10-PR chain as ad-hoc work burns hours on out-of-sequence routing.
 - **Read before writing.** Locate the relevant function/class before reading whole files. Use `tokensave_body <symbol>` to pull a single symbol's source when reading the whole file would be wasteful.
@@ -78,7 +78,7 @@ Per `_core/project-template/.claude/rules/token-efficiency.md`:
 
 This project ships templates that downstream users install verbatim. A malicious PR landing on `main` could inject hidden code into the bundle that every future bind ships to every user. That makes the review surface load-bearing in a way ordinary OSS isn't.
 
-Per `_core/project-template/.claude/rules/review-tiers.md`, applied with extra strictness here:
+Per `.claude/rules/review-tiers.md` (resolved from canonical `_core/project-template/.claude/rules/review-tiers.md`), applied with extra strictness here:
 
 - **Two tiers.** Routine review (Sonnet, every PR) + on-demand deep review (Opus, fired by `@claude review` comment).
 - **Binary verdict rule.** `🟢 LGTM` only when fully clean. `🔴 Blocking` when *any* real finding exists. No "minor non-blocking" rot. This applies to both tiers.
@@ -96,7 +96,7 @@ The routine-review + deep-review workflows are tracked-follow-up for installatio
 
 ## Visual-slice discipline
 
-The page IS a visual artifact. Per `_core/project-template/.claude/rules/visual.md`:
+The page IS a visual artifact. Per `.claude/rules/visual.md` (resolved from canonical `_core/project-template/.claude/rules/visual.md`):
 
 - Ship one verifiable slice at a time. Smaller than ~150 lines of net change per slice.
 - **Local-iterate-then-push** for visual changes. Commit locally, report, wait for visual approval, then push. Skipping this burns CI cycles on iteration.
@@ -106,13 +106,12 @@ The page IS a visual artifact. Per `_core/project-template/.claude/rules/visual.
 
 ## Session ritual
 
-Skills `/session-start` and `/session-close` (and `/find`, `/architecture-graph`) live at `.claude/skills/` — this repo is self-bound from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` with Discovery-mode resolution for null toggles. See `.claude/BIND.md` for the full audit trail (placeholders, toggle decisions, evidence). When templates evolve in `_core/`, re-resolve and replace the corresponding `.claude/skills/*.md` files; once issue #3 (v1.2.0 Audit mode) ships, that flow becomes automated.
+Skills `/session-start` and `/session-close` (and `/find`, `/architecture-graph`) live at `.claude/skills/` — this repo is self-bound from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` with Discovery-mode resolution for null toggles. Rules at `.claude/rules/` follow the same bind pattern from `_core/project-template/.claude/rules/`. See `.claude/BIND.md` for the full audit trail (placeholders, toggle decisions, evidence). When templates evolve in `_core/`, re-resolve and replace the corresponding `.claude/skills/*.md` and `.claude/rules/*.md` files; once issue #3 (v1.2.0 Audit mode) ships, that flow becomes automated.
 
 ---
 
 ## What's intentionally NOT here
 
-- **No `.claude/rules/` duplication** — rules live canonically in `_core/project-template/.claude/rules/` and are referenced from here. A downstream bind copies them out with toggle blocks resolved.
 - **Routine + deep review workflows not yet installed** — the workflows exist canonically in `_core/project-template/.github/workflows/` but haven't been copied to this project's own `.github/workflows/` yet. Tracked follow-up.
 
 ---
