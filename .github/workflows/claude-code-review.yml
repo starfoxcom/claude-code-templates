@@ -155,6 +155,13 @@ jobs:
               'REPO_URL', 'ONE_LINE_DESCRIPTION',
               'GITFLOW_OR_TRUNK',
               'TIMEZONE',
+              # v1.3.0 — `tools.code_research` slot, per-tool resolution at
+              # bind time from `manifest.tools` + `code-research-profiles.json`.
+              # See SETUP.md Phase 3 step 2 + TOGGLES.md per-value markers.
+              'TOOLS_CODE_RESEARCH_NAME',
+              'TOOLS_CODE_RESEARCH_URL',
+              'TOOLS_CODE_RESEARCH_NAME_KEBAB',
+              'TOOLS_CODE_RESEARCH_BYPASS_MARKER',
           }
           placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
           for fname in changed:
@@ -359,6 +366,25 @@ jobs:
             - 🔴 Blocking when ANY real finding exists, regardless of framing. "Minor nit" that suggests a real correctness improvement is 🔴. "All clear with caveats" is a contradiction — caveats make it 🔴.
             - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
             - "All clear on X" is allowed AS A SECTION HEADING. NEVER as the verdict line when other sections have findings.
+
+            **MANDATORY when you marked the PR for escalation in Step 2.5 (auto-escalate OR uncertainty-based):** before the final verdict line, append a `### 🟡 Uncertainty surfaced — needs-deep-review requested` section. PR readers must see *what specifically* the deep pass is being asked to verify, not just *that* a deep pass was triggered. A `@claude review this PR` trigger comment without a 🟡 section in the verdict above it is unmotivated and degrades the deep tier's signal quality — readers see only the trigger, not the rationale.
+
+            Format (this block goes BEFORE the final verdict line; verdict stays binary 🟢/🔴):
+
+            ```
+            ### 🟡 Uncertainty surfaced — needs-deep-review requested
+
+            - `<file:line>` — <what specifically concerns you about this change in 1 sentence>.
+              **Why I am not confident:** <one sentence on the limit of your analysis — what you cannot fully verify from the diff/the files you read>.
+              **What I want Opus to verify:** <one sentence naming the concrete check — invariant, contract, edge case>.
+            - ...
+
+            A depth-pass request follows in the next comment.
+            ```
+
+            For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the trigger comment in Step 4 already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4.
+
+            🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for Opus). Binary verdict + optional 🟡 section are independent dimensions.
 
             ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
 
