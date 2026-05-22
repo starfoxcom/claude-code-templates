@@ -4,6 +4,69 @@ All notable changes to this project will be documented in this file. The format 
 
 Earlier conversational `v17` and `v18` mentions never shipped as standalone artifacts — they're consolidated into the v1.0.0 release.
 
+## [v1.3.0] — 2026-05-21 — code_research agnostification
+
+The `tools.code_research` slot was promised in v1.0.0 (tokensave / ast-grep / Sourcegraph / ctags / Semgrep / none / other) but the canonical templates, the hook file, and the `/find` skill hardcoded `tokensave` references. Downstream users who picked a different code-research tool got templates that referenced tools their project didn't have. This release wires the slot through end to end **and establishes the per-value-marker + tool-profile-JSON pattern as the canonical mechanism for the other four tool slots** (`precommit` / `ci` / `ai_reviewer` / `issue_tracker`) that remain hardcoded or absent in templates today.
+
+Scope intentionally exceeded Issue #10's letter — `/find` parametrisation pulled in `/architecture-graph`, `_core/project-template/.claude/rules/token-efficiency.md`, `_core/project-template/.claude/skills/session-close/SKILL.md`'s adherence-metric section, and `_core/global-template/CLAUDE.md.additions`'s no-Explore-agents rule, because hardcoded tokensave references in any of those would have re-exposed the same surface for the next person to hit.
+
+### Added
+- **Generic hook template + per-tool profile system.** `_core/global-template/hooks/code-research-first.py.template` is the new canonical hook. `_core/global-template/hooks/code-research-profiles.json` holds per-tool profile data (display name, bypass marker, detection mode + target, command sequence bullets) for tokensave / ast-grep / Sourcegraph / ctags / Semgrep / none / custom. The bind step picks the profile matching `tools.code_research`, substitutes its placeholders into the template, and writes the result to `~/.claude/hooks/<tool>-first.py` (e.g., `tokensave-first.py`, `ast-grep-first.py`).
+- **Canonical SETUP.md shipped at bind time.** The configurator now fetches `SETUP.md` from the same-origin GitHub Pages deployment when assembling the zip. If fetch fails (file:// protocol, offline, CORS), it falls back to an inline stub that captures the v1.3 contract verbatim. Both paths produce a `SETUP.md` in the downloaded archive — downstream Claude sessions never read a stale stub.
+- **Atomic write contract for `~/.claude/hooks/*.py` and `~/.claude/settings.json`.** SETUP.md § Phase 7a documents the `.tmp` + `fsync` + `os.replace` pattern; a crash mid-bind cannot corrupt the user's global hook config.
+- **Profile schema validation step.** SETUP.md § Phase 7a validates the resolved profile against `code-research-profiles.json`'s inline `_schema` field (required-field presence, `detection_mode` enum, `bypass_marker` regex, `detection_target` path-traversal guard) before rendering. Malformed profiles abort with a clear error.
+- **Per-value toggle marker syntax.** New marker shape `<!-- TOGGLE:<slot>:<value> START/END -->` for single-select tool slots (`code_research`, `precommit`, `ci`, `ai_reviewer`, `issue_tracker`). Symmetric with the existing boolean `:off` markers — same binder logic, parameterized by what to match against. Documented in TOGGLES.md § "Per-value markers for tool slots".
+- **`{{TOOLS_<SLOT>_NAME}}`, `{{TOOLS_<SLOT>_URL}}`, `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` placeholders.** Substituted at bind time from the configurator's `tools.<slot>` selection + the hook profile JSON. Documented in SETUP.md § Phase 3 step 2.
+
+### Changed
+- **`/find` skill parametrised (closes issue #10).** Canonical `_core/project-template/.claude/skills/find/SKILL.md` now ships seven per-tool blocks (tokensave / ast-grep / Sourcegraph / ctags / Semgrep / none / custom); the bind step keeps only the block matching `tools.code_research`. Each block is self-contained: sequence + reporting + why-this-exists. Shared fallback + citation prose uses `{{TOOLS_CODE_RESEARCH_NAME}}` placeholders.
+- **`/architecture-graph` skill parametrised.** Generation step 1 (enumerate boundaries) and Refresh step 2 (diff against code reality) carry per-tool blocks; the bind step resolves to the chosen tool's primitive.
+- **`_core/project-template/CLAUDE.md` "BEFORE ANY CODE RESEARCH" + "TOKENSAVE ENTRY POINT" sections agnostified.** The two sections now reference `{{TOOLS_CODE_RESEARCH_NAME}}` and delegate per-tool command shapes to `/find`. The "TOKENSAVE ENTRY POINT" heading renamed to "CODE-RESEARCH ENTRY POINT".
+- **`_core/project-template/.claude/rules/token-efficiency.md` "Read before writing" rule** simplified to "invoke `/find` first," delegating per-tool sequence to the skill. The boolean "If tokensave is installed / Otherwise" branch is gone.
+- **`_core/project-template/.claude/skills/session-close/SKILL.md` Tokensave-adherence section** generalised to "Code-research adherence metric" — counts calls matching the chosen tool's primitive shape vs Grep/Glob fallbacks. Per-tool counting heuristic via `<!-- TOGGLE:code_research:<value> START/END -->` blocks.
+- **`_core/global-template/CLAUDE.md.additions` rule heading** renamed from "No Explore Agents When Tokensave Is Available" to "No Explore Agents When the Project's Code-Research Tool Is Available". Per-tool guidance via `:code_research:<value>` blocks; the tokensave-specific tool list moved inside the `:tokensave` block.
+- **`_core/global-template/README.md` verify question** rephrased from "tokensave-first rule" to "no-Explore-agents-for-code-research rule".
+- **Configurator UI blurbs (index.html + redesign/data.jsx + index.legacy.html).** The `tokensave_entry_point` toggle's label, controls, and blurb fields now describe the agnostic semantics. The toggle ID is preserved (legacy — see "Known follow-ups" below).
+- **Manifest entries** (index.legacy.html) updated: ships `code-research-first.py.template` + `code-research-profiles.json` instead of the old hand-coded `tokensave-first.py`.
+
+### Removed
+- **`_core/global-template/hooks/tokensave-first.py`** (orphan after the template+profile system supersedes it). The bind step renders the equivalent file from the template + tokensave profile.
+
+### Migration
+
+**If you do NOT re-bind, nothing changes for you.** Your existing `~/.claude/hooks/tokensave-first.py` (hand-installed or installed by a prior bind) keeps working unchanged. The v1.3.0 patch updates only the canonical templates in this repo; nothing on your machine is touched until you re-run setup.
+
+**To pick up the parametrised templates on an existing v1.2.1 bind:**
+1. Re-download the configurator zip from https://starfoxcom.github.io/claude-code-templates/ with the same bundle + same `tools.code_research` value you previously chose.
+2. Unzip at your project root (overwriting the prior `claude-code-templates/` folder is fine).
+3. Paste the new `PASTE-TO-CLAUDE.md` content into Claude Code. Claude reads the bundled (or fetched) `SETUP.md`, walks through Phase 1 → Phase 7a, regenerates `.claude/skills/` + hook + CLAUDE.md sections against the new canonical.
+4. The bind step asks before overwriting any file whose content diverges from the rendered output — your hand-edits in `~/.claude/hooks/tokensave-first.py` are preserved on a "no" answer.
+
+**To switch tools** (e.g., from `tokensave` to `ast-grep`):
+1. Re-run setup as above but pick the new `tools.code_research` value in the configurator UI.
+2. The bind step:
+   - Computes the new profile (`ast-grep` → `filename_basename: "ast-grep-first"`).
+   - Renders the new `~/.claude/hooks/ast-grep-first.py`.
+   - Adds the new matcher entry to `~/.claude/settings.json` (atomic write via `.tmp` + `os.replace` — never corrupts the file mid-write).
+   - Detects the orphan `tokensave-first.py` entry, asks before removing it + deleting the file.
+   - Re-resolves CLAUDE.md / `/find` / `/architecture-graph` / session-close adherence sections against `ast-grep` (per-tool blocks).
+   - Updates the global CLAUDE.md additions section block.
+
+**To switch to `none`** (no enforcement hook): pick `tools.code_research: "none"` and `tokensave_entry_point: false`. The bind step still runs the orphan cleanup — your stale `tokensave-first.py` registration is removed.
+
+**Hook is advisory, not a security boundary** — it fails open on malformed input and unknown profile fields. Don't rely on it for sandboxing; rely on it for Claude-discipline.
+
+### Known follow-ups
+- **`tokensave_entry_point` toggle rename to `code_research_first`** — the toggle's semantics are now agnostic, but its name carries the legacy. Renaming is a breaking change to existing bound projects' `bundle.toggles.md` manifests. Tracked for v1.3.x; needs a coordinated migration note in SETUP.md (with a `developer_branch`/`default_branch`-style alias resolution for backward compat) so downstream users can hand-edit their manifests on upgrade.
+- **Per-tool MCP server / CLI installation guidance.** The hook template assumes the chosen tool is already installed on the user's machine — it detects presence and blocks-or-allows accordingly, but doesn't install the tool itself. For non-tokensave tools, the setup summary should include a "to install <tool>: …" hint sourced from the profile's `url` field.
+- **Extend the per-value marker + tool-profile pattern to the other four tool slots.** `precommit` / `ci` / `ai_reviewer` / `issue_tracker` slots currently emit a chosen value but the canonical templates don't parametrise per-value. Tracked for v1.3.x / v1.4.x; the documentation precedent for adding new slots is in TOGGLES.md § "Adding a new tool slot".
+
+### Versioning policy
+- **Minor** release per the SemVer rules: wires an existing v1.0.0 promise (`tools.code_research` slot) through the canonical templates end-to-end, adds the per-value marker syntax + tool-profile JSON pattern, no toggle catalog renames / bundle key renames / manifest schema breaking changes. Downstream binds at v1.2.1 keep working — re-fetch templates to pick up the parametrised skills + hook profile system. Existing `tools.code_research: "tokensave"` users get an equivalent hook at the same filename path.
+- **New configurator contract:** every `TOOL_SLOTS[<slot>].options[<i>]` entry now carries a `key` field (lowercase, profile-lookup-safe; falls back to `name.toLowerCase()` for compat). Third-party forks adding options to any tool slot MUST set `key` explicitly — `buildManifest()` emits `key` not `name` into `tools.<slot>`. This is additive (existing options keep working via the fallback) but contributors should set `key` going forward.
+
+---
+
 ## [v1.2.1] — 2026-05-20
 
 Security patch on top of v1.2.0. Closes a false-green gate vulnerability introduced when v1.2.0 removed the verdict timestamp cutoffs. No user-visible UI changes; no contract changes; templates-only consumers and the live gate both get the corrected mechanism.
