@@ -105,8 +105,8 @@ Evaluate in order — apply the first row that matches:
 | No code changes (context refresh only) | Generate context file + commit + PR + paths-ignore fast-path auto-merge + branch cleanup. |
 | Changes exist, branch objective **incomplete** | Commit with work done. No PR. |
 | Changes exist, branch objective **complete** | Commit + PR to `{{DEV_BRANCH}}` + standard polling-loop merge + branch cleanup. |
-| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEV_BRANCH}}` is managed from GitHub). |
-| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`. |
+| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}`. After merge: **open a cascade PR `chore/cascade-<hotfix-name>` from `{{DEV_BRANCH}}` merging `{{MAIN_BRANCH}}` in** — Gitflow's "merges to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`" is a discipline, not a platform feature. Hotfix is not "done" until the cascade PR is merged. See `git.md` § "Cascade after every merge to `{{MAIN_BRANCH}}`". |
+| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}`. After merge: cascade `{{MAIN_BRANCH}}` → `{{DEV_BRANCH}}` via `chore/cascade-<release-name>` PR. Same discipline as hotfix. |
 
 Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — never `&&`-chain post-merge cleanup steps.
 
