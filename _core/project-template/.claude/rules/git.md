@@ -117,7 +117,7 @@ Verify your current branch BEFORE editing any file whose correct home depends on
 
 - Before the first edit of a task, run `git branch --show-current`. Switch first, branch second, then edit.
 - Never edit on the wrong branch and rely on `git stash → checkout → branch → stash pop` to recover. The stash dance works mechanically but hides the scope violation that put you on the wrong branch, and trains you to skip verification next time. If you find yourself reaching for it, pause — that's the signal that the up-front check got skipped.
-- Bolting a workflow change onto a release PR because the cursor was already on that branch tempts the App-auth OIDC failure → admin-merge bypass → mixed-scope merge on a published release. Three downstream mistakes from one missed `git branch --show-current` call. The cost of the check is ~0; the cost of the recovery can be a published revert.
+- Bolting a workflow change onto a different-scope PR because the cursor was already on that branch tempts the App-auth OIDC failure → admin-merge bypass → mixed-scope merge on a published branch. Three downstream mistakes from one missed `git branch --show-current` call. The cost of the check is ~0; the cost of the recovery can be a published revert.
 
 ---
 
