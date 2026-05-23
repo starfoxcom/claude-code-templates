@@ -73,7 +73,7 @@ done
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
 ### Fast-path / auto-pass PRs
 
-When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires but `triage` classifies the diff as non-reviewable, the `evaluate-review-outcome` job is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and the required check auto-passes (GitHub treats a skipped required job as passing). The whole run completes in ~30 seconds.
+When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks (`Evaluate review outcome` and `Claude On-Demand`) resolve to passing states. The whole run completes in ~30 seconds.
 
 ```bash
 # Background pattern — uses gh's built-in --jq; no external jq required:
