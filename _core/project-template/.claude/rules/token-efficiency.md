@@ -73,7 +73,7 @@ done
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
 ### Fast-path / auto-pass PRs
 
-When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires but `triage` classifies the diff as non-reviewable, the `evaluate-review-outcome` job is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and the required check auto-passes (GitHub treats a skipped required job as passing). The whole run completes in ~30 seconds.
+When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks (`Evaluate review outcome` and `Claude On-Demand`) resolve to passing states. The whole run completes in ~30 seconds.
 
 ```bash
 # Background pattern — uses gh's built-in --jq; no external jq required:
@@ -85,7 +85,7 @@ gh pr view <pr> --json statusCheckRollup
 
 After the notification:
 
-1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SKIPPED`.
+1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (the job runs via `if: always()`, PATCHes `Claude On-Demand` to `skipped` for non-reviewable diffs, then exits 0), and `Claude On-Demand: SKIPPED`.
 2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
 3. **Auto-merge** with `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate that maintainers can self-clear).
 4. **Delete branches** (local + remote) per standing authorization.
