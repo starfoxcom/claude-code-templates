@@ -48,16 +48,19 @@ jobs:
   init-deep-check:
     name: Init deep-tier check
     # Always run — every PR gets a `Claude On-Demand` check on its HEAD SHA
-    # so branch protection has something to evaluate. The check defaults to
-    # neutral (passing) and is later upgraded to in_progress if routine
-    # auto-escalates, then to success/failure by claude.yml's evaluator.
+    # so branch protection has something to evaluate. The check starts at
+    # status=in_progress ("Waiting for routine review to evaluate"), then
+    # downstream jobs PATCH it through the lifecycle:
+    #   • triage non-reviewable / Sonnet no escalation → conclusion=skipped
+    #   • Sonnet escalates → status=in_progress titled "Deep review in progress"
+    #   • Opus completes → conclusion=success/failure (claude.yml)
     runs-on: ubuntu-latest
     permissions:
       contents: read
       checks: write
       pull-requests: read
     steps:
-      - name: Create Claude On-Demand check at neutral on PR HEAD SHA
+      - name: Create Claude On-Demand check at in_progress on PR HEAD SHA
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -78,11 +81,10 @@ jobs:
           gh api "repos/$REPO/check-runs" -X POST \
             -F name="Claude On-Demand" \
             -F head_sha="$HEAD_SHA" \
-            -F status="completed" \
-            -F conclusion="neutral" \
-            -F "output[title]=Deep review not required" \
-            -F "output[summary]=This PR did not trigger deep-review escalation. To request a deep review, post a comment containing \`@claude review this PR — depth pass on <focus>\`."
-          echo "::notice::Created neutral Claude On-Demand check on $HEAD_SHA"
+            -F status="in_progress" \
+            -F "output[title]=Waiting for routine review to evaluate" \
+            -F "output[summary]=The routine review (Sonnet) is evaluating whether deep-tier review is needed. This check will resolve to skipped (no escalation) or in_progress → success/failure (escalated to Opus)."
+          echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
 
   triage:
     name: Diff triage
@@ -484,13 +486,16 @@ jobs:
 
             **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true. If the only `@claude` in your comment is inside backticks or a code block, the deep tier silently skips.
 
-      # ── Flip Claude On-Demand check to in_progress when routine auto-escalates ─
+      # ── Resolve Claude On-Demand check based on escalation state ──────────
       # Runs AFTER the action step above so we observe the label-applied state
-      # the action just produced. If `needs-deep-review` is on the PR, the
-      # Claude On-Demand check (created at neutral by init-deep-check) is
-      # PATCHed to in_progress so branch protection blocks merge until the
-      # deep tier reports its verdict on this HEAD SHA.
-      - name: Flip Claude On-Demand to in_progress on auto-escalation
+      # the action just produced. The check (created at in_progress by
+      # init-deep-check) is PATCHed to one of two terminal-ish states:
+      #   • No needs-deep-review label → conclusion=skipped (passes branch
+      #     protection; visually clear "this didn't run").
+      #   • Label applied → status=in_progress with updated title "Deep
+      #     review in progress" — branch protection blocks merge until
+      #     claude.yml PATCHes to success/failure.
+      - name: Resolve Claude On-Demand check post-routine
         if: always() && steps.claude-review.conclusion != 'cancelled'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -498,12 +503,6 @@ jobs:
           PR="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-
-          LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
-          if ! echo "$LABELS" | grep -q "needs-deep-review"; then
-            echo "::notice::Routine did not auto-escalate — leaving Claude On-Demand check at neutral"
-            exit 0
-          fi
 
           CHECK_ID=$(gh api \
             "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
@@ -513,11 +512,21 @@ jobs:
             exit 1
           fi
 
-          gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
-            -F status="in_progress" \
-            -F "output[title]=Deep review in progress" \
-            -F "output[summary]=Routine auto-escalated. Waiting for the Opus deep-tier verdict (claude.yml will PATCH this check on completion)."
-          echo "::notice::Flipped Claude On-Demand check $CHECK_ID to in_progress"
+          LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          if echo "$LABELS" | grep -q "needs-deep-review"; then
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="in_progress" \
+              -F "output[title]=Deep review in progress" \
+              -F "output[summary]=needs-deep-review applied. Waiting for the Opus deep-tier verdict (claude.yml will PATCH this check on completion)."
+            echo "::notice::Set Claude On-Demand check $CHECK_ID to in_progress (escalated)"
+          else
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="completed" \
+              -F conclusion="skipped" \
+              -F "output[title]=Deep review skipped — no escalation" \
+              -F "output[summary]=Routine review found no uncertainty warranting deep-tier escalation. To request a deep review anyway, post a comment containing \`@claude review this PR — depth pass on <focus>\`."
+            echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (no escalation)"
+          fi
 
   evaluate-review-outcome:
     name: Evaluate review outcome
@@ -533,7 +542,9 @@ jobs:
     # against the PR HEAD SHA. Branch protection ANDs the two checks; this
     # job does NOT need to know about the deep verdict.
     #
-    #   1. Triage classified the diff as non-reviewable → auto-pass.
+    #   1. Triage classified the diff as non-reviewable → auto-pass + PATCH
+    #      Claude On-Demand to conclusion=skipped (otherwise it'd be stuck
+    #      at in_progress and block merge).
     #   2. Routine review job didn't reach success → fail (action errored,
     #      OIDC tripped, workflow-validation skip, runner crash).
     #   3. Routine verdict comment missing or 🔴 → fail.
@@ -544,15 +555,34 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+      # Needed for the non-reviewable-diff path to PATCH Claude On-Demand to
+      # skipped — without this the deep check stays at in_progress on
+      # docs/rules-only PRs and branch protection blocks the merge.
+      checks: write
     steps:
       - name: Resolve routine verdict
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
 
           if [ "${{ needs.triage.outputs.run_review }}" != "true" ]; then
             echo "✅ Triage classified diff as non-reviewable — gate auto-passes"
+            CHECK_ID=$(gh api \
+              "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
+            if [ -n "$CHECK_ID" ]; then
+              gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+                -F status="completed" \
+                -F conclusion="skipped" \
+                -F "output[title]=Deep review skipped — diff non-reviewable" \
+                -F "output[summary]=Triage classified the diff as non-reviewable (docs, rules, manifest tweaks). Deep review not applicable."
+              echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (non-reviewable diff)"
+            else
+              echo "::warning::Claude On-Demand check missing on $HEAD_SHA — init-deep-check may have failed"
+            fi
             exit 0
           fi
           if [ "${{ needs.claude-review.result }}" != "success" ]; then
