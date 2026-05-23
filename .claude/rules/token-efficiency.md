@@ -50,6 +50,27 @@ done
 
 **On any-red (🔴 verdict or workflow failure):** fetch failing logs with `gh run view <id> --log-failed`, identify the offending job + step, propose the fix in one sentence, apply it, push. The push triggers a fresh polling loop on the new SHA. Don't ask permission for routine breakages (compile errors, missing-file paths, lint, dependency-version pins) — fix and push. Ask only when the failure is genuinely ambiguous (flaky test, infra outage, behavior-change-vs-test disagreement).
 
+### Fast-path / auto-pass PRs
+
+When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks resolve to passing states. The whole run completes in ~30 seconds.
+
+```bash
+# Background pattern — uses gh's built-in --jq; no external jq required:
+until [ "$(gh run list --branch <branch> --workflow=claude-code-review.yml --limit 1 --json status --jq '.[0].status')" = "completed" ]; do
+  sleep 90
+done
+gh pr view <pr> --json statusCheckRollup
+```
+
+After the notification:
+
+1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS`, and `Claude On-Demand: SKIPPED`.
+2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
+3. **Auto-merge** with `gh pr merge <pr> --merge --admin`.
+4. **Delete branches** (local + remote) per standing authorization.
+
+This fast path is **only** for PRs the routine reviewer skips — if `Diff triage` reports `run_review=true`, fall back to the standard 7-minute polling loop and read the verdict comment.
+
 ---
 
 ## Usage ceiling rule
