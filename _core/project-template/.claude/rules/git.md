@@ -211,10 +211,10 @@ A feature is complete when it can be exercised end-to-end in the running app —
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
 ## Auto-merge on fast-path PRs
 
-PRs whose diff the routine reviewer will skip (no source-extension files changed — typically docs-only, rules-only, `.claude/**`, manifest tweaks) cause the workflow to fire, `triage` to classify the diff as non-reviewable, and `evaluate-review-outcome` to be skipped (a skipped required job auto-passes the gate). The whole run completes in ~30 seconds. Don't sit on a 7-minute polling loop — but also **don't foreground-sleep**; both cadences run in the background.
+PRs whose diff the routine reviewer will skip (no source-extension files changed — typically docs-only, rules-only, `.claude/**`, manifest tweaks) cause the workflow to fire, `triage` to classify the diff as non-reviewable, and `evaluate-review-outcome` to run via `if: always()` — taking the non-reviewable-diff path, PATCHing `Claude On-Demand` to `skipped`, and exiting 0 (gate passes). The whole run completes in ~30 seconds. Don't sit on a 7-minute polling loop — but also **don't foreground-sleep**; both cadences run in the background.
 
 1. **Background-poll** with `run_in_background: true` and an until-loop that sleeps 90 s per check (see `token-efficiency.md` § "Fast-path / auto-pass" for the exact pattern). The harness notifies on exit; work on the next thing in the meantime.
-2. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SKIPPED`.
+2. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS`, and `Claude On-Demand: SKIPPED`.
 3. **Verify mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approval gate, which `--admin` resolves for the maintainer).
 4. `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate maintainers can self-clear).
 5. Delete local + remote branch.
