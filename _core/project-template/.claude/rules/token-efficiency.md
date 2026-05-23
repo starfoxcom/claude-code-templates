@@ -85,7 +85,7 @@ gh pr view <pr> --json statusCheckRollup
 
 After the notification:
 
-1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SKIPPED`.
+1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (the job runs via `if: always()`, PATCHes `Claude On-Demand` to `skipped` for non-reviewable diffs, then exits 0), and `Claude On-Demand: SKIPPED`.
 2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
 3. **Auto-merge** with `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate that maintainers can self-clear).
 4. **Delete branches** (local + remote) per standing authorization.
