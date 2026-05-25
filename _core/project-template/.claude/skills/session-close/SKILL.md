@@ -54,6 +54,16 @@ powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'"
 **Context file structure:** current state only — decisions and implementation details not derivable from the code. Conventions and rules already live in `.claude/rules/` — do not duplicate.
 
 **Uniqueness rule:** exactly **one** `*-CONTEXT_*.md` must exist in the root at all times. When creating a new one, delete the previous with `git rm`.
+
+### Model + effort outcome log
+
+Append to the regenerated context file under a `## Session model setup` section:
+
+- **Recommended at start:** <model> · <effort> · <archetype>
+- **Used:** <model> · <effort> (note any mid-session switches with reason)
+- **Outcome:** <retries needed? cleanup PR needed? wrong-branch edits? notes>
+
+Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for matrix tuning. After ~10 sessions, the session-start matrix in `.claude/skills/session-start/SKILL.md` can be tuned from real data instead of community reports. **This section sits inside the `context_refresh_files` toggle** because it appends to the file that toggle creates; disabling the toggle strips both coherently.
 <!-- TOGGLE:context_refresh_files END -->
 
 ### Update derived docs

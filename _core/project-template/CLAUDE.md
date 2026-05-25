@@ -70,6 +70,8 @@ Every work session begins with this ritual. On prompt like "session start" or "r
 
    **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front and chain dependencies with `TaskUpdate({ taskId, addBlockedBy: [<prior-pr-task-id>] })` so the task list mirrors the merge order. A 10-PR chain treated as ad-hoc work burns hours on out-of-sequence routing — the upfront enumeration prevents that.
 
+5. **Recommended model + effort** — match the planned step list (from step 4) against the session-shape matrix in `.claude/skills/session-start/SKILL.md` and emit a `## Recommended setup for this session` block. Switch BEFORE code work — switching after context loads pays a full re-read. The matrix is a starting point, not a permanent answer; tune the rows from your own `## Session model setup` log (written by `/session-close`) rather than treating the seeded defaults as fixed.
+
 Do not start code work until I approve or correct the plan.
 
 **During the session:**
