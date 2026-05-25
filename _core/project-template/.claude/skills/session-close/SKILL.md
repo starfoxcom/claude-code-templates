@@ -60,6 +60,16 @@ powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'"
 
 If applicable, update `CLAUDE.md`, `README.md`, and any touched module's `ROADMAP.md` with relevant changes. Clearly indicate which sections changed.
 
+### Model + effort outcome log
+
+Append to the regenerated context file under a `## Session model setup` section:
+
+- **Recommended at start:** <model> · <effort> · <archetype>
+- **Used:** <model> · <effort> (note any mid-session switches with reason)
+- **Outcome:** <retries needed? cleanup PR needed? wrong-branch edits? notes>
+
+Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for matrix tuning. After ~10 sessions, the session-start matrix in `.claude/skills/session-start/SKILL.md` can be tuned from real data instead of community reports.
+
 <!-- TOGGLE:dod_devlog_step START -->
 ### Devlog draft (only when a milestone just closed)
 

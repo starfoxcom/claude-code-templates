@@ -32,9 +32,39 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
 5. **Session steps** — ordered list of work items with dependencies called out. Keep it tight (3–7 items typically); longer plans get split.
 
+6. **Model + effort recommendation** — match the planned steps against the session-shape matrix below and emit the recommendation block before the approval gate. **Edit the rows to match your project's actual session shapes** — this is a starting point, not a permanent answer.
+
+   | Session archetype | Model | Effort |
+   |---|---|---|
+   | Architectural / design lock / threading or state-machine review | `claude-opus-4-6[1m]` | xhigh |
+   | High-blast-radius surface (supply-chain, public API, auth, parsers, migrations) | `claude-opus-4-6[1m]` | high |
+   | Multi-module refactor or cross-cutting public API change | `claude-opus-4-6[1m]` | high |
+   | Multi-PR workstream (hotfix + cascade, large split refactor) | `claude-opus-4-6[1m]` | high |
+   | Tightly-scoped single-bug fix from CI failure with clear repro | `claude-opus-4-7` | high |
+   | Vision-heavy / screenshot-driven verify session | `claude-opus-4-7` | high |
+   | UI / single-file feature code / visual iteration | `claude-sonnet-4-6` + `/fast` | medium |
+   | CI / workflow YAML / `settings.json` (single-file, no state machine) | `claude-sonnet-4-6` | medium |
+   | Pure docs / ROADMAP / devlog / context-refresh | `claude-sonnet-4-6` | low |
+   | Mass mechanical refactor (rename, file moves, header splits) | `claude-sonnet-4-6` | medium |
+
+   Emit:
+
+   ```
+   ## Recommended setup for this session
+
+   - Model: <id>
+   - Effort: <level>
+   - Archetype: <row name>
+   - Rationale: <one line — plan → archetype; cite project memory or 4.6-vs-4.7 evidence when picking 4.6 over the default>
+   - Switch before code work: `/model <id>`; set effort via the harness's effort selector. Switching after context loads pays a full re-read.
+   - Drift trigger: re-evaluate if a mid-session `TaskCreate` shifts scope into a higher-risk archetype.
+   ```
+
+   **Why the default is 4.6, not 4.7:** independent measurements show Opus 4.7 regressed against 4.6 on multi-step instruction following (chains fail by step 3–4), long-context retrieval (MRCR v2: 91.9% → 59.2%), and code/structured-data cost (+32–34% tokenizer inflation). 4.7 still wins on tightly-scoped SWE-Bench-shaped fixes — that's why one matrix row picks it. Source: [anthropics/claude-code#58369](https://github.com/anthropics/claude-code/issues/58369).
+
 ## Stop here — wait for approval
 
-Do NOT start code work until the user approves or corrects the plan. The plan is the contract for the session.
+Do NOT start code work until the user approves or corrects the plan **and the model + effort setup**. The plan is the contract for the session.
 
 ## After approval
 
