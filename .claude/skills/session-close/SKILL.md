@@ -54,6 +54,16 @@ date '+%Y-%m-%d_%H-%M'
 
 **Uniqueness rule:** exactly **one** `CLAUDE-CODE-TEMPLATES-CONTEXT_*.md` must exist in the root at all times. When creating a new one, delete the previous with `git rm`.
 
+### Model + effort outcome log
+
+Append to the regenerated context file under a `## Session model setup` section:
+
+- **Recommended at start:** <model> · <effort> · <archetype>
+- **Used:** <model> · <effort> (note any mid-session switches with reason)
+- **Outcome:** <retries needed? cleanup PR needed? wrong-branch edits? notes>
+
+Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for matrix tuning. After ~10 sessions, the session-start matrix in `.claude/skills/session-start/SKILL.md` can be tuned from real data instead of community reports.
+
 ### Update derived docs
 
 If applicable, update `CLAUDE.md`, `README.md`, `CHANGELOG.md`, or the touched bundle's `bundle.toggles.md`/README with relevant changes. Clearly indicate which sections changed.
