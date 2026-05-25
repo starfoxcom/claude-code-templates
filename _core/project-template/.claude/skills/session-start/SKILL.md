@@ -60,7 +60,15 @@ Run this skill at the beginning of every work session, or whenever the user asks
    - Drift trigger: re-evaluate if a mid-session `TaskCreate` shifts scope into a higher-risk archetype.
    ```
 
-   **Note on extended context:** rows that prefer Opus 4.6 also benefit from the 1M-context variant on plans that include it — pass `/model claude-opus-4-6[1m]` (or the equivalent input format for your harness version) instead of bare `claude-opus-4-6` when available.
+   **Note on extended context.** Rows that prefer Opus 4.6 also benefit from the 1M-context variant on plans that include it — pass `/model claude-opus-4-6[1m]` instead of bare `claude-opus-4-6` when available. The `[1m]` suffix is the documented Claude Code notation for the 1M-context variant (alias or full-name form both accepted) — see [Claude Code model config — Extended context](https://code.claude.com/docs/en/model-config#extended-context).
+
+   **Tuning for your plan tier.** The seeded matrix assumes Opus access (every Claude Code subscription tier — Pro / Max / Team / Enterprise — has it), but cost and 1M-context availability vary:
+
+   - **Pro:** Opus rows consume your subscription quota faster than Sonnet rows. Consider swapping Opus → Sonnet on cost-sensitive sessions, or restrict Opus to the highest-risk archetypes. The `[1m]` variant requires usage credits on Pro.
+   - **Max / Team / Enterprise:** matrix works as-is. Opus 1M-context is auto-included.
+   - **API / pay-as-you-go:** Opus rows are the most expensive. Monitor cost per session via the outcome log written by `/session-close`.
+
+   Full plan-capability table: [Claude Code model config docs](https://code.claude.com/docs/en/model-config). A bind-time `plan_tier` selector that filters / annotates the matrix automatically is a tracked follow-up — see the project's open issues.
 
    **Why the seeded default prefers 4.6 over 4.7:** community evidence (evolving) suggests version-specific tradeoffs on multi-step instruction following, long-context retrieval, and structured-data tokenizer cost — but the picture moves with each model update. **Defaults here are a starting point, not a permanent answer.** Tune the matrix from your own `## Session model setup` log (written by `/session-close`) after ~10 sessions rather than inheriting these defaults indefinitely. If a downstream maintainer wants version-specific evidence in their project-local copy of this skill, they can add it there — the canonical template stays evidence-neutral so it ages well across model updates.
 

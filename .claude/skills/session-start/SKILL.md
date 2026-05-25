@@ -45,6 +45,8 @@ Run this skill at the beginning of every work session, or whenever the user asks
    | Pure docs / ROADMAP / CHANGELOG / context-refresh | `claude-sonnet-4-6` | low |
    | Mechanical refactor (rename, file moves, mass replace) | `claude-sonnet-4-6` | medium |
 
+   **Note:** `[1m]` is the documented Claude Code suffix for the 1M-context variant — see [Claude Code model config — Extended context](https://code.claude.com/docs/en/model-config#extended-context). Auto-included for Opus on this repo's Max plan; downstream forks on other tiers should re-tune the matrix per the canonical's "Tuning for your plan tier" section.
+
    Emit:
 
    ```
