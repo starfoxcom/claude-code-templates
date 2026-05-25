@@ -64,12 +64,13 @@ Every work session begins with this ritual. On prompt like "session start" or "r
    - Hotfix to `{{MAIN_BRANCH}}` → `hotfix/<short-name>`
    - Release prep → `release/<version>`
 3. **Modules touched this session** — which directories the planned work mutates. Flag prerequisite branches.
-4. **Recommended model + effort** — match the planned work against the session-shape matrix in `.claude/skills/session-start/SKILL.md` and emit a `## Recommended setup for this session` block. Switch BEFORE code work — switching after context loads pays a full re-read. The matrix is a starting point, not a permanent answer; tune the rows from your own `## Session model setup` log (written by `/session-close`) rather than treating the seeded defaults as fixed.
-5. **Session steps as a task list** — for any session with 3+ discrete work items, call `TaskCreate` once per step in the planned order. To express dependencies, capture each new task's ID from the `tool_result` and then call `TaskUpdate({ taskId, addBlockedBy: [<prereq-id>] })`. The task list is the source of truth for what's in scope this session — never let it go stale.
+4. **Session steps as a task list** — for any session with 3+ discrete work items, call `TaskCreate` once per step in the planned order. To express dependencies, capture each new task's ID from the `tool_result` and then call `TaskUpdate({ taskId, addBlockedBy: [<prereq-id>] })`. The task list is the source of truth for what's in scope this session — never let it go stale.
 
    > **Tool note:** `TaskCreate`, `TaskUpdate`, `TaskList`, and `TaskGet` are the modern Claude Code task tools (`addBlockedBy` is a `TaskUpdate` input parameter, not a separate tool). On builds that pre-date them, or when `CLAUDE_CODE_ENABLE_TASKS=0` is set, the legacy `TodoWrite` (single-call full-array rewrite, no dependency chaining) is the fallback — express order via array position instead.
 
    **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front and chain dependencies with `TaskUpdate({ taskId, addBlockedBy: [<prior-pr-task-id>] })` so the task list mirrors the merge order. A 10-PR chain treated as ad-hoc work burns hours on out-of-sequence routing — the upfront enumeration prevents that.
+
+5. **Recommended model + effort** — match the planned step list (from step 4) against the session-shape matrix in `.claude/skills/session-start/SKILL.md` and emit a `## Recommended setup for this session` block. Switch BEFORE code work — switching after context loads pays a full re-read. The matrix is a starting point, not a permanent answer; tune the rows from your own `## Session model setup` log (written by `/session-close`) rather than treating the seeded defaults as fixed.
 
 Do not start code work until I approve or correct the plan.
 
