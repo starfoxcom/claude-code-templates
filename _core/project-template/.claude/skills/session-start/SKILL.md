@@ -36,10 +36,10 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
    | Session archetype | Model | Effort |
    |---|---|---|
-   | Architectural / design lock / threading or state-machine review | `claude-opus-4-6[1m]` | xhigh |
-   | High-blast-radius surface (supply-chain, public API, auth, parsers, migrations) | `claude-opus-4-6[1m]` | high |
-   | Multi-module refactor or cross-cutting public API change | `claude-opus-4-6[1m]` | high |
-   | Multi-PR workstream (hotfix + cascade, large split refactor) | `claude-opus-4-6[1m]` | high |
+   | Architectural / design lock / threading or state-machine review | `claude-opus-4-6` | xhigh |
+   | High-blast-radius surface (supply-chain, public API, auth, parsers, migrations) | `claude-opus-4-6` | high |
+   | Multi-module refactor or cross-cutting public API change | `claude-opus-4-6` | high |
+   | Multi-PR workstream (hotfix + cascade, large split refactor) | `claude-opus-4-6` | high |
    | Tightly-scoped single-bug fix from CI failure with clear repro | `claude-opus-4-7` | high |
    | Vision-heavy / screenshot-driven verify session | `claude-opus-4-7` | high |
    | UI / single-file feature code / visual iteration | `claude-sonnet-4-6` + `/fast` | medium |
@@ -55,12 +55,14 @@ Run this skill at the beginning of every work session, or whenever the user asks
    - Model: <id>
    - Effort: <level>
    - Archetype: <row name>
-   - Rationale: <one line — plan → archetype; cite project memory or 4.6-vs-4.7 evidence when picking 4.6 over the default>
+   - Rationale: <one line — plan → archetype; cite project memory or matrix rationale when picking from a less-default row>
    - Switch before code work: `/model <id>`; set effort via the harness's effort selector. Switching after context loads pays a full re-read.
    - Drift trigger: re-evaluate if a mid-session `TaskCreate` shifts scope into a higher-risk archetype.
    ```
 
-   **Why the default is 4.6, not 4.7:** independent measurements show Opus 4.7 regressed against 4.6 on multi-step instruction following (chains fail by step 3–4), long-context retrieval (MRCR v2: 91.9% → 59.2%), and code/structured-data cost (+32–34% tokenizer inflation). 4.7 still wins on tightly-scoped SWE-Bench-shaped fixes — that's why one matrix row picks it. Source: [anthropics/claude-code#58369](https://github.com/anthropics/claude-code/issues/58369).
+   **Note on extended context:** rows that prefer Opus 4.6 also benefit from the 1M-context variant on plans that include it — pass `/model claude-opus-4-6[1m]` (or the equivalent input format for your harness version) instead of bare `claude-opus-4-6` when available.
+
+   **Why the seeded default prefers 4.6 over 4.7:** community evidence (evolving) suggests version-specific tradeoffs on multi-step instruction following, long-context retrieval, and structured-data tokenizer cost — but the picture moves with each model update. **Defaults here are a starting point, not a permanent answer.** Tune the matrix from your own `## Session model setup` log (written by `/session-close`) after ~10 sessions rather than inheriting these defaults indefinitely. If a downstream maintainer wants version-specific evidence in their project-local copy of this skill, they can add it there — the canonical template stays evidence-neutral so it ages well across model updates.
 
 ## Stop here — wait for approval
 
