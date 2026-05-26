@@ -600,7 +600,23 @@ jobs:
                 -F "output[summary]=Triage classified the diff as non-reviewable (docs, rules, manifest tweaks). Deep review not applicable."
               echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (non-reviewable diff)"
             else
-              echo "::warning::Claude On-Demand check missing on $HEAD_SHA — init-deep-check may have failed"
+              # Self-heal: init-deep-check didn't create the check (Checks API
+              # 5xx, permission propagation delay on a fresh bind, runner
+              # blip). Create it directly here so docs/rules-only PRs don't
+              # stall in branch-protection's "Expected" state on transient
+              # infra failures. The reviewable path's Resolve step exits 1
+              # in the same scenario (clearer signal there); the
+              # non-reviewable path self-heals to preserve the fast-path
+              # ~30-second auto-merge UX.
+              echo "::warning::Claude On-Demand check missing on $HEAD_SHA — creating directly (init-deep-check may have failed)"
+              gh api "repos/$REPO/check-runs" -X POST \
+                -F name="Claude On-Demand" \
+                -F head_sha="$HEAD_SHA" \
+                -F status="completed" \
+                -F conclusion="skipped" \
+                -F "output[title]=Deep review skipped — diff non-reviewable" \
+                -F "output[summary]=Triage classified the diff as non-reviewable. init-deep-check did not create the check earlier in this run (Checks API blip or permission propagation delay); this step recovered by creating it directly."
+              echo "::notice::Created Claude On-Demand check directly at skipped (recovery path)"
             fi
             exit 0
           fi
