@@ -184,14 +184,25 @@ jobs:
         run: |
           REPO="${{ github.repository }}"
 
-          # Read the latest claude[bot] completion comment on this PR. No
-          # HEAD-SHA-floor correlation needed: a stale completion comment on
-          # a prior HEAD SHA would have already PATCHed the check on THAT
-          # SHA, not the current one. When the PR HEAD SHA advanced (new
-          # push), init-deep-check created a fresh neutral check on the new
-          # SHA, independent of any stale comments.
+          # ── Stale-comment floor (current-run correlation) ─────────────────
+          # `Evaluate deep-tier verdict` runs via `if: always()` even when
+          # Run Claude failed silently (hit --max-turns, gh post failure,
+          # network blip mid-completion-comment). The CHECK_ID lookup binds
+          # to HEAD_SHA, but a naive `| last` on the comments endpoint would
+          # pick the PRIOR push's stale 🟢 completion comment and PATCH the
+          # current HEAD SHA's check to success based on an older verdict.
+          # Filter comments by created_at >= this run's run_started_at to
+          # reject completion comments from prior pushes (mirrors the same
+          # pattern in claude-code-review.yml's evaluate-review-outcome).
+          RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at')
+          if [ -z "$RUN_STARTED_AT" ]; then
+            echo "::error::Could not resolve current run's run_started_at — refusing to evaluate verdict without stale-comment floor"
+            exit 1
+          fi
+
           COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
-            | jq -r '[.[] | select(.user.login == "claude[bot]") | select(.body | startswith("**Claude finished"))] | last | .body // ""')
+            | jq -r --arg ts "$RUN_STARTED_AT" \
+                '[.[] | select(.user.login == "claude[bot]") | select(.body | startswith("**Claude finished")) | select(.created_at >= $ts)] | last | .body // ""')
 
           CHECK_ID=$(gh api \
             "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
