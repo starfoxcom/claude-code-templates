@@ -512,6 +512,22 @@ jobs:
             exit 1
           fi
 
+          # ── Terminal-state guard ──────────────────────────────────────────
+          # If claude.yml's Evaluate step already PATCHed the check to a
+          # terminal state (success or failure), do NOT overwrite. Scenarios:
+          # (a) maintainer manually @claude-triggered before routine
+          # completed and Opus finished first; (b) "Re-run all jobs" on the
+          # routine workflow after Opus has set a terminal state. The
+          # `skipped` and `in_progress` states ARE safe to overwrite —
+          # they're set by this routine workflow, not by claude.yml's
+          # authoritative Evaluate step.
+          EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
+          EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
+          if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
+            echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — Opus has spoken; routine Resolve will not overwrite"
+            exit 0
+          fi
+
           LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           if echo "$LABELS" | grep -q "needs-deep-review"; then
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
@@ -559,6 +575,9 @@ jobs:
       # skipped — without this the deep check stays at in_progress on
       # docs/rules-only PRs and branch protection blocks the merge.
       checks: write
+      # Needed for the current-run-started-at lookup used as the stale-verdict
+      # floor. Without this the gh api call returns HTTP 403.
+      actions: read
     steps:
       - name: Resolve routine verdict
         env:
@@ -581,7 +600,23 @@ jobs:
                 -F "output[summary]=Triage classified the diff as non-reviewable (docs, rules, manifest tweaks). Deep review not applicable."
               echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (non-reviewable diff)"
             else
-              echo "::warning::Claude On-Demand check missing on $HEAD_SHA — init-deep-check may have failed"
+              # Self-heal: init-deep-check didn't create the check (Checks API
+              # 5xx, permission propagation delay on a fresh bind, runner
+              # blip). Create it directly here so docs/rules-only PRs don't
+              # stall in branch-protection's "Expected" state on transient
+              # infra failures. The reviewable path's Resolve step exits 1
+              # in the same scenario (clearer signal there); the
+              # non-reviewable path self-heals to preserve the fast-path
+              # ~30-second auto-merge UX.
+              echo "::warning::Claude On-Demand check missing on $HEAD_SHA — creating directly (init-deep-check may have failed)"
+              gh api "repos/$REPO/check-runs" -X POST \
+                -F name="Claude On-Demand" \
+                -F head_sha="$HEAD_SHA" \
+                -F status="completed" \
+                -F conclusion="skipped" \
+                -F "output[title]=Deep review skipped — diff non-reviewable" \
+                -F "output[summary]=Triage classified the diff as non-reviewable. init-deep-check did not create the check earlier in this run (Checks API blip or permission propagation delay); this step recovered by creating it directly."
+              echo "::notice::Created Claude On-Demand check directly at skipped (recovery path)"
             fi
             exit 0
           fi
@@ -590,14 +625,30 @@ jobs:
             exit 1
           fi
 
+          # ── Stale-verdict floor (current-run correlation) ─────────────────
+          # `claude-review.result == success` reflects job-level exit status —
+          # it's possible for the action to exit clean WITHOUT posting a
+          # verdict comment (hit --max-turns, gh failure, refusal). In those
+          # scenarios a naive `| last` selector on the comments endpoint
+          # would pick the PRIOR push's stale 🟢, fail-opening the gate.
+          # Filter comments by created_at >= this run's run_started_at: a
+          # comment that belongs to the current push must have been posted
+          # after the run started. New push → new run_id → new floor.
+          RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at')
+          if [ -z "$RUN_STARTED_AT" ]; then
+            echo "::error::Could not resolve current run's run_started_at — refusing to evaluate verdict without stale-floor correlation"
+            exit 1
+          fi
+
           # --paginate is mandatory: the comments endpoint defaults to 30
           # per page ascending, so on a long-thread PR the verdict comment
           # lands on a later page and `| last` would silently pick a stale
           # verdict from page 1.
-          ROUTINE_COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r '[.[] | select(.body | contains("## Code Review — claude-code-templates"))] | last | .body // ""')
+          ROUTINE_COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+            | jq -r --arg ts "$RUN_STARTED_AT" \
+                '[.[] | select(.body | contains("## Code Review — claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""')
           if [ -z "$ROUTINE_COMMENT" ]; then
-            echo "::error::No routine review comment found — Claude did not post a verdict this run"
+            echo "::error::No routine review comment found at or after run_started_at $RUN_STARTED_AT — Claude did not post a verdict this run (max-turns hit, gh failure, or refusal)"
             exit 1
           fi
           # Read the LAST line of the comment that carries a verdict emoji,
