@@ -36,7 +36,7 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
    | Session archetype | Model | Effort |
    |---|---|---|
-   | Architectural / design lock / threading or state-machine review | `claude-opus-4-6` | xhigh |
+   | Architectural / design lock / threading or state-machine review | `claude-opus-4-6` | high |
    | High-blast-radius surface (supply-chain, public API, auth, parsers, migrations) | `claude-opus-4-6` | high |
    | Multi-module refactor or cross-cutting public API change | `claude-opus-4-6` | high |
    | Multi-PR workstream (hotfix + cascade, large split refactor) | `claude-opus-4-6` | high |

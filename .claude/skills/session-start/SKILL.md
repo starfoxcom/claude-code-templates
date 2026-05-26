@@ -35,7 +35,7 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
    | Session archetype | Model | Effort |
    |---|---|---|
-   | Workflow YAML state-machine surgery (`claude.yml`, `claude-code-review.yml`, Checks API lifecycle) | `claude-opus-4-6[1m]` | xhigh |
+   | Workflow YAML state-machine surgery (`claude.yml`, `claude-code-review.yml`, Checks API lifecycle) | `claude-opus-4-6[1m]` | high |
    | Canonical + live-mirror lockstep edit (`_core/project-template/` ↔ `.claude/`) | `claude-opus-4-6[1m]` | high |
    | Bind resolution / new bundle / `BIND.md` update | `claude-opus-4-6[1m]` | high |
    | Multi-PR workstream (hotfix + cascade chain, large split refactor) | `claude-opus-4-6[1m]` | high |
