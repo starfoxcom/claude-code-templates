@@ -559,6 +559,9 @@ jobs:
       # skipped — without this the deep check stays at in_progress on
       # docs/rules-only PRs and branch protection blocks the merge.
       checks: write
+      # Needed for the current-run-started-at lookup used as the stale-verdict
+      # floor. Without this the gh api call returns HTTP 403.
+      actions: read
     steps:
       - name: Resolve routine verdict
         env:
@@ -590,14 +593,30 @@ jobs:
             exit 1
           fi
 
+          # ── Stale-verdict floor (current-run correlation) ─────────────────
+          # `claude-review.result == success` reflects job-level exit status —
+          # it's possible for the action to exit clean WITHOUT posting a
+          # verdict comment (hit --max-turns, gh failure, refusal). In those
+          # scenarios a naive `| last` selector on the comments endpoint
+          # would pick the PRIOR push's stale 🟢, fail-opening the gate.
+          # Filter comments by created_at >= this run's run_started_at: a
+          # comment that belongs to the current push must have been posted
+          # after the run started. New push → new run_id → new floor.
+          RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at')
+          if [ -z "$RUN_STARTED_AT" ]; then
+            echo "::error::Could not resolve current run's run_started_at — refusing to evaluate verdict without stale-floor correlation"
+            exit 1
+          fi
+
           # --paginate is mandatory: the comments endpoint defaults to 30
           # per page ascending, so on a long-thread PR the verdict comment
           # lands on a later page and `| last` would silently pick a stale
           # verdict from page 1.
-          ROUTINE_COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/$PR_NUMBER/comments" \
-            | jq -r '[.[] | select(.body | contains("## Code Review — claude-code-templates"))] | last | .body // ""')
+          ROUTINE_COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+            | jq -r --arg ts "$RUN_STARTED_AT" \
+                '[.[] | select(.body | contains("## Code Review — claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""')
           if [ -z "$ROUTINE_COMMENT" ]; then
-            echo "::error::No routine review comment found — Claude did not post a verdict this run"
+            echo "::error::No routine review comment found at or after run_started_at $RUN_STARTED_AT — Claude did not post a verdict this run (max-turns hit, gh failure, or refusal)"
             exit 1
           fi
           # Read the LAST line of the comment that carries a verdict emoji,
