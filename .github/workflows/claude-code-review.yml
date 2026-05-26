@@ -593,6 +593,16 @@ jobs:
               "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
               --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
             if [ -n "$CHECK_ID" ]; then
+              # Terminal-state guard (symmetric with the Resolve step's guard):
+              # if a maintainer manually @claude-triggered on a docs-only PR
+              # and Opus set the check to success/failure, a routine re-run
+              # must not overwrite that authoritative verdict with skipped.
+              EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
+              EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
+              if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
+                echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — will not overwrite with skipped"
+                exit 0
+              fi
               gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
                 -F status="completed" \
                 -F conclusion="skipped" \
