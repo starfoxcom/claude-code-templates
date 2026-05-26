@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file. The format 
 
 Earlier conversational `v17` and `v18` mentions never shipped as standalone artifacts — they're consolidated into the v1.0.0 release.
 
+## [Unreleased]
+
+Targeted for **v1.4.0** (minor bump — new feature, no break) once cut. The v1.3.0 release branch (`release/v1.3.0`) does NOT carry these changes; they landed on `develop` after the release cut.
+
+### Added
+
+- **Session-start model + effort analyzer** in `_core/project-template/.claude/skills/session-start/SKILL.md` and `.claude/skills/session-start/SKILL.md`. New step emits a `## Recommended setup for this session` block before the approval gate, picking model + effort from a session-shape matrix (archetype → model / effort). Canonical version is generic + evidence-neutral and explicitly marked as "starting point, not permanent answer"; project-local file uses this repo's specific archetypes (workflow YAML state-machine surgery / lockstep canonical+live edits / bind resolution / multi-PR cascade) with cited evidence and `[1m]` notation.
+- **Session-close outcome log** in `_core/project-template/.claude/skills/session-close/SKILL.md` and `.claude/skills/session-close/SKILL.md`. Appends a `## Session model setup` block (`Recommended at start / Used / Outcome`) to the regenerated context file. Empirical feedback loop for tuning the matrix after ~10 sessions. **Lives inside the `context_refresh_files` toggle block** so disabling that toggle strips both file-generation and outcome-log coherently.
+- **Canonical SESSION START prose updated** in `_core/project-template/CLAUDE.md` to enumerate the new `Recommended model + effort` step as step 5 (after `Session steps as a task list` at step 4 — the archetype match needs the planned step list as input, not just the module-set from step 3).
+- **Plan-tier tuning guidance** in canonical session-start SKILL.md — documents how Pro / Max / Team / Enterprise / API cost and 1M-context availability vary; cites the [official Claude Code model config docs](https://code.claude.com/docs/en/model-config#extended-context). The `[1m]` suffix is confirmed valid Claude Code notation per those docs.
+- **Memory entry: `feedback_model_default_opus_4_6`** — captures why this repo defaults to Opus 4.6 over 4.7 on high-judgment / long-context / multi-step-discipline sessions, sourced from [anthropics/claude-code#58369](https://github.com/anthropics/claude-code/issues/58369) evidence (project-private memory, not shipped).
+
+### Known follow-ups
+
+- **Issue #95** — bind-time `plan_tier` selector for the session-start matrix. The matrix's concrete IDs are valid on every paid Claude Code tier today, but cost and 1M-context availability vary substantially by plan. A bind-time selector that filters / annotates matrix rows per the maintainer's plan is scoped for v1.4 / v1.5. Touches `redesign/data.jsx` + bind logic + canonical `{{PLAN_TIER}}` placeholder + 4 bundle defaults + `BIND.md` schema. Until it lands, the canonical's "Tuning for your plan tier" subsection is the manual workaround.
+
 ## [v1.3.0] — 2026-05-21 — code_research agnostification
 
 The `tools.code_research` slot was promised in v1.0.0 (tokensave / ast-grep / Sourcegraph / ctags / Semgrep / none / other) but the canonical templates, the hook file, and the `/find` skill hardcoded `tokensave` references. Downstream users who picked a different code-research tool got templates that referenced tools their project didn't have. This release wires the slot through end to end **and establishes the per-value-marker + tool-profile-JSON pattern as the canonical mechanism for the other four tool slots** (`precommit` / `ci` / `ai_reviewer` / `issue_tracker`) that remain hardcoded or absent in templates today.
