@@ -32,7 +32,29 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
 5. **Session steps** — ordered list of work items with dependencies called out. Keep it tight (3–7 items typically); longer plans get split.
 
-6. **Model + effort recommendation** — match the planned steps against the session-shape matrix below and emit the recommendation block before the approval gate. **Edit the rows to match your project's actual session shapes** — this is a starting point, not a permanent answer.
+6. **Context budget audit** — before locking in model + effort, inventory the eager-loaded context this session is already paying for. The matrix below optimizes for *session shape* (what kind of code you're writing); this step folds in *session budget* (how much window the eager-load corpus consumes before your first user turn). Without the audit, a Sonnet recommendation can land on a project where the rule corpus + memory index + handoff already burned ~45% of the 200k window at `/session-start` alone — leaving too little for any real work session.
+
+   **Inventory the eager-loads:**
+   - Project rules (`.claude/rules/*.md`) — count files × ~avg LOC
+   - `MEMORY.md` + any auto-loaded memory body files
+   - Project `CLAUDE.md` + global `~/.claude/CLAUDE.md`
+   - The session handoff read in Step 0 (if `context_refresh_files` is enabled)
+   - Auto-loaded skills (eager-loaded by the harness, NOT lazy `/<name>` invocations)
+
+   **Get the number.** Preferred: ask the user to share the harness's `/context` output — that's the authoritative reading. Otherwise estimate from the inventory above (a `<system-reminder>` block dumping the entire rules corpus into context alone is a strong signal you're already deep into the budget).
+
+   **Apply the budget adjustment** on top of the matrix archetype Step 7 will choose:
+
+   | Post-eager-load free context | Adjustment |
+   |---|---|
+   | ≥75% (slim corpus) | Use matrix as-is. |
+   | 60–75% | Use matrix; flag the tight buffer in the recommendation block. |
+   | 45–60% | Escalate one tier — prefer the 1M-context variant (`claude-opus-4-6[1m]`) over base 200k. |
+   | <45% | **Stop.** Recommend either: (a) switch to 1M-context immediately, OR (b) trim eager-loads first — move stale rules to `docs/lazy/`, archive prior `*-CONTEXT_*.md` to `docs/sessions/`, prune `MEMORY.md` to active-only entries. Don't start work until free ≥60%. |
+
+   The thresholds are starting points, not absolutes — tune them in your project-local copy of this skill if a downstream maintainer measures different real-world session burn rates.
+
+7. **Model + effort recommendation** — match the planned steps against the session-shape matrix below, then apply the Step 6 budget adjustment, and emit the recommendation block before the approval gate. **Edit the rows to match your project's actual session shapes** — this is a starting point, not a permanent answer.
 
    | Session archetype | Model | Effort |
    |---|---|---|
@@ -55,9 +77,10 @@ Run this skill at the beginning of every work session, or whenever the user asks
    - Model: <id>
    - Effort: <level>
    - Archetype: <row name>
-   - Rationale: <one line — plan → archetype; cite project memory or matrix rationale when picking from a less-default row>
+   - Budget: <measured free %> after eager-load — <as-is | tight-buffer | escalated-to-1M | trim-first>
+   - Rationale: <one line — plan → archetype; cite project memory or matrix rationale when picking from a less-default row; note the budget adjustment if it changed the model pick>
    - Switch before code work: `/model <id>`; set effort via the harness's effort selector. Switching after context loads pays a full re-read.
-   - Drift trigger: re-evaluate if a mid-session `TaskCreate` shifts scope into a higher-risk archetype.
+   - Drift trigger: re-evaluate if a mid-session `TaskCreate` shifts scope into a higher-risk archetype, OR if the eager-load corpus grows mid-session (new rule file, lazy-loaded skill that doesn't unload).
    ```
 
    **Note on extended context.** Rows that prefer Opus 4.6 also benefit from the 1M-context variant on plans that include it — pass `/model claude-opus-4-6[1m]` instead of bare `claude-opus-4-6` when available. The `[1m]` suffix is the documented Claude Code notation for the 1M-context variant (alias or full-name form both accepted) — see [Claude Code model config — Extended context](https://code.claude.com/docs/en/model-config#extended-context).
