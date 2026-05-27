@@ -42,14 +42,19 @@ Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — n
 
 Generate a new `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` (rename the existing one with current date and time).
 
-**Local time:** try terminal first (up to 4 attempts), in order:
+**Local time:**
 
-```bash
-node -e "console.log(new Date().toLocaleString('sv-SE',{timeZone:'{{TIMEZONE}}'}).replace(',',''))"
-python -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M'))"
-date '+%Y-%m-%d %H:%M'
-powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'"
-```
+1. **Check the conversation context first.** If the optional `UserPromptSubmit` time-injection hook is installed (see `~/.claude/global-template/README.md` § 4 and `~/.claude/CLAUDE.md` → "Time-of-day awareness"), every prompt comes prefixed with a line of the form `[time] YYYY-MM-DD HH:MM:SS <IANA-zone>`. Reuse the most recent one — it's authoritative.
+2. **If no `[time]` line is available** (hook not installed, or you need to confirm against a fresh clock), fall back to terminal commands. Try in order, OS-clock only — **never hardcode a timezone**:
+
+   ```bash
+   node -e "console.log(new Date().toLocaleString('sv-SE').replace(',',' '))"
+   python -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M'))"
+   date '+%Y-%m-%d %H:%M'
+   powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'"
+   ```
+
+   Hardcoded IANA strings (e.g. `'America/Mazatlan'`) inherit US-DST assumptions that are wrong for non-US-DST locales; the OS clock is always the right source.
 
 **Context file structure:** current state only — decisions and implementation details not derivable from the code. Conventions and rules already live in `.claude/rules/` — do not duplicate.
 
