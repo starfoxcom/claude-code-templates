@@ -6,7 +6,7 @@ A one-line `UserPromptSubmit` hook that prepends a wall-clock timestamp to every
 [time] 2026-05-27 13:25:43 America/Mazatlan
 ```
 
-The format is `[time] YYYY-MM-DD HH:MM:SS <IANA-zone>`. The zone comes from the OS via `Intl.DateTimeFormat().resolvedOptions().timeZone` — no hardcoded value, so the hook is correct on every machine without per-project bind substitution.
+The format is `[time] YYYY-MM-DD HH:MM:SS <zone>`. The zone comes from the OS at call time — no hardcoded value, no per-project bind substitution. **Format fidelity depends on which command you register:** the Node command produces an IANA identifier (`America/Mazatlan`, `Europe/Madrid`); the Python fallback produces whatever the OS exposes via `datetime.tzinfo` — typically an abbreviation on POSIX (`MST`, `PDT`), a localized full name on Windows (`Mountain Standard Time` — note the embedded spaces), or a numeric offset (`UTC-07:00`) when no name is available. Prefer Node where it's on PATH; IANA is unambiguous and free of whitespace.
 
 ## Why install it
 
@@ -27,13 +27,13 @@ Node (recommended — ships with most dev environments):
 node -e "var d=new Date();console.log('[time] '+d.toLocaleString('sv-SE').replace(',',' ')+' '+Intl.DateTimeFormat().resolvedOptions().timeZone)"
 ```
 
-Python fallback (use if Node isn't on PATH):
+Python fallback (use if Node isn't on PATH — emits an OS-localized name, not IANA; see the format-fidelity note above):
 
 ```
 python -c "import datetime; n=datetime.datetime.now().astimezone(); print('[time] '+n.strftime('%Y-%m-%d %H:%M:%S')+' '+str(n.tzinfo))"
 ```
 
-Both produce the same `[time] YYYY-MM-DD HH:MM:SS <zone>` line, with the zone resolved from the OS at call time. Pick one — don't register both.
+Both produce a `[time] YYYY-MM-DD HH:MM:SS <zone>` line with the zone resolved from the OS at call time. The two differ in **what string the zone resolves to** (Node: IANA; Python: OS-localized abbreviation or full name). Pick one — don't register both.
 
 ## Register in `~/.claude/settings.json`
 
