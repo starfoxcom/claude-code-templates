@@ -110,10 +110,10 @@ A memory that names a specific function, file, or flag is a claim that it existe
 
 ## Time-of-day awareness
 
-If the prompt context contains lines of the form `[time] YYYY-MM-DD HH:MM:SS <IANA-zone>` (injected by the optional `UserPromptSubmit` hook documented in `~/.claude/global-template/README.md` § 4), treat them as authoritative wall-clock truth:
+If the prompt context contains lines of the form `[time] YYYY-MM-DD HH:MM:SS <zone>` (injected by an optional `UserPromptSubmit` hook the user may have registered under `hooks.UserPromptSubmit` in `~/.claude/settings.json`), treat them as authoritative wall-clock truth:
 
 - **Do not** run terminal `date` / `Get-Date` / `node -e "new Date()"` commands to re-derive what the hook already provided.
 - **Do** use these lines to notice multi-hour or multi-day gaps between turns — the user may have slept, switched contexts, or come back to a stale session.
-- The zone in each `[time]` line is OS-resolved, not hardcoded — trust it even if it differs from anything mentioned in memory or rules.
+- The zone string is OS-resolved at hook-call time, not hardcoded. It may be an IANA identifier (`America/Mazatlan`) when the hook uses Node's `Intl.DateTimeFormat`, or an OS-localized abbreviation/full name (`MST`, `Mountain Standard Time`) when the hook uses Python's `datetime.tzinfo` fallback. Either way, trust it over anything mentioned in memory or rules.
 
 If the hook isn't installed (no `[time]` lines appear), fall back to running a clock command exactly once when wall-clock truth is actually needed (typically only at session-close for context-file naming). Never hardcode a timezone in those commands — use `Intl.DateTimeFormat().resolvedOptions().timeZone` (Node) or `datetime.now().astimezone().tzinfo` (Python) so the OS clock is the source of truth.

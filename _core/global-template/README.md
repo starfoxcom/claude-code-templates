@@ -137,7 +137,7 @@ When the `tokensave_entry_point` toggle is ON and `tools.code_research` is not `
 
 ## 4. Install the time-injection hook (optional, recommended)
 
-Claude Code has no built-in time-of-day awareness across turns — every prompt looks the same to the model regardless of whether ten minutes or ten hours passed since the last one. The `UserPromptSubmit` hook documented in `hooks/time-injection.snippet.md` fixes this by prepending a `[time] YYYY-MM-DD HH:MM:SS <IANA-zone>` line to every prompt.
+Claude Code has no built-in time-of-day awareness across turns — every prompt looks the same to the model regardless of whether ten minutes or ten hours passed since the last one. The `UserPromptSubmit` hook documented in `hooks/time-injection.snippet.md` fixes this by prepending a `[time] YYYY-MM-DD HH:MM:SS <zone>` line to every prompt (zone resolved from the OS at call time — IANA via the Node command, OS-localized abbreviation via the Python fallback; see the snippet file for the trade-off).
 
 It's project-agnostic, parameter-free (the zone comes from the OS at call time — no per-project bind substitution), costs ~50 ms per prompt, and has no side effects. Recommended for any non-trivial project; load-bearing for multi-day sessions, polling loops, and any reasoning that depends on wall-clock truth.
 
