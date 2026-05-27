@@ -18,8 +18,7 @@ Run claude-code-templates SETUP with this configuration:
     "repo_url": "<owner/repo>",
     "main_branch": "<main|master>",
     "dev_branch": "<develop|main|...>",
-    "branching_model": "<gitflow|trunk>",
-    "timezone": "<IANA timezone like America/Mazatlan>"
+    "branching_model": "<gitflow|trunk>"
   },
   "toggles": {
     "<toggle_name>": true | false | null,
@@ -136,9 +135,8 @@ project.architecture = ["clean"]
 After the audit, ask via `AskUserQuestion` (one at a time, brief):
 
 1. **Bundle confirmation** — always ask. Show the four options + a hint from any audit signal (e.g., "I see CODEOWNERS — likely multi-dev or client-team. Which is it?"). User picks.
-2. **Timezone** — only if `preferences.timezone` was blank in the JSON. Provide a sensible system-default suggestion.
-3. **License holder** — only if neither `LICENSE` nor `git config user.name` had a usable value.
-4. **Any audit ambiguity** — e.g., two architecture patterns equally plausible, or manifest says one name but git remote says another. Cap at 2-3 of these or the discovery loses its appeal.
+2. **License holder** — only if neither `LICENSE` nor `git config user.name` had a usable value.
+3. **Any audit ambiguity** — e.g., two architecture patterns equally plausible, or manifest says one name but git remote says another. Cap at 2-3 of these or the discovery loses its appeal.
 
 **Do not ask things the audit can confidently infer.** "Did I get the stack right?" should be answered in the plan-confirmation step (user reviews the plan HTML and can correct), not pre-emptively.
 
@@ -186,7 +184,6 @@ On `apply`:
    - `{{MAIN_BRANCH}}` ← `project.main_branch` (production / release branch; tagged versions live here. Usually `main`.)
    - `{{DEV_BRANCH}}` ← `project.dev_branch` (development / integration branch where day-to-day work targets and PRs base from. `develop` for Gitflow, same as `main_branch` for trunk-based.)
    - `{{GITFLOW_OR_TRUNK}}` ← `project.branching_model`
-   - `{{TIMEZONE}}` ← `project.timezone`
    - `{{STACK_COMMANDS_ALLOWLIST}}` ← see step 5 below
    - **Tool-slot placeholders** (for each of `code_research`, `precommit`, `ci`, `ai_reviewer`, `issue_tracker`):
      - `{{TOOLS_<SLOT>_NAME}}` ← `tools.<slot>` if the value is one of the catalog options; if `"Other"`, substitute `otherTools.<slot>` (the user-supplied free-text name).
