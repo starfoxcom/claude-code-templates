@@ -13,7 +13,8 @@ global-template/
 │   └── MEMORY.md                          # Empty index — copy to the per-project memory dir
 └── hooks/
     ├── code-research-first.py.template    # Generic PreToolUse hook (rendered at bind time)
-    └── code-research-profiles.json        # Per-tool profiles consumed by the renderer
+    ├── code-research-profiles.json        # Per-tool profiles consumed by the renderer
+    └── time-injection.snippet.md          # Optional UserPromptSubmit hook — injects [time] ... per prompt
 ```
 
 ---
@@ -134,7 +135,19 @@ When the `tokensave_entry_point` toggle is ON and `tools.code_research` is not `
 
 ---
 
-## 4. Verify
+## 4. Install the time-injection hook (optional, recommended)
+
+Claude Code has no built-in time-of-day awareness across turns — every prompt looks the same to the model regardless of whether ten minutes or ten hours passed since the last one. The `UserPromptSubmit` hook documented in `hooks/time-injection.snippet.md` fixes this by prepending a `[time] YYYY-MM-DD HH:MM:SS <zone>` line to every prompt (zone resolved from the OS at call time — IANA via the Node command, OS-localized abbreviation via the Python fallback; see the snippet file for the trade-off).
+
+It's project-agnostic, parameter-free (the zone comes from the OS at call time — no per-project bind substitution), costs ~50 ms per prompt, and has no side effects. Recommended for any non-trivial project; load-bearing for multi-day sessions, polling loops, and any reasoning that depends on wall-clock truth.
+
+To install, follow the worked example in `hooks/time-injection.snippet.md` — it documents the Node command (with a Python fallback), the JSON entry to append to `~/.claude/settings.json` under `hooks.UserPromptSubmit`, and the verification step. The hook composes cleanly with the code-research-first hook from § 3; they register under different slots and never conflict.
+
+The AI-side counterpart — instructions that tell the model to attend to the `[time]` lines rather than ignore them — lives in `CLAUDE.md.additions` under the "Time-of-day awareness" section, so step 1 above already covered it.
+
+---
+
+## 5. Verify
 
 After merging, start a fresh Claude Code session in any project and ask:
 

@@ -25,7 +25,6 @@ The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x impr
 | `{{GITFLOW_OR_TRUNK}}` | `Gitflow` | from CLAUDE.md "Git workflow" + CONTRIBUTING.md "Branch from develop" |
 | `{{CONVERSATION_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
 | `{{CODE_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
-| `{{TIMEZONE}}` | `America/Mazatlan` | maintainer locale (Sinaloa, MST no-DST) |
 
 ## Toggles resolved
 
