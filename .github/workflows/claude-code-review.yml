@@ -422,11 +422,22 @@ jobs:
 
             **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
 
+            **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The `Evaluate review outcome` job parses the comment body via `grep -E "🔴|🟢" | tail -n 1`. A verdict line without one of those two emoji characters is treated as a MISSING verdict and the gate FAILS CLOSED. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
+
             Body MUST:
             - Be titled `## Code Review — claude-code-templates`
             - End with EXACTLY one of these as the FINAL line of the comment (no trailing prose after):
               - `🟢 LGTM`
               - `🔴 Blocking — must fix`
+
+            **WRONG formats — every one of these fails the gate:**
+            - `LGTM` (missing 🟢 prefix — the most common mistake; do not do this)
+            - `LGTM ✅` / `✅ LGTM` (wrong emoji — parser matches 🟢 only, not ✅)
+            - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
+            - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule below forces 🔴)
+            - Any verdict line followed by trailing prose (`🟢 LGTM, ship it!` — must be the FINAL line, nothing after)
+
+            **Self-check immediately before invoking `gh pr comment`:** Look at the literal last line of your draft body. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure on this repo is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
 
             **BINARY VERDICT RULE:**
             - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
