@@ -64,11 +64,15 @@ Generate a new `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` (rename the 
 
 Append to the regenerated context file under a `## Session model setup` section:
 
-- **Recommended at start:** <model> · <effort> · <archetype>
-- **Used:** <model> · <effort> (note any mid-session switches with reason)
+- **Recommended at start:** <tier> · <resolved model id> · <effort> · <archetype>
+- **Used:** <tier> · <resolved model id> · <effort> (note any mid-session switches with reason)
 - **Outcome:** <retries needed? cleanup PR needed? wrong-branch edits? notes>
 
-Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for matrix tuning. After ~10 sessions, the session-start matrix in `.claude/skills/session-start/SKILL.md` can be tuned from real data instead of community reports. **This section sits inside the `context_refresh_files` toggle** because it appends to the file that toggle creates; disabling the toggle strips both coherently.
+Recording **both the tier and the concrete id** keeps the log comparable across model releases — the tier is stable, the id drifts. Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for tuning the tier-resolution pins in `.claude/skills/session-start/SKILL.md`. A tier's pin is promoted to a newer model only once the log proves it on this project's own work, never on release day.
+
+**Promotion-check nudge:** when a newer top-tier model has appeared in the session environment across several recent sessions but a tier's pinned model hasn't been re-evaluated, append a one-line "run the tier-promotion check" reminder to this section — trial the newer model on the lowest-blast-radius tier first and compare its outcome against the incumbent before moving the pin.
+
+**This section sits inside the `context_refresh_files` toggle** because it appends to the file that toggle creates; disabling the toggle strips both coherently.
 <!-- TOGGLE:context_refresh_files END -->
 
 ### Update derived docs
