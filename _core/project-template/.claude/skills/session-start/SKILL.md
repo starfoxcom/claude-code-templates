@@ -32,7 +32,7 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
 5. **Session steps** — ordered list of work items with dependencies called out. Keep it tight (3–7 items typically); longer plans get split.
 
-6. **Context budget audit** — before locking in model + effort, inventory the eager-loaded context this session is already paying for. The matrix below optimizes for *session shape* (what kind of code you're writing); this step folds in *session budget* (how much window the eager-load corpus consumes before your first user turn). Without the audit, a Sonnet recommendation can land on a project where the rule corpus + memory index + handoff already burned ~45% of the 200k window at `/session-start` alone — leaving too little for any real work session.
+6. **Context budget audit** — before locking in model + effort, inventory the eager-loaded context this session is already paying for. The matrix below optimizes for *session shape* (what kind of code you're writing); this step folds in *session budget* (how much window the eager-load corpus consumes before your first user turn). Without the audit, a Frugal-tier (base-context) recommendation can land on a project where the rule corpus + memory index + handoff already burned ~45% of the 200k window at `/session-start` alone — leaving too little for any real work session.
 
    **Inventory the eager-loads:**
    - Project rules (`.claude/rules/*.md`) — count files × ~avg LOC
@@ -49,51 +49,72 @@ Run this skill at the beginning of every work session, or whenever the user asks
    |---|---|
    | ≥75% (slim corpus) | Use matrix as-is. |
    | 60–75% | Use matrix; flag the tight buffer in the recommendation block. |
-   | 45–60% | Escalate one tier — prefer the 1M-context variant (`claude-opus-4-6[1m]`) over base 200k. |
+   | 45–60% | Escalate one tier — use the Deep tier's 1M-context variant (append your plan's 1M-context suffix to the resolved Deep model id) over base 200k. |
    | <45% | **Stop.** Recommend either: (a) switch to 1M-context immediately, OR (b) trim eager-loads first — move stale rules to `docs/lazy/`, archive prior `*-CONTEXT_*.md` to `docs/sessions/`, prune `MEMORY.md` to active-only entries. Don't start work until free ≥60%. |
 
    The thresholds are starting points, not absolutes — tune them in your project-local copy of this skill if a downstream maintainer measures different real-world session burn rates.
 
-7. **Model + effort recommendation** — match the planned steps against the session-shape matrix below, then apply the Step 6 budget adjustment, and emit the recommendation block before the approval gate. **Edit the rows to match your project's actual session shapes** — this is a starting point, not a permanent answer.
+7. **Model + effort recommendation** — match the planned steps against the session-shape matrix below, **resolve the chosen tier to a concrete model id** (the resolution sub-step), apply the Step 6 budget adjustment, and emit the recommendation block before the approval gate. **Edit the rows to match your project's actual session shapes** — this is a starting point, not a permanent answer.
 
-   | Session archetype | Model | Effort |
+   The matrix names **capability tiers**, not model versions — so it never goes stale when a new model ships. The tier is the durable part; you resolve it to a concrete model id at session-start (next sub-step).
+
+   | Tier | What it is | Typical use |
    |---|---|---|
-   | Architectural / design lock / threading or state-machine review | `claude-opus-4-6` | high |
-   | High-blast-radius surface (supply-chain, public API, auth, parsers, migrations) | `claude-opus-4-6` | high |
-   | Multi-module refactor or cross-cutting public API change | `claude-opus-4-6` | high |
-   | Multi-PR workstream (hotfix + cascade, large split refactor) | `claude-opus-4-6` | high |
-   | Tightly-scoped single-bug fix from CI failure with clear repro | `claude-opus-4-7` | high |
-   | Vision-heavy / screenshot-driven verify session | `claude-opus-4-7` | high |
-   | UI / single-file feature code / visual iteration | `claude-sonnet-4-6` + `/fast` | medium |
-   | CI / workflow YAML / `settings.json` (single-file, no state machine) | `claude-sonnet-4-6` | medium |
-   | Pure docs / ROADMAP / devlog / context-refresh | `claude-sonnet-4-6` | low |
-   | Mass mechanical refactor (rename, file moves, header splits) | `claude-sonnet-4-6` | medium |
+   | **Deep** | The strongest reasoning model your plan offers (with its 1M-context variant when the budget audit calls for it). | High-judgment, high-blast-radius, multi-step, or long-context work. |
+   | **Standard** | A full-capability model at base context — strong, but you don't need the Deep tier's long-context reach. | Focused high-effort work: a tightly-scoped fix, a vision/screenshot pass. |
+   | **Frugal** | The lowest-cost capable model your plan offers. | Mechanical, docs, single-file, low-risk work. |
+
+   | Session archetype | Tier | Effort |
+   |---|---|---|
+   | Architectural / design lock / threading or state-machine review | Deep | high |
+   | High-blast-radius surface (supply-chain, public API, auth, parsers, migrations) | Deep | high |
+   | Multi-module refactor or cross-cutting public API change | Deep | high |
+   | Multi-PR workstream (hotfix + cascade, large split refactor) | Deep | high |
+   | Tightly-scoped single-bug fix with clear repro | Standard | high |
+   | Vision-heavy / screenshot-driven verify session | Standard | high |
+   | UI / single-file feature code / visual iteration | Frugal | medium |
+   | CI / workflow YAML / `settings.json` (single-file, no state machine) | Frugal | medium |
+   | Pure docs / ROADMAP / devlog / context-refresh | Frugal | low |
+   | Mass mechanical refactor (rename, file moves, header splits) | Frugal | medium |
+
+   **Resolve the tier to a concrete `/model <id>` — every session, before the emit block:**
+
+   1. **Pinned incumbent wins — the newest model does not.** A tier resolves to the *specific* model your project's `## Session model setup` log (written by `/session-close`) has **proven** for that tier's work, not to whatever shipped most recently. Until a project has logged enough sessions to have a proven choice, use the pin recorded in the **"Your project's tier pins"** table below. **On a fresh bind that table ships empty** — fill it in before your first session by mapping each tier's capability description (the **Tier** table above) to your plan's offerings (`/model` lists them; see "Tuning for your plan tier" below for plan-by-plan cost / 1M-context tradeoffs). See **"Why a tier resolves to a proven model, not the newest one"** below.
+   2. **Confirm it's still offered.** Check the resolved id against what this session's environment names as the current model(s), or against `/model`. If the pinned model is still available, use it.
+   3. **Visible fallback when the id isn't legible.** If you cannot confirm the pinned model is offered (the environment doesn't name it and you have no `/model` output to read), emit the pinned-incumbent id flagged `<unverified — confirm current id via /model>` and **stop at the approval gate** for the user to confirm. Never silently substitute a model guessed from training knowledge — that re-introduces the staleness this design removes.
+   4. **Emit a fully-qualified, versioned id.** Name the exact `/model` string, never a bare family/alias (an alias can resolve server-side to "newest," silently defeating the pin). When the budget audit calls for extended context, append your plan's 1M-context variant suffix to the resolved **Deep** id if your plan offers one — see [Claude Code model config — Extended context](https://code.claude.com/docs/en/model-config#extended-context).
+
+   **Your project's tier pins** *(fill this in on first bind — the durable ladder above never changes; only this table moves, and only once your outcome log proves a new model):*
+
+   | Tier | Pinned model |
+   |---|---|
+   | **Deep** | `<MAINTAINER: strongest reasoning model your plan offers — append the 1M-context variant suffix if available>` |
+   | **Standard** | `<MAINTAINER: full-capability model at base context>` |
+   | **Frugal** | `<MAINTAINER: lowest-cost capable model your plan offers>` |
 
    Emit:
 
    ```
    ## Recommended setup for this session
 
-   - Model: <id>
+   - Tier → Model: <Deep | Standard | Frugal> → <fully-qualified /model id>  [<unverified — confirm via /model> if step 3 applied]
    - Effort: <level>
    - Archetype: <row name>
    - Budget: <measured free %> after eager-load — <as-is | tight-buffer | escalated-to-1M | trim-first>
-   - Rationale: <one line — plan → archetype; cite project memory or matrix rationale when picking from a less-default row; note the budget adjustment if it changed the model pick>
+   - Rationale: <one line — plan → archetype → tier; cite project memory or the outcome log when picking a non-default tier; note the budget adjustment if it changed the pick>
    - Switch before code work: `/model <id>`; set effort via the harness's effort selector. Switching after context loads pays a full re-read.
    - Drift trigger: re-evaluate if a mid-session `TaskCreate` shifts scope into a higher-risk archetype, OR if the eager-load corpus grows mid-session (new rule file, lazy-loaded skill that doesn't unload).
    ```
 
-   **Note on extended context.** Rows that prefer Opus 4.6 also benefit from the 1M-context variant on plans that include it — pass `/model claude-opus-4-6[1m]` instead of bare `claude-opus-4-6` when available. The `[1m]` suffix is the documented Claude Code notation for the 1M-context variant (alias or full-name form both accepted) — see [Claude Code model config — Extended context](https://code.claude.com/docs/en/model-config#extended-context).
+   **Tuning for your plan tier.** Every Claude Code subscription tier — Pro / Max / Team / Enterprise — has a strongest-model option, but cost and 1M-context availability vary:
 
-   **Tuning for your plan tier.** The seeded matrix assumes Opus access (every Claude Code subscription tier — Pro / Max / Team / Enterprise — has it), but cost and 1M-context availability vary:
+   - **Pro:** the Deep tier consumes subscription quota faster than Frugal. Consider mapping Deep → Standard (or Standard → Frugal) on cost-sensitive sessions, or reserving Deep for the highest-risk archetypes. A 1M-context variant may require usage credits.
+   - **Max / Team / Enterprise:** the ladder works as-is; a 1M-context variant for the Deep tier is typically auto-included.
+   - **API / pay-as-you-go:** the Deep tier is the most expensive. Monitor cost per session via the outcome log written by `/session-close`.
 
-   - **Pro:** Opus rows consume your subscription quota faster than Sonnet rows. Consider swapping Opus → Sonnet on cost-sensitive sessions, or restrict Opus to the highest-risk archetypes. The `[1m]` variant requires usage credits on Pro.
-   - **Max / Team / Enterprise:** matrix works as-is. Opus 1M-context is auto-included.
-   - **API / pay-as-you-go:** Opus rows are the most expensive. Monitor cost per session via the outcome log written by `/session-close`.
+   Full plan-capability table: [Claude Code model config docs](https://code.claude.com/docs/en/model-config). A bind-time `plan_tier` selector that filters / annotates the ladder by tier is a tracked follow-up — see the project's open issues.
 
-   Full plan-capability table: [Claude Code model config docs](https://code.claude.com/docs/en/model-config). A bind-time `plan_tier` selector that filters / annotates the matrix automatically is a tracked follow-up — see the project's open issues.
-
-   **Why the seeded default prefers 4.6 over 4.7:** community evidence (evolving) suggests version-specific tradeoffs on multi-step instruction following, long-context retrieval, and structured-data tokenizer cost — but the picture moves with each model update. **Defaults here are a starting point, not a permanent answer.** Tune the matrix from your own `## Session model setup` log (written by `/session-close`) after ~10 sessions rather than inheriting these defaults indefinitely. If a downstream maintainer wants version-specific evidence in their project-local copy of this skill, they can add it there — the canonical template stays evidence-neutral so it ages well across model updates.
+   **Why a tier resolves to a proven model, not the newest one.** The newest model is not automatically the best model for a given session shape. A new frontier release can regress on the exact axes high-judgment work depends on — multi-step instruction following, long-context retrieval, structured-data tokenizer cost — even while winning headline benchmarks. So a tier resolves to the model your own `## Session model setup` outcome log has *proven* for that tier's work, not to whatever shipped most recently. A new model does not inherit a tier by existing: trial it on lower-blast-radius (Frugal / Standard) rows first, compare retries / cleanup-PRs / wrong-branch edits against the incumbent across a few real sessions, and promote it only once it has earned that on **your** workload. The harness tells you what *exists*; your outcome log tells you what *works*. This rule names no version, so it never ages — record version-specific evidence (which release regressed where) only in your project-local copy of this skill, never here.
 
 ## Stop here — wait for approval
 
