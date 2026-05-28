@@ -79,10 +79,18 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
    **Resolve the tier to a concrete `/model <id>` — every session, before the emit block:**
 
-   1. **Pinned incumbent wins — the newest model does not.** A tier resolves to the *specific* model your project's `## Session model setup` log (written by `/session-close`) has **proven** for that tier's work, not to whatever shipped most recently. Until a project has logged enough sessions to have a proven choice, use the maintainer-chosen default recorded in this skill's project-local copy. See **"Why a tier resolves to a proven model, not the newest one"** below.
+   1. **Pinned incumbent wins — the newest model does not.** A tier resolves to the *specific* model your project's `## Session model setup` log (written by `/session-close`) has **proven** for that tier's work, not to whatever shipped most recently. Until a project has logged enough sessions to have a proven choice, use the pin recorded in the **"Your project's tier pins"** table below. **On a fresh bind that table ships empty** — fill it in before your first session by mapping each tier's capability description (the **Tier** table above) to your plan's offerings (`/model` lists them; see "Tuning for your plan tier" below for plan-by-plan cost / 1M-context tradeoffs). See **"Why a tier resolves to a proven model, not the newest one"** below.
    2. **Confirm it's still offered.** Check the resolved id against what this session's environment names as the current model(s), or against `/model`. If the pinned model is still available, use it.
    3. **Visible fallback when the id isn't legible.** If you cannot confirm the pinned model is offered (the environment doesn't name it and you have no `/model` output to read), emit the pinned-incumbent id flagged `<unverified — confirm current id via /model>` and **stop at the approval gate** for the user to confirm. Never silently substitute a model guessed from training knowledge — that re-introduces the staleness this design removes.
    4. **Emit a fully-qualified, versioned id.** Name the exact `/model` string, never a bare family/alias (an alias can resolve server-side to "newest," silently defeating the pin). When the budget audit calls for extended context, append your plan's 1M-context variant suffix to the resolved **Deep** id if your plan offers one — see [Claude Code model config — Extended context](https://code.claude.com/docs/en/model-config#extended-context).
+
+   **Your project's tier pins** *(fill this in on first bind — the durable ladder above never changes; only this table moves, and only once your outcome log proves a new model):*
+
+   | Tier | Pinned model |
+   |---|---|
+   | **Deep** | `<MAINTAINER: strongest reasoning model your plan offers — append the 1M-context variant suffix if available>` |
+   | **Standard** | `<MAINTAINER: full-capability model at base context>` |
+   | **Frugal** | `<MAINTAINER: lowest-cost capable model your plan offers>` |
 
    Emit:
 

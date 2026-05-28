@@ -28,7 +28,7 @@ Targeted for **v1.4.0** (minor bump — new feature, no break) once cut. The v1.
 
 ### Known follow-ups
 
-- **Issue #95** — bind-time `plan_tier` selector for the session-start ladder. Now that the matrix is **tier-valued** (Deep / Standard / Frugal) rather than carrying concrete model IDs, the selector simplifies from "rewrite the model rows" to "annotate / filter by tier per the maintainer's plan" (e.g. collapse Deep → Standard on Pro). Scoped for v1.4 / v1.5. Touches `redesign/data.jsx` + bind logic + canonical `{{PLAN_TIER}}` placeholder + 4 bundle defaults + `BIND.md` schema. Until it lands, the canonical's "Tuning for your plan tier" subsection is the manual workaround.
+- **Issue #95** — bind-time `plan_tier` selector for the session-start ladder. Now that the matrix is **tier-valued** (Deep / Standard / Frugal) rather than carrying concrete model IDs, the selector simplifies from "rewrite the model rows" to "annotate / filter by tier per the maintainer's plan" (e.g. collapse Deep → Standard on Pro). Scoped for v1.4 / v1.5. Touches `redesign/data.jsx` + bind logic + canonical `{{PLAN_TIER}}` placeholder + 4 bundle defaults + `BIND.md` schema. Until it lands, the canonical ships a `<MAINTAINER: …>` placeholder pin table in the resolution sub-step (filled in on first bind) plus the "Tuning for your plan tier" subsection as the manual bootstrap.
 
 ## [v1.3.0] — 2026-05-21 — code_research agnostification
 
