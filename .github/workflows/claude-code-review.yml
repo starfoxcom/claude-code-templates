@@ -1,4 +1,4 @@
-# Routine PR review — Sonnet 4.6, binary 🔴/🟢 verdict
+# Routine PR review — binary 🔴/🟢 verdict
 #
 # Architecture: two independent required status checks fold into the merge
 # gate via branch protection (NOT via in-workflow comment correlation):
@@ -118,7 +118,7 @@ jobs:
           echo "run_review=true" >> "$GITHUB_OUTPUT"
 
   claude-review:
-    name: Auto review (Sonnet 4.6)
+    name: Auto review
     needs: [triage, init-deep-check]
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ubuntu-latest
@@ -228,6 +228,15 @@ jobs:
               'TOOLS_CODE_RESEARCH_URL',
               'TOOLS_CODE_RESEARCH_NAME_KEBAB',
               'TOOLS_CODE_RESEARCH_BYPASS_MARKER',
+              # v1.4.0 — review-model placeholders (default-only, no bind-UI
+              # field) for the deep/routine review --model. Bind-time default
+              # defined in SETUP.md Phase 3 step 2; consumed by the workflow
+              # templates once they are de-versioned. Registered here so the
+              # canonical placeholder scan recognizes the tokens.
+              'REVIEW_DEEP_MODEL', 'REVIEW_ROUTINE_MODEL',
+              # Pre-existing placeholder in _core/.../settings.local.json.template;
+              # registered so it doesn't trip UNKNOWN_PLACEHOLDER in a scanned diff.
+              'STACK_COMMANDS_ALLOWLIST',
           }
           placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
           for fname in changed:
