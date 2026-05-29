@@ -174,6 +174,8 @@ On `apply`:
    - `{{GITFLOW_OR_TRUNK}}` ← `project.branching_model`
    - `{{TIMEZONE}}` ← `project.timezone`
    - `{{STACK_COMMANDS_ALLOWLIST}}` ← see step 5 below
+   - `{{REVIEW_DEEP_MODEL}}` ← deliberate stable default `claude-opus-4-8` (deep-review tier model for `.github/workflows/claude.yml`'s `--model`). Default-only — no UI field; pick deliberately (not newest-by-default, per the session-start model-choice discipline), then tune in the bound workflow or override via a `REVIEW_DEEP_MODEL` GitHub repo variable.
+   - `{{REVIEW_ROUTINE_MODEL}}` ← deliberate stable default `claude-sonnet-4-6` (routine-review tier model for `.github/workflows/claude-code-review.yml`'s `--model`). Default-only — same tuning options as `{{REVIEW_DEEP_MODEL}}`.
 
 3. **Resolve toggles** in every file:
    - For **ON** toggles: remove only the `<!-- TOGGLE:NAME START -->` and `<!-- TOGGLE:NAME END -->` marker lines (keep the content between). Remove `<!-- TOGGLE:NAME:off START/END -->` blocks **entirely** (content + markers).

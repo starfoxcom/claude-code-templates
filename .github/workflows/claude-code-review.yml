@@ -229,8 +229,10 @@ jobs:
               'TOOLS_CODE_RESEARCH_NAME_KEBAB',
               'TOOLS_CODE_RESEARCH_BYPASS_MARKER',
               # v1.4.0 — review-model placeholders (default-only, no bind-UI
-              # field); the deep/routine review --model in the workflow templates
-              # resolves to a deliberate stable default at bind. See SETUP.md Phase 3.
+              # field) for the deep/routine review --model. Bind-time default
+              # defined in SETUP.md Phase 3 step 2; consumed by the workflow
+              # templates once they are de-versioned. Registered here so the
+              # canonical placeholder scan recognizes the tokens.
               'REVIEW_DEEP_MODEL', 'REVIEW_ROUTINE_MODEL',
               # Pre-existing placeholder in _core/.../settings.local.json.template;
               # registered so it doesn't trip UNKNOWN_PLACEHOLDER in a scanned diff.
