@@ -1,4 +1,4 @@
-# On-demand deep review — Opus 4.8
+# On-demand deep review
 # Filters on body SIGNATURE (`@claude review this PR`), not author. The
 # routine review's structured trigger comment (claude-code-review.yml
 # Step 4.B) is posted by GITHUB_TOKEN — author = `claude[bot]`. Body
@@ -40,7 +40,7 @@ on:
 
 jobs:
   claude:
-    name: On-demand (@claude → Opus 4.8)
+    name: On-demand (@claude → deep review)
     # Filter: accept comments whose body contains `@claude review this PR`
     # AND does NOT contain `Claude Code is working`. Both conditions are
     # cheap string contains checks that catch the relevant edge cases.
@@ -150,7 +150,7 @@ jobs:
         uses: anthropics/claude-code-action@8c196b2f61a66bfdf93322bde3a3e668669089ed  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-opus-4-8'
+          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model {{REVIEW_DEEP_MODEL}}'
           # Allow the routine review's `claude[bot]` to trigger this workflow.
           # The bare action defaults to "humans only" as a bot-loop safety;
           # we explicitly opt in to claude → claude because the routine tier
