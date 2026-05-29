@@ -1,4 +1,4 @@
-# On-demand deep review — Opus 4.8
+# On-demand deep review
 # Filters on body SIGNATURE (`@claude review this PR`), not author. Mirrors
 # Emberholm's proven shape: the routine review's structured trigger comment
 # (claude-code-review.yml Step 4.B) is posted by GITHUB_TOKEN — author =
@@ -33,7 +33,7 @@ on:
 
 jobs:
   claude:
-    name: On-demand (@claude → Opus 4.8)
+    name: On-demand (@claude → deep review)
     # Filter: accept comments whose body contains `@claude review this PR`
     # AND does NOT contain `Claude Code is working`. Both conditions are
     # cheap string contains checks; defence-in-depth catches edge cases
