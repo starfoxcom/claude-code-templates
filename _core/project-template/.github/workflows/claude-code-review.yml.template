@@ -1,4 +1,4 @@
-# Routine PR review — Sonnet 4.6, binary 🔴/🟢 verdict
+# Routine PR review — binary 🔴/🟢 verdict
 #
 # Architecture: two independent required status checks fold into the merge
 # gate via branch protection (NOT via in-workflow comment correlation):
@@ -127,7 +127,7 @@ jobs:
           fi
 
   claude-review:
-    name: Auto review (Sonnet 4.6)
+    name: Auto review
     needs: [triage, init-deep-check]
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ubuntu-latest
@@ -308,7 +308,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
-          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-sonnet-4-6'
+          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model {{REVIEW_ROUTINE_MODEL}}'
           prompt: |
             Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }} for **{{PROJECT_NAME}}** — {{ONE_LINE_DESCRIPTION}}.
 

@@ -25,6 +25,8 @@ The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x impr
 | `{{GITFLOW_OR_TRUNK}}` | `Gitflow` | from CLAUDE.md "Git workflow" + CONTRIBUTING.md "Branch from develop" |
 | `{{CONVERSATION_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
 | `{{CODE_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
+| `{{REVIEW_DEEP_MODEL}}` | `claude-opus-4-8` | deep-review tier model (`.github/workflows/claude.yml`); this repo's deliberate pin per SETUP.md Phase 3 default |
+| `{{REVIEW_ROUTINE_MODEL}}` | `claude-sonnet-4-6` | routine-review tier model (`.github/workflows/claude-code-review.yml`); deliberate pin per SETUP.md Phase 3 default |
 
 ## Toggles resolved
 
