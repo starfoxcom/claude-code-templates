@@ -2077,7 +2077,13 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
    \`manifest.tools.code_research\`) and substitute residual
    \`{{TOOLS_CODE_RESEARCH_*}}\` placeholders. \`CLAUDE.md.additions\` is in
    \`_core/global-template/\`, so Phase 3 step 3a doesn't touch it — resolve
-   here explicitly. Ask before overwriting existing sections.
+   here explicitly. Detect existing sections in \`~/.claude/CLAUDE.md\` by H2
+   heading match (\`## MANDATORY: No Explore Agents When the Project's
+   Code-Research Tool Is Available\`, \`## Auto memory\`); if found, ask before
+   overwriting. **Legacy heading transition:** a pre-v1.3.0 bind wrote
+   \`## MANDATORY: No Explore Agents When Tokensave Is Available\` — when that
+   exact heading is detected, treat it as the same section, ask before
+   overwriting, and rewrite using the new heading on accept.
 8. Initialize per-project memory at
    \`~/.claude/projects/<slug>/memory/MEMORY.md\` from the template.
 
