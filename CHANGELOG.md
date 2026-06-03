@@ -34,7 +34,7 @@ Scope intentionally exceeded Issue #10's letter — `/find` parametrisation pull
 
 ### Also shipped — CI review-gate hardening + workflow maintenance (accumulated on `main` since v1.2.1)
 
-The v1.3.0 tag is cut from `main`, which accrued these hotfixes during the v1.3.0 development window. They are documented here so the changelog matches what the tag ships. Where an item also has a **canonical-template** counterpart, that counterpart landed on `develop` only and is tracked for v1.4.0 (see `[Unreleased]`) — **only the live-workflow half is in v1.3.0.**
+The v1.3.0 tag is cut from `main`, which accrued these hotfixes during the v1.3.0 development window. They are documented here so the changelog matches what the tag ships. Where an item also has a **canonical-template** counterpart, that counterpart landed on `develop` only and ships in v1.4.0 (the mirror PR is cited inline per item) — **only the live-workflow half is in v1.3.0.**
 
 **Two-tier review gate matured to its Checks-API architecture:**
 - **Deep-tier verdict folded into the merge gate** (#83), then reframed as **two independent required status checks on the PR HEAD SHA via the Checks API** (#87) — `Evaluate review outcome` (routine) AND `Claude On-Demand` (deep), ANDed for merge.
