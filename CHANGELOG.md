@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file. The format 
 
 Earlier conversational `v17` and `v18` mentions never shipped as standalone artifacts — they're consolidated into the v1.0.0 release.
 
-## [v1.3.0] — 2026-05-21 — code_research agnostification
+## [v1.3.0] — 2026-06-03 — code_research agnostification
 
 The `tools.code_research` slot was promised in v1.0.0 (tokensave / ast-grep / Sourcegraph / ctags / Semgrep / none / other) but the canonical templates, the hook file, and the `/find` skill hardcoded `tokensave` references. Downstream users who picked a different code-research tool got templates that referenced tools their project didn't have. This release wires the slot through end to end **and establishes the per-value-marker + tool-profile-JSON pattern as the canonical mechanism for the other four tool slots** (`precommit` / `ci` / `ai_reviewer` / `issue_tracker`) that remain hardcoded or absent in templates today.
 
@@ -31,6 +31,23 @@ Scope intentionally exceeded Issue #10's letter — `/find` parametrisation pull
 
 ### Removed
 - **`_core/global-template/hooks/tokensave-first.py`** (orphan after the template+profile system supersedes it). The bind step renders the equivalent file from the template + tokensave profile.
+
+### Also shipped — CI review-gate hardening + workflow maintenance (accumulated on `main` since v1.2.1)
+
+The v1.3.0 tag is cut from `main`, which accrued these hotfixes during the v1.3.0 development window. They are documented here so the changelog matches what the tag ships. Where an item also has a **canonical-template** counterpart, that counterpart landed on `develop` only and is tracked for v1.4.0 (see `[Unreleased]`) — **only the live-workflow half is in v1.3.0.**
+
+**Two-tier review gate matured to its Checks-API architecture:**
+- **Deep-tier verdict folded into the merge gate** (#83), then reframed as **two independent required status checks on the PR HEAD SHA via the Checks API** (#87) — `Evaluate review outcome` (routine) AND `Claude On-Demand` (deep), ANDed for merge.
+- **`Claude On-Demand` lifecycle** walks `in_progress → skipped / success / failure` (#90); **fail-closed when Opus errors** without posting a verdict comment (#89).
+- **Hardening invariants** (#97): stale-verdict floor on the routine gate, stale-comment floor on the deep-tier gate, terminal-state guard on the Resolve step, self-heal POST for `init-deep-check` failures. Plus a **terminal-state guard on the non-reviewable PATCH path** (#99).
+- **`🟡 Uncertainty surfaced` section required in escalating verdicts** (#78).
+- **`code_research` pre-screen placeholders registered in the canonical allowlist** (#76) — the live-workflow half of this release's headline feature.
+
+**Reviewer-prompt + model maintenance (live-workflow half only):**
+- **Routine reviewer prompt — FAIL-CLOSED verdict-emoji enforcement** (#105): the `Evaluate` parser is strict (`grep -E "🔴|🟢" | tail -n 1`), so bare `LGTM` is treated as a missing verdict. Added a WRONG-formats list (bare `LGTM`, wrong emoji, missing `— must fix` suffix) + a pre-post self-check. _(Canonical-template mirror: v1.4.0, #106.)_
+- **On-demand deep-review model bumped Opus 4.7 → 4.8** in live `claude.yml` (#111), adopted as a watched trial. _(Canonical `claude.yml.template` mirror: v1.4.0, #112.)_
+- **Review-workflow live labels de-versioned + placeholder tokens registered** (#113, #115): `REVIEW_DEEP_MODEL` / `REVIEW_ROUTINE_MODEL` / `STACK_COMMANDS_ALLOWLIST` added to the canonical placeholder allowlist; SETUP.md Phase 3 resolves the review-model tokens to deliberate stable defaults (`claude-opus-4-8` deep / `claude-sonnet-4-6` routine). Live `--model` literals stay concrete. _(Canonical template tokenization: v1.4.0, #116.)_
+- **Orphaned `'TIMEZONE'` entry dropped from the canonical placeholder allowlist** (#107). _(Full end-to-end `{{TIMEZONE}}` removal across canonical templates + bind UI: v1.4.0, #104.)_
 
 ### Migration
 
