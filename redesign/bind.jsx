@@ -2057,13 +2057,64 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
 6. Render tools section (\`{{STACK_COMMANDS_ALLOWLIST}}\` etc.) from
    \`manifest.tools\` and \`manifest.project.stack_commands\`.
 7. Merge global additions into \`~/.claude/CLAUDE.md\` if the memory or
-   code-research toggles are ON. Ask before overwriting existing sections.
+   code-research toggles are ON. **Before appending,** strip per-value
+   \`<!-- TOGGLE:code_research:<value> START/END -->\` blocks from
+   \`CLAUDE.md.additions\` (keep only the block matching
+   \`manifest.tools.code_research\`) and substitute residual
+   \`{{TOOLS_CODE_RESEARCH_*}}\` placeholders. \`CLAUDE.md.additions\` is in
+   \`_core/global-template/\`, so Phase 3 step 3a doesn't touch it — resolve
+   here explicitly. Detect existing sections in \`~/.claude/CLAUDE.md\` by H2
+   heading match (\`## MANDATORY: No Explore Agents When the Project's
+   Code-Research Tool Is Available\`, \`## Auto memory\`); if found, ask before
+   overwriting. **Legacy heading transition:** a pre-v1.3.0 bind wrote
+   \`## MANDATORY: No Explore Agents When Tokensave Is Available\` — when that
+   exact heading is detected, treat it as the same section, ask before
+   overwriting, and rewrite using the new heading on accept.
 8. Initialize per-project memory at
    \`~/.claude/projects/<slug>/memory/MEMORY.md\` from the template.
 
-## Phase 7a — Render and install the code-research-first hook (GLOBAL)
+## Phase 7a — Manage the code-research-first hook (GLOBAL)
 
-Only if \`tokensave_entry_point\` is ON AND \`manifest.tools.code_research !== "none"\`:
+This phase has TWO sub-phases that run independently:
+
+- **Phase 7a-Cleanup (unconditional, runs first):** orphan-hook de-duplication
+  + cleanup of stale \`*-first.py\` hook entries from prior binds with a
+  different \`tools.code_research\` value. Runs whether the new bind installs a
+  hook or not — so a switch from \`tokensave\` to \`none\` (or a
+  decline-to-install) still cleans up the prior \`tokensave-first.py\`.
+- **Phase 7a-Install (conditional, runs only if \`tokensave_entry_point\` is
+  ON AND \`manifest.tools.code_research !== "none"\`):** render the template,
+  write the new hook, register the matcher entry.
+
+---
+
+**Phase 7a-Cleanup (unconditional):** iterate
+\`hooks.PreToolUse[*].hooks[*].command\` in \`~/.claude/settings.json\`
+(atomic-write pattern: parse → mutate → write to \`.tmp\` → fsync →
+\`os.replace\`). Before iterating, normalize the in-memory shape — \`{}\`,
+\`{"hooks": null}\`, \`{"hooks": {"PreToolUse": null}}\` all coerce to the
+canonical shape without clobbering sibling keys. Missing
+\`~/.claude/settings.json\` is created with \`{"hooks": {"PreToolUse": []}}\`
+(first-time-user case; no abort, no backup). For each command whose path ends
+in \`-first.py\`:
+
+- Compute the basename. Compare against the new bind's
+  \`<filename_basename>.py\` — or against the sentinel \`None\` when there is
+  no new hook to install (\`tokensave_entry_point: false\` OR
+  \`tools.code_research === "none"\`), so every existing \`*-first.py\` is
+  treated as orphan.
+- If basename matches the new bind's target → leave alone (idempotent re-bind).
+- If basename is a DIFFERENT \`*-first.py\` (or the new target is \`None\`) →
+  ask the user before removing the array element AND \`os.unlink\`-ing the
+  orphan file. Never leave two code-research-first hooks racing.
+- **If the user declines orphan removal:** leave both file + entry intact, BUT
+  surface a prominent ⚠️ warning in the bind summary naming the stale basename
+  so the user can remove it manually later.
+
+---
+
+**Phase 7a-Install (conditional — only if \`tokensave_entry_point\` is ON AND
+\`manifest.tools.code_research !== "none"\`):**
 
 1. Read the profile for \`manifest.tools.code_research\` from
    \`_core/global-template/hooks/code-research-profiles.json\`.
@@ -2095,17 +2146,17 @@ Only if \`tokensave_entry_point\` is ON AND \`manifest.tools.code_research !== "
 5. Register in \`~/.claude/settings.json\` under \`hooks.PreToolUse\`. ATOMIC
    write pattern: parse → mutate → write to \`.tmp\` → fsync → \`os.replace\`.
    Preserve unrelated user customisation (sibling matchers + user-added hooks).
-6. De-duplicate: if a DIFFERENT \`*-first.py\` hook is already registered (user
-   switched tools), remove its entry AND ask before \`os.unlink\` the orphan
-   file. Never leave two enforcement hooks racing. This step ALSO runs when
-   \`tools.code_research === "none"\` to clean up after a switch-to-none.
 
 **Hook is advisory, not a security boundary** — it fails open on JSON decode
 errors and unknown detection modes. Document this in the bind summary so the
 user knows the hook is best-effort enforcement.
 
-7. Atomic commit. No \`Co-Authored-By:\` line. No push.
-8. Self-verify: zero orphaned TOGGLE markers; zero unresolved
+---
+
+**After both sub-phases (always run):**
+
+6. Atomic commit. No \`Co-Authored-By:\` line. No push.
+7. Self-verify: zero orphaned TOGGLE markers; zero unresolved
    \`{{PLACEHOLDERS}}\`; JSON files parse cleanly.
 
 ## Phase 4 — Cleanup
