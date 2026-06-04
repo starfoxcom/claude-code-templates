@@ -28,7 +28,7 @@ Maintained well, this kills the "cognitive debt" of architecture drifting silent
 
 ## Generation procedure (first time)
 
-1. **Map the high-level boundaries first** — top-level directories that represent distinct subsystems (e.g., `apps/`, `packages/`, `services/`, `src/<module>/`). Use `tokensave_files` or `Glob` (with bypass) to enumerate.
+1. **Map the high-level boundaries first** — top-level directories that represent distinct subsystems (e.g., `apps/`, `packages/`, `services/`, `src/<module>/`). Use the project's code-research tool's file-listing primitive (per `.claude/skills/find/SKILL.md`), or `Glob` (with a `# TOKENSAVE_BYPASS: <reason>` bypass marker if the hook is installed and the listing is non-code). For this project (tokensave): `tokensave_files <pattern>`.
 2. **Identify external boundaries** — databases, message queues, external APIs, file system, network. Read package manifests / lock files to find them.
 3. **Trace data paths** through 3–5 key user-facing features. Pick the most central ones; don't try to map everything on first pass.
 4. **Identify control-flow seams** — interface boundaries, event/message channels, dependency-injection seams.
@@ -55,7 +55,7 @@ Maintained well, this kills the "cognitive debt" of architecture drifting silent
 ## Refresh procedure
 
 1. Read existing `docs/architecture/diagram.json`.
-2. Diff against current code reality (use tokensave's `tokensave_dsm` + `tokensave_coupling` + `tokensave_files` to find new/removed modules).
+2. Diff against current code reality to find new/removed modules. Use `tokensave_dsm` (dependency-structure matrix) + `tokensave_coupling` + `tokensave_files` — fast, deterministic, no whole-tree walk.
 3. Update nodes / edges / groups. Bump `generated_at`.
 4. Commit: `docs: refresh architecture diagram after <change>`.
 

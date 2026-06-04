@@ -700,12 +700,13 @@ const TOOL_SLOTS = [
     label: "code research",
     hint: "How Claude answers \"where is X / what calls Y\" before reading files.",
     options: [
-      { name: "tokensave", desc: "Open-source code-graph MCP — indexes your codebase as a graph so Claude can ask \"where is X / what calls Y\" without reading whole files.", url: "https://github.com/aovestdipaperino/tokensave" },
-      { name: "ast-grep", desc: "Structural search across ASTs — pattern-based code search that understands syntax, not text.", url: "https://ast-grep.github.io" },
-      { name: "Sourcegraph", desc: "Hosted code search across repositories with semantic understanding + references.", url: "https://sourcegraph.com" },
-      { name: "ctags", desc: "Decades-old indexer producing tag files for jump-to-definition. Universal Ctags is the maintained fork.", url: "https://ctags.io" },
-      { name: "Semgrep", desc: "Lightweight static analysis with rule patterns; doubles as AST-aware grep.", url: "https://semgrep.dev" },
-      { name: "none", desc: "Plain grep / glob / Read. Cheapest setup; most tokens spent on file reads.", url: null },
+      { key: "tokensave",   name: "tokensave",        desc: "Open-source code-graph MCP — indexes your codebase as a graph so Claude can ask \"where is X / what calls Y\" without reading whole files. Best fit: walks-up marker file (`.tokensave/tokensave.db`); hook blocks Grep/Glob when present.", url: "https://github.com/aovestdipaperino/tokensave" },
+      { key: "ast-grep",    name: "ast-grep",         desc: "Structural search across ASTs — pattern-based code search that understands syntax, not text. Best fit: CLI on PATH; hook blocks Grep/Glob when the binary is available.", url: "https://ast-grep.github.io" },
+      { key: "sourcegraph", name: "Sourcegraph",      desc: "Hosted code search across repositories with semantic understanding + references. Best fit: `src` CLI on PATH; hook blocks Grep/Glob when the binary is available. Requires a configured Sourcegraph instance.", url: "https://sourcegraph.com" },
+      { key: "ctags",       name: "ctags",            desc: "Decades-old indexer producing tag files for jump-to-definition. Universal Ctags is the maintained fork. Best fit: walks-up `tags` file; hook blocks Grep/Glob when the file is present in the project tree.", url: "https://ctags.io" },
+      { key: "semgrep",     name: "Semgrep",          desc: "Lightweight static analysis with rule patterns; doubles as AST-aware grep. Best fit: CLI on PATH; hook blocks Grep/Glob when the binary is available.", url: "https://semgrep.dev" },
+      { key: "none",        name: "none",             desc: "Plain grep / glob / Read. Cheapest setup; most tokens spent on file reads. The `/find` skill still ships with a canonical Grep→Glob→Read sequence; no enforcement hook is installed.", url: null },
+      { key: "custom",      name: "Other (specify)",  desc: "Roll-your-own code-research tool. You supply a name + URL; the bind step renders a stub hook + skill block keyed off your CLI name. Refine the rendered hook's SEQUENCE_BULLETS by hand after binding.", url: null },
     ],
     default: "tokensave",
   },
@@ -794,7 +795,7 @@ const TOGGLE_GROUPS = [
     toggles: [
       { id: "definition_of_done_verification", short: "Definition-of-done verification", controls: "CLAUDE.md + session-close.md", blurb: "Session-close runs per-bullet DoD check.", d: TG([ON, ON, ON, ON]) },
       { id: "context_refresh_files", short: "Session-context refresh files", controls: "CLAUDE.md + session-close.md", blurb: "Regenerates PROJECT-CONTEXT_YYYY-MM-DD.md at session close.", d: TG([ON, ON, ON, ON]) },
-      { id: "tokensave_entry_point", short: "Tokensave-first code research (hook-enforced)", controls: "CLAUDE.md + ~/.claude/hooks/tokensave-first.py + /find skill", blurb: "Routes code research through tokensave (open-source code-graph MCP). Installs the GLOBAL PreToolUse hook + /find skill + CLAUDE.md callout + session-close adherence metric.", d: TG([ASK, ASK, ASK, ASK]) },
+      { id: "tokensave_entry_point", short: "Code-research-first hook (enforces tools.code_research)", controls: "CLAUDE.md + ~/.claude/hooks/<tools.code_research>-first.py + /find skill", blurb: "Routes code research through the code_research tool you picked above (tokensave / ast-grep / Sourcegraph / ctags / Semgrep / Other). Installs a GLOBAL PreToolUse hook rendered from `_core/global-template/hooks/code-research-first.py.template` against the matching profile in `code-research-profiles.json`, plus the /find skill + CLAUDE.md callout + session-close adherence metric. Set to OFF if you want the /find skill and CLAUDE.md guidance without the Grep/Glob-blocking hook.", d: TG([ASK, ASK, ASK, ASK]) },
       { id: "lazy_rules_folder", short: "Lazy-loaded rules folder", controls: "docs/lazy/ + CLAUDE.md", blurb: "docs/lazy/ for rules that only matter at specific milestones.", d: TG([ON, ON, ON, ON]) },
       { id: "memory_system", short: "Per-project memory system", controls: "global-template + CLAUDE.md", blurb: "~/.claude/projects/<slug>/memory/ with 4 memory types.", d: TG([ON, ON, ON, ON]) },
       { id: "language_specific_rules_scaffold", short: "Scaffold language code-style rule", controls: ".claude/rules/code-style.md", blurb: "Audit codebase, write .claude/rules/code-style.md.", d: TG([ON, ON, ON, ON]) },
@@ -1697,8 +1698,30 @@ function BindFolio() {
   }
 
   function buildManifest() {
+    // Resolve each tool slot to its `key` (lowercase, profile-lookup-safe form)
+    // for built-in options, or `custom` for the "Other (specify)" case.
+    // Also resolve the URL from the catalog for built-ins; user-supplied for Other.
+    const resolvedTools = {};
+    const resolvedToolUrls = {};
+    const resolvedToolNames = {};
+
+    Object.entries(tools).forEach(([slotId, picked]) => {
+      const slot = window.TOOL_SLOTS.find(s => s.id === slotId);
+      const pick = slot && slot.options.find(o => (o.name === picked || o.key === picked));
+      if (pick && pick.key !== "custom") {
+        resolvedTools[slotId] = pick.key || pick.name.toLowerCase();
+        if (pick.url) resolvedToolUrls[slotId] = pick.url;
+        resolvedToolNames[slotId] = pick.name;
+      } else {
+        const userName = otherTools[slotId] || "unspecified";
+        resolvedTools[slotId] = "custom";
+        if (otherToolUrls[slotId]) resolvedToolUrls[slotId] = otherToolUrls[slotId];
+        resolvedToolNames[slotId] = userName;
+      }
+    });
+
     return {
-      version: "1.1.0",
+      version: "v1.3.0",
       generated_at: new Date().toISOString(),
       mode,
       bundle: bundleId,
@@ -1713,17 +1736,9 @@ function BindFolio() {
         conversation_language: project.conversation_language,
         timezone: project.timezone,
       },
-      tools: Object.fromEntries(
-        Object.entries(tools).map(([k, v]) => [
-          k,
-          v === "Other" ? `other: ${otherTools[k] || "unspecified"}` : v,
-        ])
-      ),
-      tool_urls: Object.fromEntries(
-        Object.entries(tools)
-          .filter(([k, v]) => v === "Other" && otherToolUrls[k])
-          .map(([k]) => [k, otherToolUrls[k]])
-      ),
+      tools: resolvedTools,
+      tool_names: resolvedToolNames,
+      tool_urls: resolvedToolUrls,
       toggles: Object.fromEntries(
         Object.entries(toggleState).map(([k, v]) => {
           if (mode === "discovery") {
@@ -1757,14 +1772,26 @@ function BindFolio() {
     }
     const zip = new window.JSZip();
     zip.file("manifest.json", JSON.stringify(manifest, null, 2));
-    zip.file("VERSION", "v1.1.0\n");
+    zip.file("VERSION", `${manifest.version}\n`);
 
     // SETUP.md — the orchestration prompt Claude reads in step 2.
-    // This is a self-contained stub keyed off the manifest the user just
-    // composed; in production the page would fetch the canonical
-    // _core/SETUP.md from the upstream repo. The stub below carries the
-    // same contract so step 2 still works against this zip.
-    zip.file("SETUP.md", buildSetupMd(manifest, bundleId));
+    // We TRY to fetch the canonical SETUP.md from the same origin (GitHub
+    // Pages deployment), since it's the authoritative version. If fetch
+    // fails (file:// protocol during local dev, offline, CORS), we fall
+    // back to the inline stub which captures the v1.3 contract.
+    let setupMdContent;
+    try {
+      const res = await fetch("./SETUP.md");
+      if (res.ok) {
+        setupMdContent = await res.text();
+      } else {
+        throw new Error(`fetch returned ${res.status}`);
+      }
+    } catch (e) {
+      // Inline fallback — accurate to the v1.3 agnostified contract.
+      setupMdContent = buildSetupMd(manifest, bundleId);
+    }
+    zip.file("SETUP.md", setupMdContent);
 
     // bundles/<bundleId>/bundle.toggles.md — per-bundle defaults Claude
     // walks during the interview.
@@ -1772,7 +1799,7 @@ function BindFolio() {
       buildBundleTogglesMd(bundleId, bundleDefaults(bundleId)));
 
     zip.file("README.txt",
-`claude-code-templates v1.1.0 — bundle: ${bundleId}
+`claude-code-templates ${manifest.version} — bundle: ${bundleId}
 Generated: ${manifest.generated_at}
 Toggles ON: ${onCount}    Toggles ASK: ${askCount}    Diverged from default: ${changes}
 
@@ -1793,7 +1820,7 @@ can copy them into your project root during step 2 apply.
     zip.file("PASTE-TO-CLAUDE.md", buildPasteText(manifest, bundleId));
 
     const blob = await zip.generateAsync({ type: "blob" });
-    triggerDownload(blob, `claude-code-templates-${bundleId}-v1.1.0.zip`);
+    triggerDownload(blob, `claude-code-templates-${bundleId}-${manifest.version}.zip`);
     toast("Bound. Volume downloaded.");
   }
 
@@ -2396,7 +2423,7 @@ can copy them into your project root during step 2 apply.
               </button>
             </div>
             <div className="bind-filename mono">
-              claude-code-templates-{bundleId}-v1.1.0.zip
+              claude-code-templates-{bundleId}-{buildManifest().version}.zip
             </div>
             <div className="bind-preview-label tag">Archive contents</div>
             <pre className="bind-preview mono fast">{buildZipManifestPreview(buildManifest(), fileCount)}</pre>
@@ -3547,11 +3574,15 @@ function CleanupCallout() {
 // ── Utils ───────────────────────────────────────────────────────────────
 
 function buildSetupMd(manifest, bundleId) {
-  return `# SETUP.md — claude-code-templates v1.1.0 orchestration prompt
+  return `# SETUP.md — claude-code-templates ${manifest.version} orchestration prompt (FALLBACK)
 
-> This file is read by Claude Code at the start of step 2 (after the user
-> pastes the bootstrap brief). It tells Claude how to apply the configuration
-> in \`manifest.json\` into the user's project root atomically.
+> **This is the inline fallback stub.** The configurator tries to fetch the canonical
+> \`SETUP.md\` from the GitHub Pages deployment at bundle time; if that fetch fails
+> (file:// protocol, offline, CORS), you get this stub instead. The stub captures the
+> same contract as the canonical but is intentionally concise. If you can,
+> read the canonical at
+> https://github.com/starfoxcom/claude-code-templates/blob/main/SETUP.md — it's
+> the authoritative source and ships with worked examples.
 
 ## Phase 1 — Validate
 
@@ -3562,9 +3593,10 @@ function buildSetupMd(manifest, bundleId) {
    \`bundle\`, \`project.name\`, \`project.repo_url\`, \`project.main_branch\`,
    \`project.dev_branch\`, \`toggles\`. Missing fields → run a short interview to fill them.
 3. Cross-check every toggle key against the catalog. Unknown keys → reject.
-4. Resolve \`ask\` toggles based on project signals (e.g. the code_research
-   toggle resolves to ON only if the selected tool reports ready via its
-   status probe; architecture scaffold only if clear layers exist).
+4. Resolve \`ask\` toggles. For \`tokensave_entry_point\`, probe the chosen tool
+   per its profile in \`_core/global-template/hooks/code-research-profiles.json\`
+   (walk_up marker vs cli_available probe). Force \`false\` when
+   \`tools.code_research === "none"\` (the profile has \`_skip_install: true\`).
 
 ## Phase 2 — Plan
 
@@ -3572,8 +3604,12 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
 
 - Selected bundle and final toggle state (defaults + overrides + ask fills)
 - Substituted placeholders (\`{{PROJECT_NAME}}\`, \`{{REPO_URL}}\`,
-  \`{{MAIN_BRANCH}}\`, \`{{DEV_BRANCH}}\`, etc.)
+  \`{{MAIN_BRANCH}}\`, \`{{DEV_BRANCH}}\`,
+  \`{{TOOLS_CODE_RESEARCH_NAME}}\`, \`{{TOOLS_CODE_RESEARCH_URL}}\`,
+  \`{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}\`, \`{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}\`)
 - Per-toggle ON/OFF and what files/sections it affects
+- Per-tool-slot value resolution: which \`:code_research:<value>\` blocks
+  will be KEPT in each canonical template, which STRIPPED
 - Every file that will be created, every section that will be stripped,
   every file that will be deleted
 - The proposed commit message: \`chore(claude): bootstrap Claude Code setup\`
@@ -3584,21 +3620,124 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
 
 1. Copy every file from \`./claude-code-templates/_core/project-template/\`
    into the project root, preserving the tree.
-2. Substitute placeholders (UPPER_SNAKE_CASE only — doesn't collide with
-   GitHub Actions \`\${{ ... }}\` expressions).
-3. Resolve toggle markers:
+2. **First** resolve per-value toggle blocks (so unused tool branches are
+   stripped before substitution wastes work on them):
+   - For each \`<!-- TOGGLE:<slot>:<value> START/END -->\` block (slots:
+     \`code_research\` / \`precommit\` / \`ci\` / \`ai_reviewer\` / \`issue_tracker\`):
+     keep the block whose \`<value>\` matches \`manifest.tools.<slot>\`, strip
+     all others entirely. "Other (specify)" UI choice resolves to \`:custom\`.
+3. **Then** resolve boolean toggle markers:
    - ON: keep content, strip marker lines only.
    - OFF: remove block entirely (including marker lines).
    - \`:off\` inverse markers do the opposite.
-   - After all resolution, collapse triple blank lines.
-4. Render tools section (\`{{STACK_COMMANDS_ALLOWLIST}}\` etc.) from
+4. **Then** substitute placeholders (UPPER_SNAKE_CASE only — doesn't collide
+   with GitHub Actions \`\${{ ... }}\` expressions). Tool-slot placeholders
+   (\`{{TOOLS_<SLOT>_NAME}}\`, \`_URL\`, \`_BYPASS_MARKER\`, \`_NAME_KEBAB\`)
+   resolve from \`manifest.tools\` + the profile JSON.
+5. After all resolution, collapse triple blank lines.
+6. Render tools section (\`{{STACK_COMMANDS_ALLOWLIST}}\` etc.) from
    \`manifest.tools\` and \`manifest.project.stack_commands\`.
-5. Merge global additions into \`~/.claude/CLAUDE.md\` if the memory or
-   code-research toggles are ON. Ask before overwriting existing sections.
-6. Initialize per-project memory at
+7. Merge global additions into \`~/.claude/CLAUDE.md\` if the memory or
+   code-research toggles are ON. **Before appending,** strip per-value
+   \`<!-- TOGGLE:code_research:<value> START/END -->\` blocks from
+   \`CLAUDE.md.additions\` (keep only the block matching
+   \`manifest.tools.code_research\`) and substitute residual
+   \`{{TOOLS_CODE_RESEARCH_*}}\` placeholders. \`CLAUDE.md.additions\` is in
+   \`_core/global-template/\`, so Phase 3 step 3a doesn't touch it — resolve
+   here explicitly. Detect existing sections in \`~/.claude/CLAUDE.md\` by H2
+   heading match (\`## MANDATORY: No Explore Agents When the Project's
+   Code-Research Tool Is Available\`, \`## Auto memory\`); if found, ask before
+   overwriting. **Legacy heading transition:** a pre-v1.3.0 bind wrote
+   \`## MANDATORY: No Explore Agents When Tokensave Is Available\` — when that
+   exact heading is detected, treat it as the same section, ask before
+   overwriting, and rewrite using the new heading on accept.
+8. Initialize per-project memory at
    \`~/.claude/projects/<slug>/memory/MEMORY.md\` from the template.
-7. Atomic commit. No \`Co-Authored-By:\` line. No push.
-8. Self-verify: zero orphaned TOGGLE markers; zero unresolved
+
+## Phase 7a — Manage the code-research-first hook (GLOBAL)
+
+This phase has TWO sub-phases that run independently:
+
+- **Phase 7a-Cleanup (unconditional, runs first):** orphan-hook de-duplication
+  + cleanup of stale \`*-first.py\` hook entries from prior binds with a
+  different \`tools.code_research\` value. Runs whether the new bind installs a
+  hook or not — so a switch from \`tokensave\` to \`none\` (or a
+  decline-to-install) still cleans up the prior \`tokensave-first.py\`.
+- **Phase 7a-Install (conditional, runs only if \`tokensave_entry_point\` is
+  ON AND \`manifest.tools.code_research !== "none"\`):** render the template,
+  write the new hook, register the matcher entry.
+
+---
+
+**Phase 7a-Cleanup (unconditional):** iterate
+\`hooks.PreToolUse[*].hooks[*].command\` in \`~/.claude/settings.json\`
+(atomic-write pattern: parse → mutate → write to \`.tmp\` → fsync →
+\`os.replace\`). Before iterating, normalize the in-memory shape — \`{}\`,
+\`{"hooks": null}\`, \`{"hooks": {"PreToolUse": null}}\` all coerce to the
+canonical shape without clobbering sibling keys. Missing
+\`~/.claude/settings.json\` is created with \`{"hooks": {"PreToolUse": []}}\`
+(first-time-user case; no abort, no backup). For each command whose path ends
+in \`-first.py\`:
+
+- Compute the basename. Compare against the new bind's
+  \`<filename_basename>.py\` — or against the sentinel \`None\` when there is
+  no new hook to install (\`tokensave_entry_point: false\` OR
+  \`tools.code_research === "none"\`), so every existing \`*-first.py\` is
+  treated as orphan.
+- If basename matches the new bind's target → leave alone (idempotent re-bind).
+- If basename is a DIFFERENT \`*-first.py\` (or the new target is \`None\`) →
+  ask the user before removing the array element AND \`os.unlink\`-ing the
+  orphan file. Never leave two code-research-first hooks racing.
+- **If the user declines orphan removal:** leave both file + entry intact, BUT
+  surface a prominent ⚠️ warning in the bind summary naming the stale basename
+  so the user can remove it manually later.
+
+---
+
+**Phase 7a-Install (conditional — only if \`tokensave_entry_point\` is ON AND
+\`manifest.tools.code_research !== "none"\`):**
+
+1. Read the profile for \`manifest.tools.code_research\` from
+   \`_core/global-template/hooks/code-research-profiles.json\`.
+2. For the \`custom\` profile (when user picked "Other"): resolve nested
+   placeholders FIRST — compute \`NAME_KEBAB\` and \`NAME_UPPER_SNAKE\` from the
+   user-supplied name (ASCII-sanitize, reject empty / digit-leading /
+   over-40-chars / under-2-chars / collides-with-built-in-key, re-prompt on
+   failure), substitute into the profile's values.
+3. Substitute the profile's resolved values into
+   \`_core/global-template/hooks/code-research-first.py.template\`. Use
+   \`json.dumps()\` (or equivalent) when substituting \`{{TOOLS_CODE_RESEARCH_NAME}}\`
+   into the Python string literal \`DISPLAY_NAME = "..."\`.
+   **Triple-quote collision guard for \`SEQUENCE_BULLETS\` (custom profile only):**
+   the template line \`SEQUENCE_BULLETS = """{{TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS}}"""\`
+   uses a triple-quoted Python literal. For the \`custom\` profile, \`sequence_bullets\`
+   references \`{{TOOLS_CODE_RESEARCH_URL}}\` which is user-supplied free-text. If
+   the resolved bullets string contains \`"""\` or \`'''\` (either triple-quote
+   terminator), the rendered Python either breaks at load time OR breaks out of
+   the literal — an arbitrary-code surface against the user's own machine.
+   Before substituting, scan the resolved \`sequence_bullets\` for \`"""\` and \`'''\`;
+   if either appears, escape the offending quotes (insert a zero-width joiner
+   between the three characters, or fall back to \`json.dumps()\`-ing the bullets
+   and assigning to a regular double-quoted string). Built-in profile URLs are
+   pre-validated as safe — no guard needed for tokensave / ast-grep / sourcegraph
+   / ctags / semgrep.
+4. Write the result to \`~/.claude/hooks/<filename_basename>.py\` ATOMICALLY
+   (write to \`<filename_basename>.py.tmp\`, fsync, \`os.replace\` to final).
+   Ask before overwriting; show a diff if the existing file was hand-edited.
+5. Register in \`~/.claude/settings.json\` under \`hooks.PreToolUse\`. ATOMIC
+   write pattern: parse → mutate → write to \`.tmp\` → fsync → \`os.replace\`.
+   Preserve unrelated user customisation (sibling matchers + user-added hooks).
+
+**Hook is advisory, not a security boundary** — it fails open on JSON decode
+errors and unknown detection modes. Document this in the bind summary so the
+user knows the hook is best-effort enforcement.
+
+---
+
+**After both sub-phases (always run):**
+
+6. Atomic commit. No \`Co-Authored-By:\` line. No push.
+7. Self-verify: zero orphaned TOGGLE markers; zero unresolved
    \`{{PLACEHOLDERS}}\`; JSON files parse cleanly.
 
 ## Phase 4 — Cleanup
@@ -3648,9 +3787,9 @@ function buildBundleTogglesMd(bundleId, defaults) {
 }
 
 function buildPasteText(manifest, bundleId) {
-  return `# claude-code-templates v1.1.0 — bootstrap brief
+  return `# claude-code-templates ${manifest.version} — bootstrap brief
 
-Please bootstrap claude-code-templates v1.1.0 in this project.
+Please bootstrap claude-code-templates ${manifest.version} in this project.
 
 PREREQUISITE — the user has already downloaded the configured bundle and
 unzipped it at the project root, so a \`./claude-code-templates/\` folder
@@ -3673,7 +3812,7 @@ ${JSON.stringify(manifest, null, 2)}
 \`\`\`
 
 Land files atomically with a single commit:
-\`chore: install claude-code-templates v1.1.0 (${manifest.bundle})\`
+\`chore: install claude-code-templates ${manifest.version} (${manifest.bundle})\`
 `;
 }
 
@@ -3690,7 +3829,7 @@ function buildZipManifestPreview(manifest, fileCount) {
   const has = (id) => togglesOn.includes(id);
 
   const lines = [
-    `claude-code-templates-${manifest.bundle}-v1.1.0.zip   (~${fileCount} files)`,
+    `claude-code-templates-${manifest.bundle}-${manifest.version}.zip   (~${fileCount} files)`,
     `│`,
     `├── SETUP.md                          ← Claude reads this in step 2`,
     `├── README.md`,
@@ -3700,7 +3839,7 @@ function buildZipManifestPreview(manifest, fileCount) {
     `├── CHANGELOG.md`,
     `├── CONTRIBUTING.md`,
     `├── LICENSE`,
-    `├── VERSION                           v1.1.0`,
+    `├── VERSION                           ${manifest.version}`,
     `├── manifest.json                     ← resolved config from folio I`,
     `│`,
     `├── bundles/`,
@@ -4428,7 +4567,7 @@ function HowFolio() {
             <FileEntry kind="file" path="  TOGGLES.md" desc="catalog mirror, readable as git-diff fodder" />
             <FileEntry kind="file" path="  COMPARISON.md" desc="bundle matrix mirror" />
             <FileEntry kind="file" path="  LICENSE" />
-            <FileEntry kind="file" path="  VERSION" desc="v1.1.0" />
+            <FileEntry kind="file" path="  VERSION" desc="v1.3.0" />
             <FileEntry kind="file" path="  manifest.json" desc="resolved config baked from your folio I choices" />
 
             <FileEntry kind="dir" path="  bundles/" desc="bundle defaults Claude resolves against" />
@@ -4950,7 +5089,7 @@ function AboutFolio() {
         <div className="colophon">
 
           <ColRow k="Project" v="claude-code-templates" sub="MIT licensed · solo-maintained" />
-          <ColRow k="Version" v="v1.1.0" sub="2026-05-16" />
+          <ColRow k="Version" v="v1.3.0" sub="2026-05-21" />
           <ColRow k="Source" v={<a href="https://github.com/starfoxcom/claude-code-templates" target="_blank" rel="noreferrer">github.com/starfoxcom/claude-code-templates</a>} sub="issues + PRs welcome on best-effort basis" />
           <ColRow k="Hosting" v="GitHub Pages" sub="static HTML + JavaScript · no server · no analytics" />
 
@@ -5162,7 +5301,7 @@ function Sidebar({ folio, setFolio, theme, toggleTheme, mobileOpen, setMobileOpe
           <span className="brand-dot"></span>
           <span className="brand-name">claude-code-templates</span>
         </div>
-        <div className="brand-rev mono">v1.1.0</div>
+        <div className="brand-rev mono">v1.3.0</div>
       </div>
 
       <nav className="sb-nav" aria-label="Folios">
@@ -5205,7 +5344,7 @@ function MobileBar({ folio, setMobileOpen }) {
       <div className="mb-brand">
         <span className="brand-dot"></span>
         <span className="brand-name">claude-code-templates</span>
-        <span className="mono mb-rev">v1.1.0</span>
+        <span className="mono mb-rev">v1.3.0</span>
       </div>
       <div className="mb-now mono">{f && `${f.n} · ${f.label}`}</div>
     </header>

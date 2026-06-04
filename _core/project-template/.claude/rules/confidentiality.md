@@ -39,7 +39,7 @@ If multiple clients are on the same workstation:
 - **Per-project memory** is already isolated by Claude Code (each project gets its own `~/.claude/projects/<slug>/`).
 - **Global memory** (`~/.claude/CLAUDE.md`) is shared across projects — keep client-specific facts OUT of it.
 - **Permissions** (`.claude/settings.local.json`) are per-project — review what's allowed and ensure no cross-project tooling leak.
-- **Tokensave index** (`.tokensave/tokensave.db`) is per-project — never commit it to the client's repo.
+- **Code-research tool indexes / artifacts** are per-project — never commit them to the client's repo. Depending on `tools.code_research`: `.tokensave/` (tokensave's index dir), `tags` (ctags), `.ast-grep.yml` runtime artifacts, Sourcegraph local caches, `.semgrep` config dirs. Add the relevant entries to the project `.gitignore`.
 
 ---
 
