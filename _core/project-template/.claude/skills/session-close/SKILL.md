@@ -72,17 +72,35 @@ Triggered only when the DoD verification step just flipped a milestone to ✅. S
 <!-- TOGGLE:dod_devlog_step END -->
 
 <!-- TOGGLE:tokensave_entry_point START -->
-### Tokensave adherence metric
+### Code-research adherence metric
 
-Before signaling session close, count how often code-research happened through tokensave vs through Grep/Glob/raw-grep this session:
+Before signaling session close, count how often code-research happened through {{TOOLS_CODE_RESEARCH_NAME}} vs through Grep/Glob/raw-grep this session:
 
-- **tokensave_* calls this session:** look at your tool-use history and count any call matching `tokensave_*` (search, context, callers, callees, impact, body, files, etc.).
-- **Grep + Glob calls this session:** count `Grep` + `Glob` tool calls + any Bash command containing `grep `, `rg `, `ag `, `ack `, `ripgrep ` UNLESS the command had a `# TOKENSAVE_BYPASS:` marker.
-- **Adherence ratio** = `tokensave_calls / (tokensave_calls + grep_glob_calls)` — express as a percentage.
+- **{{TOOLS_CODE_RESEARCH_NAME}} calls this session:** look at your tool-use history and count calls matching the tool's primitive shape:
+  <!-- TOGGLE:code_research:tokensave START -->
+  any call matching `tokensave_*` (search, context, callers, callees, impact, body, files, etc.).
+  <!-- TOGGLE:code_research:tokensave END -->
+  <!-- TOGGLE:code_research:ast-grep START -->
+  any Bash command starting with `ast-grep run`, `ast-grep scan`, or `ast-grep test`.
+  <!-- TOGGLE:code_research:ast-grep END -->
+  <!-- TOGGLE:code_research:sourcegraph START -->
+  any Bash command starting with `src search`, `src api`, or `src code-intel`.
+  <!-- TOGGLE:code_research:sourcegraph END -->
+  <!-- TOGGLE:code_research:ctags START -->
+  any Bash command using `readtags`, or `grep` against a `tags` file, or `ctags -R` regeneration.
+  <!-- TOGGLE:code_research:ctags END -->
+  <!-- TOGGLE:code_research:semgrep START -->
+  any Bash command starting with `semgrep`.
+  <!-- TOGGLE:code_research:semgrep END -->
+  <!-- TOGGLE:code_research:custom START -->
+  any Bash command invoking the `{{TOOLS_CODE_RESEARCH_NAME}}` CLI per its documentation at {{TOOLS_CODE_RESEARCH_URL}}.
+  <!-- TOGGLE:code_research:custom END -->
+- **Grep + Glob calls this session:** count `Grep` + `Glob` tool calls + any Bash command containing `grep `, `rg `, `ag `, `ack `, `ripgrep ` UNLESS the command had a `# {{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` marker.
+- **Adherence ratio** = `{{TOOLS_CODE_RESEARCH_NAME}}_calls / ({{TOOLS_CODE_RESEARCH_NAME}}_calls + grep_glob_calls)` — express as a percentage.
 
 Report it like:
 
-> **Tokensave adherence this session: 7 tokensave calls / 1 grep fallback → 87%.** (Bypass reason: <if any>.)
+> **{{TOOLS_CODE_RESEARCH_NAME}} adherence this session: 7 {{TOOLS_CODE_RESEARCH_NAME}} calls / 1 grep fallback → 87%.** (Bypass reason: <if any>.)
 
 If the ratio is under 70% AND there were no documented bypass reasons, surface that as a regression to fix next session. The hook should have prevented unjustified Grep calls; if any got through, note why.
 <!-- TOGGLE:tokensave_entry_point END -->

@@ -31,3 +31,6 @@ yarn.lock
 
 # tokensave — local code-research index (per-project, never committed)
 .tokensave/
+
+# Claude Code agent worktrees — created by parallel review fan-outs, local-only
+.claude/worktrees/
