@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""
+PreToolUse hook — {{TOOLS_CODE_RESEARCH_NAME}}-first enforcement.
+
+⚠️  ADVISORY ENFORCEMENT — NOT A SECURITY BOUNDARY. The hook fails open on
+JSON-decode errors, unknown DETECTION_MODE values, OSError during path
+resolution, and any other unexpected exception. Treat it as a guidance nudge
+that routes Claude to a code-research tool when the tool is available; don't
+treat it as a sandbox or as protection against malicious commands.
+
+Runs before Grep / Glob / raw grep|rg|ag|ack Bash calls. If
+{{TOOLS_CODE_RESEARCH_NAME}} is available for this project, the hook prints a
+structured reason to stderr and exits 2 (block). Claude reads the reason and
+routes the next call through {{TOOLS_CODE_RESEARCH_NAME}}.
+
+Bypass paths:
+  - {{TOOLS_CODE_RESEARCH_NAME}} not available → hook exits 0 (allows the tool).
+  - Searching non-code content (markdown, binaries, .gitignored, etc.) →
+    add `# {{TOOLS_CODE_RESEARCH_BYPASS_MARKER}} <reason>` inside the Bash
+    command. The hook lets it through. For Grep/Glob tool calls there is no
+    inline escape — briefly explain the bypass in chat and re-issue.
+
+Generated from `_core/global-template/hooks/code-research-first.py.template`
+at bind time. Profile source: `code-research-profiles.json` →
+`{{TOOLS_CODE_RESEARCH_NAME}}`. To switch to a different code-research tool,
+re-run the setup with a different `tools.code_research` value — the bind step
+renders a fresh `<tool>-first.py` and updates `~/.claude/settings.json`.
+
+Install (canonical procedure in SETUP.md § Phase 7a):
+  Render this template GLOBALLY at
+  ~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py and register in
+  ~/.claude/settings.json under hooks.PreToolUse:
+    {
+      "matcher": "Grep|Glob|Bash",
+      "hooks": [
+        { "type": "command",
+          "command": "py \"~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py\"" }
+      ]
+    }
+  On ALL platforms (Windows AND macOS/Linux), expand ~ to the absolute home
+  path before writing the command string into settings.json — e.g.
+  `C:/Users/Alice/.claude/hooks/...` or `/home/alice/.claude/hooks/...`.
+  Claude Code's hook executor does NOT auto-expand ~ in the command string;
+  a literal ~ silently disables the hook. Use `os.path.expanduser('~')` at
+  bind time. On Windows the launcher is `py`; on macOS/Linux swap to
+  `python3`. NEVER install project-local — it can trigger tool-specific
+  template-inheritance bugs that corrupt settings on every Stop event.
+"""
+import json
+import os
+import pathlib
+import shutil
+import sys
+from typing import Optional
+
+
+# === Tool profile (substituted at bind time from code-research-profiles.json) ===
+DISPLAY_NAME = "{{TOOLS_CODE_RESEARCH_NAME}}"
+BYPASS_MARKER = "{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}"
+DETECTION_MODE = "{{TOOLS_CODE_RESEARCH_DETECTION_MODE}}"
+DETECTION_TARGET = "{{TOOLS_CODE_RESEARCH_DETECTION_TARGET}}"
+SEQUENCE_BULLETS = """{{TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS}}"""
+# =============================================================================
+
+
+def detect_walk_up(start_path: str, marker_relpath: str) -> Optional[str]:
+    """Walk up from start_path looking for marker_relpath. Returns the matched root, or None.
+
+    Refuses to walk if marker_relpath contains path-traversal components (`..`), absolute
+    paths, or null bytes — defense in depth against a malformed profile. The bind step
+    is supposed to validate this against the profile `_schema`, but we double-check here
+    so a corrupted profile can't trick the hook into probing arbitrary filesystem paths.
+    """
+    if not marker_relpath:
+        return None
+    if "\x00" in marker_relpath:
+        return None
+    # Split on BOTH POSIX `/` and Windows `\` separators when checking for `..`
+    # path-traversal components. pathlib on Windows treats `\` as a separator
+    # equivalently to `/`, so a profile-supplied `..\foo` would otherwise
+    # bypass a POSIX-only split check.
+    normalized_parts = marker_relpath.replace("\\", "/").split("/")
+    if ".." in normalized_parts:
+        return None
+    if marker_relpath.startswith("/") or marker_relpath.startswith("\\") or (
+        len(marker_relpath) >= 2 and marker_relpath[1] == ":"
+    ):
+        return None
+    try:
+        p = pathlib.Path(start_path).resolve()
+        if not p.exists():
+            return None
+    except (OSError, ValueError):
+        return None
+    while True:
+        if (p / marker_relpath).exists():
+            return str(p / marker_relpath.split("/")[0])
+        if p == p.parent:
+            return None
+        p = p.parent
+
+
+def detect_cli(command: str) -> bool:
+    """Check if a CLI tool is available on PATH (cross-platform: shutil.which honors PATHEXT on Windows)."""
+    return shutil.which(command) is not None
+
+
+def has_bypass_marker(cmd: str) -> bool:
+    """Match BYPASS_MARKER only when it appears inside a # comment, not as a substring of a literal."""
+    if not cmd or BYPASS_MARKER not in cmd:
+        return False
+    # require the marker to appear after a `#` (comment context) on the same logical line
+    for line in cmd.splitlines():
+        idx = line.find(BYPASS_MARKER)
+        if idx < 0:
+            continue
+        hash_idx = line.find("#")
+        if 0 <= hash_idx < idx:
+            return True
+    return False
+
+
+# Single-token commands matched via startswith.
+_GREP_TOKENS = ("grep", "rg", "ag", "ack", "ripgrep", "findstr")
+# Multi-token commands matched literally (e.g. `git grep`).
+_GREP_MULTI_TOKENS = ("git grep",)
+
+
+def is_grep_like_bash(cmd: str) -> bool:
+    """Return True if the command invokes a grep-class tool — including through shell chains.
+
+    Covers: leading command, pipes (`| grep`), and-chains (`&& grep`), semicolon chains
+    (`; grep`), or-chains (`|| grep`), command substitution (`$(grep ...)` and backticks),
+    `xargs grep`, `find -exec grep`, multi-token tools like `git grep`, the Windows
+    `findstr`, and newline-separated commands. The detection is heuristic (shell parsing
+    in pure Python is brittle) — false-positives prefer to over-block (user can add a
+    bypass marker) rather than silently let a grep through.
+    """
+    if not cmd:
+        return False
+    # Split on shell control characters that introduce a new command context.
+    splitters = ("|", "&&", "||", ";", "\n", "$(", "`", "xargs ", "-exec ")
+    chunks = [cmd]
+    for sp in splitters:
+        next_chunks = []
+        for c in chunks:
+            next_chunks.extend(c.split(sp))
+        chunks = next_chunks
+    for chunk in chunks:
+        token = chunk.lstrip()
+        # Single-token commands: match name followed by space, tab, or end-of-string.
+        for name in _GREP_TOKENS:
+            if token == name or token.startswith(name + " ") or token.startswith(name + "\t"):
+                return True
+        # Multi-token commands: substring at chunk start (after lstrip).
+        for name in _GREP_MULTI_TOKENS:
+            if token.startswith(name + " ") or token == name:
+                return True
+    return False
+
+
+def main() -> None:
+    try:
+        payload = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        # Malformed PreToolUse payload — fail open. Enforcement is advisory.
+        sys.exit(0)
+
+    tool_name = payload.get("tool_name", "")
+    tool_input = payload.get("tool_input", {}) or {}
+    cwd = payload.get("cwd") or os.getcwd()
+
+    intercept = False
+    if tool_name in ("Grep", "Glob"):
+        intercept = True
+    elif tool_name == "Bash":
+        cmd = tool_input.get("command", "") or ""
+        if has_bypass_marker(cmd):
+            sys.exit(0)
+        if is_grep_like_bash(cmd):
+            intercept = True
+
+    if not intercept:
+        sys.exit(0)
+
+    if DETECTION_MODE == "walk_up":
+        evidence = detect_walk_up(cwd, DETECTION_TARGET)
+        if evidence is None:
+            sys.exit(0)
+    elif DETECTION_MODE == "cli_available":
+        if not detect_cli(DETECTION_TARGET):
+            sys.exit(0)
+        evidence = DETECTION_TARGET
+    else:
+        # Unknown DETECTION_MODE — print one-line warning then fail open so a broken
+        # hook never bricks all Bash/Grep/Glob calls. Enforcement is advisory, not
+        # a security boundary.
+        print(
+            f"[{DISPLAY_NAME}-first] Unknown DETECTION_MODE={DETECTION_MODE!r}; "
+            "hook is failing open. Check code-research-profiles.json and re-run setup.",
+            file=sys.stderr,
+        )
+        sys.exit(0)
+
+    msg = (
+        f"{DISPLAY_NAME} available at {evidence}.\n\n"
+        f"Code research must route through {DISPLAY_NAME} first, not Grep / Glob / raw grep / rg:\n"
+        f"{SEQUENCE_BULLETS}\n"
+        "\n"
+        "Fall back to Grep/Glob/raw grep ONLY when:\n"
+        f"  1. You've tried {DISPLAY_NAME} with 2+ keyword variants and got nothing usable.\n"
+        "  2. You're searching non-code content (markdown, binaries, .gitignored).\n"
+        f"  3. {DISPLAY_NAME}'s status check shows it's unavailable for the scope you need.\n\n"
+        f"Bypass (Bash only): include `# {BYPASS_MARKER} <reason>` in the command.\n"
+        f"Bypass (Grep/Glob tools): briefly explain in chat why {DISPLAY_NAME} doesn't fit, then re-issue."
+    )
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
