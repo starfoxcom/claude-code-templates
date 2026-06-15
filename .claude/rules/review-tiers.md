@@ -5,7 +5,7 @@
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
 | **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Verdict feeds the `Evaluate review outcome` check. |
-| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict feeds the `Claude On-Demand` check via the Checks API — independently required by branch protection when configured. |
+| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict feeds the `Claude On-Demand` check via the Checks API — independently required by branch protection. |
 
 ## The gate model — two independent required status checks
 
@@ -28,7 +28,7 @@ Branch protection requires **two** status checks, both attached to the PR HEAD S
 
 **Dismiss path for the maintainer:** if the deep tier is genuinely broken or its finding doesn't apply, admin-bypass leaves an audit trail. Removing the `needs-deep-review` label does NOT auto-reset the check in the two-check architecture (no event fires to PATCH on unlabeled).
 
-**Configure the branch-protection ruleset to require BOTH `Evaluate review outcome` AND `Claude On-Demand`** if you want deep-tier verdicts to actually gate merge. Omitting `Claude On-Demand` from required checks leaves the check visible but advisory — useful for projects that want the deep verdict on the PR status panel without it being load-bearing.
+Both `Evaluate review outcome` AND `Claude On-Demand` are configured as required status checks on `main` and `develop`. Omitting either from required checks would leave one tier advisory; this repo dogfoods the full strict model.
 
 ## Workflow-touching PRs require admin-bypass
 
@@ -55,15 +55,9 @@ This is the single most load-bearing rule for review quality.
 
 ## Deep-review trigger list
 
-<!-- TOGGLE:github_actions_deep_review_auto_fire START -->
 **Auto-escalation enabled** — the routine review's Step 2.5 applies the `needs-deep-review` label AND posts a structured `@claude review this PR` comment automatically when the diff touches any of the items below.
 
 This list is canonical here AND in the workflow's Step 2.5 prompt — **keep them in sync when extending.**
-<!-- TOGGLE:github_actions_deep_review_auto_fire END -->
-
-<!-- TOGGLE:github_actions_deep_review_auto_fire:off START -->
-**Auto-escalation disabled** — you fire the deep review manually by commenting `@claude review this PR` on the PR. The trigger list below is your mental checklist for when to do that.
-<!-- TOGGLE:github_actions_deep_review_auto_fire:off END -->
 
 The trigger surface — when a PR's diff touches any of these, the deep review is warranted. Edit this list to match your project's risk surface; the categories below are starting points.
 

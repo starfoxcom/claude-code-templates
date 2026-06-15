@@ -63,7 +63,6 @@ function BindFolio() {
     license_holder: "",
     conversation_language: "English",
     code_language: "English",
-    timezone: "",
     architecture: [],              // selected architectural patterns
     stack_commands: [],            // pre-approved Bash commands
   });
@@ -167,7 +166,6 @@ function BindFolio() {
       } : {
         discovery: true,
         conversation_language: project.conversation_language,
-        timezone: project.timezone,
       },
       tools: resolvedTools,
       tool_names: resolvedToolNames,
@@ -437,12 +435,6 @@ can copy them into your project root during step 2 apply.
                       value={project.license_holder}
                       onChange={e => setProject(p => ({ ...p, license_holder: e.target.value }))} />
                   </Field>
-                  <Field label="Timezone (IANA name)" full
-                    hint={<>For session-close timestamps. IANA is the canonical world-clock identifier list (e.g. <code className="mono">America/Mazatlan</code>, <code className="mono">Europe/Madrid</code>, <code className="mono">Asia/Tokyo</code>). Full list: <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noreferrer" style={{color: "var(--accent)"}}>tz database time zones ↗</a>.</>}>
-                    <input className="input" placeholder="America/Mazatlan"
-                      value={project.timezone}
-                      onChange={e => setProject(p => ({ ...p, timezone: e.target.value }))} />
-                  </Field>
                 </div>
 
                 <PatternCarousel
@@ -522,7 +514,7 @@ can copy them into your project root during step 2 apply.
       {/* ── DISCOVERY PREFERENCES ─ visible only in Discovery mode ───── */}
       {mode === "discovery" && (
         <section className="step disc-prefs-step">
-          <StepHead step="03" title="Discovery preferences" annot="2 THINGS CLAUDE CAN'T INFER FROM CODE" />
+          <StepHead step="03" title="Discovery preferences" annot="1 THING CLAUDE CAN'T INFER FROM CODE" />
           <div className="card pad" style={{ background: "var(--paper-card)" }}>
             <div className="proj-grid">
               <Field label="Conversation language"
@@ -530,12 +522,6 @@ can copy them into your project root during step 2 apply.
                 <input className="input" placeholder="English"
                   value={project.conversation_language}
                   onChange={e => setProject(p => ({ ...p, conversation_language: e.target.value }))} />
-              </Field>
-              <Field label="Timezone (IANA name)"
-                hint={<>For session-close timestamps. IANA = canonical world-clock list (e.g. <code className="mono">America/Mazatlan</code>). Full list: <a href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" target="_blank" rel="noreferrer" style={{color: "var(--accent)"}}>tz database time zones ↗</a>. Leave blank and Claude will ask during the audit.</>}>
-                <input className="input" placeholder="America/Mazatlan"
-                  value={project.timezone}
-                  onChange={e => setProject(p => ({ ...p, timezone: e.target.value }))} />
               </Field>
             </div>
           </div>
@@ -1264,7 +1250,7 @@ function SubRow({ k, v, accent }) {
 // Counts how many of the advanced fields the user has filled, for the
 // disclosure summary label.
 function advancedFilledCount(p) {
-  const n = ["description", "dev_branch", "branching_model", "license_holder", "timezone", "code_language"]
+  const n = ["description", "dev_branch", "branching_model", "license_holder", "code_language"]
     .filter(k => {
       if (k === "dev_branch") return p.branching_model === "gitflow" && p.dev_branch && p.dev_branch !== "develop";
       return p[k] && p[k] !== "trunk" && p[k] !== "English" && p[k] !== "main";
@@ -1717,7 +1703,7 @@ function DiscoverySummary() {
           <li><span className="disc-tick" aria-hidden>✓</span>
             <span>Infers toggle states from bundle defaults + project signals (e.g. <code className="mono">visual_test_discipline</code> ON if a frontend chip is detected).</span></li>
           <li><span className="disc-tick" aria-hidden>✓</span>
-            <span>Asks 0–3 questions for genuinely-not-in-code items (timezone, license holder, anything ambiguous).</span></li>
+            <span>Asks 0–3 questions for genuinely-not-in-code items (license holder, anything ambiguous).</span></li>
           <li><span className="disc-tick" aria-hidden>✓</span>
             <span>Proposes the plan with an <strong>evidence footnote on every inferred value</strong> before writing anything.</span></li>
         </ul>

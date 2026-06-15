@@ -1,6 +1,23 @@
-# Routine PR review — Sonnet 4.6, binary 🔴/🟢 verdict
-# Verdict resolution lives inside the same job as the review action — no
-# issue_comment re-evaluation. Deep-tier escalation is owned by claude.yml.
+# Routine PR review — binary 🔴/🟢 verdict
+#
+# Architecture: two independent required status checks fold into the merge
+# gate via branch protection (NOT via in-workflow comment correlation):
+#   1. `Evaluate review outcome` — routine tier (this workflow). Required.
+#   2. `Claude On-Demand`        — deep tier (claude.yml). Required when
+#                                  branch protection is configured to require it.
+#
+# The `Claude On-Demand` check is created on the PR HEAD SHA at workflow
+# start (via the Checks API so it shows up on the PR's status rollup) and
+# walks through this lifecycle:
+#   • PR opens                    → status=in_progress  ("Waiting for routine review")
+#   • Triage non-reviewable diff  → conclusion=skipped  ("Diff non-reviewable")
+#   • Sonnet completes, no escal. → conclusion=skipped  ("No escalation")
+#   • Sonnet escalates            → status=in_progress  ("Deep review in progress")
+#   • Opus completes              → success / failure   (claude.yml PATCHes)
+#
+# All terminal states (skipped, success) pass branch protection; in_progress
+# blocks merge with a spinner visible in the PR status rollup; failure blocks
+# merge with a red X.
 #
 # POST-BIND PREREQUISITES (workflow is a no-op until BOTH are done):
 #   1. Add CLAUDE_CODE_OAUTH_TOKEN to repo secrets
@@ -11,13 +28,18 @@
 #      land this file on {{MAIN_BRANCH}} first via a hotfix/* branch, then cascade
 #      {{MAIN_BRANCH}} → {{DEV_BRANCH}}. Workflow files installed only on a non-default
 #      branch will NEVER fire.
+#   3. (Recommended) Add `Evaluate review outcome` AND `Claude On-Demand` to
+#      required status checks under your branch protection ruleset. Both are
+#      created against the PR HEAD SHA. Adding both makes deep-tier verdicts
+#      actually gate merge; omitting `Claude On-Demand` leaves the check
+#      visible but advisory.
 #
-# PERMANENT LIMITATION — workflow-touching PRs require admin-bypass:
+# PERMANENT LIMITATION — claude-code-review.yml edits require admin-bypass:
 #   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
 #   head ref is byte-identical to the version on the default branch before granting
-#   an OIDC-exchanged token. Any PR that edits .github/workflows/claude*.yml therefore
-#   fails the token exchange and the routine review action cannot post a verdict.
-#   Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
+#   an OIDC-exchanged token. Any PR that edits .github/workflows/claude-code-review.yml
+#   therefore fails the token exchange and the routine review action cannot post a
+#   verdict. Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
 
 name: Claude Code Review
 
@@ -32,10 +54,52 @@ on:
     <!-- TOGGLE:branching_model_trunk END -->
 
 concurrency:
+  # Cancel in-flight reviews when a newer commit lands on the same PR.
   group: claude-review-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  init-deep-check:
+    name: Init deep-tier check
+    # Always run — every PR gets a `Claude On-Demand` check on its HEAD SHA
+    # so branch protection has something to evaluate. The check starts at
+    # status=in_progress ("Waiting for routine review to evaluate"), then
+    # downstream jobs PATCH it through the lifecycle:
+    #   • triage non-reviewable / Sonnet no escalation → conclusion=skipped
+    #   • Sonnet escalates → status=in_progress titled "Deep review in progress"
+    #   • Opus completes → conclusion=success/failure (claude.yml)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: read
+    steps:
+      - name: Create Claude On-Demand check at in_progress on PR HEAD SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          REPO="${{ github.repository }}"
+
+          # Idempotent: if the check already exists on this HEAD SHA, do
+          # nothing. Re-running this job on a rerun_failed scenario must not
+          # overwrite a deep-tier-set conclusion.
+          EXISTING=$(gh api \
+            "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+            --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "::notice::Claude On-Demand check already exists on $HEAD_SHA (id=$EXISTING) — skipping create"
+            exit 0
+          fi
+
+          gh api "repos/$REPO/check-runs" -X POST \
+            -F name="Claude On-Demand" \
+            -F head_sha="$HEAD_SHA" \
+            -F status="in_progress" \
+            -F "output[title]=Waiting for routine review to evaluate" \
+            -F "output[summary]=The routine review (Sonnet) is evaluating whether deep-tier review is needed. This check will resolve to skipped (no escalation) or in_progress → success/failure (escalated to Opus)."
+          echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
+
   triage:
     name: Diff triage
     runs-on: ubuntu-latest
@@ -62,9 +126,9 @@ jobs:
             echo "run_review=false" >> "$GITHUB_OUTPUT"
           fi
 
-  evaluate-review-outcome:
-    name: Evaluate review outcome
-    needs: triage
+  claude-review:
+    name: Auto review
+    needs: [triage, init-deep-check]
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -73,6 +137,9 @@ jobs:
       issues: write
       id-token: write
       actions: read
+      # Needed so the post-action Resolve step can PATCH the Claude On-Demand
+      # check based on whether routine auto-escalated.
+      checks: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -241,7 +308,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
-          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-sonnet-4-6'
+          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model {{REVIEW_ROUTINE_MODEL}}'
           prompt: |
             Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }} for **{{PROJECT_NAME}}** — {{ONE_LINE_DESCRIPTION}}.
 
@@ -289,16 +356,44 @@ jobs:
 
             **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
 
+            **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The `Evaluate review outcome` job parses the comment body via `grep -E "🔴|🟢" | tail -n 1`. A verdict line without one of those two emoji characters is treated as a MISSING verdict and the gate FAILS CLOSED. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
+
             Body MUST:
             - Be titled `## Code Review — {{PROJECT_NAME}}`
             - End with EXACTLY one of these as the FINAL line of the comment (no trailing prose after):
               - `🟢 LGTM`
               - `🔴 Blocking — must fix`
 
+            **WRONG formats — every one of these fails the gate:**
+            - `LGTM` (missing 🟢 prefix — the most common mistake; do not do this)
+            - `LGTM ✅` / `✅ LGTM` (wrong emoji — parser matches 🟢 only, not ✅)
+            - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
+            - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule below forces 🔴)
+            - Any verdict line followed by trailing prose (`🟢 LGTM, ship it!` — must be the FINAL line, nothing after)
+
+            **Self-check immediately before invoking `gh pr comment`:** Look at the literal last line of your draft body. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
+
             **BINARY VERDICT RULE:**
             - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
             - 🔴 Blocking when ANY real finding exists, regardless of framing.
             - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
+
+            **MANDATORY when you marked the PR for escalation in Step 2.5 (path-based OR uncertainty-based):** before the final verdict line, append a `### 🟡 Uncertainty surfaced — needs-deep-review requested` section. PR readers must see *what specifically* the deep tier is being asked to verify, not just *that* it was flagged. An escalation without a 🟡 section in the verdict above it is unmotivated and degrades the deep tier's signal quality — readers see the label / trigger but not the rationale.
+
+            Format (this block goes BEFORE the final verdict line; verdict stays binary 🟢/🔴):
+
+            ```
+            ### 🟡 Uncertainty surfaced — needs-deep-review requested
+
+            - `<file:line>` — <what specifically concerns you about this change in 1 sentence>.
+              **Why I am not confident:** <one sentence on the limit of your analysis — what you cannot fully verify from the diff/the files you read>.
+              **What I want Opus to verify:** <one sentence naming the concrete check — invariant, contract, edge case>.
+            - ...
+            ```
+
+            For escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep tier should mechanically rule out, what invariant could silently break. "Path is on the escalate list" alone is NOT a sufficient 🟡 entry. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5.
+
+            🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for Opus). Binary verdict + optional 🟡 section are independent dimensions.
 
             <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
             ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
@@ -329,74 +424,220 @@ jobs:
             - 🔴 Blocking when ANY real finding exists, regardless of framing.
             - DROP style preferences and micro-optimisations entirely.
 
+            **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment and takes the LAST line containing 🔴 or 🟢 as the verdict — the SAME strict contract as the routine gate. A final line with neither emoji is treated as a MISSING verdict and PATCHes the `Claude On-Demand` check to failure, blocking merge. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract.
+
+            **WRONG formats — every one of these fails the deep gate:**
+            - `LGTM` (missing 🟢 prefix — the most common mistake)
+            - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
+            - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
+            - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
+            - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+
+            **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
+
             **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
             ```
 
             **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true.
             <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
 
-      - name: Evaluate review outcome
-        if: always()
+      # ── Resolve Claude On-Demand check based on escalation state ──────────
+      # Runs AFTER the action step above so we observe the label-applied state
+      # the action just produced (or that a maintainer manually applied). The
+      # check (created at in_progress by init-deep-check) is PATCHed to one
+      # of two states:
+      #   • No needs-deep-review label → conclusion=skipped (passes branch
+      #     protection; visually clear "this didn't run").
+      #   • Label applied → status=in_progress with updated title "Deep
+      #     review in progress" — branch protection blocks merge until
+      #     claude.yml PATCHes to success/failure.
+      - name: Resolve Claude On-Demand check post-routine
+        if: always() && steps.claude-review.conclusion != 'cancelled'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # HEAD-SHA verdict correlation. Filter verdict comments by
-          # created_at >= the earliest run_started_at across all workflow
-          # runs at the PR's current HEAD SHA. Closes the false-green gate
-          # vulnerability where a workflow-touching Push B (which fails the
-          # App OIDC token exchange and posts no verdict) would otherwise
-          # pick up Push A's prior 🟢 verdict via `| last`.
-          #
-          # cancel-in-progress on the concurrency block prevents two runs
-          # from racing in-flight, but it cannot un-post a verdict that an
-          # earlier completed run already wrote to the PR. The HEAD-SHA
-          # floor closes that gap: any verdict belonging to the current
-          # push was posted by SOME run firing on this HEAD, so its
-          # created_at is necessarily >= the earliest run_started_at at
-          # this HEAD. Push A's verdict was posted under HEAD SHA A — the
-          # actions/runs?head_sha=B query doesn't include Run A, the floor
-          # is Run B's start time, and Run A's verdict (created_at < floor)
-          # is correctly rejected.
-          #
-          # Why HEAD-SHA over $GITHUB_RUN_ID-based correlation: generalises
-          # to multi-tier reads where the verdict is posted by a different
-          # workflow run than the one running the gate. Architectural
-          # improvement cross-ported from Emberholm.
-          # --paginate walks all pages on both queries — the issue-comments
-          # endpoint defaults to per_page=30 and the actions/runs endpoint
-          # is bounded by per_page=100.
+          PR="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          HEAD_SHA_FLOOR=$(gh api --paginate \
-            "repos/${{ github.repository }}/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
-            --jq '[.workflow_runs[].run_started_at] | min // empty')
-          if [ -z "$HEAD_SHA_FLOOR" ]; then
-            echo "::error::Could not determine HEAD-SHA run-started-at floor for $HEAD_SHA"
-            exit 1
-          fi
-          COMMENT=$(gh api --paginate "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
-            | jq -r --arg ts "$HEAD_SHA_FLOOR" '[.[] | select(.body | contains("## Code Review — {{PROJECT_NAME}}")) | select(.created_at >= $ts)] | last | .body // ""')
 
-          if [ -z "$COMMENT" ]; then
-            echo "::error::No review comment found at or after HEAD-SHA floor $HEAD_SHA_FLOOR — Claude did not post a verdict this run"
+          CHECK_ID=$(gh api \
+            "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+            --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
+          if [ -z "$CHECK_ID" ]; then
+            echo "::error::Claude On-Demand check not found on $HEAD_SHA — init-deep-check must have skipped or failed"
             exit 1
           fi
 
-          # Verdict is the LAST line containing 🔴 or 🟢. This is robust to:
-          #   (a) Sonnet recapping a prior 🔴 finding mid-body in a 🟢 review,
-          #   (b) Sonnet adding a closing paragraph after the verdict line.
-          VERDICT_LINE=$(printf '%s\n' "$COMMENT" | grep -E "🔴|🟢" | tail -n 1)
-          if [ -z "$VERDICT_LINE" ]; then
-            echo "::error::Review comment has no 🔴/🟢 verdict at all"
+          # ── Terminal-state guard ──────────────────────────────────────────
+          # If claude.yml's Evaluate step already PATCHed the check to a
+          # terminal state (success or failure), do NOT overwrite. Scenarios:
+          # (a) maintainer manually @claude-triggered before routine
+          # completed and Opus finished first; (b) "Re-run all jobs" on the
+          # routine workflow after Opus has set a terminal state. The
+          # `skipped` and `in_progress` states ARE safe to overwrite —
+          # they're set by this routine workflow, not by claude.yml's
+          # authoritative Evaluate step.
+          EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
+          EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
+          if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
+            echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — Opus has spoken; routine Resolve will not overwrite"
+            exit 0
+          fi
+
+          LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          if echo "$LABELS" | grep -q "needs-deep-review"; then
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="in_progress" \
+              -F "output[title]=Deep review in progress" \
+              -F "output[summary]=needs-deep-review applied. Waiting for the Opus deep-tier verdict (claude.yml will PATCH this check on completion)."
+            echo "::notice::Set Claude On-Demand check $CHECK_ID to in_progress (escalated)"
+          else
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="completed" \
+              -F conclusion="skipped" \
+              -F "output[title]=Deep review skipped — no escalation" \
+              -F "output[summary]=Routine review found no uncertainty warranting deep-tier escalation. To request a deep review anyway, post a comment containing \`@claude review this PR — depth pass on <focus>\`."
+            echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (no escalation)"
+          fi
+
+  evaluate-review-outcome:
+    name: Evaluate review outcome
+    needs: [triage, claude-review]
+    # Runs on every PR event. MUST run for every PR (including non-reviewable
+    # docs/rules/context-refresh PRs) so the branch-protection ruleset's
+    # required-status-check "Evaluate review outcome" always resolves to a
+    # status — `always()` keeps the gate firing even when `claude-review` is
+    # skipped via the triage classifier.
+    #
+    # Gate logic — routine tier ONLY. The deep tier is a SEPARATE required
+    # status check (`Claude On-Demand`) created/PATCHed via the Checks API
+    # against the PR HEAD SHA. Branch protection ANDs the two checks; this
+    # job does NOT need to know about the deep verdict.
+    #
+    #   1. Triage classified the diff as non-reviewable → auto-pass + PATCH
+    #      Claude On-Demand to conclusion=skipped (otherwise it'd be stuck
+    #      at in_progress and block merge on non-reviewable PRs).
+    #   2. Routine review job didn't reach success → fail (action errored,
+    #      OIDC tripped, workflow-validation skip, runner crash).
+    #   3. Routine verdict comment missing or 🔴 → fail.
+    #   4. Routine 🟢 → pass.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      # Needed for the non-reviewable-diff path to PATCH Claude On-Demand to
+      # skipped — without this the deep check stays at in_progress on
+      # docs/rules-only PRs and the maintainer would have to admin-bypass to
+      # land them when `Claude On-Demand` is a required status check.
+      checks: write
+      # Needed for the current-run-started-at lookup used as the stale-verdict
+      # floor. Without this the gh api call returns HTTP 403.
+      actions: read
+    steps:
+      - name: Resolve routine verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          if [ "${{ needs.triage.outputs.run_review }}" != "true" ]; then
+            echo "✅ Triage classified diff as non-reviewable — gate auto-passes"
+            CHECK_ID=$(gh api \
+              "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
+            if [ -n "$CHECK_ID" ]; then
+              # Terminal-state guard (symmetric with the Resolve step's guard):
+              # if a maintainer manually @claude-triggered on a docs-only PR
+              # and Opus set the check to success/failure, a routine re-run
+              # must not overwrite that authoritative verdict with skipped.
+              EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
+              EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
+              if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
+                echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — will not overwrite with skipped"
+                exit 0
+              fi
+              gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+                -F status="completed" \
+                -F conclusion="skipped" \
+                -F "output[title]=Deep review skipped — diff non-reviewable" \
+                -F "output[summary]=Triage classified the diff as non-reviewable (docs, rules, manifest tweaks). Deep review not applicable."
+              echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (non-reviewable diff)"
+            else
+              # Self-heal: init-deep-check didn't create the check (Checks API
+              # 5xx, permission propagation delay on a fresh bind, runner
+              # blip). Create it directly here so docs/rules-only PRs don't
+              # stall in branch-protection's "Expected" state on transient
+              # infra failures. The reviewable path's Resolve step exits 1
+              # in the same scenario (clearer signal there); the
+              # non-reviewable path self-heals to preserve the fast-path
+              # ~30-second auto-merge UX downstream users expect.
+              echo "::warning::Claude On-Demand check missing on $HEAD_SHA — creating directly (init-deep-check may have failed)"
+              gh api "repos/$REPO/check-runs" -X POST \
+                -F name="Claude On-Demand" \
+                -F head_sha="$HEAD_SHA" \
+                -F status="completed" \
+                -F conclusion="skipped" \
+                -F "output[title]=Deep review skipped — diff non-reviewable" \
+                -F "output[summary]=Triage classified the diff as non-reviewable. init-deep-check did not create the check earlier in this run (Checks API blip or permission propagation delay); this step recovered by creating it directly."
+              echo "::notice::Created Claude On-Demand check directly at skipped (recovery path)"
+            fi
+            exit 0
+          fi
+          if [ "${{ needs.claude-review.result }}" != "success" ]; then
+            echo "::error::Claude review job did not complete successfully (result: ${{ needs.claude-review.result }})"
             exit 1
           fi
-          if echo "$VERDICT_LINE" | grep -qF "🔴"; then
-            echo "::error::Routine review verdict: 🔴 Blocking — merge blocked"
+
+          # ── Stale-verdict floor (current-run correlation) ─────────────────
+          # `claude-review.result == success` reflects job-level exit status —
+          # it's possible for the action to exit clean WITHOUT posting a
+          # verdict comment (hit --max-turns, gh failure, refusal). In those
+          # scenarios a naive `| last` selector on the comments endpoint
+          # would pick the PRIOR push's stale 🟢, fail-opening the gate.
+          # Filter comments by created_at >= this run's run_started_at: a
+          # comment that belongs to the current push must have been posted
+          # after the run started. New push → new run_id → new floor.
+          RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at')
+          if [ -z "$RUN_STARTED_AT" ]; then
+            echo "::error::Could not resolve current run's run_started_at — refusing to evaluate verdict without stale-floor correlation"
             exit 1
           fi
-          if ! echo "$VERDICT_LINE" | grep -qF "🟢"; then
-            echo "::error::Last verdict-bearing line has neither 🔴 nor 🟢 (parser bug?)"
-            echo "::error::Line was: $VERDICT_LINE"
+
+          # --paginate is mandatory: the comments endpoint defaults to 30
+          # per page ascending, so on a long-thread PR the verdict comment
+          # lands on a later page and `| last` would silently pick a stale
+          # verdict from page 1.
+          # Title-tolerant match: the routine reviewer does not reliably
+          # reproduce the exact `## Code Review — {{PROJECT_NAME}}` heading (it
+          # may post `**Code Review - …**` or a heading-less variant). The title
+          # is only a SELECTOR key, not a load-bearing contract like the verdict
+          # emoji. Match the stable `Code Review` phrase scoped to claude[bot];
+          # name-independent on purpose — embedding {{PROJECT_NAME}} in the match
+          # would break if the project name carried regex/substring-special
+          # characters, and `claude[bot]` + `Code Review` already uniquely
+          # identifies the routine verdict comment (the deep trigger and
+          # completion comments contain neither).
+          ROUTINE_COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+            | jq -r --arg ts "$RUN_STARTED_AT" \
+                '[.[] | select(.user.login == "claude[bot]") | select(.body | contains("Code Review")) | select(.created_at >= $ts)] | last | .body // ""')
+          if [ -z "$ROUTINE_COMMENT" ]; then
+            echo "::error::No routine review comment found at or after run_started_at $RUN_STARTED_AT — Claude did not post a verdict this run (max-turns hit, gh failure, or refusal)"
             exit 1
           fi
-          echo "✅ Review passed — 🟢 LGTM"
-          exit 0
+          # Read the LAST line of the comment that carries a verdict emoji,
+          # not the whole body. A 🟢 review whose body recaps a prior 🔴
+          # finding must not false-block on the recap text.
+          ROUTINE_VERDICT_LINE=$(printf '%s\n' "$ROUTINE_COMMENT" | grep -E "🔴|🟢" | tail -n 1)
+          if [ -z "$ROUTINE_VERDICT_LINE" ]; then
+            echo "::error::Routine review comment has no 🔴/🟢 verdict line"
+            exit 1
+          fi
+          if echo "$ROUTINE_VERDICT_LINE" | grep -qF "🔴"; then
+            echo "::error::Routine review verdict: 🔴 Blocking — must fix"
+            exit 1
+          fi
+          echo "✅ Routine review verdict: 🟢 LGTM"

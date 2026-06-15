@@ -1,6 +1,6 @@
 # BIND.md — self-bind audit trail
 
-This file captures the toggle decisions and placeholder values that produced the `.claude/skills/` and `.github/` artifacts currently committed to this repo. It's an audit trail for "what state was this project bound in" — re-binds (issue #3 Audit mode, when shipped) read this to know what they're refreshing.
+This file captures the toggle decisions and placeholder values that produced the `.claude/skills/`, `.claude/rules/`, and `.github/` artifacts currently committed to this repo. It's an audit trail for "what state was this project bound in" — re-binds (issue #3 Audit mode, when shipped) read this to know what they're refreshing.
 
 The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x improvement worth folding into the bundle workflow.
 
@@ -25,7 +25,8 @@ The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x impr
 | `{{GITFLOW_OR_TRUNK}}` | `Gitflow` | from CLAUDE.md "Git workflow" + CONTRIBUTING.md "Branch from develop" |
 | `{{CONVERSATION_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
 | `{{CODE_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
-| `{{TIMEZONE}}` | `America/Mazatlan` | maintainer locale (Sinaloa, MST no-DST) |
+| `{{REVIEW_DEEP_MODEL}}` | `claude-opus-4-8` | deep-review tier model (`.github/workflows/claude.yml`); this repo's deliberate pin per SETUP.md Phase 3 default |
+| `{{REVIEW_ROUTINE_MODEL}}` | `claude-sonnet-4-6` | routine-review tier model (`.github/workflows/claude-code-review.yml`); deliberate pin per SETUP.md Phase 3 default |
 
 ## Toggles resolved
 
@@ -58,15 +59,22 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 | `.claude/skills/session-close/SKILL.md` | Resolved (DoD + context + tokensave-adherence kept, devlog step stripped, placeholders substituted) |
 | `.claude/skills/find/SKILL.md` | Resolved (per-tool blocks for tokensave / ast-grep / sourcegraph / ctags / semgrep / none / custom; this bind resolves to the tokensave block, all others stripped). Issue #10 closed by the v1.3-unreleased code_research agnostification. |
 | `.claude/skills/architecture-graph/SKILL.md` | Resolved (per-tool blocks for the enumerate + diff-coupling steps; this bind resolves to the tokensave commands). |
+| `.claude/rules/git.md` | Resolved (`branching_model_gitflow` blocks kept, `branching_model_trunk` stripped; `{{MAIN_BRANCH}}` → `main`, `{{DEV_BRANCH}}` → `develop`). |
+| `.claude/rules/review-tiers.md` | Resolved (`github_actions_deep_review_auto_fire` block kept, `:off` variant stripped). |
+| `.claude/rules/token-efficiency.md` | Resolved (`code_research:tokensave` block kept, other 6 per-tool blocks stripped; `github_actions_paths_ignore_auto_merge` block stripped; `{{TOOLS_CODE_RESEARCH_NAME}}` → `tokensave`, `{{REPO_URL}}` → `https://github.com/starfoxcom/claude-code-templates`). |
+| `.claude/rules/collaboration.md` | Resolved (`mandatory_deep_review_before_merge` block kept, `oncall_awareness` block stripped per Discovery resolution; `{{DEV_BRANCH}}` → `develop`). |
+| `.claude/rules/visual.md` | Resolved (no toggles, no placeholders — verbatim copy). |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Resolved (`audit_trail_commits` block stripped per bundle 2) |
 | `.claude/BIND.md` | This file |
-| `CLAUDE.md` (root) | Edited to reflect now-local skills |
+| `CLAUDE.md` (root) | Edited to reflect now-local skills + rules |
 
 ## Intentional non-artifacts
 
 | Artifact | Why omitted |
 |---|---|
-| `.claude/rules/*` | CLAUDE.md's "What's intentionally NOT here" deliberately keeps rules pointing at `_core/project-template/.claude/rules/`. Rules are prose — duplicating them risks drift between source-of-truth and bound copies. The repo IS the templates; keeping rules canonical at `_core/` is correct here. |
+| `.claude/rules/clean-room.md` | `clean_room_rule: false` (not a derived-from-prior-art project). |
+| `.claude/rules/confidentiality.md` | `confidentiality_rule: false` (open-source toolkit, no NDA stake). |
+| `.claude/rules/architecture/*.md` | `architecture_rules_scaffold: none` (single hand-authored `index.html` + sibling `redesign/*.jsx` modules; no formal architecture pattern fits the actual shape). |
 | `CODEOWNERS` | `codeowners: false` (solo-maintained) |
 | `~/.claude/hooks/tokensave-first.py` (project copy) | Hook is installed **globally**, not project-local — per CLAUDE.md's note about the tokensave template-inheritance bug that makes per-project installation unsafe. As of the v1.3-unreleased agnostification, the hook is rendered from `_core/global-template/hooks/code-research-first.py.template` + `code-research-profiles.json` → tokensave profile; the rendered filename remains `tokensave-first.py` for this bind because `tools.code_research = "tokensave"`. |
 | Devlog scaffolding (`devlog/posts/0000-template/`) | `dod_devlog_step: false` (no devlog tradition for this project — release notes live in `CHANGELOG.md` and GitHub Releases). |
@@ -77,7 +85,7 @@ When toggles change or templates evolve in `_core/`:
 
 1. Open issue describing the re-bind intent.
 2. Branch `chore/rebind-<reason>` off `develop`.
-3. Re-resolve any affected `.claude/skills/*.md`, `.github/PULL_REQUEST_TEMPLATE.md`, this file's toggle table, and CLAUDE.md from the latest `_core/project-template/` sources.
+3. Re-resolve any affected `.claude/skills/*.md`, `.claude/rules/*.md`, `.github/PULL_REQUEST_TEMPLATE.md`, this file's toggle table, and CLAUDE.md from the latest `_core/project-template/` sources.
 4. Atomic commits per artifact category.
 5. Standard PR + merge to `develop`.
 

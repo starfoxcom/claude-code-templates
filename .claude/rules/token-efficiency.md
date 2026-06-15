@@ -4,29 +4,9 @@
 
 Before reading any source file to understand a symbol, first locate it through this project's code-research tool, then read only the relevant function/class — never the whole file unless context genuinely requires it.
 
-The canonical sequence for **{{TOOLS_CODE_RESEARCH_NAME}}** lives in `.claude/skills/find/SKILL.md`. Invoke `/find` (or follow its sequence inline) before any `Read` of a file you haven't opened yet this session. The `/find` skill also documents the fallback conditions for dropping back to plain `Grep`/`Glob`/`Read`.
+The canonical sequence for **tokensave** lives in `.claude/skills/find/SKILL.md`. Invoke `/find` (or follow its sequence inline) before any `Read` of a file you haven't opened yet this session. The `/find` skill also documents the fallback conditions for dropping back to plain `Grep`/`Glob`/`Read`.
 
-<!-- TOGGLE:code_research:tokensave START -->
 For this project (tokensave): start with `tokensave_search <name>` for symbol lookup, fall through to `tokensave_context <natural-language query>` for fuzzy exploration, then `tokensave_body <symbol>` to read a single function instead of the whole file.
-<!-- TOGGLE:code_research:tokensave END -->
-<!-- TOGGLE:code_research:ast-grep START -->
-For this project (ast-grep): start with `ast-grep run --pattern '<name>' --lang <lang>` for symbol lookup, then `ast-grep run --pattern '<AST pattern>' --lang <lang>` for structural search. Read sliced code via `Read <file>` with `offset`/`limit` to inspect matched ranges.
-<!-- TOGGLE:code_research:ast-grep END -->
-<!-- TOGGLE:code_research:sourcegraph START -->
-For this project (Sourcegraph): start with `src search 'r:<repo> <name>'`. For literal lookups use `patterntype:literal`; for file-name search use `type:file f:<pattern>`. Read sliced code via `Read <file>` with `offset`/`limit`.
-<!-- TOGGLE:code_research:sourcegraph END -->
-<!-- TOGGLE:code_research:ctags START -->
-For this project (ctags): regenerate `tags` after edits (`ctags -R -f tags .`), then look up symbols with `readtags -t tags -e -p '<prefix>'` (Universal Ctags) or `grep -E '^<name>\b' tags` (any ctags). Insert a `-` separator before `<prefix>` only if it starts with `-`. Read sliced code via `Read <file>` with `offset`/`limit`.
-<!-- TOGGLE:code_research:ctags END -->
-<!-- TOGGLE:code_research:semgrep START -->
-For this project (Semgrep): start with `semgrep --pattern '<name>' --lang <lang>` for symbol lookup, then `semgrep --pattern '$X = $Y' --lang <lang>` for structural search. Read sliced code via `Read <file>` with `offset`/`limit`.
-<!-- TOGGLE:code_research:semgrep END -->
-<!-- TOGGLE:code_research:none START -->
-For this project (`tools.code_research: "none"`), there is no indexer — the `/find` skill resolves to a `Grep` → `Glob` → `Read` sequence. Still invoke `/find` rather than jumping to `Grep` directly, so the discipline of "narrow before you read" stays consistent.
-<!-- TOGGLE:code_research:none END -->
-<!-- TOGGLE:code_research:custom START -->
-For this project ({{TOOLS_CODE_RESEARCH_NAME}} — see {{TOOLS_CODE_RESEARCH_URL}}): substitute the tool's symbol-lookup + structural-search commands here. Fall through to `Grep`/`Glob`/`Read` when the tool can't answer a question.
-<!-- TOGGLE:code_research:custom END -->
 
 ---
 
@@ -70,10 +50,9 @@ done
 
 **On any-red (🔴 verdict or workflow failure):** fetch failing logs with `gh run view <id> --log-failed`, identify the offending job + step, propose the fix in one sentence, apply it, push. The push triggers a fresh polling loop on the new SHA. Don't ask permission for routine breakages (compile errors, missing-file paths, lint, dependency-version pins) — fix and push. Ask only when the failure is genuinely ambiguous (flaky test, infra outage, behavior-change-vs-test disagreement).
 
-<!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
 ### Fast-path / auto-pass PRs
 
-When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks (`Evaluate review outcome` and `Claude On-Demand`) resolve to passing states. The whole run completes in ~30 seconds.
+When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks resolve to passing states. The whole run completes in ~30 seconds.
 
 ```bash
 # Background pattern — uses gh's built-in --jq; no external jq required:
@@ -85,13 +64,12 @@ gh pr view <pr> --json statusCheckRollup
 
 After the notification:
 
-1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (the job runs via `if: always()`, PATCHes `Claude On-Demand` to `skipped` for non-reviewable diffs, then exits 0), and `Claude On-Demand: SKIPPED`.
+1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS`, and `Claude On-Demand: SKIPPED`.
 2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
-3. **Auto-merge** with `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate that maintainers can self-clear).
+3. **Auto-merge** with `gh pr merge <pr> --merge --admin`.
 4. **Delete branches** (local + remote) per standing authorization.
 
 This fast path is **only** for PRs the routine reviewer skips — if `Diff triage` reports `run_review=true`, fall back to the standard 7-minute polling loop and read the verdict comment.
-<!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
 
 ---
 
@@ -132,4 +110,4 @@ When triggered: prepare session close ritual immediately.
 
 ## Read review-comment verdict, not workflow conclusion
 
-`gh run list --headSha <sha>` misses issue-comment-triggered deep reviews (the deep review's workflow run won't show under the original PR commit's SHA). Always read the 🔴/🟢 verdict line directly from the latest review comment via `gh pr view <pr> --json comments` (or `gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/pulls/<pr>/comments"` if you need the lower-level API with the owner/repo slug rather than the full URL stored in `{{REPO_URL}}`).
+`gh run list --headSha <sha>` misses issue-comment-triggered deep reviews (the deep review's workflow run won't show under the original PR commit's SHA). Always read the 🔴/🟢 verdict line directly from the latest review comment via `gh pr view <pr> --json comments` (or `gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/pulls/<pr>/comments"` if you need the lower-level API with the owner/repo slug rather than the full URL stored in `https://github.com/starfoxcom/claude-code-templates`).
