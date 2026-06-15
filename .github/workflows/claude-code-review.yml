@@ -500,6 +500,17 @@ jobs:
             - 🔴 Blocking when ANY real finding exists, regardless of framing.
             - DROP style preferences and micro-optimisations entirely.
 
+            **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment and takes the LAST line containing 🔴 or 🟢 as the verdict — the SAME strict contract as the routine gate. A final line with neither emoji is treated as a MISSING verdict and PATCHes the `Claude On-Demand` check to failure, blocking merge. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract.
+
+            **WRONG formats — every one of these fails the deep gate:**
+            - `LGTM` (missing 🟢 prefix — the most common mistake)
+            - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
+            - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
+            - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
+            - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+
+            **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
+
             **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
             ```
 
