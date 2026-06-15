@@ -438,7 +438,7 @@ jobs:
             **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
             ```
 
-            **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true.
+            **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true. If the only `@claude` in your comment is inside backticks or a code block, the deep tier silently skips.
             <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
 
       # ── Resolve Claude On-Demand check based on escalation state ──────────
