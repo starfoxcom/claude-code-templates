@@ -611,9 +611,19 @@ jobs:
           # per page ascending, so on a long-thread PR the verdict comment
           # lands on a later page and `| last` would silently pick a stale
           # verdict from page 1.
+          # Title-tolerant match: the routine reviewer does not reliably
+          # reproduce the exact `## Code Review — {{PROJECT_NAME}}` heading (it
+          # may post `**Code Review - …**` or a heading-less variant). The title
+          # is only a SELECTOR key, not a load-bearing contract like the verdict
+          # emoji. Match the stable `Code Review` phrase scoped to claude[bot];
+          # name-independent on purpose — embedding {{PROJECT_NAME}} in the match
+          # would break if the project name carried regex/substring-special
+          # characters, and `claude[bot]` + `Code Review` already uniquely
+          # identifies the routine verdict comment (the deep trigger and
+          # completion comments contain neither).
           ROUTINE_COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
             | jq -r --arg ts "$RUN_STARTED_AT" \
-                '[.[] | select(.body | contains("## Code Review — {{PROJECT_NAME}}")) | select(.created_at >= $ts)] | last | .body // ""')
+                '[.[] | select(.user.login == "claude[bot]") | select(.body | contains("Code Review")) | select(.created_at >= $ts)] | last | .body // ""')
           if [ -z "$ROUTINE_COMMENT" ]; then
             echo "::error::No routine review comment found at or after run_started_at $RUN_STARTED_AT — Claude did not post a verdict this run (max-turns hit, gh failure, or refusal)"
             exit 1
