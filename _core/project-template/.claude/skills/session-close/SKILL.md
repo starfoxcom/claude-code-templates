@@ -42,18 +42,37 @@ Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — n
 
 Generate a new `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` (rename the existing one with current date and time).
 
-**Local time:** try terminal first (up to 4 attempts), in order:
+**Local time:**
 
-```bash
-node -e "console.log(new Date().toLocaleString('sv-SE',{timeZone:'{{TIMEZONE}}'}).replace(',',''))"
-python -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M'))"
-date '+%Y-%m-%d %H:%M'
-powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'"
-```
+1. **Check the conversation context first.** If the optional `UserPromptSubmit` time-injection hook is installed (see `~/.claude/CLAUDE.md` → "Time-of-day awareness"), every prompt comes prefixed with a line of the form `[time] YYYY-MM-DD HH:MM:SS <zone>`. Reuse the most recent one — it's authoritative.
+2. **If no `[time]` line is available** (hook not installed, or you need to confirm against a fresh clock), fall back to terminal commands. Try in order, OS-clock only — **never hardcode a timezone**:
+
+   ```bash
+   node -e "console.log(new Date().toLocaleString('sv-SE').replace(',',' '))"
+   python -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M'))"
+   date '+%Y-%m-%d %H:%M'
+   powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'"
+   ```
+
+   Hardcoded IANA strings (e.g. `'America/Mazatlan'`) inherit US-DST assumptions that are wrong for non-US-DST locales; the OS clock is always the right source.
 
 **Context file structure:** current state only — decisions and implementation details not derivable from the code. Conventions and rules already live in `.claude/rules/` — do not duplicate.
 
 **Uniqueness rule:** exactly **one** `*-CONTEXT_*.md` must exist in the root at all times. When creating a new one, delete the previous with `git rm`.
+
+### Model + effort outcome log
+
+Append to the regenerated context file under a `## Session model setup` section:
+
+- **Recommended at start:** <tier> · <resolved model id> · <effort> · <archetype>
+- **Used:** <tier> · <resolved model id> · <effort> (note any mid-session switches with reason)
+- **Outcome:** <retries needed? cleanup PR needed? wrong-branch edits? notes>
+
+Recording **both the tier and the concrete id** keeps the log comparable across model releases — the tier is stable, the id drifts. Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for tuning the tier-resolution pins in `.claude/skills/session-start/SKILL.md`. A tier's pin is promoted to a newer model only once the log proves it on this project's own work, never on release day.
+
+**Promotion-check nudge:** when a newer top-tier model has appeared in the session environment across several recent sessions but a tier's pinned model hasn't been re-evaluated, append a one-line "run the tier-promotion check" reminder to this section — trial the newer model on the lowest-blast-radius tier first and compare its outcome against the incumbent before moving the pin.
+
+**This section sits inside the `context_refresh_files` toggle** because it appends to the file that toggle creates; disabling the toggle strips both coherently.
 <!-- TOGGLE:context_refresh_files END -->
 
 ### Update derived docs

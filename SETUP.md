@@ -18,8 +18,7 @@ Run claude-code-templates SETUP with this configuration:
     "repo_url": "<owner/repo>",
     "main_branch": "<main|master>",
     "dev_branch": "<develop|main|...>",
-    "branching_model": "<gitflow|trunk>",
-    "timezone": "<IANA timezone like America/Mazatlan>"
+    "branching_model": "<gitflow|trunk>"
   },
   "toggles": {
     "<toggle_name>": true | false | null,
@@ -136,9 +135,8 @@ project.architecture = ["clean"]
 After the audit, ask via `AskUserQuestion` (one at a time, brief):
 
 1. **Bundle confirmation** — always ask. Show the four options + a hint from any audit signal (e.g., "I see CODEOWNERS — likely multi-dev or client-team. Which is it?"). User picks.
-2. **Timezone** — only if `preferences.timezone` was blank in the JSON. Provide a sensible system-default suggestion.
-3. **License holder** — only if neither `LICENSE` nor `git config user.name` had a usable value.
-4. **Any audit ambiguity** — e.g., two architecture patterns equally plausible, or manifest says one name but git remote says another. Cap at 2-3 of these or the discovery loses its appeal.
+2. **License holder** — only if neither `LICENSE` nor `git config user.name` had a usable value.
+3. **Any audit ambiguity** — e.g., two architecture patterns equally plausible, or manifest says one name but git remote says another. Cap at 2-3 of these or the discovery loses its appeal.
 
 **Do not ask things the audit can confidently infer.** "Did I get the stack right?" should be answered in the plan-confirmation step (user reviews the plan HTML and can correct), not pre-emptively.
 
@@ -186,7 +184,6 @@ On `apply`:
    - `{{MAIN_BRANCH}}` ← `project.main_branch` (production / release branch; tagged versions live here. Usually `main`.)
    - `{{DEV_BRANCH}}` ← `project.dev_branch` (development / integration branch where day-to-day work targets and PRs base from. `develop` for Gitflow, same as `main_branch` for trunk-based.)
    - `{{GITFLOW_OR_TRUNK}}` ← `project.branching_model`
-   - `{{TIMEZONE}}` ← `project.timezone`
    - `{{STACK_COMMANDS_ALLOWLIST}}` ← see step 5 below
    - `{{REVIEW_DEEP_MODEL}}` ← deliberate stable default `claude-opus-4-8` (deep-review tier model for `.github/workflows/claude.yml`'s `--model`). Default-only — no UI field; pick deliberately (not newest-by-default, per the session-start model-choice discipline), then tune in the bound workflow or override via a `REVIEW_DEEP_MODEL` GitHub repo variable.
    - `{{REVIEW_ROUTINE_MODEL}}` ← deliberate stable default `claude-sonnet-4-6` (routine-review tier model for `.github/workflows/claude-code-review.yml`'s `--model`). Default-only — same tuning options as `{{REVIEW_DEEP_MODEL}}`.
@@ -411,7 +408,7 @@ On `apply`:
     > 1. **Add the `CLAUDE_CODE_OAUTH_TOKEN` secret** — GitHub → repo Settings → Secrets and variables → Actions → New repository secret. Generate the token from your Claude Code subscription per Anthropic's docs. Until this secret exists, the `anthropics/claude-code-action@beta` step fails with a missing-token error on every PR.
     > 2. **Push the workflows to the repo's DEFAULT branch first.** GitHub Actions only triggers workflows that live on the repo's default branch. The setup just committed the workflow files locally on your current branch (`<branch-name>`) — but if your default branch is different (common in Gitflow: default=`{{MAIN_BRANCH}}`, day-to-day PRs target `{{DEV_BRANCH}}`), the workflows won't fire until they land on `{{MAIN_BRANCH}}`. Recommended path: open this commit as a `hotfix/*` PR against `{{MAIN_BRANCH}}` first, merge, then cascade-merge `{{MAIN_BRANCH}}` → `{{DEV_BRANCH}}`. Pushing directly to your dev branch leaves the workflows installed-but-inert.
     >
-    > Optionally also add `Evaluate review outcome` (and `Evaluate deep-tier verdict` if deep review is ON) as required status checks under your branch protection rules — this is what makes the binary 🔴/🟢 verdict an actual merge gate.
+    > Optionally also add `Evaluate review outcome` AND (if deep review is ON) `Claude On-Demand` as required status checks under your branch protection rules — this is what makes the binary 🔴/🟢 verdict an actual merge gate. `Claude On-Demand` is the deep-tier check (per `.claude/rules/review-tiers.md`); it walks through a state machine — created at in_progress on PR open, PATCHed to skipped when no escalation is needed, or to success/failure based on Opus's verdict when the deep tier runs. Both checks are PR-HEAD-SHA-attached and ANDed by branch protection. Omit `Claude On-Demand` to leave the deep tier visible-but-advisory.
 
     Substitute `<branch-name>` with the user's current `git branch --show-current` value. Substitute `{{MAIN_BRANCH}}` and `{{DEV_BRANCH}}` with the resolved values from the user's config. If trunk-based (`branching_model: trunk`), simplify step 2 to *"Push the commit to your default branch — workflows installed only on feature branches won't fire."*
 
