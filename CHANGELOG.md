@@ -6,7 +6,9 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **Canonical Step 4 trigger-comment guidance — backtick-skip clarifier** (PR #128). The canonical `_core/project-template/.github/workflows/claude-code-review.yml.template` Step 4 "CRITICAL — do not skip step B" paragraph was missing the live workflow's trailing sentence noting that an `@claude` token appearing only inside backticks or a code block causes the deep tier to silently skip. Completes the live↔canonical lockstep on that paragraph (the rest of the Step 4 block was reconciled in v1.4.0, #122).
 
 ## [v1.4.0] — 2026-06-15 — canonical-template parity + session-lifecycle tuning
 
