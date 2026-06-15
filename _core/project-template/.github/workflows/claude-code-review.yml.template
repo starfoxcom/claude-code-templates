@@ -424,6 +424,17 @@ jobs:
             - 🔴 Blocking when ANY real finding exists, regardless of framing.
             - DROP style preferences and micro-optimisations entirely.
 
+            **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment and takes the LAST line containing 🔴 or 🟢 as the verdict — the SAME strict contract as the routine gate. A final line with neither emoji is treated as a MISSING verdict and PATCHes the `Claude On-Demand` check to failure, blocking merge. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract.
+
+            **WRONG formats — every one of these fails the deep gate:**
+            - `LGTM` (missing 🟢 prefix — the most common mistake)
+            - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
+            - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
+            - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
+            - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+
+            **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
+
             **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
             ```
 
@@ -539,6 +550,16 @@ jobs:
               "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
               --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty')
             if [ -n "$CHECK_ID" ]; then
+              # Terminal-state guard (symmetric with the Resolve step's guard):
+              # if a maintainer manually @claude-triggered on a docs-only PR
+              # and Opus set the check to success/failure, a routine re-run
+              # must not overwrite that authoritative verdict with skipped.
+              EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
+              EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
+              if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
+                echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — will not overwrite with skipped"
+                exit 0
+              fi
               gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
                 -F status="completed" \
                 -F conclusion="skipped" \
@@ -590,9 +611,19 @@ jobs:
           # per page ascending, so on a long-thread PR the verdict comment
           # lands on a later page and `| last` would silently pick a stale
           # verdict from page 1.
+          # Title-tolerant match: the routine reviewer does not reliably
+          # reproduce the exact `## Code Review — {{PROJECT_NAME}}` heading (it
+          # may post `**Code Review - …**` or a heading-less variant). The title
+          # is only a SELECTOR key, not a load-bearing contract like the verdict
+          # emoji. Match the stable `Code Review` phrase scoped to claude[bot];
+          # name-independent on purpose — embedding {{PROJECT_NAME}} in the match
+          # would break if the project name carried regex/substring-special
+          # characters, and `claude[bot]` + `Code Review` already uniquely
+          # identifies the routine verdict comment (the deep trigger and
+          # completion comments contain neither).
           ROUTINE_COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
             | jq -r --arg ts "$RUN_STARTED_AT" \
-                '[.[] | select(.body | contains("## Code Review — {{PROJECT_NAME}}")) | select(.created_at >= $ts)] | last | .body // ""')
+                '[.[] | select(.user.login == "claude[bot]") | select(.body | contains("Code Review")) | select(.created_at >= $ts)] | last | .body // ""')
           if [ -z "$ROUTINE_COMMENT" ]; then
             echo "::error::No routine review comment found at or after run_started_at $RUN_STARTED_AT — Claude did not post a verdict this run (max-turns hit, gh failure, or refusal)"
             exit 1
