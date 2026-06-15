@@ -684,9 +684,17 @@ jobs:
           # per page ascending, so on a long-thread PR the verdict comment
           # lands on a later page and `| last` would silently pick a stale
           # verdict from page 1.
+          # Title-tolerant match: Sonnet does not reliably reproduce the exact
+          # `## Code Review — claude-code-templates` heading (observed `**Code
+          # Review - …**` and a heading-less `Code Review — …`). The title is
+          # only a SELECTOR key, not a load-bearing contract like the verdict
+          # emoji — so match the stable `Code Review <sep> claude-code-templates`
+          # phrase with `test()`, tolerant of the heading markup and ANY
+          # separator (em/en/hyphen/colon/space) via `[^a-zA-Z]+`, and scope to
+          # claude[bot] so a human quoting the phrase can't be mistaken for it.
           ROUTINE_COMMENT=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
             | jq -r --arg ts "$RUN_STARTED_AT" \
-                '[.[] | select(.body | contains("## Code Review — claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""')
+                '[.[] | select(.user.login == "claude[bot]") | select(.body | test("Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""')
           if [ -z "$ROUTINE_COMMENT" ]; then
             echo "::error::No routine review comment found at or after run_started_at $RUN_STARTED_AT — Claude did not post a verdict this run (max-turns hit, gh failure, or refusal)"
             exit 1
