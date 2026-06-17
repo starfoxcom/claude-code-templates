@@ -338,7 +338,7 @@ jobs:
 
             ## Step 2.5 — Decide whether to escalate (do not post yet)
 
-            Escalation is *orthogonal* to the verdict — it's "deeper look requested," not a blocker.
+            Escalation is *orthogonal* to the verdict — it's "deeper look requested," not a blocker. The verdict in Step 3 stays binary regardless.
 
             <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
             **Auto-escalate when the pre-screen reports a non-empty deep-review trigger surface.** Otherwise apply judgment: escalate when (a) the concern is about correctness not style, (b) you can articulate a specific reason an Opus reviewer would catch what you cannot, (c) you would not stake the merge on your own verdict for that concern.
@@ -375,8 +375,9 @@ jobs:
 
             **BINARY VERDICT RULE:**
             - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
-            - 🔴 Blocking when ANY real finding exists, regardless of framing.
+            - 🔴 Blocking when ANY real finding exists, regardless of framing. "Minor nit" that suggests a real correctness improvement is 🔴. "All clear with caveats" is a contradiction — caveats make it 🔴.
             - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
+            - "All clear on X" is allowed AS A SECTION HEADING. NEVER as the verdict line when other sections have findings.
 
             **MANDATORY when you marked the PR for escalation in Step 2.5 (path-based OR uncertainty-based):** before the final verdict line, append a `### 🟡 Uncertainty surfaced — needs-deep-review requested` section. PR readers must see *what specifically* the deep tier is being asked to verify, not just *that* it was flagged. An escalation without a 🟡 section in the verdict above it is unmotivated and degrades the deep tier's signal quality — readers see the label / trigger but not the rationale.
 
