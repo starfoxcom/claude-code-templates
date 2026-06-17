@@ -11,7 +11,7 @@
 #
 # Merge gate participation: this workflow PATCHes the `Claude On-Demand`
 # check-run on the PR HEAD SHA via the Checks API after Opus finishes its
-# review. The check was created at conclusion=neutral by claude-code-review.yml's
+# review. The check was created at status=in_progress by claude-code-review.yml's
 # init-deep-check job; this workflow upgrades it to success/failure based on
 # the deep verdict. Branch protection on main/develop requires both
 # `Evaluate review outcome` (routine) AND `Claude On-Demand` (deep) — the
@@ -105,11 +105,11 @@ jobs:
 
       # ── Upsert Claude On-Demand check to in_progress ──────────────────────
       # claude-code-review.yml's init-deep-check job created the check at
-      # conclusion=neutral; routine auto-escalation may have flipped it to
-      # in_progress already. For manual `@claude review this PR` triggers
-      # without a prior routine run on this HEAD SHA, the check may not yet
-      # exist — create it. Either way, the PR's check rollup now shows
-      # "Claude On-Demand: in_progress" while Opus runs.
+      # status=in_progress; routine auto-escalation may have already PATCHed
+      # the title to "Deep review in progress". For manual `@claude review
+      # this PR` triggers without a prior routine run on this HEAD SHA, the
+      # check may not yet exist — create it. Either way, the PR's check
+      # rollup now shows "Claude On-Demand: in_progress" while Opus runs.
       - name: Upsert Claude On-Demand check to in_progress
         if: steps.pr-head.outputs.head_sha != ''
         env:
