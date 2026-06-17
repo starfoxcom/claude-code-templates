@@ -6,13 +6,13 @@
 #   2. `Claude On-Demand`        — deep tier (claude.yml). Required.
 #
 # The routine workflow creates the `Claude On-Demand` check on the PR HEAD
-# SHA at workflow start, attached to PR HEAD SHA via the Checks API (so it
-# shows up on the PR's status rollup). State transitions:
-#   • Routine did NOT auto-escalate → conclusion=neutral → branch protection
-#     treats it as passing. PR merges on routine 🟢 alone.
-#   • Routine auto-escalated (`needs-deep-review` label applied)
-#     → status=in_progress → branch protection treats as pending. claude.yml
-#     PATCHes the check to success/failure when the deep tier finishes.
+# SHA at workflow start (via the Checks API so it shows up on the PR's
+# status rollup) and walks it through this lifecycle:
+#   • PR opens                    → status=in_progress  ("Waiting for routine review")
+#   • Triage non-reviewable diff  → conclusion=skipped  ("Diff non-reviewable")
+#   • Routine completes, no escal. → conclusion=skipped  ("No escalation")
+#   • Routine escalates           → status=in_progress  ("Deep review in progress")
+#   • Opus completes              → success / failure   (claude.yml PATCHes)
 #
 # Why: previously the gate "folded in" the deep verdict by re-firing on the
 # deep tier's `issue_comment` completion event and reading the comment body.
@@ -25,12 +25,12 @@
 #
 # Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
 #
-# PERMANENT LIMITATION — workflow-touching PRs require admin-bypass:
+# PERMANENT LIMITATION — claude-code-review.yml edits require admin-bypass:
 #   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
 #   head ref is byte-identical to the version on the default branch before granting
-#   an OIDC-exchanged token. Any PR that edits .github/workflows/claude*.yml therefore
-#   fails the token exchange and the routine review action cannot post a verdict.
-#   Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
+#   an OIDC-exchanged token. Any PR that edits .github/workflows/claude-code-review.yml
+#   therefore fails the token exchange and the routine review action cannot post a
+#   verdict. Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
 
 name: Claude Code Review
 
