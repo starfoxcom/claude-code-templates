@@ -9,6 +9,10 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 ### Fixed
 
 - **Canonical Step 4 trigger-comment guidance — backtick-skip clarifier** (PR #128). The canonical `_core/project-template/.github/workflows/claude-code-review.yml.template` Step 4 "CRITICAL — do not skip step B" paragraph was missing the live workflow's trailing sentence noting that an `@claude` token appearing only inside backticks or a code block causes the deep tier to silently skip. Completes the live↔canonical lockstep on that paragraph (the rest of the Step 4 block was reconciled in v1.4.0, #122).
+- **Live review-workflow comments — stale lifecycle + bypass scope** (PR #129). Corrected stale `conclusion=neutral` lifecycle comments in `.github/workflows/claude-code-review.yml` + `claude.yml` (the `init-deep-check` job creates the `Claude On-Demand` check at `status=in_progress`; "neutral" appeared in no code path), and narrowed the admin-bypass-scope comment from `claude*.yml` to `claude-code-review.yml` (the glob wrongly implied `claude.yml` edits trip OIDC, contradicting `review-tiers.md`). Comment-only; the canonical templates already carried the accurate wording.
+- **Canonical review prompt — full BINARY VERDICT RULE prose** (PR #131). The canonical `claude-code-review.yml.template` review prompt was an abbreviated version of the live one — missing the 🔴 "minor nit → 🔴 / all-clear-with-caveats = contradiction" clauses, the "'All clear on X' is allowed as a section heading, never as the verdict line" bullet, and the Step 2.5 "verdict stays binary regardless" clarifier — all of which the canonical's own `review-tiers.md` states in full. Mirrored so downstream binds inherit the complete contract. (The 🟡 block's auto-fire-specific "depth-pass follows" line was intentionally left out — the canonical 🟡 block is toggle-agnostic and must read correctly with auto-fire OFF too.)
+
+These two + the #128 backtick-skip fix close out a full live↔canonical reconciliation audit of the review workflows that found **no behavioral drift** — only documentation/prose gaps.
 
 ## [v1.4.0] — 2026-06-15 — canonical-template parity + session-lifecycle tuning
 
