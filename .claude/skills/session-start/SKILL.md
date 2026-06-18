@@ -48,7 +48,7 @@ Run this skill at the beginning of every work session, or whenever the user asks
    |---|---|
    | ≥75% (slim corpus) | Use matrix as-is. |
    | 60–75% | Use matrix; flag the tight buffer in the recommendation block. |
-   | 45–60% | Escalate one tier — use the Deep tier's 1M-context variant (`claude-opus-4-6[1m]` on this repo today) over base 200k. |
+   | 45–60% | Escalate one tier — use the Deep tier's 1M-context variant (`claude-opus-4-8[1m]` on this repo today) over base 200k. |
    | <45% | **Stop.** Recommend either: (a) switch to 1M-context immediately, OR (b) trim eager-loads first — move stale rules to `docs/lazy/`, archive prior `*-CONTEXT_*.md` to `docs/sessions/`, prune `MEMORY.md` to active-only entries. Don't start work until free ≥60%. |
 
    Include the measured free-context % + the adjustment decision in the recommendation block emitted by Step 8.
@@ -77,7 +77,7 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
    **Resolve the tier to a concrete `/model <id>` — every session, before the emit block:**
 
-   1. **Pinned incumbent wins — the newest model does not.** A tier resolves to the specific model this project's `## Session model setup` log has proven for that tier's work, not to whatever shipped most recently. This repo's current pins are in the table below; see **"Why the pin is 4.6, not the newer 4.7"** below for why.
+   1. **Pinned incumbent wins — the newest model does not.** A tier resolves to the specific model this project's `## Session model setup` log has proven for that tier's work, not to whatever shipped most recently. This repo's current pins are in the table below; see **"Why the Deep pin is 4.8"** below for why.
    2. **Confirm it's still offered** against what the session environment names as the current model(s), or against `/model`.
    3. **Visible fallback when the id isn't legible.** If you can't confirm the pinned model is offered, emit it flagged `<unverified — confirm current id via /model>` and **stop at the approval gate**. Never silently substitute a guessed model.
    4. **Emit a fully-qualified, versioned id** — never a bare alias like `/model opus` (it can resolve server-side to "newest" and defeat the pin).
@@ -86,11 +86,11 @@ Run this skill at the beginning of every work session, or whenever the user asks
 
    | Tier | Pinned model (today) | Why |
    |---|---|---|
-   | **Deep** | `claude-opus-4-6[1m]` | 1M-context variant — auto-included on this repo's Max plan; `[1m]` is the documented Claude Code suffix ([model config docs](https://code.claude.com/docs/en/model-config#extended-context)). |
+   | **Deep** | `claude-opus-4-8[1m]` | 1M-context variant — auto-included on this repo's Max plan; `[1m]` is the documented Claude Code suffix ([model config docs](https://code.claude.com/docs/en/model-config#extended-context)). |
    | **Standard** | `claude-opus-4-6` | Base 200k — for tightly-scoped fixes that don't need 1M context. |
    | **Frugal** | `claude-sonnet-4-6` | Lowest-cost capable. (`/fast` is an Opus-speed mode, so it applies to the Deep/Standard tiers, not this one.) |
 
-   **Why the pin is 4.6, not the newer 4.7** *(version-specific evidence — lives here in the mirror, never in canonical):* independent measurements showed Opus 4.7 regressed against 4.6 on multi-step instruction following (chains fail by step 3–4), long-context retrieval (MRCR v2: 91.9% → 59.2%), and code/structured-data cost (+32–34% tokenizer inflation). 4.7 still edged 4.6 on tightly-scoped SWE-Bench-shaped fixes — so for a Standard-tier single-bug-fix session it is a legitimate *trial* candidate, but it earns the pin only via the outcome log, not by being newer. Source: [anthropics/claude-code#58369](https://github.com/anthropics/claude-code/issues/58369); see memory `feedback_model_default_opus_4_6`. **When Opus 4.8+ appears in the session environment, it does not auto-promote** — trial it on Frugal / Standard rows and compare against the incumbent before moving the Deep pin.
+   **Why the Deep pin is 4.8** *(version-specific evidence — lives here in the mirror, never in canonical):* the pin tracks *proven outcomes*, never recency. Opus **4.7** is the cautionary case: independent measurements showed it regressed against 4.6 on multi-step instruction following (chains fail by step 3–4), long-context retrieval (MRCR v2: 91.9% → 59.2%), and code/structured-data cost (+32–34% tokenizer inflation) — it edged 4.6 only on tightly-scoped SWE-Bench-shaped fixes, never on the multi-step / long-context work the Deep tier exists for — so this repo **skipped 4.7 entirely** and held the Deep pin at `claude-opus-4-6[1m]`. Opus **4.8** then shipped (2026-05-28), remediating 4.7's long-context + instruction-following regressions at the same price and ~4× less likely to let a code bug pass unremarked. It was adopted **as a watched trial first** (CI deep-review model, then Deep-tier session work) and **earned the Deep pin via the `## Session model setup` outcome log** — clean multi-PR sessions across the v1.3.0 ship, the v1.4.0 ship, and the post-v1.4.0 review-workflow reconciliation — promoted 2026-06-18. Source: [anthropics/claude-code#58369](https://github.com/anthropics/claude-code/issues/58369); see memory `feedback_model_default_opus_4_6`. **When Opus 4.9+ (or any newer model) appears in the session environment, it does not auto-promote** — trial it on Frugal / Standard rows and compare against the incumbent (`claude-opus-4-8[1m]`) before moving the Deep pin. The newest model never wins by default; the pinned incumbent does.
 
    Emit:
 
