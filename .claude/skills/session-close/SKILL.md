@@ -69,7 +69,7 @@ Append to the regenerated context file under a `## Session model setup` section:
 
 Recording **both the tier and the concrete id** keeps the log comparable across model releases — the tier is stable, the id drifts. Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for tuning the tier-resolution pins in `.claude/skills/session-start/SKILL.md`. A tier's pin is promoted to a newer model only once the log proves it on this project's own work, never on release day.
 
-**Promotion-check nudge:** when a newer top-tier model (e.g. an Opus 4.8+) has appeared in the session environment across several recent sessions but the Deep-tier pin hasn't been re-evaluated, append a one-line "run the tier-promotion check" reminder here — trial the newer model on the Frugal / Standard tier first and compare against the incumbent before moving the Deep pin.
+**Promotion-check nudge:** when a newer top-tier model (e.g. an Opus 4.9+) has appeared in the session environment across several recent sessions but the Deep-tier pin hasn't been re-evaluated, append a one-line "run the tier-promotion check" reminder here — trial the newer model on the Frugal / Standard tier first and compare against the incumbent before moving the Deep pin.
 
 ### Update derived docs
 

@@ -6,6 +6,10 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ## [Unreleased]
 
+### Changed
+
+- **Session-start Deep-tier pin promoted `claude-opus-4-6[1m]` → `claude-opus-4-8[1m]`** (PR #133). After a multi-session watched trial — the v1.3.0 ship, the v1.4.0 ship, and the post-v1.4.0 review-workflow reconciliation all ran clean on `claude-opus-4-8[1m]` — `.claude/skills/session-start/SKILL.md` moves the Deep tier off the held-at-4.6 incumbent (budget-escalation example, tier-resolution table, and rationale paragraph). The 4.7-regression evidence is kept as the historical "why we skipped 4.7 and held 4.6" context, the rationale heading is renamed `Why the pin is 4.6, not the newer 4.7` → `Why the Deep pin is 4.8`, and the next-frontier guard now names Opus 4.9+ as the example not-yet-evaluated model (mirrored into the `session-close` promotion-check nudge). Standard (`claude-opus-4-6`) and Frugal (`claude-sonnet-4-6`) pins are unchanged. **Canonical `_core/` stays version-free** — it carries `<MAINTAINER: …>` placeholders, so the promotion edits zero canonical files. (Project-private memory `feedback_model_default_opus_4_6` updated to record the promotion; not shipped.)
+
 ### Fixed
 
 - **Canonical Step 4 trigger-comment guidance — backtick-skip clarifier** (PR #128). The canonical `_core/project-template/.github/workflows/claude-code-review.yml.template` Step 4 "CRITICAL — do not skip step B" paragraph was missing the live workflow's trailing sentence noting that an `@claude` token appearing only inside backticks or a code block causes the deep tier to silently skip. Completes the live↔canonical lockstep on that paragraph (the rest of the Step 4 block was reconciled in v1.4.0, #122).
