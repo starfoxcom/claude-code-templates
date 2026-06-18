@@ -59,18 +59,6 @@ Generate a new `CLAUDE-CODE-TEMPLATES-CONTEXT_YYYY-MM-DD_HH-MM.md` at the repo r
 
 **Uniqueness rule:** exactly **one** `CLAUDE-CODE-TEMPLATES-CONTEXT_*.md` must exist in the root at all times. When creating a new one, delete the previous with `git rm`.
 
-### Model + effort outcome log
-
-Append to the regenerated context file under a `## Session model setup` section:
-
-- **Recommended at start:** <tier> · <resolved model id> · <effort> · <archetype>
-- **Used:** <tier> · <resolved model id> · <effort> (note any mid-session switches with reason)
-- **Outcome:** <retries needed? cleanup PR needed? wrong-branch edits? notes>
-
-Recording **both the tier and the concrete id** keeps the log comparable across model releases — the tier is stable, the id drifts. Empirical feedback loop: if `Used` diverged from `Recommended`, note why — it's signal for tuning the tier-resolution pins in `.claude/skills/session-start/SKILL.md`. A tier's pin is promoted to a newer model only once the log proves it on this project's own work, never on release day.
-
-**Promotion-check nudge:** when a newer top-tier model (e.g. an Opus 4.9+) has appeared in the session environment across several recent sessions but the Deep-tier pin hasn't been re-evaluated, append a one-line "run the tier-promotion check" reminder here — trial the newer model on the Frugal / Standard tier first and compare against the incumbent before moving the Deep pin.
-
 ### Update derived docs
 
 If applicable, update `CLAUDE.md`, `README.md`, `CHANGELOG.md`, or the touched bundle's `bundle.toggles.md`/README with relevant changes. Clearly indicate which sections changed.
