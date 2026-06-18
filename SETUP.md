@@ -185,7 +185,7 @@ On `apply`:
    - `{{DEV_BRANCH}}` ← `project.dev_branch` (development / integration branch where day-to-day work targets and PRs base from. `develop` for Gitflow, same as `main_branch` for trunk-based.)
    - `{{GITFLOW_OR_TRUNK}}` ← `project.branching_model`
    - `{{STACK_COMMANDS_ALLOWLIST}}` ← see step 5 below
-   - `{{REVIEW_DEEP_MODEL}}` ← deliberate stable default `claude-opus-4-8` (deep-review tier model for `.github/workflows/claude.yml`'s `--model`). Default-only — no UI field; pick deliberately (not newest-by-default, per the session-start model-choice discipline), then tune in the bound workflow or override via a `REVIEW_DEEP_MODEL` GitHub repo variable.
+   - `{{REVIEW_DEEP_MODEL}}` ← deliberate stable default `claude-opus-4-8` (deep-review tier model for `.github/workflows/claude.yml`'s `--model`). Default-only — no UI field; pick deliberately (not newest-by-default), then tune in the bound workflow or override via a `REVIEW_DEEP_MODEL` GitHub repo variable.
    - `{{REVIEW_ROUTINE_MODEL}}` ← deliberate stable default `claude-sonnet-4-6` (routine-review tier model for `.github/workflows/claude-code-review.yml`'s `--model`). Default-only — same tuning options as `{{REVIEW_DEEP_MODEL}}`.
    - **Tool-slot placeholders** (for each of `code_research`, `precommit`, `ci`, `ai_reviewer`, `issue_tracker`):
      - `{{TOOLS_<SLOT>_NAME}}` ← `tools.<slot>` if the value is one of the catalog options; if `"Other"`, substitute `otherTools.<slot>` (the user-supplied free-text name).
