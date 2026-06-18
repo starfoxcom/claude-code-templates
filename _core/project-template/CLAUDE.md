@@ -70,10 +70,6 @@ Every work session begins with this ritual. On prompt like "session start" or "r
 
    **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front and chain dependencies with `TaskUpdate({ taskId, addBlockedBy: [<prior-pr-task-id>] })` so the task list mirrors the merge order. A 10-PR chain treated as ad-hoc work burns hours on out-of-sequence routing — the upfront enumeration prevents that.
 
-5. **Context budget audit** — before locking in model + effort, measure how much window the eager-load corpus already consumed (`.claude/rules/*.md`, `MEMORY.md`, project + global `CLAUDE.md`, the session handoff, auto-loaded skills). The matrix optimizes for *session shape*; this step folds in *session budget*. Ask the user to share `/context` output if uncertain. Apply the budget-adjustment table in `.claude/skills/session-start/SKILL.md` § "Context budget audit" — `≥75%` free → use matrix as-is; `60–75%` → flag tight buffer; `45–60%` → escalate to the Deep tier's 1M-context variant; `<45%` → **stop**, trim eager-loads or switch to 1M-context before starting work. The audit's free-% reading + adjustment decision become part of step 6's recommendation block.
-
-6. **Recommended model + effort** — match the planned step list (from step 4) against the session-shape matrix in `.claude/skills/session-start/SKILL.md` to pick a **capability tier** (Deep / Standard / Frugal), then **resolve that tier to a concrete `/model <id>`** per the skill's resolution sub-step — pinned-incumbent (the model your outcome log has *proven*), **not** newest-by-default — apply the step 5 budget adjustment, and emit a `## Recommended setup for this session` block. Switch BEFORE code work — switching after context loads pays a full re-read. The tier ladder is durable (it names no model version); the project-local pin + your `## Session model setup` log (written by `/session-close`) are what you tune as models evolve — never auto-adopt a newer model into a tier just because it shipped.
-
 Do not start code work until I approve or correct the plan.
 
 **During the session:**
