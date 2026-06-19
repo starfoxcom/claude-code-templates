@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-<!-- TOGGLE:tokensave_entry_point START -->
+<!-- TOGGLE:code_research_first START -->
 ---
 
 ## 🚨 BEFORE ANY CODE RESEARCH — read this first
@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This project uses **{{TOOLS_CODE_RESEARCH_NAME}}** as its code-research tool. A PreToolUse hook at `~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py` (installed **globally**, never project-local — see `SETUP.md` § Phase 7a for the procedure) blocks Grep / Glob / raw-grep calls when {{TOOLS_CODE_RESEARCH_NAME}} is available. The `/find` skill documents the canonical sequence, the fallback conditions, and the bypass marker for genuinely-out-of-scope searches.
 
 The session-close skill ends each session by reporting your code-research adherence ratio (calls through {{TOOLS_CODE_RESEARCH_NAME}} vs Grep/Glob fallbacks) — that metric is the score the discipline is graded on.
-<!-- TOGGLE:tokensave_entry_point END -->
+<!-- TOGGLE:code_research_first END -->
 
 ---
 
@@ -44,7 +44,7 @@ All code in the repo is in **{{CODE_LANGUAGE}}**: comments, variable/class/funct
 
 ---
 
-<!-- TOGGLE:tokensave_entry_point START -->
+<!-- TOGGLE:code_research_first START -->
 ## CODE-RESEARCH ENTRY POINT
 
 Code-research entry point is **{{TOOLS_CODE_RESEARCH_NAME}}** ({{TOOLS_CODE_RESEARCH_URL}}), not Explore/Grep/Glob first. The `/find` skill (`.claude/skills/find/SKILL.md`) documents the canonical command sequence for this tool, the fallback conditions, and the bypass mechanism.
@@ -52,7 +52,7 @@ Code-research entry point is **{{TOOLS_CODE_RESEARCH_NAME}}** ({{TOOLS_CODE_RESE
 The full rule (and the rationale) lives in `~/.claude/CLAUDE.md`. If {{TOOLS_CODE_RESEARCH_NAME}} is unavailable for the scope you need, fall back to Grep/Read per the `/find` skill's fallback section.
 
 ---
-<!-- TOGGLE:tokensave_entry_point END -->
+<!-- TOGGLE:code_research_first END -->
 
 ## SESSION START
 
