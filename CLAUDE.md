@@ -90,7 +90,7 @@ Per `.claude/rules/review-tiers.md` (resolved from canonical `_core/project-temp
   - Every external contribution: AI routine review verdict + maintainer eyes-on review + approval = three signals before merge
   - Deep review fires automatically on any PR touching `_core/`, the bundled `index.html`, `_core/project-template/.claude/hooks/`, or `redesign/*.jsx`. These are the highest-blast-radius surfaces.
 
-The routine-review + deep-review workflows are tracked-follow-up for installation here (issue #1) — they exist canonically in `_core/project-template/.github/workflows/` and need to be copied to the project's own `.github/workflows/` to self-host the same discipline the templates ship.
+The routine-review + deep-review workflows are installed and active in this repo's own `.github/workflows/` (`claude-code-review.yml` and `claude.yml`) — they self-host the same discipline the templates ship. They exist canonically in `_core/project-template/.github/workflows/` (`claude-code-review.yml.template`, `claude.yml.template`); this repo's live copies are the resolved bind of those canonical templates.
 
 ---
 
@@ -107,12 +107,6 @@ The page IS a visual artifact. Per `.claude/rules/visual.md` (resolved from cano
 ## Session ritual
 
 Skills `/session-start` and `/session-close` (and `/find`, `/architecture-graph`) live at `.claude/skills/` — this repo is self-bound from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` with Discovery-mode resolution for null toggles. Rules at `.claude/rules/` follow the same bind pattern from `_core/project-template/.claude/rules/`. See `.claude/BIND.md` for the full audit trail (placeholders, toggle decisions, evidence). When templates evolve in `_core/`, re-resolve and replace the corresponding `.claude/skills/*.md` and `.claude/rules/*.md` files; once issue #3 (v1.2.0 Audit mode) ships, that flow becomes automated.
-
----
-
-## What's intentionally NOT here
-
-- **Routine + deep review workflows not yet installed** — the workflows exist canonically in `_core/project-template/.github/workflows/` but haven't been copied to this project's own `.github/workflows/` yet. Tracked follow-up.
 
 ---
 

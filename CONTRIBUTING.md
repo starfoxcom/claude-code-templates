@@ -14,7 +14,7 @@ Thanks for considering a contribution. This project is solo-maintained on a best
 
 This project ships templates that downstream users install verbatim into their own repos — a malicious or buggy PR landing on `main` could ship harmful code to every future bind. The review surface is load-bearing, so every PR (yours and mine) goes through:
 
-1. **AI routine review.** A Claude-powered workflow auto-fires on every PR open / synchronize. It posts a binary 🔴 / 🟢 verdict comment. 🔴 blocks merge. No "minor non-blocking" findings — anything worth writing down is blocking. *(Workflow installation is tracked follow-up — when it lands, this is what gates merges.)*
+1. **AI routine review.** A Claude-powered workflow auto-fires on every PR open / synchronize. It posts a binary 🔴 / 🟢 verdict comment. 🔴 blocks merge. No "minor non-blocking" findings — anything worth writing down is blocking.
 2. **Auto-deep-review** on high-blast-radius diffs (anything touching `_core/`, `index.html`, `_core/project-template/.claude/hooks/`, or `redesign/*.jsx`). A second AI pass from Opus, same binary verdict rule. The routine reviewer applies the `needs-deep-review` label automatically.
 3. **Maintainer review + approval.** I read the AI verdict, then the diff itself. External PRs require my approval before merge regardless of AI verdict. The combination is the gate — AI catches the mechanical stuff, I catch the contextual stuff and the supply-chain-risk stuff.
 
