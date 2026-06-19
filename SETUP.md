@@ -48,15 +48,14 @@ The templates live at ./claude-code-templates/ (or wherever the user unzipped th
 4. **Cross-check toggles + tool-slot values.** Every key in `toggles` must be in `TOGGLES.md`'s catalog. Unknown keys → reject with the offending names. Every `tools.<slot>` value must be in the configurator catalog (`redesign/data.jsx` `TOOL_SLOTS[<slot>].options[].key`) — for slots with profile-driven generation (currently `code_research`), the value must additionally match a key in the slot's profile JSON. Unknown values → reject with: "`tools.<slot>` value `<value>` is not in the catalog. Valid keys: <list>. If this was a hand-edit, pick a catalog value or use `Other` (resolves to `custom`)."
 
    **Backward-compat alias map** (handle deprecated toggle names that downstream users may have in their manifests; mirrors the `developer_branch`/`default_branch` precedent):
-   - **Until the rename ships in v1.3.x**, `tokensave_entry_point` IS the canonical toggle name — this block is a no-op forward-compat hook documenting the future contract.
-   - **When the v1.3.x rename ships** (planned: `tokensave_entry_point` → `code_research_first`), the alias-resolution behavior is:
-     - If `tokensave_entry_point` is present in `toggles` but `code_research_first` is not, accept it as the alias and warn: *"`tokensave_entry_point` is the v1.0–v1.3.0 legacy name; v1.3.x+ uses `code_research_first` for the same toggle. Updating your manifest to the new name is recommended but not required."*
+   - `code_research_first` is the canonical toggle name. `tokensave_entry_point` is its deprecated legacy alias (from the tokensave-only era), still accepted so manifests bound before the rename keep working. Alias-resolution behavior:
+     - If `tokensave_entry_point` is present in `toggles` but `code_research_first` is not, accept it as the alias and warn: *"`tokensave_entry_point` is the legacy toggle name; current versions use `code_research_first` for the same toggle. Updating your manifest to the new name is recommended but not required."*
      - If both are present, prefer `code_research_first` (the canonical name) and warn that `tokensave_entry_point` was ignored.
 5. **Resolve derived toggles** from `project.branching_model`:
    - `gitflow` → `branching_model_gitflow: true`, `branching_model_trunk: false`
    - `trunk` → `branching_model_gitflow: false`, `branching_model_trunk: true`
 6. **Resolve `null` toggles** (those the bundle marks "ask"):
-   - `tokensave_entry_point` → ask the user "Install the code-research hook (enforces /find-first for **{tools.code_research}** via Grep/Glob/Bash interception)?". If unsure, probe availability of the chosen tool per its profile (`_core/global-template/hooks/code-research-profiles.json`):
+   - `code_research_first` → ask the user "Install the code-research hook (enforces /find-first for **{tools.code_research}** via Grep/Glob/Bash interception)?". If unsure, probe availability of the chosen tool per its profile (`_core/global-template/hooks/code-research-profiles.json`):
      - `detection_mode: walk_up` (tokensave / ctags) → check for the marker file under the project root. Use `true` if found.
      - `detection_mode: cli_available` (ast-grep / sourcegraph / semgrep / custom) → check if the CLI is on PATH. Use `true` if found.
      - `tools.code_research === "none"` → force `false` (no hook to install).
@@ -104,12 +103,12 @@ Read these sources, in order:
 8. **File extensions histogram** (top 5 most-common code extensions) → language chips
 9. **Manifest scripts / Makefile / Cargo bin / pyproject scripts** → stack_commands chips
 10. **Existing `.claude/` content** → don't overwrite if user already has rules / skills / memory; note in plan
-11. **Code-research tool detection** → infer `tools.code_research` AND `tokensave_entry_point`:
-    - `.tokensave/tokensave.db` present → `tools.code_research: "tokensave"`, `tokensave_entry_point: true`
-    - `tags` file at repo root → `tools.code_research: "ctags"`, `tokensave_entry_point: true`
-    - `ast-grep`, `src`, or `semgrep` binary on PATH → `tools.code_research` to the matching tool, `tokensave_entry_point: true`
+11. **Code-research tool detection** → infer `tools.code_research` AND `code_research_first`:
+    - `.tokensave/tokensave.db` present → `tools.code_research: "tokensave"`, `code_research_first: true`
+    - `tags` file at repo root → `tools.code_research: "ctags"`, `code_research_first: true`
+    - `ast-grep`, `src`, or `semgrep` binary on PATH → `tools.code_research` to the matching tool, `code_research_first: true`
     - Multiple signals → ask the user which to use as the primary; default to tokensave > ast-grep > sourcegraph > semgrep > ctags in priority order
-    - No signal → `tools.code_research: "none"`, `tokensave_entry_point: false` (the user can still flip this in the plan-confirmation step)
+    - No signal → `tools.code_research: "none"`, `code_research_first: false` (the user can still flip this in the plan-confirmation step)
 12. **`.github/workflows/`** existence → `github_actions_*: true`
 13. **`CODEOWNERS`** existence → likely multi-dev / client-team
 14. **README mentions of "team" / "client" / "we" / "I"** → bundle heuristic (not definitive — bundle is always user-confirmed)
@@ -160,7 +159,7 @@ Produce a concise HTML plan file `claude-code-setup-plan.html` in the project ro
 - The full list of files that will be created in the project (with their destination path)
 - The full list of sections that will be stripped
 - The full list of files that will be deleted / skipped (file-scoped OFF toggles)
-- The `~/.claude/` merge plan (if `memory_system` or `tokensave_entry_point` is ON)
+- The `~/.claude/` merge plan (if `memory_system` or `code_research_first` is ON)
 - The proposed commit message and the diff scope
 
 Tell the user: *"Open `claude-code-setup-plan.html` in your browser to review. Reply `apply` to execute, or describe what to change."*
@@ -193,7 +192,7 @@ On `apply`:
      - Example: `tools.code_research: "tokensave"` produces `{{TOOLS_CODE_RESEARCH_NAME}} = "tokensave"` and `{{TOOLS_CODE_RESEARCH_URL}} = "https://github.com/aovestdipaperino/tokensave"`.
    - **Code-research profile-derived placeholders** (read from `_core/global-template/hooks/code-research-profiles.json` keyed by `tools.code_research`):
      - `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` ← profile `bypass_marker` (e.g., `"TOKENSAVE_BYPASS:"`, `"AST_GREP_BYPASS:"`). For the `custom` profile, compute as `<NAME_UPPER_SNAKE>_BYPASS:` from the user-supplied name (see Phase 7a for the transformation).
-     - `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` ← the profile JSON key itself when `tools.code_research` is one of the built-in values (`tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep` — all already kebab-shaped, so the substituted value equals the manifest's `tools.code_research` value verbatim). For the `custom` profile, computed from the user-supplied name per Phase 7a step "Compute custom-case placeholders". **Substituted into template files** — notably `_core/project-template/CLAUDE.md`, `_core/project-template/.claude/skills/find/SKILL.md`, and `_core/global-template/CLAUDE.md.additions`, wherever the hook filename `~/.claude/hooks/<name-kebab>-first.py` appears in the shared/header sections (which apply to every bind) or inside `:tokensave_entry_point` / `:code_research:custom` blocks.
+     - `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` ← the profile JSON key itself when `tools.code_research` is one of the built-in values (`tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep` — all already kebab-shaped, so the substituted value equals the manifest's `tools.code_research` value verbatim). For the `custom` profile, computed from the user-supplied name per Phase 7a step "Compute custom-case placeholders". **Substituted into template files** — notably `_core/project-template/CLAUDE.md`, `_core/project-template/.claude/skills/find/SKILL.md`, and `_core/global-template/CLAUDE.md.additions`, wherever the hook filename `~/.claude/hooks/<name-kebab>-first.py` appears in the shared/header sections (which apply to every bind) or inside `:code_research_first` / `:code_research:custom` blocks.
      - `{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}` ← UPPER_SNAKE form of the same source (used inside `code-research-profiles.json` for the `custom` profile's `bypass_marker` derivation — not otherwise referenced directly in template files; the resolved `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` placeholder carries the final value into template files).
      - For `tools.code_research === "none"`, substitute the literal string `(no hook)` for `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` — the find skill's fallback block doesn't render in any non-tokensave-entry-point case anyway.
 
@@ -234,7 +233,7 @@ On `apply`:
 
 6a. **(reserved — hook installation moved to Phase 7a, global install. Project-local hook registration is forbidden — see the "Why not project-local?" note in Phase 7a.)**
 
-7. **Merge global additions.** If `tokensave_entry_point` or `memory_system` is ON, resolve and append `claude-code-templates/_core/global-template/CLAUDE.md.additions` into `~/.claude/CLAUDE.md`:
+7. **Merge global additions.** If `code_research_first` or `memory_system` is ON, resolve and append `claude-code-templates/_core/global-template/CLAUDE.md.additions` into `~/.claude/CLAUDE.md`:
 
    1. **Resolve per-value toggle blocks first.** `CLAUDE.md.additions` ships seven `<!-- TOGGLE:code_research:<value> START/END -->` blocks (`tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep`, `none`, `custom`) inside the "No Explore Agents" section. Apply the Phase 3 step 3a logic here too: keep the block whose `<value>` matches `manifest.tools.code_research`, strip all others entirely (content + marker lines). This file is in `_core/global-template/`, not `_core/project-template/` — Phase 3 step 3a's "scan `_core/project-template/**`" pass does NOT touch it, so the resolution must happen explicitly at this step. Skipping it leaves all seven contradictory `## MANDATORY` directives in the user's global config and is a correctness bug, not cosmetic.
    2. **Substitute the residual placeholders.** After block stripping, the surviving block (and any shared prose outside the blocks) may still contain `{{TOOLS_CODE_RESEARCH_NAME}}`, `{{TOOLS_CODE_RESEARCH_URL}}`, `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}`, `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}`. Substitute them using the Phase 3 step 2 + step 3c rules (resolve from `manifest.tools` + `code-research-profiles.json`; for `custom`, resolve the nested computed values first).
@@ -244,19 +243,19 @@ On `apply`:
 7a. **Manage the code-research-first hook GLOBALLY.** This phase has TWO sub-phases that run independently:
 
    - **Phase 7a-Cleanup (unconditional, runs first):** orphan-hook de-duplication + cleanup of stale `~/.claude/hooks/*-first.py` files left by a prior bind with a different `tools.code_research` value. Runs whether the new bind installs a hook or not — so a switch from `tokensave` to `none` (or a decline-to-install at the CLI probe in Phase 7a-Install) still cleans up the prior `tokensave-first.py`.
-   - **Phase 7a-Install (conditional, runs only if `tokensave_entry_point` is ON AND `tools.code_research !== "none"`):** render the template + write the new hook + register the matcher entry.
+   - **Phase 7a-Install (conditional, runs only if `code_research_first` is ON AND `tools.code_research !== "none"`):** render the template + write the new hook + register the matcher entry.
 
    ---
 
    **Phase 7a-Cleanup (unconditional):** iterate `hooks.PreToolUse[*].hooks[*].command` in `~/.claude/settings.json` (using the atomic-write pattern below). For each command whose path ends in `-first.py`:
-   - Compute the basename. Compare against the new bind's `<filename_basename>.py` — when there is NO new hook (`tools.code_research === "none"` or `tokensave_entry_point: false`), compare against the sentinel `None` so every existing `*-first.py` is treated as orphan.
+   - Compute the basename. Compare against the new bind's `<filename_basename>.py` — when there is NO new hook (`tools.code_research === "none"` or `code_research_first: false`), compare against the sentinel `None` so every existing `*-first.py` is treated as orphan.
    - If basename matches the new bind's target → leave alone (idempotent re-bind).
    - If basename is a DIFFERENT `*-first.py` (or the new target is `None` and any `*-first.py` exists) → ask the user before removing the array element AND `os.unlink`-ing the orphan file. Never leave two code-research-first hooks racing.
    - **If the user declines orphan removal:** leave both file + entry intact, BUT surface a prominent warning in the bind summary: ⚠️ *"Stale `<old-basename>.py` hook from a previous bind is still registered in `~/.claude/settings.json` and will fire on every Bash/Grep/Glob call — even though the current bind doesn't reference it. To remove later: edit `~/.claude/settings.json` and delete the matching `PreToolUse` entry, then `rm ~/.claude/hooks/<old-basename>.py`."* Repeat this warning at session-reload disclosure (Phase 3 step 13) so the user can't miss it.
 
    ---
 
-   **Phase 7a-Install (conditional — `tokensave_entry_point` ON AND `tools.code_research !== "none"`):**
+   **Phase 7a-Install (conditional — `code_research_first` ON AND `tools.code_research !== "none"`):**
 
    - **Why not project-local?** Empirical finding for the canonical tokensave case: tokensave's own `install` / `reinstall` logic reads project-local `settings.local.json` for hook templates and inherits the executable prefix from existing entries. If a project-local hook uses `python <path>`, tokensave copies that prefix and writes its own auto-registration as `python hook-stop` / `python hook-prompt-submit` — broken commands that block every subsequent Stop / UserPromptSubmit event. Installing globally sidesteps that template-inheritance entirely. The same reasoning applies preemptively to any code-research tool that ships its own hook generator: keep ours global, out of the per-project template-inheritance surface.
 
@@ -280,7 +279,7 @@ On `apply`:
    - **Probe tool availability at bind time** (parity between detection modes):
      - For `cli_available` (ast-grep / sourcegraph / semgrep / custom-by-default): run `shutil.which(detection_target)` equivalent. On Windows, confirm `PATHEXT` includes the binary's extension (`.exe` / `.cmd` / `.bat` / `.ps1`); some Scoop / npm shims register `.ps1` only and need `PATHEXT` set.
      - For `walk_up` (tokensave / ctags): walk up from the project root looking for `detection_target` (e.g., `.tokensave/tokensave.db`, `tags`). The marker file must exist somewhere in the project's ancestor chain.
-   - **If the tool is NOT available** (CLI missing OR walk_up marker missing), do NOT silently install the hook — warn the user: "The code-research tool `<DISPLAY_NAME>` is not available for this project (`<reason>`: CLI not on PATH / no marker file found). The hook will be installed but will fail-open on every Bash/Grep/Glob call until the tool is set up (`<tip>`: install `<binary>` / run `tokensave init`). Continue anyway? [y/N]". If the user declines, set `tokensave_entry_point: false` for this bind and skip the hook install (cleanup still runs unconditionally above).
+   - **If the tool is NOT available** (CLI missing OR walk_up marker missing), do NOT silently install the hook — warn the user: "The code-research tool `<DISPLAY_NAME>` is not available for this project (`<reason>`: CLI not on PATH / no marker file found). The hook will be installed but will fail-open on every Bash/Grep/Glob call until the tool is set up (`<tip>`: install `<binary>` / run `tokensave init`). Continue anyway? [y/N]". If the user declines, set `code_research_first: false` for this bind and skip the hook install (cleanup still runs unconditionally above).
    - **Validate the resolved profile against the inline `_schema` contract** in `code-research-profiles.json`:
      - Required fields present (`filename_basename`, `bypass_marker`, `detection_mode`, `detection_target`, `sequence_bullets`).
      - `detection_mode` is one of `walk_up` or `cli_available`.
@@ -329,7 +328,7 @@ On `apply`:
        This guarantees Cleanup's iteration and Install's append don't crash with `KeyError` or `TypeError`. Run this normalization step ONCE per Phase 7a invocation, before either Cleanup or Install touches the data.
    - **Disk-full / read-only-home handling.** Wrap the atomic-write step in a try/except. On `OSError` / `PermissionError` / `OSError(errno.ENOSPC)`: clean up any leftover `.tmp` file, name the path in the error message, and suggest a remediation ("check disk free space" / "your `~/.claude/` directory appears to be read-only — check ownership and `chmod`"). Do NOT leave orphan `.tmp` files on disk.
    - **`cli_available` re-probe at runtime.** The bind-time `shutil.which` probe verifies the tool is installed when the hook is rendered — but PATH may differ between the bind shell and Claude Code's spawned shell (especially on Windows where `py` inherits a different env). The hook RE-probes via its own `shutil.which` at runtime, so a tool that was uninstalled between bind and hook execution will simply fail-open. Document this in the bind summary as "the hook re-checks tool availability per call; it will not block if the tool is uninstalled later."
-   - **(Orphan cleanup happens in Phase 7a-Cleanup above — runs UNCONDITIONALLY, including when `_skip_install: true` or `tokensave_entry_point: false`.)**
+   - **(Orphan cleanup happens in Phase 7a-Cleanup above — runs UNCONDITIONALLY, including when `_skip_install: true` or `code_research_first: false`.)**
    - **Do NOT** add the hook entry to project-local `settings.local.json` or the project's `.claude/settings.json`. Even for tools that don't have tokensave's template-inheritance bug, project-local hook installation is forbidden by convention so users can switch projects without per-project hook surgery.
    - **Do NOT** add `python:*` to project-local permissions allowlist (hook runs globally with the `py` launcher).
 
