@@ -55,7 +55,7 @@ Claude will start populating memory entries during your normal sessions — you 
 
 ## 3. Install the code-research-first hook (optional, recommended)
 
-When the `tokensave_entry_point` toggle is ON and `tools.code_research` is not `none`, SETUP.md § Phase 7a renders `hooks/code-research-first.py.template` against the profile in `hooks/code-research-profiles.json` matching your chosen tool and writes the result to `~/.claude/hooks/<tool>-first.py`. The hook is then registered in `~/.claude/settings.json` under `hooks.PreToolUse` so it intercepts `Grep`/`Glob`/`Bash` calls and routes Claude through your chosen tool first.
+When the `code_research_first` toggle is ON and `tools.code_research` is not `none`, SETUP.md § Phase 7a renders `hooks/code-research-first.py.template` against the profile in `hooks/code-research-profiles.json` matching your chosen tool and writes the result to `~/.claude/hooks/<tool>-first.py`. The hook is then registered in `~/.claude/settings.json` under `hooks.PreToolUse` so it intercepts `Grep`/`Glob`/`Bash` calls and routes Claude through your chosen tool first.
 
 **Supported `tools.code_research` keys** (must match a key in `code-research-profiles.json`):
 

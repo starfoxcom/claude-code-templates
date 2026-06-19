@@ -76,7 +76,7 @@ Triggered only when the DoD verification step just flipped a milestone to ✅. S
 4. **Stop there.** The user reviews and publishes manually — never auto-push to external services.
 <!-- TOGGLE:dod_devlog_step END -->
 
-<!-- TOGGLE:tokensave_entry_point START -->
+<!-- TOGGLE:code_research_first START -->
 ### Code-research adherence metric
 
 Before signaling session close, count how often code-research happened through {{TOOLS_CODE_RESEARCH_NAME}} vs through Grep/Glob/raw-grep this session:
@@ -108,7 +108,7 @@ Report it like:
 > **{{TOOLS_CODE_RESEARCH_NAME}} adherence this session: 7 {{TOOLS_CODE_RESEARCH_NAME}} calls / 1 grep fallback → 87%.** (Bypass reason: <if any>.)
 
 If the ratio is under 70% AND there were no documented bypass reasons, surface that as a regression to fix next session. The hook should have prevented unjustified Grep calls; if any got through, note why.
-<!-- TOGGLE:tokensave_entry_point END -->
+<!-- TOGGLE:code_research_first END -->
 
 ### Signal session close
 

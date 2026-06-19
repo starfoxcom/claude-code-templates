@@ -15,7 +15,7 @@ Bundle for a team working on a client codebase. All of `client-solo` + team coor
     "binary_verdict_rule": true,
     "definition_of_done_verification": true,
     "context_refresh_files": true,
-    "tokensave_entry_point": null,
+    "code_research_first": null,
     "lazy_rules_folder": true,
     "memory_system": true,
     "skill_session_start": true,
