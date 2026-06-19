@@ -660,9 +660,9 @@ can copy them into your project root during step 2 apply.
             }
             return null;
           })()}
-          tokensave={toggleState.tokensave_entry_point}
+          tokensave={toggleState.code_research_first}
           contextRefresh={toggleState.context_refresh_files}
-          onTokensave={(v) => setToggle("tokensave_entry_point", v)}
+          onTokensave={(v) => setToggle("code_research_first", v)}
           onContextRefresh={(v) => setToggle("context_refresh_files", v)}
         />
       )}
@@ -1773,7 +1773,7 @@ function QuickOptions({ codeResearchTool, tokensave, contextRefresh, onTokensave
       <div className="quick-grid">
         {showCodeResearchRow && (
           <QuickRow
-            k="tokensave_entry_point"
+            k="code_research_first"
             title={isTokensave ? "I have tokensave installed" : `I have ${toolName} configured`}
             desc={
               isTokensave ? (
@@ -2011,8 +2011,10 @@ function buildSetupMd(manifest, bundleId) {
 2. Parse \`./claude-code-templates/manifest.json\`. Required fields:
    \`bundle\`, \`project.name\`, \`project.repo_url\`, \`project.main_branch\`,
    \`project.dev_branch\`, \`toggles\`. Missing fields → run a short interview to fill them.
-3. Cross-check every toggle key against the catalog. Unknown keys → reject.
-4. Resolve \`ask\` toggles. For \`tokensave_entry_point\`, probe the chosen tool
+3. Cross-check every toggle key against the catalog. Unknown keys → reject
+   (the legacy key \`tokensave_entry_point\` is accepted as an alias for
+   \`code_research_first\`).
+4. Resolve \`ask\` toggles. For \`code_research_first\`, probe the chosen tool
    per its profile in \`_core/global-template/hooks/code-research-profiles.json\`
    (walk_up marker vs cli_available probe). Force \`false\` when
    \`tools.code_research === "none"\` (the profile has \`_skip_install: true\`).
@@ -2082,7 +2084,7 @@ This phase has TWO sub-phases that run independently:
   different \`tools.code_research\` value. Runs whether the new bind installs a
   hook or not — so a switch from \`tokensave\` to \`none\` (or a
   decline-to-install) still cleans up the prior \`tokensave-first.py\`.
-- **Phase 7a-Install (conditional, runs only if \`tokensave_entry_point\` is
+- **Phase 7a-Install (conditional, runs only if \`code_research_first\` is
   ON AND \`manifest.tools.code_research !== "none"\`):** render the template,
   write the new hook, register the matcher entry.
 
@@ -2100,7 +2102,7 @@ in \`-first.py\`:
 
 - Compute the basename. Compare against the new bind's
   \`<filename_basename>.py\` — or against the sentinel \`None\` when there is
-  no new hook to install (\`tokensave_entry_point: false\` OR
+  no new hook to install (\`code_research_first: false\` OR
   \`tools.code_research === "none"\`), so every existing \`*-first.py\` is
   treated as orphan.
 - If basename matches the new bind's target → leave alone (idempotent re-bind).
@@ -2113,7 +2115,7 @@ in \`-first.py\`:
 
 ---
 
-**Phase 7a-Install (conditional — only if \`tokensave_entry_point\` is ON AND
+**Phase 7a-Install (conditional — only if \`code_research_first\` is ON AND
 \`manifest.tools.code_research !== "none"\`):**
 
 1. Read the profile for \`manifest.tools.code_research\` from

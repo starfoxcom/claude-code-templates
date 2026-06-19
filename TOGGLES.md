@@ -27,7 +27,7 @@ Legend: ✅ on by default · ❌ off by default · ⚙️ asked during interview
 | `binary_verdict_rule` | Section in `review-tiers.md` + `git.md` | ✅ | ✅ | ✅ | ✅ |
 | `definition_of_done_verification` | Section in `CLAUDE.md` + `session-close.md` skill | ✅ | ✅ | ✅ | ✅ |
 | `context_refresh_files` | Section in `CLAUDE.md` + `session-close.md` skill | ✅ | ✅ | ✅ | ✅ |
-| `tokensave_entry_point` | Sections in `CLAUDE.md`, `find/SKILL.md`, `session-close/SKILL.md` + global hook install per `tools.code_research` (see SETUP.md § Phase 7a). The toggle name is legacy from the tokensave-only era; semantically it now controls "install the code-research-first hook for whichever tool is at `tools.code_research`." A rename to `code_research_first` is tracked for v1.3.x as a deferred breaking change (with backward-compat alias resolution — see CHANGELOG Known follow-ups). | ⚙️ | ⚙️ | ⚙️ | ⚙️ |
+| `code_research_first` | Sections in `CLAUDE.md`, `find/SKILL.md`, `session-close/SKILL.md` + global hook install per `tools.code_research` (see SETUP.md § Phase 7a). Controls "install the code-research-first hook for whichever tool is at `tools.code_research`." The legacy name `tokensave_entry_point` (from the tokensave-only era) is still accepted as a backward-compat alias — see SETUP.md § Phase 1 alias resolution. | ⚙️ | ⚙️ | ⚙️ | ⚙️ |
 | `lazy_rules_folder` | `docs/lazy/` directory + section in `CLAUDE.md` | ✅ | ✅ | ✅ | ✅ |
 | `memory_system` | `global-template/memory-template/` + section in `CLAUDE.md` | ✅ | ✅ | ✅ | ✅ |
 | `skill_session_start` | `.claude/skills/session-start/SKILL.md` | ✅ | ✅ | ✅ | ✅ |
@@ -160,7 +160,7 @@ Some files are entirely toggle-controlled (e.g., `CONTRIBUTING.md` only exists i
 
 A few toggles default to "ask the user" because they depend on context Claude doesn't know until the interview:
 
-- `tokensave_entry_point` — depends on whether tokensave is installed (`tokensave_status` check)
+- `code_research_first` — depends on whether the chosen code-research tool is installed (per-tool availability probe, e.g. `tokensave_status` for tokensave)
 - `architecture_rules_scaffold` — depends on whether the codebase has clear layer boundaries worth documenting
 - `visual_test_discipline` — depends on whether the project has a UI / visual surface
 - `codeowners` — depends on team size and structure

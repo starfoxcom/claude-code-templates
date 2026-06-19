@@ -173,15 +173,15 @@ Allowed ONLY if:
 - You're searching non-code content (markdown, binaries, `.gitignored` files).
 - {{TOOLS_CODE_RESEARCH_NAME}} is unavailable for the scope you need (CLI missing / index empty / instance unreachable).
 
-<!-- TOGGLE:tokensave_entry_point START -->
+<!-- TOGGLE:code_research_first START -->
 The `~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py` hook (installed globally — see `SETUP.md` § Phase 7a) is the gatekeeper:
 
 - **Bash `grep`/`rg`/`ag`/`ack`** — add an inline `# {{TOOLS_CODE_RESEARCH_BYPASS_MARKER}} <reason>` comment in your command, hook lets it through.
 - **Grep/Glob tools** — there's no inline escape; briefly explain the bypass to the user in chat, then re-issue the tool call.
-<!-- TOGGLE:tokensave_entry_point END -->
-<!-- TOGGLE:tokensave_entry_point:off START -->
+<!-- TOGGLE:code_research_first END -->
+<!-- TOGGLE:code_research_first:off START -->
 No code-research-first hook is installed for this project. Use Grep/Glob directly when you've exhausted {{TOOLS_CODE_RESEARCH_NAME}} or the case fits one of the fallback conditions above. The session-close adherence metric still counts the ratio — keep the discipline even without enforcement.
-<!-- TOGGLE:tokensave_entry_point:off END -->
+<!-- TOGGLE:code_research_first:off END -->
 
 ## Citation purpose
 
