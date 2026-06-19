@@ -36,13 +36,13 @@ User-explicit (3):
 |---|---|---|
 | `code_research` | `tokensave` | User-explicit |
 | `context_refresh_files` | `true` | User-explicit |
-| `tokensave_entry_point` | `true` | User-explicit (re-confirms `code_research`) |
+| `code_research_first` | `true` | User-explicit (re-confirms `code_research`; formerly `tokensave_entry_point`) |
 
 Bundle 2 defaults kept verbatim (22):
 
 `github_actions_routine_review: true`, `github_actions_deep_review: true`, `github_actions_deep_review_auto_fire: true`, `github_actions_paths_ignore_auto_merge: false`, `binary_verdict_rule: true`, `definition_of_done_verification: true`, `lazy_rules_folder: true`, `memory_system: true`, `skill_session_start: true`, `skill_session_close: true`, `permissions_file_template: true`, `contributing_md: true`, `pr_template: true`, `collaboration_rule: true`, `confidentiality_rule: false`, `audit_trail_commits: false`, `billable_handoff_summary: false`, `team_handoff_notes: false`, `branch_protection_loose: false`, `branch_protection_strict: true`, `mandatory_deep_review_before_merge: true`, `dod_devlog_step: false`, `language_specific_rules_scaffold: true`, `clean_room_rule: false`.
 
-Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th null toggle `tokensave_entry_point` was promoted to the User-explicit table above):
+Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th null toggle `code_research_first` was promoted to the User-explicit table above):
 
 | Toggle | Value | Repo evidence |
 |---|---|---|
