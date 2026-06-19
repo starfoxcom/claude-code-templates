@@ -35,8 +35,6 @@ Evaluate in order — apply the first row that matches:
 
 Commit and PR format per `_core/project-template/.claude/rules/git.md`. Use **atomic Bash calls** — never `&&`-chain post-merge cleanup; permission rules match the full command string and chained calls stall on partial deny.
 
-**Note for this repo, pre-review-workflows:** until issue #6 (install routine + deep review workflows) lands, PRs to `develop` have no CI gate. Use `gh pr merge --merge --delete-branch --admin` after verifying mergeability. After #6 merges, switch to the standard polling-loop flow per `_core/project-template/.claude/rules/token-efficiency.md`.
-
 ### Update context
 
 Generate a new `CLAUDE-CODE-TEMPLATES-CONTEXT_YYYY-MM-DD_HH-MM.md` at the repo root (rename the existing one with current date and time — `git mv` it out first so the uniqueness rule holds).
