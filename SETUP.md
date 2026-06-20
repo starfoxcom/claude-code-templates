@@ -363,10 +363,13 @@ On `apply`:
 8d. **Apply issue templates** if `github_issue_templates` is ON:
    - Copy `_core/project-template/.github/ISSUE_TEMPLATE/` (full directory). Substitute `{{REPO_URL}}` in `config.yml`.
 
-8e. **Apply pre-commit hooks scaffold** if `precommit_hooks_scaffold` is ON:
-   - Copy `_core/project-template/lefthook.yml.template` → `lefthook.yml`.
-   - Substitute `{{LINT_COMMAND}}` / `{{TYPECHECK_COMMAND}}` / `{{TEST_COMMAND}}` based on `stack_commands` (use the user's `lint` / typecheck / `test` values; leave as `{{...}}` placeholder if not provided and note the user must fill them).
-   - Tell the user: *"Run `lefthook install` once after this setup to activate the hooks. Install lefthook first if needed (brew/scoop/npm/cargo/go binary)."*
+8e. **Apply pre-commit hooks scaffold** if `precommit_hooks_scaffold` is ON. This is **profile-driven** off `tools.precommit` (mirrors the `code_research` slot): look up the matching profile in `_core/project-template/precommit/precommit-profiles.json`, then —
+   - **`tools.precommit: "none"`** (profile `_skip_install: true`) → write nothing and skip the rest of this step. The gate being ON with no manager selected is a deliberate no-op (mirrors `code_research: "none"`).
+   - **`tools.precommit: "Other"` / custom** (profile `_uses_user_input: true`) → write nothing; tell the user: *"Configure your chosen pre-commit tool (the name you supplied) per its own documentation to run lint / typecheck / test on commit — we don't scaffold a config for custom tools."*
+   - **Any catalogued manager** (`lefthook` / `husky` / `pre-commit` / `simple-git-hooks`) → from its profile entry:
+     - Copy `_core/project-template/<template_ref>` → the profile's `config_filename` in the project root (e.g. `lefthook` → `lefthook.yml`; `husky` → `.husky/pre-commit`; `pre-commit` → `.pre-commit-config.yaml`; `simple-git-hooks` → `.simple-git-hooks.json`).
+     - Substitute `{{LINT_COMMAND}}` / `{{TYPECHECK_COMMAND}}` / `{{TEST_COMMAND}}` based on `stack_commands` (use the user's `lint` / typecheck / `test` values; leave as `{{...}}` placeholder if not provided and note the user must fill them).
+     - **Emit, never execute** (the bind writes config + instructs; it does not run `npm`/`pip`/installs): tell the user *"Run `<activation_command>` once after this setup to activate the hooks. `<runtime_note>`. See `<url>`."* — taking `activation_command`, `runtime_note`, and `url` verbatim from the profile (e.g. `lefthook install`; `npm install --save-dev husky && npx husky init`; `pre-commit install`; `npx simple-git-hooks`).
 
 8f. **Apply architecture-graph skill** if `architecture_diagram_skill` is ON:
    - The skill file is already copied via the universal copy step. No additional action beyond ensuring it's at `.claude/skills/architecture-graph/SKILL.md`. The user invokes `/architecture-graph` when ready.
