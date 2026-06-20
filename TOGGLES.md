@@ -146,7 +146,7 @@ Placeholders associated with tool slots (substituted in Phase 3 of SETUP.md):
 | `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` | the bypass marker string from `_core/global-template/hooks/code-research-profiles.json` (e.g., `TOKENSAVE_BYPASS:`, `AST_GREP_BYPASS:`); computed for `custom` from the user-supplied name |
 | `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` | lowercase + kebab form of the code-research tool name; for built-in profiles equals the JSON key (`tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep`); for `custom`, computed from the user-supplied name per SETUP.md § Phase 7a sanitization rules. Used in hook filename paths (`<name-kebab>-first.py`). |
 | `{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}` | UPPER_SNAKE form, complement to NAME_KEBAB; used only inside `code-research-profiles.json`'s `custom` profile for deriving the bypass marker (e.g., `MY_TOOL_BYPASS:`). Not substituted into other templates directly. |
-| `{{TOOLS_PRECOMMIT_NAME}}` / `{{TOOLS_PRECOMMIT_URL}}` | analogous |
+| `{{TOOLS_PRECOMMIT_NAME}}` / `{{TOOLS_PRECOMMIT_URL}}` | name + homepage URL of `tools.precommit` from `_core/project-template/precommit/precommit-profiles.json` (or `otherTools.precommit` for "Other"); feeds the install-hint + the `git.md` `:custom` block. The copied precommit config template additionally substitutes `{{LINT_COMMAND}}` / `{{TYPECHECK_COMMAND}}` / `{{TEST_COMMAND}}` from `stack_commands` (SETUP.md step 8e). |
 | `{{TOOLS_CI_NAME}}` / `{{TOOLS_CI_URL}}` | analogous |
 | `{{TOOLS_AI_REVIEWER_NAME}}` / `{{TOOLS_AI_REVIEWER_URL}}` | analogous |
 | `{{TOOLS_ISSUE_TRACKER_NAME}}` / `{{TOOLS_ISSUE_TRACKER_URL}}` | analogous |
@@ -207,7 +207,7 @@ The five tool slots (`code_research` / `precommit` / `ci` / `ai_reviewer` / `iss
    - Open the configurator (`index.html`), pick your new option, click "Bind a volume" — the downloaded zip's `SETUP.md` should reference your tool by name in the `tools.code_research` line of the embedded JSON.
    - Manually substitute the placeholders in `code-research-first.py.template` against your `grit` profile and confirm the result is valid Python (`python -c "import ast; ast.parse(open('rendered-hook.py').read())"`).
 
-If you're adding a value to a different tool slot (`precommit` / `ci` / `ai_reviewer` / `issue_tracker`) those slots don't yet have profile-driven generation — they're tracked as v1.3.x / v1.4.x follow-ups. Until those slots get their own `*-profiles.json`, adding a value there is configurator-only (steps 1 + 4 + 5).
+If you're adding a value to `ci` / `ai_reviewer` / `issue_tracker`, those slots don't yet have profile-driven generation — until they get their own `*-profiles.json`, adding a value there is configurator-only (steps 1 + 4 + 5). The `precommit` slot **is** profile-driven (project-local profile at `_core/project-template/precommit/precommit-profiles.json`): add the option `key` in all three configurator mirrors, an entry in `precommit-profiles.json`, and a `<!-- TOGGLE:precommit:<value> -->` block in `git.md`.
 
 ---
 
@@ -225,11 +225,11 @@ The inverse operation. To retire an existing option (e.g., the project drops sup
 
 ## Promoting a configurator-only slot to profile-driven
 
-`precommit` / `ci` / `ai_reviewer` / `issue_tracker` ship configurator-only today — the manifest carries `tools.<slot>` but no canonical template branches on it. To retrofit profile-driven generation onto an existing slot (the v1.3.x / v1.4.x trajectory):
+`ci` / `ai_reviewer` / `issue_tracker` ship configurator-only today — the manifest carries `tools.<slot>` but no canonical template branches on it. (`precommit` was the first slot promoted; its project-local profile + per-manager config templates are the worked example for the steps below.) To retrofit profile-driven generation onto an existing slot:
 
-1. **Build the profile JSON + template** under `_core/global-template/<slot>/<slot>-profiles.json` + `<slot>-first.<ext>.template` (or equivalent artifact for non-Python tooling — e.g., a YAML config for `ci`). Follow the schema documented inside `code-research-profiles.json` `_schema` as a model.
+1. **Build the profile JSON + templates.** For a **global** slot whose artifact lands in `~/.claude` (like `code_research`'s hook), place them under `_core/global-template/<slot>/<slot>-profiles.json` + `<slot>-first.<ext>.template`. For a **project-local** slot whose artifact lands in the user's repo (like `precommit`'s config files), place them under `_core/project-template/<slot>/<slot>-profiles.json` + the per-value config templates. Follow the schema in the slot's profile `_schema` as a model — `precommit`'s is leaner than `code_research`'s (no `bypass_marker` / `detection_mode`, since it writes a static config rather than an executable hook).
 2. **Add per-value blocks** to the canonical templates that should now vary per `tools.<slot>` choice. Use the same `<!-- TOGGLE:<slot>:<value> START/END -->` syntax already documented above.
-3. **Extend SETUP.md** with a new Phase 7c / 7d / etc. covering render + install for the new slot. Follow Phase 7a's structure: Cleanup (unconditional) + Install (conditional on toggle-on + tool selected).
+3. **Extend SETUP.md.** A global hook slot adds a new Phase 7c / 7d covering render + install (follow Phase 7a: Cleanup unconditional + Install conditional). A project-local config slot may instead **generalize an existing copy step** — `precommit` generalized step 8e from a hardcoded lefthook copy into a `tools.precommit` profile lookup (copy `template_ref` → `config_filename`, substitute the commands, emit `activation_command`; never execute installs).
 4. **Document new placeholders** ({{TOOLS_<SLOT>_NAME}} etc.) in the placeholder table above + in SETUP.md Phase 3 step 2.
 5. **CHANGELOG entry** stating the slot now has profile-driven generation; existing bound projects keep working (the configurator-only emission path is unchanged); re-binding picks up the new per-value templates.
 
@@ -237,7 +237,7 @@ The inverse operation. To retire an existing option (e.g., the project drops sup
 
 ## Adding a new tool slot
 
-Tool slots are the broader category (`code_research`, `precommit`, etc.). The `code_research` slot is the only one with profile-driven hook rendering today; adding a sixth slot follows the same pattern. Steps:
+Tool slots are the broader category (`code_research`, `precommit`, etc.). `code_research` (a global hook) and `precommit` (project-local config) are the profile-driven slots today; adding a sixth slot follows the same pattern. Steps:
 
 1. **Configurator catalog** — add the slot to `TOOL_SLOTS` in `redesign/data.jsx` + `index.html` (+ `index.legacy.html`). Schema: `{ id, label, hint, options: [{ key, name, desc, url }], default }`. The `key` field on each option is mandatory — it's what `tools.<slot>` emits to the manifest and what profile lookups join against.
 2. **Profile JSON + template** (only if the slot needs runtime enforcement like `code_research`'s hook):
