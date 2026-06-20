@@ -208,6 +208,33 @@ A feature is complete when it can be exercised end-to-end in the running app —
 
 ---
 
+<!-- TOGGLE:precommit_hooks_scaffold START -->
+## Pre-commit hooks
+
+A local commit-time gate (lint / typecheck / conventional-commit-msg / test) scaffolded per `tools.precommit`. The bind writes the config file; activate it once with the command below. Bypass a single commit with `git commit --no-verify`.
+
+<!-- TOGGLE:precommit:lefthook START -->
+Pre-commit gate: **lefthook** — config `lefthook.yml`. Activate: `lefthook install`.
+<!-- TOGGLE:precommit:lefthook END -->
+<!-- TOGGLE:precommit:husky START -->
+Pre-commit gate: **husky** — config `.husky/pre-commit`. Activate: `npm install --save-dev husky && npx husky init`.
+<!-- TOGGLE:precommit:husky END -->
+<!-- TOGGLE:precommit:pre-commit START -->
+Pre-commit gate: **pre-commit** — config `.pre-commit-config.yaml`. Activate: `pre-commit install`.
+<!-- TOGGLE:precommit:pre-commit END -->
+<!-- TOGGLE:precommit:simple-git-hooks START -->
+Pre-commit gate: **simple-git-hooks** — config `.simple-git-hooks.json`. Activate: `npx simple-git-hooks`.
+<!-- TOGGLE:precommit:simple-git-hooks END -->
+<!-- TOGGLE:precommit:none START -->
+No hook manager is scaffolded — run lint / typecheck / test before pushing; CI is the backstop.
+<!-- TOGGLE:precommit:none END -->
+<!-- TOGGLE:precommit:custom START -->
+Pre-commit gate: **{{TOOLS_PRECOMMIT_NAME}}** ({{TOOLS_PRECOMMIT_URL}}) — configured per its own docs.
+<!-- TOGGLE:precommit:custom END -->
+
+---
+<!-- TOGGLE:precommit_hooks_scaffold END -->
+
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
 ## Auto-merge on fast-path PRs
 
