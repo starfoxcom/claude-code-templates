@@ -59,7 +59,7 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 | `.claude/skills/session-close/SKILL.md` | Resolved (DoD + context + tokensave-adherence kept, devlog step stripped, placeholders substituted) |
 | `.claude/skills/find/SKILL.md` | Resolved (per-tool blocks for tokensave / ast-grep / sourcegraph / ctags / semgrep / none / custom; this bind resolves to the tokensave block, all others stripped). Issue #10 closed by the v1.3-unreleased code_research agnostification. |
 | `.claude/skills/architecture-graph/SKILL.md` | Resolved (per-tool blocks for the enumerate + diff-coupling steps; this bind resolves to the tokensave commands). |
-| `.claude/rules/git.md` | Resolved (`branching_model_gitflow` blocks kept, `branching_model_trunk` stripped; `{{MAIN_BRANCH}}` → `main`, `{{DEV_BRANCH}}` → `develop`). |
+| `.claude/rules/git.md` | Resolved (`branching_model_gitflow` blocks kept, `branching_model_trunk` stripped; the new `precommit_hooks_scaffold` Pre-commit hooks section stripped — OFF for this repo; `{{MAIN_BRANCH}}` → `main`, `{{DEV_BRANCH}}` → `develop`). |
 | `.claude/rules/review-tiers.md` | Resolved (`github_actions_deep_review_auto_fire` block kept, `:off` variant stripped). |
 | `.claude/rules/token-efficiency.md` | Resolved (`code_research:tokensave` block kept, other 6 per-tool blocks stripped; `github_actions_paths_ignore_auto_merge` block stripped; `{{TOOLS_CODE_RESEARCH_NAME}}` → `tokensave`, `{{REPO_URL}}` → `https://github.com/starfoxcom/claude-code-templates`). |
 | `.claude/rules/collaboration.md` | Resolved (`mandatory_deep_review_before_merge` block kept, `oncall_awareness` block stripped per Discovery resolution; `{{DEV_BRANCH}}` → `develop`). |
@@ -78,6 +78,7 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 | `CODEOWNERS` | `codeowners: false` (solo-maintained) |
 | `~/.claude/hooks/tokensave-first.py` (project copy) | Hook is installed **globally**, not project-local — per CLAUDE.md's note about the tokensave template-inheritance bug that makes per-project installation unsafe. As of the v1.3-unreleased agnostification, the hook is rendered from `_core/global-template/hooks/code-research-first.py.template` + `code-research-profiles.json` → tokensave profile; the rendered filename remains `tokensave-first.py` for this bind because `tools.code_research = "tokensave"`. |
 | Devlog scaffolding (`devlog/posts/0000-template/`) | `dod_devlog_step: false` (no devlog tradition for this project — release notes live in `CHANGELOG.md` and GitHub Releases). |
+| `.claude/rules/git.md` Pre-commit hooks section + a repo-root precommit config | `precommit_hooks_scaffold: false` — new toggle ([Unreleased]); this repo resolves it OFF (overriding the bundle-2 ON default) because it has no build/lint/test tooling to gate on. Mirrors `architecture_rules_scaffold: none` — over-scaffolding would be cargo-culting. |
 
 ## Re-bind procedure (until Audit mode lands)
 
