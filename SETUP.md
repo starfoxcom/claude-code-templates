@@ -109,9 +109,15 @@ Read these sources, in order:
     - `ast-grep`, `src`, or `semgrep` binary on PATH → `tools.code_research` to the matching tool, `code_research_first: true`
     - Multiple signals → ask the user which to use as the primary; default to tokensave > ast-grep > sourcegraph > semgrep > ctags in priority order
     - No signal → `tools.code_research: "none"`, `code_research_first: false` (the user can still flip this in the plan-confirmation step)
-12. **`.github/workflows/`** existence → `github_actions_*: true`
-13. **`CODEOWNERS`** existence → likely multi-dev / client-team
-14. **README mentions of "team" / "client" / "we" / "I"** → bundle heuristic (not definitive — bundle is always user-confirmed)
+12. **Pre-commit hooks detection** → infer `tools.precommit` AND `precommit_hooks_scaffold` (mirrors step 11's tool+gate dual-set):
+    - `lefthook.yml` / `.lefthook.yml` present → `tools.precommit: "lefthook"`, `precommit_hooks_scaffold: true`
+    - `.husky/` directory present → `tools.precommit: "husky"`, `precommit_hooks_scaffold: true`
+    - `.pre-commit-config.yaml` present → `tools.precommit: "pre-commit"`, `precommit_hooks_scaffold: true`
+    - `.simple-git-hooks.json` present, or a `simple-git-hooks` key in `package.json` → `tools.precommit: "simple-git-hooks"`, `precommit_hooks_scaffold: true`
+    - No signal → `tools.precommit: "none"`, `precommit_hooks_scaffold: false` (the user can still flip this in the plan-confirmation step)
+13. **`.github/workflows/`** existence → `github_actions_*: true`
+14. **`CODEOWNERS`** existence → likely multi-dev / client-team
+15. **README mentions of "team" / "client" / "we" / "I"** → bundle heuristic (not definitive — bundle is always user-confirmed)
 
 #### Step 2 — Build the inference table
 
