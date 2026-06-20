@@ -36,6 +36,7 @@ Bundle for open-source libraries or shared personal projects with multiple human
     "dod_devlog_step": false,
     "language_specific_rules_scaffold": true,
     "architecture_rules_scaffold": null,
+    "precommit_hooks_scaffold": true,
     "clean_room_rule": false,
     "visual_test_discipline": null
   }
@@ -54,3 +55,4 @@ Bundle for open-source libraries or shared personal projects with multiple human
 | `pr_template: true` | Standardizes what contributors include in PRs. |
 | `collaboration_rule: true` | Encodes PR etiquette for multi-human collaboration. |
 | `codeowners: null` | Depends on team structure — ask during setup. |
+| `precommit_hooks_scaffold: true` | A local lint/typecheck/commit-msg gate complements the review tiers on a multi-dev repo. |

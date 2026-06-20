@@ -36,6 +36,7 @@ Bundle for a solo consultant working on a client codebase under NDA. Confidentia
     "dod_devlog_step": false,
     "language_specific_rules_scaffold": true,
     "architecture_rules_scaffold": null,
+    "precommit_hooks_scaffold": false,
     "clean_room_rule": false,
     "visual_test_discipline": null
   }
@@ -55,3 +56,4 @@ Bundle for a solo consultant working on a client codebase under NDA. Confidentia
 | `pr_template: true` | Includes the audit-trail fields (toggle-gated within the template). |
 | `branch_protection_*: null` | Client decides. |
 | `team_handoff_notes: false` | Solo on the engagement — flip ON via bundle 4 if a colleague joins. |
+| `precommit_hooks_scaffold: false` | Don't impose a hook manager on the client's toolchain — enable per their preference. |

@@ -36,6 +36,7 @@ Bundle for a team working on a client codebase. All of `client-solo` + team coor
     "dod_devlog_step": false,
     "language_specific_rules_scaffold": true,
     "architecture_rules_scaffold": null,
+    "precommit_hooks_scaffold": true,
     "clean_room_rule": false,
     "visual_test_discipline": null
   }
@@ -54,3 +55,4 @@ Bundle for a team working on a client codebase. All of `client-solo` + team coor
 | `mandatory_deep_review_before_merge: true` | Architectural changes touch shared surfaces — deep review required. |
 | `oncall_awareness: null` | Depends on whether the team has an on-call rotation — ask during setup. |
 | `contributing_md: true` | Internal team contributor guide (not public-facing, but useful for onboarding). |
+| `precommit_hooks_scaffold: true` | A shared local gate keeps the whole team's commits lint/typecheck-clean before review. |
