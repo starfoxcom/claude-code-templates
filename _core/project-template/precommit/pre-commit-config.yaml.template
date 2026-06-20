@@ -1,0 +1,43 @@
+# pre-commit configuration — https://pre-commit.com
+# Activate in this repo: pre-commit install --install-hooks
+#
+# Uses `repo: local` + `language: system` so the checks run your project's own
+# lint / typecheck / test commands (no isolated env). Tighten the entries to your
+# stack; the setup form's stack-commands chip selector auto-suggests these.
+# Placeholders are quoted so this file stays valid YAML before substitution.
+
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: lint
+        name: lint (staged files)
+        entry: "{{LINT_COMMAND}}"
+        language: system
+        stages: [pre-commit]
+        pass_filenames: true
+        # Examples (entry): npx eslint --fix | ruff check --fix | cargo fmt -- | dart format
+
+      - id: typecheck
+        name: typecheck
+        entry: "{{TYPECHECK_COMMAND}}"
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        # Examples (entry): npx tsc --noEmit | mypy . | cargo check --all-targets
+
+      - id: conventional-commit
+        name: conventional commit message
+        # $1 is the commit-message file pre-commit passes on the commit-msg stage.
+        entry: "bash -c 'grep -qE \"^(feat|fix|refactor|perf|test|docs|chore|style|data)(\\([a-z0-9_-]+\\))?: .{1,72}$\" \"$1\" || { echo \"Commit message must follow: <type>(<scope>): <imperative description> — see .claude/rules/git.md\"; exit 1; }' --"
+        language: system
+        stages: [commit-msg]
+
+      - id: tests
+        name: tests
+        entry: "{{TEST_COMMAND}}"
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        # Comment out (or drop the pre-push stage) if the suite is too slow; rely on CI instead.
