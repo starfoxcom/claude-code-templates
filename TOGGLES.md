@@ -188,7 +188,7 @@ The catalog grows monotonically — toggles get added, rarely removed. Removing 
 
 ## Adding a new value to an existing tool slot (e.g., a new `code_research` option)
 
-The five tool slots (`code_research` / `precommit` / `ci` / `ai_reviewer` / `issue_tracker`) accept user-selectable values; `code_research` ships with profile-driven hook generation in v1.3.0. To add a new option (e.g., a hypothetical `"grit"`):
+The five tool slots (`code_research` / `precommit` / `ci` / `ai_reviewer` / `issue_tracker`) accept user-selectable values; `code_research` (global hook, v1.3.0) and `precommit` (project-local config) ship with profile-driven generation. To add a new option (e.g., a hypothetical `"grit"`):
 
 1. **Configurator catalog** — add `{ key: "grit", name: "Grit", desc: "...", url: "..." }` to `TOOL_SLOTS[code_research].options` in BOTH `redesign/data.jsx` AND `index.html` (and `index.legacy.html` for parity with the v1.0.0 fallback). Run `grep -n "key: \"" redesign/data.jsx index.html index.legacy.html` to confirm parity afterwards.
 2. **Profile entry** — add a `"grit": { ... }` block to `_core/global-template/hooks/code-research-profiles.json` matching the schema documented in that file's `_schema` field (required: `filename_basename`, `bypass_marker`, `detection_mode`, `detection_target`, `sequence_bullets`; optional: `url`). Validate by parsing the JSON (`python -c "import json; json.load(open('_core/global-template/hooks/code-research-profiles.json'))"`) — must succeed.
@@ -207,7 +207,7 @@ The five tool slots (`code_research` / `precommit` / `ci` / `ai_reviewer` / `iss
    - Open the configurator (`index.html`), pick your new option, click "Bind a volume" — the downloaded zip's `SETUP.md` should reference your tool by name in the `tools.code_research` line of the embedded JSON.
    - Manually substitute the placeholders in `code-research-first.py.template` against your `grit` profile and confirm the result is valid Python (`python -c "import ast; ast.parse(open('rendered-hook.py').read())"`).
 
-If you're adding a value to `ci` / `ai_reviewer` / `issue_tracker`, those slots don't yet have profile-driven generation — until they get their own `*-profiles.json`, adding a value there is configurator-only (steps 1 + 4 + 5). The `precommit` slot **is** profile-driven (project-local profile at `_core/project-template/precommit/precommit-profiles.json`): add the option `key` in all three configurator mirrors, an entry in `precommit-profiles.json`, and a `<!-- TOGGLE:precommit:<value> -->` block in `git.md`.
+If you're adding a value to `ci` / `ai_reviewer` / `issue_tracker`, those slots don't yet have profile-driven generation — until they get their own `*-profiles.json`, adding a value there is configurator-only (steps 1 + 4 + 5). The `precommit` slot **is** profile-driven (project-local profile at `_core/project-template/precommit/precommit-profiles.json`): add the option `key` in the two primary configurator mirrors (`redesign/data.jsx` + `index.html`; `index.legacy.html` uses a keyless `<select>`), an entry in `precommit-profiles.json`, and a `<!-- TOGGLE:precommit:<value> -->` block in `git.md`.
 
 ---
 
