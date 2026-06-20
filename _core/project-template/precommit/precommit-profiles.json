@@ -1,0 +1,58 @@
+{
+  "_doc": "Per-manager profile for the precommit tool slot. The bind step (SETUP.md step 8e) picks the profile matching tools.precommit, copies template_ref into the project, substitutes {{LINT_COMMAND}}/{{TYPECHECK_COMMAND}}/{{TEST_COMMAND}}, and emits activation_command as a user instruction. See SETUP.md Phase 3 step 8e.",
+  "_schema_version": 1,
+  "_schema": {
+    "required_fields": {
+      "config_filename": "string - path written into the project repo, e.g. 'lefthook.yml', '.husky/pre-commit', '.pre-commit-config.yaml', '.simple-git-hooks.json'",
+      "config_format": "string - YAML | POSIX-sh | JSON",
+      "template_ref": "string - path under _core/project-template/precommit/ of the config template to copy",
+      "activation_command": "string - the command the USER runs to activate (emitted as instruction, never executed)",
+      "url": "string|null - homepage, feeds {{TOOLS_PRECOMMIT_URL}} + the install-hint"
+    },
+    "optional_fields": {
+      "runtime_note": "string - runtime/toolchain the user must have (shown in install-hint)",
+      "_skip_install": "bool - true for 'none' (write nothing, still run gate cleanup)",
+      "_uses_user_input": "bool - true for 'custom' (hint-only stub)"
+    }
+  },
+  "lefthook": {
+    "config_filename": "lefthook.yml",
+    "config_format": "YAML",
+    "template_ref": "precommit/lefthook.yml.template",
+    "activation_command": "lefthook install",
+    "url": "https://lefthook.dev",
+    "runtime_note": "standalone binary (brew/scoop/winget/npm/go) - no language runtime required"
+  },
+  "husky": {
+    "config_filename": ".husky/pre-commit",
+    "config_format": "POSIX-sh",
+    "template_ref": "precommit/husky-pre-commit.template",
+    "activation_command": "npm install --save-dev husky && npx husky init",
+    "url": "https://typicode.github.io/husky",
+    "runtime_note": "requires Node + package.json (activation rides the npm prepare script)"
+  },
+  "pre-commit": {
+    "config_filename": ".pre-commit-config.yaml",
+    "config_format": "YAML",
+    "template_ref": "precommit/pre-commit-config.yaml.template",
+    "activation_command": "pre-commit install",
+    "url": "https://pre-commit.com",
+    "runtime_note": "requires Python (pipx install pre-commit)"
+  },
+  "simple-git-hooks": {
+    "config_filename": ".simple-git-hooks.json",
+    "config_format": "JSON",
+    "template_ref": "precommit/simple-git-hooks.json.template",
+    "activation_command": "npx simple-git-hooks",
+    "url": "https://github.com/toplenboren/simple-git-hooks",
+    "runtime_note": "requires Node (npm devDependency)"
+  },
+  "none": {
+    "_skip_install": true,
+    "url": null
+  },
+  "custom": {
+    "_uses_user_input": true,
+    "url": "{{TOOLS_PRECOMMIT_URL}}"
+  }
+}
