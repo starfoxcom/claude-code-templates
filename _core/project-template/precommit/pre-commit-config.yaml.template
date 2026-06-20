@@ -1,5 +1,5 @@
 # pre-commit configuration — https://pre-commit.com
-# Activate in this repo: pre-commit install --install-hooks
+# Activate in this repo: pre-commit install
 #
 # Uses `repo: local` + `language: system` so the checks run your project's own
 # lint / typecheck / test commands (no isolated env). Tighten the entries to your

@@ -8,8 +8,9 @@
 # lint/typecheck. The setup form's stack-commands chip selector auto-suggests
 # these; what you see here is the structural skeleton.
 
-# Lint only the staged files (Added / Copied / Modified).
-STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+# Lint the staged files (Added / Copied / Modified / Renamed). Paths containing
+# spaces need extra quoting — tighten this for your linter if that applies.
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
 if [ -n "$STAGED" ]; then
   {{LINT_COMMAND}} $STAGED
 fi
