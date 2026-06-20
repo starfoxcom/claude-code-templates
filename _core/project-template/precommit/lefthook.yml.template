@@ -1,5 +1,5 @@
 # Lefthook — fast, language-agnostic git hooks runner
-# https://github.com/evilmartians/lefthook
+# https://lefthook.dev
 # Install: brew install lefthook  (or npm/cargo/go/scoop equivalents)
 # Activate in this repo: lefthook install
 #
