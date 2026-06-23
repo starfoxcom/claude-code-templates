@@ -237,6 +237,17 @@ jobs:
               # Pre-existing placeholder in _core/.../settings.local.json.template;
               # registered so it doesn't trip UNKNOWN_PLACEHOLDER in a scanned diff.
               'STACK_COMMANDS_ALLOWLIST',
+              # precommit slot — profile-driven config generation under
+              # _core/project-template/precommit/ (mirrors code_research). NAME/URL
+              # resolve via the generic tool-slot enumeration (SETUP.md Phase 3
+              # step 2); LINT/TYPECHECK/TEST substitute from stack_commands in
+              # SETUP.md step 8e. Registered ahead of the feature branch that
+              # introduces the templates, per the placeholder->allowlist lockstep.
+              'TOOLS_PRECOMMIT_NAME',
+              'TOOLS_PRECOMMIT_URL',
+              'LINT_COMMAND',
+              'TYPECHECK_COMMAND',
+              'TEST_COMMAND',
           }
           placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
           for fname in changed:
