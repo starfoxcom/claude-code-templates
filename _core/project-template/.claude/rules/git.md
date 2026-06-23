@@ -211,7 +211,7 @@ A feature is complete when it can be exercised end-to-end in the running app —
 <!-- TOGGLE:precommit_hooks_scaffold START -->
 ## Pre-commit hooks
 
-A local commit-time gate (lint / typecheck / conventional-commit-msg / test) scaffolded per `tools.precommit`. The bind writes the config file; activate it once with the command below. Bypass a single commit with `git commit --no-verify`.
+A local commit-time gate (lint / typecheck / conventional-commit-msg / test) scaffolded per `tools.precommit`. Bypass a single commit with `git commit --no-verify`.
 
 <!-- TOGGLE:precommit:lefthook START -->
 Pre-commit gate: **lefthook** — config `lefthook.yml`. Activate: `lefthook install`.
