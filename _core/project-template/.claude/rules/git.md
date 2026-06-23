@@ -211,25 +211,25 @@ A feature is complete when it can be exercised end-to-end in the running app —
 <!-- TOGGLE:precommit_hooks_scaffold START -->
 ## Pre-commit hooks
 
-A local commit-time gate (lint / typecheck / conventional-commit-msg / test) scaffolded per `tools.precommit`. Bypass a single commit with `git commit --no-verify`.
+`tools.precommit` selects the pre-commit manager (or `none`); the line below states the config file and activation command for that choice (for `none`, nothing is scaffolded — checks run via CI).
 
 <!-- TOGGLE:precommit:lefthook START -->
-Pre-commit gate: **lefthook** — config `lefthook.yml`. Activate: `lefthook install`.
+Pre-commit gate: **lefthook** — config `lefthook.yml`. Activate: `lefthook install`. Bypass one commit: `git commit --no-verify`.
 <!-- TOGGLE:precommit:lefthook END -->
 <!-- TOGGLE:precommit:husky START -->
-Pre-commit gate: **husky** — config `.husky/pre-commit`. Activate: `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`.
+Pre-commit gate: **husky** — config `.husky/pre-commit` (the pre-commit gate; commit-msg + pre-push hooks ship as documented opt-in siblings). Activate: `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`. Bypass one commit: `git commit --no-verify`.
 <!-- TOGGLE:precommit:husky END -->
 <!-- TOGGLE:precommit:pre-commit START -->
-Pre-commit gate: **pre-commit** — config `.pre-commit-config.yaml`. Activate: `pre-commit install`.
+Pre-commit gate: **pre-commit** — config `.pre-commit-config.yaml`. Activate: `pre-commit install`. Bypass one commit: `git commit --no-verify`.
 <!-- TOGGLE:precommit:pre-commit END -->
 <!-- TOGGLE:precommit:simple-git-hooks START -->
-Pre-commit gate: **simple-git-hooks** — config `.simple-git-hooks.json`. Activate: `npx simple-git-hooks`.
+Pre-commit gate: **simple-git-hooks** — config `.simple-git-hooks.json`. Activate: `npx simple-git-hooks`. Bypass one commit: `git commit --no-verify`.
 <!-- TOGGLE:precommit:simple-git-hooks END -->
 <!-- TOGGLE:precommit:none START -->
 No hook manager is scaffolded — run lint / typecheck / test before pushing; CI is the backstop.
 <!-- TOGGLE:precommit:none END -->
 <!-- TOGGLE:precommit:custom START -->
-Pre-commit gate: **{{TOOLS_PRECOMMIT_NAME}}** ({{TOOLS_PRECOMMIT_URL}}) — configured per its own docs.
+Pre-commit gate: **{{TOOLS_PRECOMMIT_NAME}}** ({{TOOLS_PRECOMMIT_URL}}) — configured per its own docs. Bypass one commit: `git commit --no-verify`.
 <!-- TOGGLE:precommit:custom END -->
 
 ---
