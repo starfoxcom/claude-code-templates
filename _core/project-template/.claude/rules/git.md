@@ -217,7 +217,7 @@ A local commit-time gate (lint / typecheck / conventional-commit-msg / test) sca
 Pre-commit gate: **lefthook** — config `lefthook.yml`. Activate: `lefthook install`.
 <!-- TOGGLE:precommit:lefthook END -->
 <!-- TOGGLE:precommit:husky START -->
-Pre-commit gate: **husky** — config `.husky/pre-commit`. Activate: `npm install --save-dev husky && npx husky init`.
+Pre-commit gate: **husky** — config `.husky/pre-commit`. Activate: `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`.
 <!-- TOGGLE:precommit:husky END -->
 <!-- TOGGLE:precommit:pre-commit START -->
 Pre-commit gate: **pre-commit** — config `.pre-commit-config.yaml`. Activate: `pre-commit install`.
