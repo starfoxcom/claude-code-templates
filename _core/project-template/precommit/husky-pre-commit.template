@@ -1,8 +1,10 @@
 # Husky pre-commit hook — fast, language-agnostic checks before each commit
 # https://typicode.github.io/husky
 #
-# Activate in this repo: npm install --save-dev husky && npx husky init
-# (husky v9+: a hook is a plain shell script — no sourcing boilerplate needed.)
+# Activate in this repo: npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare
+# (husky v9+: a hook is a plain shell script — no sourcing boilerplate needed. We
+#  set + run the prepare script rather than `husky init`, which would overwrite
+#  this hook with a sample.)
 #
 # This template is generic. Tighten the commands to your project's actual
 # lint/typecheck. The setup form's stack-commands chip selector auto-suggests

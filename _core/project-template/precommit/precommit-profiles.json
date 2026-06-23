@@ -27,7 +27,7 @@
     "config_filename": ".husky/pre-commit",
     "config_format": "POSIX-sh",
     "template_ref": "precommit/husky-pre-commit.template",
-    "activation_command": "npm install --save-dev husky && npx husky init",
+    "activation_command": "npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare",
     "url": "https://typicode.github.io/husky",
     "runtime_note": "requires Node + package.json (activation rides the npm prepare script)"
   },
