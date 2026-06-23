@@ -48,7 +48,7 @@ Legend: ✅ on by default · ❌ off by default · ⚙️ asked during interview
 | `dod_devlog_step` | Section in `session-close.md` (devlog drafts on milestone close) | ❌ | ❌ | ❌ | ❌ |
 | `language_specific_rules_scaffold` | `.claude/rules/code-style.md` scaffolded from codebase audit | ✅ | ✅ | ✅ | ✅ |
 | `architecture_rules_scaffold` | `.claude/rules/architecture.md` scaffolded from codebase audit | ⚙️ | ⚙️ | ⚙️ | ⚙️ |
-| `precommit_hooks_scaffold` | Pre-commit hook config for `tools.precommit` (lefthook / husky / pre-commit / simple-git-hooks) with lint/typecheck/commit-msg/test hooks | ❌ | ✅ | ❌ | ✅ |
+| `precommit_hooks_scaffold` | Pre-commit hook config for `tools.precommit` (lefthook / husky / pre-commit / simple-git-hooks): lint/typecheck on commit, plus commit-msg/test where the manager scaffolds them | ❌ | ✅ | ❌ | ✅ |
 | `clean_room_rule` | `.claude/rules/clean-room.md` (spiritual-successor / derived-from-prior-art projects) | ❌ | ❌ | ❌ | ❌ |
 | `visual_test_discipline` | `.claude/rules/visual.md` (UI/visual projects) | ⚙️ | ⚙️ | ⚙️ | ⚙️ |
 
