@@ -1,5 +1,5 @@
 # Lefthook — fast, language-agnostic git hooks runner
-# https://github.com/evilmartians/lefthook
+# https://lefthook.dev
 # Install: brew install lefthook  (or npm/cargo/go/scoop equivalents)
 # Activate in this repo: lefthook install
 #
@@ -29,7 +29,7 @@ commit-msg:
   commands:
     conventional-commits:
       # Enforce conventional commit format: type(scope): subject
-      # Allowed types align with .claude/rules/git.md (feat / fix / refactor / perf / test / docs / chore / style)
+      # Allowed types align with .claude/rules/git.md (feat / fix / refactor / perf / test / docs / chore / style / data)
       run: |
         grep -qE '^(feat|fix|refactor|perf|test|docs|chore|style|data)(\([a-z0-9_\-]+\))?: .{1,72}$' {1} || {
           echo "❌ Commit message must follow: <type>(<scope>): <imperative description>"
