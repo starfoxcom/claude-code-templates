@@ -1,0 +1,5 @@
+{
+  "pre-commit": "{{LINT_COMMAND}} && {{TYPECHECK_COMMAND}}",
+  "commit-msg": "grep -qE '^(feat|fix|refactor|perf|test|docs|chore|style|data)(\\([a-z0-9_-]+\\))?: .{1,72}$' \"$1\" || { echo 'Commit message must follow: <type>(<scope>): <imperative description> - see .claude/rules/git.md'; exit 1; }",
+  "pre-push": "{{TEST_COMMAND}}"
+}

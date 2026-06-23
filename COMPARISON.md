@@ -79,6 +79,7 @@ If your project is between two bundles (e.g., personal project that *might* have
 - **Architecture rules** — same reason. Scaffolded after audit.
 - **Test framework specifics** — same.
 - **Linter/formatter config** — outside Claude Code's scope; use your language's idiomatic tools.
-- **Pre-commit hooks** — recommended (Husky / pre-commit / lefthook) but not bundled because they vary by ecosystem.
+
+(**Pre-commit hooks** used to live here, but the `precommit` slot is now profile-driven: the bind writes the chosen manager's config — lefthook / husky / pre-commit / simple-git-hooks — and tells you the one command to activate it, without running any installs.)
 
 The bundles deliberately ship the **process discipline**, not the **language opinions**. The bootstrap prompt fills in the language-specific layer after seeing your actual codebase.
