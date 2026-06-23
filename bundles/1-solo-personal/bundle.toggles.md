@@ -36,6 +36,7 @@ Bundle for solo devs on personal / portfolio projects. The default toggle set ta
     "dod_devlog_step": false,
     "language_specific_rules_scaffold": true,
     "architecture_rules_scaffold": null,
+    "precommit_hooks_scaffold": false,
     "clean_room_rule": false,
     "visual_test_discipline": null
   }
@@ -55,3 +56,4 @@ Bundle for solo devs on personal / portfolio projects. The default toggle set ta
 | `confidentiality_rule: false` | Your project, your data. |
 | `memory_system: true` | Highest-leverage feature for a solo workflow. |
 | `dod_devlog_step: false` | Flip ON only if you publish a dev log. |
+| `precommit_hooks_scaffold: false` | Local hooks add commit friction for a solo flow — enable the scaffold (lefthook/husky/…) on demand. |

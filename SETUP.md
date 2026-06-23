@@ -45,7 +45,7 @@ The templates live at ./claude-code-templates/ (or wherever the user unzipped th
 1. **Locate templates.** Expect them at `./claude-code-templates/` by default. If not there, ask the user where they unzipped (don't assume).
 2. **Parse the JSON.** Validate required fields: `bundle`, `project.name`, `project.repo_url`, `project.main_branch`, `project.dev_branch`, `toggles`. If any field is `null` or missing, run a short interview to fill it — never assume. For backwards-compat with manifests produced before the v1.x rename: if `dev_branch` is missing but `developer_branch` or `default_branch` is present, accept it and warn.
 3. **Cross-check bundle.** Read `claude-code-templates/bundles/<bundle>/bundle.toggles.md` to confirm the bundle exists and to know its expected toggle set. For any toggle in the catalog NOT present in the user's JSON, fall back to the bundle default.
-4. **Cross-check toggles + tool-slot values.** Every key in `toggles` must be in `TOGGLES.md`'s catalog. Unknown keys → reject with the offending names. Every `tools.<slot>` value must be in the configurator catalog (`redesign/data.jsx` `TOOL_SLOTS[<slot>].options[].key`) — for slots with profile-driven generation (currently `code_research`), the value must additionally match a key in the slot's profile JSON. Unknown values → reject with: "`tools.<slot>` value `<value>` is not in the catalog. Valid keys: <list>. If this was a hand-edit, pick a catalog value or use `Other` (resolves to `custom`)."
+4. **Cross-check toggles + tool-slot values.** Every key in `toggles` must be in `TOGGLES.md`'s catalog. Unknown keys → reject with the offending names. Every `tools.<slot>` value must be in the configurator catalog (`redesign/data.jsx` `TOOL_SLOTS[<slot>].options[].key`) — for slots with profile-driven generation (`code_research` → `_core/global-template/hooks/code-research-profiles.json`; `precommit` → `_core/project-template/precommit/precommit-profiles.json`), the value must additionally match a key in the slot's profile JSON — **except** the literal value `"custom"`, which is always valid for any slot (it is the canonical resolution of the configurator's generic "Other" choice, even when the slot's options array carries no explicit `custom` key). Unknown values → reject with: "`tools.<slot>` value `<value>` is not in the catalog. Valid keys: <list>. If this was a hand-edit, pick a catalog value or use `Other` (resolves to `custom`)."
 
    **Backward-compat alias map** (handle deprecated toggle names that downstream users may have in their manifests; mirrors the `developer_branch`/`default_branch` precedent):
    - `code_research_first` is the canonical toggle name. `tokensave_entry_point` is its deprecated legacy alias (from the tokensave-only era), still accepted so manifests bound before the rename keep working. Alias-resolution behavior:
@@ -109,9 +109,15 @@ Read these sources, in order:
     - `ast-grep`, `src`, or `semgrep` binary on PATH → `tools.code_research` to the matching tool, `code_research_first: true`
     - Multiple signals → ask the user which to use as the primary; default to tokensave > ast-grep > sourcegraph > semgrep > ctags in priority order
     - No signal → `tools.code_research: "none"`, `code_research_first: false` (the user can still flip this in the plan-confirmation step)
-12. **`.github/workflows/`** existence → `github_actions_*: true`
-13. **`CODEOWNERS`** existence → likely multi-dev / client-team
-14. **README mentions of "team" / "client" / "we" / "I"** → bundle heuristic (not definitive — bundle is always user-confirmed)
+12. **Pre-commit hooks detection** → infer `tools.precommit` AND `precommit_hooks_scaffold` (mirrors step 11's tool+gate dual-set):
+    - `lefthook.yml` / `.lefthook.yml` present → `tools.precommit: "lefthook"`, `precommit_hooks_scaffold: true`
+    - `.husky/` directory present → `tools.precommit: "husky"`, `precommit_hooks_scaffold: true`
+    - `.pre-commit-config.yaml` present → `tools.precommit: "pre-commit"`, `precommit_hooks_scaffold: true`
+    - `.simple-git-hooks.json` present, or a `simple-git-hooks` key in `package.json` → `tools.precommit: "simple-git-hooks"`, `precommit_hooks_scaffold: true`
+    - No signal → `tools.precommit: "none"`, `precommit_hooks_scaffold: false` (the user can still flip this in the plan-confirmation step)
+13. **`.github/workflows/`** existence → `github_actions_*: true`
+14. **`CODEOWNERS`** existence → likely multi-dev / client-team
+15. **README mentions of "team" / "client" / "we" / "I"** → bundle heuristic (not definitive — bundle is always user-confirmed)
 
 #### Step 2 — Build the inference table
 
@@ -363,10 +369,13 @@ On `apply`:
 8d. **Apply issue templates** if `github_issue_templates` is ON:
    - Copy `_core/project-template/.github/ISSUE_TEMPLATE/` (full directory). Substitute `{{REPO_URL}}` in `config.yml`.
 
-8e. **Apply pre-commit hooks scaffold** if `precommit_hooks_scaffold` is ON:
-   - Copy `_core/project-template/lefthook.yml.template` → `lefthook.yml`.
-   - Substitute `{{LINT_COMMAND}}` / `{{TYPECHECK_COMMAND}}` / `{{TEST_COMMAND}}` based on `stack_commands` (use the user's `lint` / typecheck / `test` values; leave as `{{...}}` placeholder if not provided and note the user must fill them).
-   - Tell the user: *"Run `lefthook install` once after this setup to activate the hooks. Install lefthook first if needed (brew/scoop/npm/cargo/go binary)."*
+8e. **Apply pre-commit hooks scaffold** if `precommit_hooks_scaffold` is ON. This is **profile-driven** off `tools.precommit` (mirrors the `code_research` slot): look up the matching profile in `_core/project-template/precommit/precommit-profiles.json`, then —
+   - **`tools.precommit: "none"`** (profile `_skip_install: true`) → write nothing and skip the rest of this step. The gate being ON with no manager selected is a deliberate no-op (mirrors `code_research: "none"`).
+   - **`tools.precommit: "Other"` / custom** (profile `_uses_user_input: true`) → write nothing; tell the user: *"Configure your chosen pre-commit tool (the name you supplied) per its own documentation to run lint / typecheck / test on commit — we don't scaffold a config for custom tools."*
+   - **Any catalogued manager** (`lefthook` / `husky` / `pre-commit` / `simple-git-hooks`) → from its profile entry:
+     - Copy `_core/project-template/<template_ref>` → the profile's `config_filename` in the project root (e.g. `lefthook` → `lefthook.yml`; `husky` → `.husky/pre-commit`; `pre-commit` → `.pre-commit-config.yaml`; `simple-git-hooks` → `.simple-git-hooks.json`).
+     - Substitute `{{LINT_COMMAND}}` / `{{TYPECHECK_COMMAND}}` / `{{TEST_COMMAND}}` based on `stack_commands` (use the user's `lint` / typecheck / `test` values; leave as `{{...}}` placeholder if not provided and note the user must fill them).
+     - **Emit, never execute** (the bind writes config + instructs; it does not run `npm`/`pip`/installs): tell the user *"Run `<activation_command>` once after this setup to activate the hooks. `<runtime_note>`. See `<url>`."* — taking `activation_command`, `runtime_note`, and `url` verbatim from the profile (e.g. `lefthook install`; `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`; `pre-commit install`; `npx simple-git-hooks`).
 
 8f. **Apply architecture-graph skill** if `architecture_diagram_skill` is ON:
    - The skill file is already copied via the universal copy step. No additional action beyond ensuring it's at `.claude/skills/architecture-graph/SKILL.md`. The user invokes `/architecture-graph` when ready.
