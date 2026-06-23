@@ -5,7 +5,7 @@
     "required_fields": {
       "config_filename": "string - path written into the project repo, e.g. 'lefthook.yml', '.husky/pre-commit', '.pre-commit-config.yaml', '.simple-git-hooks.json'",
       "config_format": "string - YAML | POSIX-sh | JSON",
-      "template_ref": "string - path under _core/project-template/precommit/ of the config template to copy",
+      "template_ref": "string - path relative to _core/project-template/ (i.e. carries the precommit/ prefix), e.g. 'precommit/lefthook.yml.template'; SETUP.md step 8e copies _core/project-template/<template_ref>",
       "activation_command": "string - the command the USER runs to activate (emitted as instruction, never executed)",
       "url": "string|null - homepage, feeds {{TOOLS_PRECOMMIT_URL}} + the install-hint"
     },
