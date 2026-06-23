@@ -2,6 +2,7 @@
   "_doc": "Per-manager profile for the precommit tool slot. The bind step (SETUP.md step 8e) picks the profile matching tools.precommit, copies template_ref into the project, substitutes {{LINT_COMMAND}}/{{TYPECHECK_COMMAND}}/{{TEST_COMMAND}}, and emits activation_command as a user instruction. See SETUP.md Phase 3 step 8e.",
   "_schema_version": 1,
   "_schema": {
+    "_note": "required_fields apply to catalogued manager entries; entries with _skip_install:true (e.g. none) or _uses_user_input:true (e.g. custom) are exempt and carry only url.",
     "required_fields": {
       "config_filename": "string - path written into the project repo, e.g. 'lefthook.yml', '.husky/pre-commit', '.pre-commit-config.yaml', '.simple-git-hooks.json'",
       "config_format": "string - YAML | POSIX-sh | JSON",
