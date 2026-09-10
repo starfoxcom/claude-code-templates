@@ -154,3 +154,13 @@ After merging, start a fresh Claude Code session in any project and ask:
 > "What's the no-Explore-agents-for-code-research rule, and where is per-project memory stored?"
 
 Claude should answer from the global `~/.claude/CLAUDE.md`, not by reading files. If it answers correctly, the global setup is good.
+
+## 4. Delegation ladder (optional, recommended on a subscription)
+
+`agents/` holds three pinned subagents (`builder`, `scribe`, `runner`) and `rules/delegation.md` the loop that uses them: the main session writes a spec, the cheaper pinned agent builds, the main session reviews the diff with a binary verdict, at most two fix rounds go back to the same agent. Install:
+
+1. Copy `agents/*.md` to `~/.claude/agents/` and `rules/delegation.md` to `~/.claude/rules/`.
+2. Add `"CLAUDE_CODE_SUBAGENT_MODEL": "claude-sonnet-5"` under `env` in `~/.claude/settings.json` so unpinned subagents and workflow agents inherit the cheap rung.
+3. Optional per-prompt reminder under `hooks.UserPromptSubmit`: a `node -e "console.log('[delegation] ...')"` line pointing at the rule.
+
+The model and effort pins come from a measured nine-arm sweep (Sonnet 5 low/medium/high/xhigh/max, Sonnet 4.6 low/medium/high/max, blind judges): Sonnet 5 at medium won on quality per token; Sonnet 5 low delivered nothing on a build task; Sonnet 4.6 runs at 200k only on a subscription and trailed. Re-run the sweep when a new Sonnet generation lands.
