@@ -22,7 +22,9 @@ Rename the project to **Bindwright** and rebuild it so the path from "land on th
 | Page tech | Plain HTML, CSS and JS. No React, no in-browser Babel, no build step. |
 | Look | Dark graphite with tactile key controls. The answer combo's hue is the only accent. See `DESIGN.md` and `mockup.html`. |
 | Choices | Two questions (just me or a team; my project or a client's) plus an Advanced drawer with at most seven switches. |
-| Bind | Deterministic. The page renders `_core/` in the browser and the zip is a ready overlay for the repo root. Claude only does judgment work afterward (`TAILOR.md`, about 5 KB). |
+| Bind | Deterministic. Decided 2026-09-24: Bindwright ships as a Claude Code plugin. The page ends in a setup code; `/bindwright:setup <code>` renders `_core/` in the repo with the plugin's own engine and templates, then does the judgment work (merge existing `CLAUDE.md`, README and friends, fill real lint and test commands, trim the code-size table to the repo's languages, offer the `~/.claude` extras). A zip download stays as the fallback for people without plugins. |
+| Previews | Three live panes on the page: (1) the files the setup produces; (2) a small TypeScript demo app with planted problems, shown before and after for every setting that has a visible effect, as red and green diffs; (3) a Claude Code terminal replay of skills and rules in action, with and without Bindwright, chosen from a list of scenario prompts. Panes 2 and 3 come only from real recorded runs: session logs replayed as a terminal chat, never hand-written. Each recording stores a hash of the files it exercised, and a test fails when they change so stale demos cannot ship. |
+| Plugin lifecycle | `/bindwright:update` rebuilds with the answers saved in `.bindwright/` and a three-way merge against the stored pristine render, so hand edits are never overwritten silently. A once-a-day SessionStart notice (cached, silent offline) says when the plugin or the repo's files are behind. `/bindwright:audit` reads recent session logs, measures how the rules hold up, and proposes exact edits that apply only on approval. |
 | Review gate | One required check, "Review gate". Shared logic in `.github/scripts/review_gate.py`, settings in `.github/review-gate.yml` and repo variables, so the workflow file is identical for every user. Primary model Fable 5.1 (low effort), one-shot fallback Opus 5.5 (medium). |
 | Code-research tools | Offer tokensave, Claude Code LSP plugins, CodeGraph, Serena, codebase-memory-mcp, none, and custom. Drop Semgrep, Sourcegraph and ctags (wrong category or audience). Each tool is a small data profile, not install prose. See `research/code-research-tools.md`. |
 | Guard hooks | Ship in the repo (`.claude/hooks/`), registered in the committed `.claude/settings.json`, with `attribution` turned off, so cloud sessions and teammates get them. |
@@ -39,11 +41,12 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 
 ### Phase 1: engine
 - [x] New answer model: two questions, advanced switches, presets kept internal. Delete dead toggles and dead tool slots; bake in the always-same toggles.
-- [ ] Deterministic renderer (browser JS, plus a stdlib Python twin for CI tests) that resolves toggle blocks and placeholders against `_core/`.
+- [x] Deterministic renderer (browser JS) that resolves toggle blocks and placeholders against `_core/`.
+- [ ] Engine runtime inside the plugin: Node or a stdlib Python twin, whichever every Claude Code install can run. Research first.
 - [ ] Code-research tool profiles (data file) replacing the SETUP.md hook-install prose.
-- [ ] `TAILOR.md` replaces SETUP.md. `install-global.py` handles `~/.claude` changes.
-- [ ] Rules trimmed to one owner per concept (about 200 always-loaded lines), `paths:` scoping, new rules: task-tracking, testing, code-size (language profiles), shipped-text (toggle). Fix the squash and self-merge contradictions. Monitor-based CI watching replaces polling loops.
-- [ ] Skills updated from Emberholm and Stockra (stop conditions, cascade step, `--body-file`, measured adherence). `architecture-graph` becomes an add-on.
+- [ ] Plugin skeleton (`plugin/`: `plugin.json`, skills, engine, templates) and `/bindwright:setup` (replaces `SETUP.md` and the planned `TAILOR.md`; installs `~/.claude` extras only with consent). Setup-code format shared with the page.
+- [x] Rules trimmed to one owner per concept (about 200 always-loaded lines), `paths:` scoping, new rules: task-tracking, testing, code-size (language profiles), shipped-text (toggle). Fix the squash and self-merge contradictions. Monitor-based CI watching replaces polling loops.
+- [x] Skills updated from Emberholm and Stockra (stop conditions, cascade step, `--body-file`, measured adherence). `architecture-graph` is held out of setups until it returns as an add-on.
 - [ ] Repo-level hooks and `attribution` settings (this repo first, then canonical).
 
 ### Phase 2: review gate v2
@@ -52,13 +55,23 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 - [ ] `scripts/setup-review-gate.sh` (labels, merge settings, ruleset, secret, App check) with a read-only `--check` mode used by session-start.
 - [ ] Canonical templates follow the prototype once it has run on real PRs.
 
+### Phase 2b: plugin lifecycle
+- [ ] `.bindwright/` state: saved answers, template version, pristine render for three-way merges.
+- [ ] `/bindwright:update` and the daily SessionStart notice.
+- [ ] `/bindwright:audit`: measurements from session logs, proposed edits applied on approval.
+- [ ] Marketplace: own marketplace first, then a community-marketplace submission.
+
 ### Phase 3: the page
 Built in visual slices of about 150 lines each, checked locally by the maintainer before any push.
 - [ ] Shell, tokens, fonts, header, theme.
 - [ ] Two-question picker with key controls and the hue accent.
 - [ ] Live file tree and file preview driven by the renderer.
+- [ ] Demo project (`demo/`): a small TypeScript app with one planted problem per rule that has a visible effect.
+- [ ] Recording harness: headless Claude Code runs per scenario, with and without Bindwright, saved as sanitized replay data with the staleness hash test.
+- [ ] Demo pane: before and after diffs per setting.
+- [ ] Terminal pane: scenario picker and replay of recorded sessions.
 - [ ] Advanced drawer, URL state and Share link.
-- [ ] Download, review panel, mobile bottom bar.
+- [ ] Setup code, zip fallback, review panel, mobile bottom bar.
 - [ ] Secondary pages: compare, all settings, how it works.
 
 ### Phase 4: rename and release
