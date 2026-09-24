@@ -65,17 +65,6 @@ Generate a new `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` (rename the 
 
 If applicable, update `CLAUDE.md`, `README.md`, and any touched module's `ROADMAP.md` with relevant changes. Clearly indicate which sections changed.
 
-<!-- TOGGLE:dod_devlog_step START -->
-### Devlog draft (only when a milestone just closed)
-
-Triggered only when the DoD verification step just flipped a milestone to ✅. Skipped for routine sessions, hotfixes, releases, or partial-milestone sessions.
-
-1. Create `devlog/posts/<NNNN>-<slug>/` (next sequential number; slug = milestone topic).
-2. Copy from `devlog/posts/0000-template/` and fill in `post.md` from the milestone DoD checklist + new context file.
-3. Commit drafts with `docs(devlog): draft post for M<N>`.
-4. **Stop there.** The user reviews and publishes manually — never auto-push to external services.
-<!-- TOGGLE:dod_devlog_step END -->
-
 <!-- TOGGLE:code_research_first START -->
 ### Code-research adherence metric
 

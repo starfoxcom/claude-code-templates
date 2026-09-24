@@ -90,6 +90,38 @@ test("license body is filled with holder and year", async () => {
   assert.match(license, /Copyright \(c\) 2026 Ada Lovelace/);
 });
 
+test("merge style picks the matching merge command", async () => {
+  for (const style of ["squash", "merge", "rebase"]) {
+    const a = defaults();
+    a.advanced.mergeStyle = style;
+    const git = (await run(a)).get(".claude/rules/git.md");
+    assert.match(git, new RegExp(`gh pr merge <pr> --${style} --delete-branch`));
+    for (const other of ["squash", "rebase"].filter((s) => s !== style)) {
+      assert.doesNotMatch(git, new RegExp(`gh pr merge <pr> --${other}`), `${style} bind mentions --${other}`);
+    }
+    assert.match(git, /Release PRs .* always use `--merge`/, "gitflow releases stay merge commits");
+  }
+});
+
+test("default-branch choice flips the workflow-change guidance", async () => {
+  const a = defaults();
+  const mainDefault = (await run(a)).get(".claude/rules/git.md");
+  assert.match(mainDefault, /lands on `main` first as a `hotfix\/<name>` PR/);
+  a.advanced.devIsDefault = true;
+  const devDefault = (await run(a)).get(".claude/rules/git.md");
+  assert.match(devDefault, /workflow changes are ordinary work PRs into `develop`/);
+  assert.doesNotMatch(devDefault, /always pass `--base develop`/);
+});
+
+test("rules carry no stale model names or polling loops", async () => {
+  const files = await run(defaults({ team: true, client: true }));
+  for (const [path, text] of files) {
+    if (!path.startsWith(".claude/rules/") && !path.endsWith("CONTRIBUTING.md")) continue;
+    assert.doesNotMatch(text, /\b(Sonnet|Opus)\b/, `${path} names a model`);
+    assert.doesNotMatch(text, /sleep 420/, `${path} teaches a sleep loop`);
+  }
+});
+
 test("bad answers are rejected", async () => {
   const a = defaults();
   a.project.name = "../escape";

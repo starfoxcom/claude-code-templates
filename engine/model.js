@@ -36,6 +36,7 @@ export function defaults({ team = false, client = false } = {}) {
       cleanRoom: false,
       codeResearch: "none",
       branching: "gitflow",
+      devIsDefault: false,
       mergeStyle: "squash",
       architecture: "none",
     },
@@ -56,6 +57,7 @@ export function validate(a) {
   check(ARCHITECTURES.includes(adv.architecture), `unknown architecture "${adv.architecture}"`);
   check(["gitflow", "trunk"].includes(adv.branching), `unknown branching model "${adv.branching}"`);
   check(["squash", "merge", "rebase"].includes(adv.mergeStyle), `unknown merge style "${adv.mergeStyle}"`);
+  check(typeof adv.devIsDefault === "boolean", "devIsDefault must be true or false");
   return a;
 }
 
@@ -73,19 +75,18 @@ export function flagsFor(a) {
     precommit_hooks_scaffold: adv.precommit !== "none",
     branching_model_gitflow: adv.branching === "gitflow",
     branching_model_trunk: adv.branching === "trunk",
+    default_branch_is_dev: adv.branching === "gitflow" && adv.devIsDefault,
     contributing_md: a.team,
-    oncall_awareness: false,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
     context_refresh_files: true,
     lazy_rules_folder: true,
     memory_system: true,
-    dod_devlog_step: false,
   };
 }
 
 export function choicesFor(a) {
-  return { code_research: a.advanced.codeResearch, precommit: a.advanced.precommit };
+  return { code_research: a.advanced.codeResearch, precommit: a.advanced.precommit, merge_style: a.advanced.mergeStyle };
 }
 
 function upperSnake(s) {
@@ -103,7 +104,7 @@ export function valuesFor(a, { year = new Date().getFullYear() } = {}) {
     YEAR: year,
     MAIN_BRANCH: "main",
     DEV_BRANCH: gitflow ? "develop" : "main",
-    DEFAULT_BRANCH: "main",
+    DEFAULT_BRANCH: gitflow && a.advanced.devIsDefault ? "develop" : "main",
     GITFLOW_OR_TRUNK: gitflow ? "gitflow" : "trunk",
     REVIEW_ROUTINE_MODEL: REVIEW_MODELS.routine,
     REVIEW_DEEP_MODEL: REVIEW_MODELS.deep,
