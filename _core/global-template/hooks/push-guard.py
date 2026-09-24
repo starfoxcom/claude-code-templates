@@ -97,7 +97,7 @@ REDIRECT_MARK = str.maketrans("<>&", "\ue000\ue001\ue002")
 UNMARK = str.maketrans("\ue000\ue001\ue002", "<>&")
 
 
-def scan(command, tool, text=False):
+def scan(command, tool, text=False, keywords=True):
     """Split a command at unquoted separators and drop comments. A separator
     inside a substitution (`$(...)`, backticks, `${...}`, `<(...)`, PowerShell
     `$(...)` and `@(...)`) does not end the statement around it, and a Bash
@@ -183,11 +183,12 @@ def scan(command, tool, text=False):
             nested = {"`": None, "${": "{"}.get(kind, "(")
             # A `case` statement's patterns end in `)`, which must not close
             # the group; count `case` and `esac` in command position.
-            keyword = re.match(r"(case|esac)(?=[\s;)]|$)", command[i:i + 5]) if ch in "ce" else None
+            keyword = re.match(r"(case|esac)(?=[\s;)]|$)", command[i:i + 5]) if keywords and ch in "ce" else None
             # `^` may only match at the group's own start, so a cut-off window
-            # gets a leading word character.
+            # gets a leading word character. A `then`, `do`, `else` or `elif`
+            # before it counts only when it is itself in command position.
             window = command[start:i] if i - start <= 40 else "x" + command[i - 40:i]
-            if keyword and re.search(r"(^|[;&|(\n]|(^|\s)(then|do|else|elif|in))[ \t]*$", window):
+            if keyword and re.search(r"(^|[;&|(\n])[ \t]*((then|do|else|elif)[ \t]+)?$", window):
                 stack[-1][4] = cases + 1 if keyword.group(1) == "case" else max(cases - 1, 0)
                 i += 4
                 continue
@@ -612,6 +613,10 @@ def check(command, tool, depth=0):
     if not re.search(r"push|send-pack", bare, re.I) or len(command) > MAX_COMMAND:
         return None
     parts, groups, readable = scan(command, tool)
+    # A miscounted `case` keeps a group open; a second reading without `case`
+    # counting closes each group at its first `)`.
+    if not readable:
+        parts, groups, readable = scan(command, tool, keywords=False)
     if not readable:
         return None
     deleted = set()

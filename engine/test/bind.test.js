@@ -451,6 +451,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "x=$(case $y in a) echo a;; b) echo b;; esac); git push -qf origin main",
     "x=$(" + "echo a; ".repeat(10) + "case $y in a) echo a;; esac); git push -qf origin main",
     "x=$(grep -in case f); git push -qf origin main",
+    "x=$(echo just in case); git push -qf origin main", "x=$(echo do case); git push -qf origin main",
     "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case where the lock is stale\nEOF\n)\" && git push -f origin main",
     // In an unquoted heredoc body, quotes and `#` are text and `$(...)` still runs.
     "cat <<EOF\ndon't\n$(git push -qf origin main)\nEOF", "cat <<EOF\n# $(git push -qf origin main)\nEOF",
