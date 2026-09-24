@@ -335,7 +335,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
-    "git push origin main `\n-qf"];
+    "git push origin main `\n-qf",
+    // In PowerShell 7 a mid-line `&` starts a background job and ends the statement; so does a lone CR.
+    "git commit -m wip & git push -qf origin main", "echo x & git push -qf origin main",
+    "Write-Output x & git push -qf origin main", "git commit -m wip\rgit push -qf origin main"];
   // Silent passes: pushes on the allow-list, commands that never push, and text that only mentions one.
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",

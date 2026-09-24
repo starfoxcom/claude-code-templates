@@ -433,7 +433,7 @@ On `apply`:
     - List every file declared in the plan and confirm it exists at its destination path.
     - If any check fails, report immediately. Do not amend silently.
 
-12. **Report a summary** to the user: files created, sections stripped, files deleted/skipped, files scaffolded, the commit SHA, and the `~/.claude/` merge result.
+12. **Report a summary** to the user: files created, sections stripped, files deleted/skipped, files scaffolded, the commit SHA, the `~/.claude/` merge result, and the push guard result (installed with which interpreter, or skipped and what was cleaned up, and whether safe pushes now skip the prompt in every project).
 
 12a. **Surface post-bind GitHub configuration** (only if `github_actions_routine_review` OR `github_actions_deep_review` is ON). The installed workflow files are no-ops until the user does both of the following via the GitHub UI — these steps Claude **cannot** perform during setup, so they MUST be enumerated explicitly in the summary (do not bury them in "see the workflow file's header comment"):
 

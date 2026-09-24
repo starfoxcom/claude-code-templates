@@ -137,8 +137,13 @@ def scan(command, tool):
             current = []
             i += 2
             continue
-        elif ch in ";|\n" or (ch == "&" and tool != "PowerShell" and command[i - 1:i] not in "<>"
-                               and command[i + 1:i + 2] != ">"):
+        # A lone `&` ends a statement in both shells (in PowerShell 7 it starts a
+        # background job), except inside a redirect like `2>&1` and, in
+        # PowerShell, as the call operator at the start of a statement. A lone
+        # carriage return also ends a PowerShell statement.
+        elif (ch in ";|\n" or (ch == "\r" and tool == "PowerShell")
+              or (ch == "&" and command[i - 1:i] not in "<>" and command[i + 1:i + 2] != ">"
+                  and (tool != "PowerShell" or "".join(current).strip()))):
             parts.append("".join(current))
             current = []
             i += 1
