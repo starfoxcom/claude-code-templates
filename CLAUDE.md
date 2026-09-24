@@ -65,9 +65,10 @@ Per `.claude/rules/token-efficiency.md` (resolved from canonical `_core/project-
 - **Command timeout scaling.** Default starting timeout for builds: 420 000 ms. Each retry escalates by 120 000 ms.
 - **Never use `gh run watch`.** Always poll `gh run list` with a background loop — see the canonical pattern in the rule file.
 - **CI polling cadence is fixed by PR class, and ALL cadences run in the background.** Use the Bash tool with `run_in_background: true` and an until-loop — never foreground-sleep. The harness notifies on exit; pick up other work while CI runs.
-  - **Fast-path / auto-pass PRs** (docs-only, rules-only, anything `triage` classifies non-reviewable) — background until-loop with `sleep 90` per check, then `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (auto-passes via `if: always()`), `Claude On-Demand: SKIPPED` (`evaluate-review-outcome` PATCHes the deep check for non-reviewable diffs). Auto-merge with `gh pr merge <pr> --squash --admin`.
-  - **Normal-review PRs** — background until-loop with `sleep 420` (7 minutes) between checks. Read the routine reviewer's verdict comment via `gh pr view <pr> --json comments` and act on the last non-empty 🟢/🔴 line. On 🟢, merge with `--squash --admin` (`--merge` for release and cascade PRs); on 🔴, fix on the PR branch and push.
-  - **Workflow-touching PRs** (`.github/workflows/claude-code-review.yml` only) — same 7-minute background loop. Expect `Workflow validation failed` because App auth blocks the action. (Edits to `claude.yml` alone do NOT trip this — claude.yml runs from the default branch's version on `issue_comment` events, so the running workflow file always matches the default branch and OIDC passes.) Confirm via `gh run view --job <id> --log-failed` (look for `Workflow validation failed`), then `--admin` merge. This is the ONLY scenario where `--admin` is justified pre-verdict; for all other PRs, wait for the comment.
+  - **Fast-path / auto-pass PRs** (docs-only, rules-only, anything `triage` classifies non-reviewable) — background until-loop with `sleep 90` per check, then `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (auto-passes via `if: always()`), `Claude On-Demand: SKIPPED` (`evaluate-review-outcome` PATCHes the deep check for non-reviewable diffs). Merge with `gh pr merge <pr> --squash` once the PR reports `CLEAN`.
+  - **Normal-review PRs** — background until-loop with `sleep 420` (7 minutes) between checks. Read the routine reviewer's verdict comment via `gh pr view <pr> --json comments` and act on the last non-empty 🟢/🔴 line. On 🟢, merge with `--squash` (`--merge` for release and cascade PRs); on 🔴, fix on the PR branch and push.
+  - **Workflow-only PRs** (only `.github/workflows/` files) — triage never reviews workflow files, so these pass both checks like a docs PR. The review action would refuse to run anyway: it requires the PR's workflow file to match the default branch's. Keep workflow edits in a PR of their own with no reviewable files, show the maintainer the diff, and merge only after they have read it.
+- **No admin bypass, ever.** Never `gh pr merge --admin`. The rulesets have no bypass actors; `BLOCKED` means find and fix the cause.
 - **Branch cleanup after every merge.** Delete the branch BOTH locally and on remote. Chain `git branch -D <name> && git push origin --delete <name>` into the post-merge sequence — `gh pr merge --delete-branch` only handles remote.
 - **Auto-merge on paths-ignore PRs is OFF** for this repo. The OSS bundle defaults this off because a public repo deserves a human eyeball on every PR.
 - **Usage ceiling:** at ≥80%, commit locally and stop. Don't push to PR (CI run costs 10–15% of remaining capacity).
@@ -80,14 +81,14 @@ This project ships templates that downstream users install verbatim. A malicious
 
 Per `.claude/rules/review-tiers.md` (resolved from canonical `_core/project-template/.claude/rules/review-tiers.md`), applied with extra strictness here:
 
-- **Two tiers.** Routine review (Sonnet, every PR) + on-demand deep review (Opus, fired by `@claude review` comment).
+- **Two tiers.** Routine review (every PR) + on-demand deep review (fired by `@claude review` comment). Both run Fable 5.1 at low effort with an Opus 5.5 high-effort backup; the deep tier retries Fable once before falling back. A green check does not name the model that wrote it: the backup ran when its step shows success in the job's step list.
 - **Binary verdict rule.** `🟢 LGTM` only when fully clean. `🔴 Blocking` when *any* real finding exists. No "minor non-blocking" rot. This applies to both tiers.
 - **Auto-fire deep review** on the trigger surface (parsing/codec/serialization, threading, scheduling, save/load formats, mod-loader DAG changes — full list in `git.md`). The routine reviewer applies the `needs-deep-review` label automatically.
 - **Strict OSS review posture on `main` AND `develop`:**
-  - Required-status-checks: routine-review verdict MUST be 🟢 before merge
-  - Required approvals: 1 (the maintainer manually approves after reading the AI verdict)
-  - Bypass: admin role only (the maintainer can self-merge their own PRs without the approval; that's their accountability)
-  - Every external contribution: AI routine review verdict + maintainer eyes-on review + approval = three signals before merge
+  - Required status checks: `Evaluate review outcome` and `Claude On-Demand` must pass before merge
+  - Required approvals: 0 (the AI gates decide; a solo maintainer cannot approve their own PR)
+  - Bypass actors: none. Nobody, admins included, can merge past the gates
+  - Every external contribution: AI routine review verdict + maintainer eyes-on review before merge
   - Deep review fires automatically on any PR touching `_core/`, the bundled `index.html`, `_core/project-template/.claude/hooks/`, or `redesign/*.jsx`. These are the highest-blast-radius surfaces.
 
 The routine-review + deep-review workflows are installed and active in this repo's own `.github/workflows/` (`claude-code-review.yml` and `claude.yml`) — they self-host the same discipline the templates ship. They exist canonically in `_core/project-template/.github/workflows/` (`claude-code-review.yml.template`, `claude.yml.template`); this repo's live copies are the resolved bind of those canonical templates.

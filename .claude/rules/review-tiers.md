@@ -4,8 +4,8 @@
 
 | Tier | Trigger | Cost | What it does |
 |---|---|---|---|
-| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Verdict feeds the `Evaluate review outcome` check. |
-| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Opus) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict feeds the `Claude On-Demand` check via the Checks API — independently required by branch protection. |
+| **Routine** | Auto on every PR via `claude-code-review.yml` | Subscription (Fable 5.1 low, backup Opus 5.5 high) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Verdict feeds the `Evaluate review outcome` check. |
+| **On-demand deep** | `@claude review this PR` comment (fires `claude.yml`) | Subscription (Fable 5.1 low, backup Opus 5.5 high) | Depth pass on the focus the routine review escalated to. **Same binary 🔴/🟢 rule.** Verdict feeds the `Claude On-Demand` check via the Checks API — independently required by branch protection. |
 
 ## The gate model — two independent required status checks
 
@@ -21,22 +21,22 @@ Branch protection requires **two** status checks, both attached to the PR HEAD S
    - Triage non-reviewable → `evaluate-review-outcome` PATCHes to `conclusion=skipped`.
    - Routine done, no escalation → `claude-review`'s Resolve step PATCHes to `conclusion=skipped`.
    - Routine escalated → Resolve step PATCHes to `status=in_progress` titled "Deep review in progress".
-   - Opus completes → `claude.yml`'s Evaluate step PATCHes to `conclusion=success` (🟢) or `conclusion=failure` (🔴).
-   - Opus errored (no completion comment) → PATCHes to `conclusion=failure` (FAIL-CLOSED).
+   - Deep review completes → `claude.yml`'s Evaluate step PATCHes to `conclusion=success` (🟢) or `conclusion=failure` (🔴).
+   - Every deep attempt errored (no completion comment) → PATCHes to `conclusion=failure` (FAIL-CLOSED).
 
 `success`, `skipped`, and `neutral` all pass branch protection; `in_progress` blocks merge with a visible spinner; `failure` blocks merge with a red X.
 
-**Dismiss path for the maintainer:** if the deep tier is genuinely broken or its finding doesn't apply, admin-bypass leaves an audit trail. Removing the `needs-deep-review` label does NOT auto-reset the check in the two-check architecture (no event fires to PATCH on unlabeled).
+**When the deep tier is broken or its finding does not apply:** re-trigger it, or explain in a PR comment why the finding does not apply and re-trigger. If it keeps failing, report it to the maintainer. There is no bypass. Removing the `needs-deep-review` label does NOT auto-reset the check in the two-check architecture (no event fires to PATCH on unlabeled).
 
 Both `Evaluate review outcome` AND `Claude On-Demand` are configured as required status checks on `main` and `develop`. Omitting either from required checks would leave one tier advisory; this repo dogfoods the full strict model.
 
-## Workflow-touching PRs require admin-bypass
+## Workflow-only PRs skip the review
 
-The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token. Any PR that edits `.github/workflows/claude-code-review.yml` therefore fails the token exchange and the routine review action cannot post a verdict. `Evaluate review outcome` has no comment to read, exits 1, and the only path forward is `gh pr merge --admin`.
+The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token, so the review action cannot run on a PR that edits `.github/workflows/claude-code-review.yml`. Triage therefore never counts `.github/workflows/` files as reviewable: a PR that touches only workflow files passes both checks like a docs PR. Keep workflow edits in a PR of their own, with no reviewable files; the maintainer reads the diff before it merges. A reviewable file in the same PR starts the review, which then fails validation and leaves no verdict.
 
 (Edits to `claude.yml` alone do not trip this: claude.yml runs from the default branch's version on `issue_comment` events, so the running workflow file always matches the default branch. The OIDC check passes.)
 
-Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (Sonnet posted 🔴, missing verdict line, etc.), fix the underlying issue — do not bypass.
+Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (the reviewer posted 🔴, missing verdict line, etc.), fix the underlying issue.
 
 ---
 
