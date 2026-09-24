@@ -37,6 +37,7 @@ export function defaults({ team = false, client = false } = {}) {
       uiRule: false,
       confidentiality: client,
       cleanRoom: false,
+      plainWriting: false,
       codeResearch: "none",
       branching: "gitflow",
       devIsDefault: false,

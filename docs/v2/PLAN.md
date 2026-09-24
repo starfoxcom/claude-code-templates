@@ -35,8 +35,10 @@ Rename the project to **Bindwright** and rebuild it so the path from "land on th
 
 Each item is one PR unless noted. Workflow files land on `main` first (hotfix + cascade), everything else on `develop`.
 
+Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETUP.md` stay frozen at v1 and are not kept in sync with the engine. New options get their controls in the Phase 3 Advanced drawer. `main` and the live page change only with the v2.0.0 release.
+
 ### Phase 1: engine
-- [ ] New answer model: two questions, advanced switches, presets kept internal. Delete dead toggles and dead tool slots; bake in the always-same toggles.
+- [x] New answer model: two questions, advanced switches, presets kept internal. Delete dead toggles and dead tool slots; bake in the always-same toggles.
 - [ ] Deterministic renderer (browser JS, plus a stdlib Python twin for CI tests) that resolves toggle blocks and placeholders against `_core/`.
 - [ ] Code-research tool profiles (data file) replacing the SETUP.md hook-install prose.
 - [ ] `TAILOR.md` replaces SETUP.md. `install-global.py` handles `~/.claude` changes.
