@@ -27,14 +27,16 @@ inside a literal command string (`sh -c '...'`, `bash -l -c '...'`, `pwsh
 -Command '...'`, `eval '...'`), with a force flag among its own words, also
 when written in Bash's `$'...'` quoting or with a redirect glued to it
 (`-qf>/dev/null`). A separator inside a substitution does not end the
-statement around it. Text that only prints or commits (`echo`, `printf`,
-`git commit`, without a redirect) is never read as a push, and neither are
+statement around it, and a heredoc body is text, not commands. Text that
+only prints or commits (`echo`, `printf`, `git commit`, without a redirect)
+is never read as a push, and neither are
 comments.
 
 Out of reach, so these run without a block:
 
 - a command this hook cannot split into statements for certain: one with a
-  heredoc (`<<`), a PowerShell here-string, block comment or `--%`,
+  heredoc that never reaches its closing line, a PowerShell here-string,
+  block comment or `--%`,
   unbalanced quotes or groups, or, in PowerShell, characters outside ASCII;
 - remote branch and tag deletions (`--delete`, `:branch`, `--prune`);
 - a force flag the shell builds at run time (`git push $FLAGS`, `xargs`,
@@ -84,7 +86,11 @@ DATA_COMMANDS = {"echo", "printf", "write-output", "write-host"}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 POWERSHELLS = {"pwsh", "powershell"}
 EVAL_COMMANDS = {"eval", "invoke-expression", "iex"}
-MAX_DEPTH = 3
+MAX_DEPTH = 8
+# `scan` writes unquoted `<`, `>` and `&` as these private-use characters, so a
+# redirect is told apart from the same character inside quotes.
+REDIRECT_MARK = str.maketrans("<>&", "\ue000\ue001\ue002")
+UNMARK = str.maketrans("\ue000\ue001\ue002", "<>&")
 
 
 def join_lines(command, tool):
@@ -117,20 +123,52 @@ def join_lines(command, tool):
 def scan(command, tool):
     """Split a command at unquoted separators and drop comments. A separator
     inside a substitution (`$(...)`, backticks, `${...}`, `<(...)`, PowerShell
-    `$(...)` and `@(...)`) does not end the statement around it. Returns the
-    statements, the text of each command substitution (checked as a command
-    of its own), and whether the split is certain: a heredoc, a PowerShell
-    here-string or `--%`, or quotes or groups that never close make it
-    uncertain."""
+    `$(...)` and `@(...)`) does not end the statement around it, and a Bash
+    heredoc body is text, not commands. Unquoted redirect characters come out
+    as REDIRECT marks, so a quoted `>` is never read as a redirect. Returns
+    the statements, the text of each outermost command substitution (checked
+    as a command of its own, including those in an unquoted heredoc body), and
+    whether the split is certain: a PowerShell here-string, block comment or
+    `--%`, a heredoc without its closing line, or quotes or groups that never
+    close make it uncertain."""
     escape = "`" if tool == "PowerShell" else "\\"
     openers = ("$(", "@(") if tool == "PowerShell" else ("$(", "<(", ">(", "${")
-    parts, current, groups, stack = [], [], [], []
-    quote, readable, i, n = None, True, 0, len(command)
+    parts, current, groups, stack, heredocs = [], [], [], [], []
+    quote, readable, escaped_end, i, n = None, True, -1, 0, len(command)
+
+    def mark(text):
+        return text.translate(REDIRECT_MARK)
+
     while i < n:
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
             current.append(command[i:i + 2])
             i += 2
+            escaped_end = i
+            continue
+        # Heredoc bodies start after the line that opened them.
+        if ch == "\n" and quote is None and heredocs:
+            j = i + 1
+            for delimiter, strip_tabs, literal in heredocs:
+                start = j
+                while True:
+                    end = command.find("\n", j)
+                    line = command[j:n if end < 0 else end]
+                    if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+                        if not literal:
+                            groups.extend(scan(command[start:j], tool)[1])
+                        j = n if end < 0 else end + 1
+                        break
+                    if end < 0:
+                        return parts + ["".join(current)], groups, False
+                    j = end + 1
+            heredocs = []
+            if stack:
+                current.append("\n")
+            else:
+                parts.append("".join(current))
+                current = []
+            i = j
             continue
         # Substitutions open outside single quotes, inside double quotes too,
         # and start a fresh quoting context.
@@ -138,7 +176,7 @@ def scan(command, tool):
         if quote != "'" and (opener or (ch == "`" and tool != "PowerShell" and not (stack and stack[-1][0] == "`"))):
             opener = opener or "`"
             stack.append([opener, i + len(opener), quote, 0])
-            current.append(opener)
+            current.append(mark(opener))
             quote = None
             i += len(opener)
             continue
@@ -152,7 +190,9 @@ def scan(command, tool):
                 stack[-1][3] -= 1
             elif ch == closer:
                 stack.pop()
-                if kind != "${":
+                # Only the outermost substitutions are kept; a nested one is
+                # found again when its group is checked, so the time stays linear.
+                if kind != "${" and all(s[0] == "${" for s in stack):
                     groups.append(command[start:i])
                 quote = outer
                 current.append(ch)
@@ -165,13 +205,29 @@ def scan(command, tool):
             if tool == "PowerShell" and command[i - 1:i] == "@":
                 readable = False
             quote = ch
-        elif command.startswith("<<", i) or (tool == "PowerShell" and command.startswith("<#", i)):
+        elif tool == "PowerShell" and command.startswith(("<<", "<#"), i):
             readable = False
+        elif command.startswith("<<<", i):
+            current.append(mark("<<<"))
+            i += 3
+            continue
+        elif command.startswith("<<", i):
+            here = re.match(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|(\\?)([A-Za-z0-9_.-]+))", command[i:])
+            if not here:
+                readable = False
+            else:
+                delimiter = next(g for g in (here.group(2), here.group(3), here.group(5)) if g is not None)
+                literal = here.group(5) is None or bool(here.group(4))
+                heredocs.append((delimiter, bool(here.group(1)), literal))
+                current.append(mark(here.group(0)))
+                i += here.end()
+                continue
         # A `#` that starts a word starts a comment, which runs to the end of the
-        # line. Only PowerShell ends words at a carriage return; in Bash `\r#` is
-        # part of a word.
-        elif ch == "#" and (i == 0 or command[i - 1] in " \t\n;|&"
-                            or (tool == "PowerShell" and command[i - 1] == "\r")):
+        # line. The character before it must be an unescaped delimiter; only
+        # PowerShell ends words at a carriage return, and inside `${...}` Bash
+        # reads `#` as text.
+        elif (ch == "#" and escaped_end != i and not (stack and stack[-1][0] == "${")
+              and (i == 0 or command[i - 1] in " \t\n;|&" or (tool == "PowerShell" and command[i - 1] == "\r"))):
             while i < n and command[i] != "\n":
                 i += 1
             continue
@@ -193,10 +249,10 @@ def scan(command, tool):
             current = []
             i += 1
             continue
-        current.append(ch)
+        current.append(mark(ch) if quote is None else ch)
         i += 1
     parts.append("".join(current))
-    if stack:
+    if stack or heredocs:
         readable = False
     # PowerShell also reads curly quotes as quotes and Unicode spaces, vertical
     # tab and form feed as whitespace; shlex does not.
@@ -319,8 +375,8 @@ def program(token):
     `x=$(git`, `<(git` and, after PowerShell's call operator, `&git` and
     `("git")` are all git. A redirect glued to the name ends it, as in the
     shell: `git>/dev/null` is git."""
-    token = re.sub(r"^(?:[A-Za-z_][A-Za-z0-9_]*=)?[$`(&<>]+", "", token)
-    name = re.split(r"[<>&]", token, 1)[0].rstrip(")")
+    token = re.sub(r"^(?:[A-Za-z_][A-Za-z0-9_]*=)?[$`(&<>\ue000-\ue002]+", "", token)
+    name = re.split(r"[\ue000-\ue002]", token, 1)[0].rstrip(")")
     name = name.replace("\\", "/").split("/")[-1].lower()
     return re.sub(r"\.exe$", "", name)
 
@@ -345,7 +401,7 @@ def push_reason(tokens, deleted, depth):
         if i >= len(tokens):
             continue
         # A redirect glued to the subcommand ends it: `push>/dev/null` is push.
-        name, args = re.split(r"[<>&]", tokens[i], 1)[0], tokens[i + 1:]
+        name, args = re.split(r"[\ue000-\ue002]", tokens[i], 1)[0], tokens[i + 1:]
         # A one-off alias (`-c alias.p='push -f'`) runs its words in place of
         # the alias name; a `!` alias runs its text in a shell with the
         # arguments appended. Config keys ignore case, and an alias can name
@@ -410,10 +466,10 @@ def force_reason(args):
         # passes `-qf`. A word that starts with a redirect (`2>&1`, `>out.txt`) is
         # no argument. A bare operator (`>`, `2>`, `-qf>`) takes the next word
         # as its file.
-        cut = re.search(r"[<>&]", arg)
+        cut = re.search(r"[\ue000-\ue002]", arg)
         if cut:
             head, operator = arg[:cut.start()], arg[cut.start():]
-            extra = 1 if re.fullmatch(r"[<>&|]+", operator) else 0
+            extra = 1 if re.fullmatch(r"[\ue000-\ue002|]+", operator) else 0
             if not head or head.isdigit():
                 i += 1 + extra
                 continue
@@ -457,7 +513,7 @@ def only_data(segment, tokens):
     are text, never a push. A redirect makes them write, and in PowerShell a
     `(...)` argument runs as a command (`Write-Output (git push -qf)`), so
     neither counts."""
-    if re.search(r"[>(]", segment):
+    if re.search(r"[>(\ue001]", segment):
         return False
     if tokens[0].lower() in DATA_COMMANDS:
         return True
@@ -553,6 +609,7 @@ def main():
         # The guard only blocks what it reads for certain; an error is not certain.
         return 0
     if reason:
+        reason = reason.translate(UNMARK)
         print(f"Blocked a force push: {reason}. Use `--force-with-lease` instead, "
               "which refuses to overwrite commits you have not fetched.", file=sys.stderr)
         return 2
