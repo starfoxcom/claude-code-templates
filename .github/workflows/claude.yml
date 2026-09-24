@@ -33,7 +33,7 @@ on:
 
 jobs:
   claude:
-    name: On-demand (@claude → deep review)
+    name: On-demand (@claude → Fable 5.1, fallback Opus 5.5)
     # Filter: accept comments whose body contains `@claude review this PR`
     # AND does NOT contain `Claude Code is working`. Both conditions are
     # cheap string contains checks; defence-in-depth catches edge cases
@@ -124,7 +124,7 @@ jobs:
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
               -F "output[title]=Deep review in progress" \
-              -F "output[summary]=Opus is reviewing the PR. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment."
+              -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment."
             echo "::notice::Set existing Claude On-Demand check $CHECK_ID to in_progress"
           else
             gh api "repos/$REPO/check-runs" -X POST \
@@ -132,33 +132,157 @@ jobs:
               -F head_sha="$HEAD_SHA" \
               -F status="in_progress" \
               -F "output[title]=Deep review in progress" \
-              -F "output[summary]=Manual @claude trigger fired on a HEAD SHA with no prior routine run. Opus is reviewing."
+              -F "output[summary]=Manual @claude trigger fired on a HEAD SHA with no prior routine run. The deep reviewer is running."
             echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
           fi
 
       - name: Run Claude
-        # Pinned to v1's resolved SHA (resolved 2026-05-04). The bare `@v1`
-        # floats — silent behavior changes from auto-updates burned other
-        # projects already. Update via
+        id: claude_attempt_1
+        continue-on-error: true
+        # Pinned to the v1 tag's resolved SHA (v1.0.213; its CLI 2.1.258 is the
+        # first the API accepts for Fable 5.1). The bare `@v1` floats. Update via
         #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
-        # and bump the SHA here AND in `.github/workflows/claude-code-review.yml`.
-        uses: anthropics/claude-code-action@8c196b2f61a66bfdf93322bde3a3e668669089ed  # v1
+        # and bump the SHA here AND in `.github/workflows/claude-code-review.yml`
+        # in one hotfix: both tiers carry the same pin.
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        # The token goes in both as a `with:` input and as an env var, the
+        # upstream workaround for credential loss in tag mode.
+        # Fable 5.1 at low effort, the model and effort the sibling projects'
+        # best-of-three head-to-heads chose for this seat. `--disallowedTools`
+        # bans helper agents and wake-ups on every attempt: a one-shot session
+        # that delegates ends with no verdict.
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-opus-4-8'
-          # Allow the routine review's `claude[bot]` to trigger this workflow.
-          # The bare action defaults to "humans only" as a bot-loop safety;
-          # we explicitly opt in to claude → claude because the routine tier
-          # is the canonical caller for deep-review escalations per
-          # `_core/project-template/.claude/rules/review-tiers.md`.
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-fable-5-1 --effort low'
+          show_full_output: false
+          additional_permissions: |
+            actions: read
           allowed_bots: "claude"
-          # NOTE on context: this action does NOT support a `system_prompt:`
-          # input (warns "Unexpected input"). Project context is auto-loaded
-          # by Claude Code itself from `CLAUDE.md` + `.claude/rules/*.md` at
-          # repo root once the runner checks out. The structured `@claude`
-          # comment from the routine review provides the per-PR focus,
-          # invariants, and out-of-scope list, including the binary verdict
-          # rule the deep tier must follow.
+          # Allow the routine review's `claude[bot]` to trigger this workflow: the
+          # routine tier is the caller for deep-review escalations.
+          # This action has no `system_prompt:` input. Claude Code loads
+          # `CLAUDE.md` + `.claude/rules/*.md` from the checkout, and the
+          # structured `@claude` comment from the routine review gives the
+          # per-PR focus, invariants and the binary verdict rule.
+
+      # ── Usage-limit exhaustion vs transient failure ──────────────────────
+      # On a usage limit: skip the same-model retry and fall back to Opus.
+      # On any other failure: retry Fable first, then fall back to Opus only
+      # if the retry also fails.
+      - name: Detect failure class
+        id: failure_class
+        if: steps.claude_attempt_1.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          RUN_ID="${{ github.run_id }}"
+
+          JOB_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+            --jq '[.jobs[] | select(.name | test("On-demand"))] | first | .id // empty')
+          if [ -z "$JOB_ID" ]; then
+            echo "::warning::Could not resolve job ID — treating as transient failure"
+            echo "usage_limit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LOG=$(gh api "repos/$REPO/actions/jobs/$JOB_ID/logs" 2>/dev/null || true)
+          # The action also saves the CLI's result to a file, on disk even when
+          # the job log has not reached the API yet. A plan cap reads "You've
+          # reached your <model> limit" with HTTP 429.
+          RESULT=$(cat "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
+          if printf '%s %s' "$LOG" "$RESULT" | grep -qiE 'rate.limit|usage.limit|billing|quota.exceeded|resource.exhausted|spending.limit|credit|allowance|reached your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
+            echo "::warning::Usage limit detected in attempt 1 — skipping the same-model retry, falling back to Opus 5.5 @ high"
+            echo "usage_limit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Attempt 1 failure is not a usage limit — retrying with Fable 5.1"
+            echo "usage_limit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Back off before attempt 2
+        if: steps.claude_attempt_1.outcome == 'failure'
+        run: sleep 90
+
+      # Attempt 2a: same-model retry, for transient failures only.
+      - name: Run Claude (retry — Fable 5.1 @ low)
+        id: claude_retry
+        if: steps.claude_attempt_1.outcome == 'failure' && steps.failure_class.outputs.usage_limit != 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-fable-5-1 --effort low'
+          show_full_output: false
+          additional_permissions: |
+            actions: read
+          allowed_bots: "claude"
+
+      # The fallback model needs a newer CLI than the pinned action installs;
+      # the API refuses Opus 5.5 on it. Install a job-private copy only when the
+      # fallback is about to run. Drop this step (and the executable input
+      # below) once the pinned action installs this version itself.
+      - name: Install Claude Code for the fallback reviewer
+        id: claude-cli
+        if: |
+          (steps.failure_class.outputs.usage_limit == 'true') ||
+          (steps.claude_retry.outcome == 'failure')
+        continue-on-error: true
+        shell: bash
+        env:
+          CLI_VERSION: "2.1.280"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::Claude Code $CLI_VERSION install failed three times"
+              exit 1
+            fi
+            sleep 5
+          done
+          src="$HOME/.local/share/claude/versions/$CLI_VERSION"
+          if [ ! -x "$src" ]; then
+            src="$(readlink -f "$HOME/.local/bin/claude")"
+          fi
+          dest="$RUNNER_TEMP/claude-cli/claude"
+          mkdir -p "$(dirname "$dest")"
+          cp "$src" "$dest"
+          chmod +x "$dest"
+          installed="$("$dest" --version | awk '{print $1}')"
+          if [ "$installed" != "$CLI_VERSION" ]; then
+            echo "::error::expected Claude Code $CLI_VERSION, got '$installed'"
+            exit 1
+          fi
+          echo "Claude Code $installed at $dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+
+      # Attempt 2b: model fallback, Opus 5.5 @ high. Fires on a usage limit,
+      # or when the same-model retry also failed. The Evaluate step below owns
+      # the outcome, so every attempt continues on error.
+      - name: Run Claude (fallback — Opus 5.5 @ high)
+        id: claude_fallback
+        if: |
+          steps.claude-cli.outcome == 'success' && (
+          (steps.failure_class.outputs.usage_limit == 'true') ||
+          (steps.claude_retry.outcome == 'failure'))
+        continue-on-error: true
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        with:
+          path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-opus-5-5 --effort high'
+          show_full_output: false
+          additional_permissions: |
+            actions: read
+          allowed_bots: "claude"
 
       - name: Evaluate deep-tier verdict
         # PATCH the `Claude On-Demand` check on the PR HEAD SHA to
@@ -214,12 +338,12 @@ jobs:
 
           if [ -z "$COMMENT" ]; then
             # FAIL-CLOSED: neutral counts as passing in required status checks — failure blocks merge until a retry succeeds.
-            echo "::error::No deep-tier completion comment found — Opus action errored or skipped. Setting check to failure (fail-closed)."
+            echo "::error::No deep-tier completion comment found — every attempt errored or was skipped. Setting check to failure (fail-closed)."
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review errored" \
-              -F "output[summary]=The Opus action did not post a completion comment (errored or skipped). Re-trigger with \`@claude review this PR — depth pass on <focus>\` to retry. If the deep tier keeps failing, report it to the maintainer."
+              -F "output[summary]=The reviewer never ran to completion (attempt 1 Fable 5.1: ${{ steps.claude_attempt_1.outcome }}, usage limit: ${{ steps.failure_class.outputs.usage_limit }}, retry Fable: ${{ steps.claude_retry.outcome || 'skipped' }}, fallback Opus 5.5: ${{ steps.claude_fallback.outcome || 'skipped' }}). This is not a blocking finding; nothing was judged. Re-trigger with \`@claude review this PR — depth pass on <focus>\` to retry. If the deep tier keeps failing, report it to the maintainer."
             exit 1
           fi
 
@@ -231,7 +355,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review verdict missing" \
-              -F "output[summary]=Opus completed but did not include a 🔴/🟢 verdict line. Re-trigger and ensure the prompt mandates a binary verdict on the final line."
+              -F "output[summary]=The deep reviewer completed but did not include a 🔴/🟢 verdict line. Re-trigger and ensure the prompt mandates a binary verdict on the final line."
             exit 1
           fi
 
@@ -241,7 +365,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review verdict: 🔴 Blocking" \
-              -F "output[summary]=Opus returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing. If the finding does not apply, explain why in a PR comment and re-trigger the deep review."
+              -F "output[summary]=The deep reviewer returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing. If the finding does not apply, explain why in a PR comment and re-trigger the deep review."
             exit 1
           fi
 
@@ -250,5 +374,5 @@ jobs:
             -F status="completed" \
             -F conclusion="success" \
             -F "output[title]=Deep review verdict: 🟢 LGTM" \
-            -F "output[summary]=Opus signed off. Merge gate's deep-tier requirement satisfied."
+            -F "output[summary]=The deep reviewer signed off. Merge gate's deep-tier requirement satisfied."
           exit 0
