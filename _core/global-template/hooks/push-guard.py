@@ -176,8 +176,9 @@ def words(segment, tool):
 
 
 def program(token):
-    """The program a word names: `/usr/bin/git`, `(git` and `GIT.EXE` are all git."""
-    name = token.lstrip("(").replace("\\", "/").split("/")[-1].lower()
+    """The program a word names: `/usr/bin/git`, `(git`, `GIT.EXE` and, after
+    PowerShell's call operator, `&git` and `("git")` are all git."""
+    name = token.lstrip("(&").rstrip(")").replace("\\", "/").split("/")[-1].lower()
     return re.sub(r"\.exe$", "", name)
 
 
@@ -382,10 +383,17 @@ def decide(data):
             return 2
     pushes = False
     for part, tokens in segments:
-        if tokens and not only_data(part, tokens) and push_related(tokens):
+        if not tokens or only_data(part, tokens):
+            continue
+        if push_related(tokens):
             if not safe_push(part):
                 return ask()
             pushes = True
+        elif relevant(part) and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", tokens[0]):
+            # Push text passes silently only in a segment that plainly starts with
+            # a program name (`docker push`, `git stash push`); a first word such
+            # as `&('gi'+'t')` could still run git.
+            return ask()
     # Next to a push, every other segment must be known to leave git's behavior
     # alone; anything else (`readonly HOME=...`, `Set-Item Env:...`) could point
     # the push at other config.

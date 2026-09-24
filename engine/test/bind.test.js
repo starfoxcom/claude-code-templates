@@ -344,6 +344,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
     "git push origin main `\n-qf", "git push origin main `\r-qf", "git push origin main `\r\n-qf",
     ". git push -qf origin main",
+    // The call operator glued to git, around a parenthesized name, or a command lookup.
+    "&git push -qf origin main", "&'git' push -qf origin main", "& (\"git\") push -qf origin main",
+    "&git.exe push -qf origin main", "&(Get-Command git) push -qf origin main",
     // PowerShell runs a parenthesized argument as a command, so these push for certain.
     "Write-Output (git push -qf origin main)", "echo (git push -qf origin main)",
     "git commit -m (git push -qf origin main)",
@@ -420,7 +423,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // PowerShell evaluates a parenthesized argument; Set-Item changes the environment next to a push.
     "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin",
     // After `--%` PowerShell passes separators through as words.
-    "git push origin main -o --% ; -qf"]) {
+    "git push origin main -o --% ; -qf",
+    // Push text after a first word that is not a plain program name could still run git.
+    "&('gi'+'t') push -qf origin main"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.
