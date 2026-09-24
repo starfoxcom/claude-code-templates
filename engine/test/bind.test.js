@@ -325,17 +325,24 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push --m origin", "git --config-env core.x=HOME push -f origin main", "git --attr-source HEAD push -qf origin main",
     "(git push -qf origin main)", "if x; then git push -qf origin main; fi",
     "for r in a; do git push -qf origin main; done", "GIT.EXE push -f origin main",
+    // Wrappers with their own options cannot hide the push.
+    "sudo -u me git push -qf origin main", "timeout 5 git push -f origin main", "nice -n 5 git push -qf origin main",
+    "command -p git push -qf origin main",
   ];
   const bashOnly = [
     "git commit -m \"fix \\\"x\" && git push -qf origin main", "a & git push -qf origin main",
     // Line continuations are joined first, and quotes or escapes inside `push` are read as the shell reads them.
     "git push origin main \\\n-qf", "cd repo && \\\ngit push -qf origin main",
     "git pu''sh -qf origin main", "git \"pu\"sh -qf origin main", "git pu\\sh -qf origin main",
+    "case x in a) git push -qf origin main;; esac",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
-    "git push origin main `\n-qf",
+    "git push origin main `\n-qf", "git push origin main `\r-qf",
+    // PowerShell runs a parenthesized argument as a command, so these push for certain.
+    "Write-Output (git push -qf origin main)", "echo (git push -qf origin main)",
+    "git commit -m (git push -qf origin main)",
     // In PowerShell 7 a mid-line `&` starts a background job and ends the statement; so does a lone CR.
     "git commit -m wip & git push -qf origin main", "echo x & git push -qf origin main",
     "Write-Output x & git push -qf origin main", "git commit -m wip\rgit push -qf origin main"];
@@ -351,11 +358,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Pushes that are not git's, and a push next to segments known to leave git alone.
     "git stash push -m wip", "gh run list --event push", "docker push img:1",
     "git add . && git commit -m \"x\" && git push origin x", "git fetch origin && git push -u origin x",
-    "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
+    "echo git push -f", "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
   ];
   // Everything else that mentions a push asks: never a guess, never a silent pass.
   const asked = [
-    "sudo -u me git push -qf origin main", "eval \"git push -qf origin main\"", "git commit -m \"unbalanced && git push -f",
+    "eval \"git push -qf origin main\"", "git commit -m \"unbalanced && git push -f",
     "git push -o ci.skip origin x", "git push origin main:+notes", "git push -- +main", "git push --repo=origin",
     "echo $(git push -qf origin main)", "out=$(git push -qf origin main 2>&1)", "echo \"$(git push -qf origin main)\"",
     "x=`git push -qf origin main`", "diff <(git push -qf origin main) x", "git push $FLAGS origin main",
@@ -407,9 +414,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // PowerShell reads curly quotes as quotes and Unicode spaces as whitespace.
     "git push origin main \u201c-qf\u201d", "git push origin \"x\u201c -qf \u201cy\"", "git push origin main\u00a0-qf",
     // PowerShell evaluates a parenthesized argument; Set-Item changes the environment next to a push.
-    "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin",
-    "Write-Output (git push -qf origin main)", "echo (git push -qf origin main)",
-    "git commit -m (git push -qf origin main)"]) {
+    "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.

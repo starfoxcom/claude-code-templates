@@ -14,9 +14,11 @@ overwrite work the local repo has not seen.
 Decisions, in order, for a command that mentions a push, a mirror or git
 config from the environment:
 
-1. Block (exit 2) when a plain command certainly force-pushes. Plain means
-   words, quotes, escapes and the `&&`, `||`, `;`, `|`, `&` and newline
-   separators, nothing else.
+1. Block (exit 2) when a plain command certainly force-pushes: a `git push`
+   anywhere in a statement, also after wrappers such as `sudo -u me` or
+   `timeout 5`, with a force flag among its own words. Plain means words,
+   quotes, escapes and the `&&`, `||`, `;`, `|`, `&` and newline separators,
+   nothing else.
 2. Pass silently only when every segment that mentions a push is on an
    allow-list: `git push` followed by known-safe flags and plain ref names,
    written with letters, digits and `._/:=-` only (an optional trailing `2>&1`
@@ -71,11 +73,6 @@ GIT_FLAG_OPTIONS = {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-repl
                     "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
                     "--no-optional-locks", "--no-advice", "--no-lazy-fetch"}
 PUSH_VALUE_OPTIONS = {"--repo", "--push-option", "--receive-pack", "--exec"}
-# Words that can stand before a command without changing which program runs.
-PREFIXES = {"sudo", "env", "command", "builtin", "nice", "nohup", "time", "timeout", "stdbuf", "noglob",
-            "exec", "do", "then", "else", "elif", "!", "&"}
-# Not `xargs`: it appends words from its input, so `echo -qf | xargs git push`
-# forces a push its own arguments do not show.
 # Flags a push on the allow-list may carry: none of them forces, mirrors or
 # reads a value from the next word.
 SAFE_FLAGS = {"-u", "--set-upstream", "--tags", "--follow-tags", "--force-with-lease", "--force-if-includes",
@@ -95,8 +92,9 @@ def join_lines(command, tool):
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
             rest = command[i + 1:i + 3]
-            if rest.startswith("\n") or rest == "\r\n":
-                i += 2 if rest.startswith("\n") else 3
+            # PowerShell also ends a line at a lone carriage return.
+            if rest.startswith("\n") or rest == "\r\n" or (tool == "PowerShell" and rest.startswith("\r")):
+                i += 3 if rest == "\r\n" else 2
                 continue
             out.append(command[i:i + 2])
             i += 2
@@ -178,17 +176,20 @@ def program(token):
 
 
 def push_args(tokens):
-    """The arguments after `push` when the tokens run `git push`, else None."""
-    i = 0
-    while i < len(tokens) and (tokens[i] in PREFIXES or tokens[i] == "(" or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[i])):
-        i += 1
-    if i >= len(tokens) or program(tokens[i]) != "git":
-        return None
-    i += 1
-    while i < len(tokens) and tokens[i].startswith("-"):
-        i += 2 if tokens[i] in GIT_VALUE_OPTIONS else 1
-    if i < len(tokens) and tokens[i] == "push":
-        return tokens[i + 1:]
+    """The arguments after `push` for the first `git push` in the tokens, else
+    None. Every git word is checked, not only the first word, so wrappers with
+    their own options (`sudo -u me`, `timeout 5`, `nice -n 5`, `command -p`)
+    and shell keywords (`case x in a)`) cannot hide a push. `xargs` appends
+    words from its input (`echo -qf | xargs git push`), so a push after it is
+    not certain here; it fails the allow-list and asks."""
+    for k, token in enumerate(tokens):
+        if program(token) != "git":
+            continue
+        i = k + 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            i += 2 if tokens[i] in GIT_VALUE_OPTIONS else 1
+        if i < len(tokens) and tokens[i] == "push":
+            return tokens[i + 1:]
     return None
 
 
@@ -363,7 +364,10 @@ def decide(data):
     segments = [(part, words(part, tool)) for part in parts]
     if any(tokens is None for _, tokens in segments):
         return ask()
-    for _, tokens in segments:
+    for part, tokens in segments:
+        # A print or commit only carries push text; it never runs it.
+        if tokens and only_data(part, tokens):
+            continue
         args = push_args(tokens)
         reason = force_reason(args) if args is not None else None
         if reason:
