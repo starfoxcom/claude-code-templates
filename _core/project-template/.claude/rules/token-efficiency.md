@@ -13,19 +13,37 @@ Enable an MCP server only while the work needs it. Every enabled server adds its
 
 ## Watching CI
 
-After every push, watch the PR's checks with the **Monitor tool**, never a sleep loop and never `gh run watch`:
+After every push, watch the PR's checks with the **Monitor tool** where it exists; never use `gh run watch`:
 
 - One monitor per PR, timeout one hour, so a stuck check becomes a loud timeout instead of a silent wait.
 - Inside it, poll `gh pr checks <pr> --json name,bucket` about every 60 seconds. Filter on the `bucket` field with `gh`'s own `--jq` (the standalone `jq` binary is missing on some shells, and an empty result looks exactly like "still running").
 - Print each check as it settles and finish with an explicit "all checks settled" line.
 - On a new push to the same PR, stop the old monitor and start a new one.
 
+Monitor is missing on some cloud providers and when non-essential traffic is disabled. Without it, run this as one Bash call with `run_in_background` and act when it exits. It stops after about nine minutes; if checks are still pending, run it again.
+
+```bash
+sleep 45
+for i in $(seq 8); do
+  state=$(gh pr checks <pr> --json bucket --jq 'if length == 0 then "none" else ([.[] | select(.bucket == "pending")] | length | tostring) end')
+  [ "$state" = "0" ] && break
+  sleep 60
+done
+gh pr checks <pr> --json name,bucket --jq '.[] | "\(.name): \(.bucket)"'
+```
+
 When everything is green, merge per `git.md` § Merging. On a red check, read the failing log (`gh run view <id> --log-failed`), fix it on the branch and push. Ask first only when the failure is ambiguous (flaky test, infrastructure outage, or the test and the change disagree about intended behavior).
 
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
 ### Fast path for docs-only PRs
 
-Diffs with no source files (docs, rules, `.claude/**`) pass both review checks in about 30 seconds. Skip the monitor: wait about 90 seconds, confirm `gh pr view <pr> --json mergeable,mergeStateStatus` shows `MERGEABLE` and `CLEAN`, then merge and delete the branch. Approval to open the PR covers this merge.
+Diffs with no source files (docs, rules, `.claude/**`) pass both review checks in about 30 seconds. Skip the monitor: wait about 90 seconds, check `gh pr view <pr> --json mergeable,mergeStateStatus`, then merge per `git.md` § Merging:
+
+- `MERGEABLE` and `CLEAN`: merge.
+- `MERGEABLE` and `BLOCKED` only because branch protection requires an approval: merge with `--admin`. The maintainer's admin bypass exists for this solo case.
+- Anything else: stop and report the state.
+
+Approval to open the PR covers this merge.
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
 
 ## Long sessions

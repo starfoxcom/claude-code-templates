@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind, STAGING } from "../bind.js";
-import { defaults, DEFERRED, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES } from "../model.js";
+import { defaults, flagsFor, DEFERRED, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES } from "../model.js";
 import { listCore } from "../list-core.js";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -119,6 +119,15 @@ test("rules carry no stale model names or polling loops", async () => {
     if (!path.startsWith(".claude/rules/") && !path.endsWith("CONTRIBUTING.md")) continue;
     assert.doesNotMatch(text, /\b(Sonnet|Opus)\b/, `${path} names a model`);
     assert.doesNotMatch(text, /sleep 420/, `${path} teaches a sleep loop`);
+  }
+});
+
+test("every flag is read by a template or by bind.js", () => {
+  const templates = coreFiles.map((f) => readFileSync(join(repo, "_core/project-template", f), "utf8")).join("\n");
+  const bindSource = readFileSync(join(repo, "engine/bind.js"), "utf8");
+  for (const name of Object.keys(flagsFor(defaults()))) {
+    const used = templates.includes(`TOGGLE:${name} `) || templates.includes(`TOGGLE:${name}:off `) || bindSource.includes(`flags.${name}`);
+    assert.ok(used, `flag "${name}" controls nothing`);
   }
 });
 

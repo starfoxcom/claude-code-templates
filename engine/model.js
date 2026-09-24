@@ -72,7 +72,6 @@ export function flagsFor(a) {
     github_actions_routine_review: adv.aiReview,
     github_actions_deep_review: adv.aiReview,
     github_actions_deep_review_auto_fire: adv.aiReview && adv.deepEscalation,
-    mandatory_deep_review_before_merge: adv.aiReview && adv.deepEscalation,
     github_actions_paths_ignore_auto_merge: adv.aiReview && soloOwn,
     code_research_first: adv.codeResearch !== "none",
     precommit_hooks_scaffold: adv.precommit !== "none",
