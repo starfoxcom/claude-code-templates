@@ -150,6 +150,31 @@ test("path-scoped rules keep their frontmatter at the top", async () => {
   }
 });
 
+test("every code-research tool gets exactly one lookup sequence and no retired tools", async () => {
+  for (const tool of Object.keys(CODE_RESEARCH_TOOLS)) {
+    const a = defaults();
+    a.advanced.codeResearch = tool;
+    const files = await run(a);
+    assert.equal(files.get(".claude/skills/find/SKILL.md").match(/^## Sequence$/gm).length, 1, `${tool}: /find sequence count`);
+    for (const [path, text] of files) {
+      assert.doesNotMatch(text, /ast-grep|sourcegraph|semgrep|ctags/i, `${tool}: ${path} mentions a retired tool`);
+    }
+  }
+});
+
+test("the adherence script ships only with a code-research tool", async () => {
+  const script = ".claude/scripts/research-adherence.py";
+  assert.ok(!(await run(defaults())).has(script));
+  for (const tool of Object.keys(CODE_RESEARCH_TOOLS).filter((t) => t !== "none")) {
+    const a = defaults();
+    a.advanced.codeResearch = tool;
+    const text = (await run(a)).get(script);
+    const pattern = text.match(/TOOL = re\.compile\(r"(.*)"\)/)[1];
+    assert.doesNotThrow(() => new RegExp(pattern), `${tool}: bad match pattern`);
+    assert.match(CODE_RESEARCH_TOOLS[tool].match, /./);
+  }
+});
+
 test("bad answers are rejected", async () => {
   const a = defaults();
   a.project.name = "../escape";

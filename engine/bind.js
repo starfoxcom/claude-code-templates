@@ -3,7 +3,7 @@
 // browser, fs in Node), so the same code runs in both.
 
 import { renderTemplate } from "./render.js";
-import { validate, flagsFor, choicesFor, valuesFor, DEFERRED, LICENSES } from "./model.js";
+import { validate, flagsFor, choicesFor, valuesFor, CHOICE_OPTIONS, DEFERRED, LICENSES } from "./model.js";
 
 const CORE = "_core/project-template/";
 
@@ -27,6 +27,7 @@ function included(path, a, flags) {
     ".claude/rules/shipped-text.md": adv.plainWriting,
     ".claude/rules/visual.md": adv.uiRule,
     ".claude/rules/review-tiers.md": adv.aiReview,
+    ".claude/scripts/research-adherence.py": flags.code_research_first,
     ".github/workflows/claude-code-review.yml.template": flags.github_actions_routine_review,
     ".github/workflows/claude.yml.template": flags.github_actions_deep_review,
   };
@@ -66,7 +67,7 @@ export async function bind(answers, { readFile, coreFiles, year }) {
     values.TOOLS_PRECOMMIT_URL = p.url;
   }
   const licenseText = await readFile(`_core/licenses/${LICENSES[a.project.license]}`);
-  const ctx = { flags: flagsFor(a), choices: choicesFor(a), values, deferred: DEFERRED };
+  const ctx = { flags: flagsFor(a), choices: choicesFor(a), options: CHOICE_OPTIONS, values, deferred: DEFERRED };
   values.LICENSE_BODY = renderTemplate(licenseText, ctx, "license").trimEnd();
 
   const out = new Map();
