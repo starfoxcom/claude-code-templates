@@ -175,6 +175,22 @@ test("the adherence script ships only with a code-research tool", async () => {
   }
 });
 
+test("the deny list blocks force pushes but allows --force-with-lease", async () => {
+  const files = await run(defaults());
+  // Deferred placeholders are filled by setup later; blank them to parse.
+  const settings = JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
+  // Claude Code permission rules: `*` matches anything; a trailing `:*` is a prefix match.
+  const rules = settings.permissions.deny.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map((p) =>
+    new RegExp("^" + p.replace(/:\*$/, "*").split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$"));
+  const denied = (cmd) => rules.some((r) => r.test(cmd));
+  for (const cmd of ["git push --force", "git push --force origin x", "git push origin x --force", "git push -f origin x", "git push origin -f"]) {
+    assert.ok(denied(cmd), `${cmd} should be denied`);
+  }
+  for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x"]) {
+    assert.ok(!denied(cmd), `${cmd} should be allowed`);
+  }
+});
+
 test("bad answers are rejected", async () => {
   const a = defaults();
   a.project.name = "../escape";
