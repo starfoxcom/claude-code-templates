@@ -61,5 +61,19 @@
       "Bash(git branch -D master)",
       "Bash(git branch -D develop)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/push-guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }

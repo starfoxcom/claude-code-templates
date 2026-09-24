@@ -268,6 +268,39 @@ test("the adherence script counts only code searches", { skip: !python && "needs
   assert.match(out.stdout, /1 calls, plain code searches: 8 \(plus 1 marked bypasses\) -> 11%/);
 });
 
+test("the push guard blocks force pushes in any flag bundle", { skip: !python && "needs Python 3.8+" }, async () => {
+  const files = await run(defaults());
+  const settings = JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
+  const registered = settings.hooks.PreToolUse.flatMap((h) => h.hooks.map((x) => x.command));
+  assert.ok(registered.some((c) => c.includes(".claude/hooks/push-guard.py")), "hook is registered");
+  const dir = mkdtempSync(join(tmpdir(), "push-guard-"));
+  const hook = join(dir, "push-guard.py");
+  writeFileSync(hook, files.get(".claude/hooks/push-guard.py"));
+  const verdict = (tool, command) =>
+    spawnSync(python, [hook], { input: JSON.stringify({ tool_name: tool, tool_input: { command } }), encoding: "utf8" }).status;
+  const blocked = [
+    "git push --force", "git push origin main --force", "git push -f origin x", "git push origin x -f",
+    "git push -fu origin x", "git push -uf origin x", "git push -qf origin main", "git push -vf origin main",
+    "git push origin main -qf", "git push -uqf origin main", "git push origin +main", "git push origin -- +main",
+    "git -C repo push -f", "cd repo && git push --force origin x", "echo hi; git push -qf", "GIT_TRACE=1 git push -f",
+    "/usr/bin/git push -f", "git push --force=true origin x",
+  ];
+  const allowed = [
+    "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
+    "git push origin x --force-with-lease=x:abc", "git push --force-if-includes --force-with-lease origin x",
+    "git push --follow-tags origin x", "git push -o ci.skip origin x", "git push -uo f origin x",
+    "git push --push-option f origin x", "git commit -m \"push -f later\"", "echo \"git push -f\"", "git log -f",
+    "git push origin main:+notes",
+  ];
+  for (const cmd of blocked) {
+    assert.equal(verdict("Bash", cmd), 2, `Bash should block: ${cmd}`);
+    assert.equal(verdict("PowerShell", cmd), 2, `PowerShell should block: ${cmd}`);
+  }
+  for (const cmd of allowed) assert.equal(verdict("Bash", cmd), 0, `should allow: ${cmd}`);
+  assert.equal(verdict("Read", "git push -f"), 0, "other tools pass");
+  assert.equal(spawnSync(python, [hook], { input: "not json", encoding: "utf8" }).status, 0, "bad input fails open");
+});
+
 test("bad answers are rejected", async () => {
   const a = defaults();
   a.project.name = "../escape";
