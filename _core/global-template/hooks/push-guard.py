@@ -34,8 +34,9 @@ config from the environment:
 
 Out of reach for any command guard: git config that already holds a forcing
 `remote.<name>.push` or `mirror` setting when a plain `git push` runs, or an
-alias that pushes with force (`git p` after `alias.p = push -f`), however it
-got there (a file edit, an earlier command). A push word built at run time
+alias that pushes with force (`git p` after `alias.p = push -f`, or a shell
+alias for git), however it got there (a file edit, an earlier command). In
+the same command, alias and config settings ask. A push word built at run time
 (`git p$(echo u)sh`) is not matched by a `git push` allow rule either, so it
 reaches the prompt without this hook. Code inside an interpreter one-liner
 that an allow rule approves (`python -c`, `node -e`) can build a push the
@@ -71,6 +72,11 @@ import sys
 # Longer commands that mention a push ask without being parsed; no plain push
 # needs more, and parsing must never approach the hook timeout.
 MAX_COMMAND = 20000
+# git subcommands and programs that push. `send-pack` and `http-push` are the
+# plumbing under `git push`, with their own `--force`.
+PUSH_SUBCOMMANDS = {"push", "send-pack", "http-push"}
+PUSH_PROGRAMS = {"git-push", "git-send-pack", "git-http-push"}
+ALIAS_COMMANDS = {"alias", "hash", "set-alias", "new-alias", "sal", "nal"}
 # git options that take their value as the next argument.
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--config-env", "--attr-source"}
@@ -294,7 +300,7 @@ def relevant(text):
     """Whether text, with quote and escape characters removed, mentions a push,
     a mirror, git config from the environment, or `git remote ... --mi[rror]`."""
     bare = re.sub(r"[\"'`\\]", "", text)
-    if re.search(r"push\b|mirror|git_config", bare, re.I):
+    if re.search(r"push\b|send-pack|mirror|git_config", bare, re.I):
         return True
     # Linear on purpose: a backtracking `remote.*--mi` pattern could run past
     # the hook timeout on a long command, and a timed-out hook lets it through.
@@ -335,12 +341,20 @@ def push_related(tokens):
     # Checked once per segment, not once per git word, so the time stays linear.
     upload_pack = any(t.startswith("--upl") for t in tokens)
     has_push = "push" in tokens
+    # Commands that give a program another name (`alias g=git`, `hash -p
+    # /usr/bin/git g`, PowerShell `sal -Value git g`) can hide a later push.
+    if program(tokens[0]) in ALIAS_COMMANDS:
+        return True
     for k, token in enumerate(tokens):
-        if program(token) == "git-push":
+        if program(token) in PUSH_PROGRAMS:
             return True
         if program(token) == "git":
+            # git anywhere but the program position (after wrappers or
+            # assignments) may be an argument that renames it.
+            if any(t != "&" and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) for t in tokens[:k]):
+                return True
             name = subcommand(tokens, k)
-            if name == "push" or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+            if name in PUSH_SUBCOMMANDS or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
                 return True
             # `fetch`/`pull --upload-pack=<cmd>` (any abbreviation) runs <cmd>
             # through a shell, which can write push config or push itself.

@@ -402,6 +402,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git config remote.b.mirror true", "git remote add --mirror b https://example.com/b.git",
     // An alias can turn any later word into a push.
     "git -c alias.p='push -f' p origin main", "git config alias.p 'push -f'",
+    "git -c alias.p=push p -f origin main", "git config --global alias.p 'push -f'",
+    "hash -p /usr/bin/git g; g push -qf origin main", "alias g=git\ng push -qf origin main",
+    // git's push plumbing has its own --force.
+    "git send-pack --force https://x/y main", "git http-push --force https://x/y main",
     "git remote add --mirr=push b https://example.com/b.git",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
     "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main:main'\" git push origin",
@@ -447,7 +451,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // After `--%` PowerShell passes separators through as words.
     "git push origin main -o --% ; -qf",
     // Push text after a first word that is not a plain program name could still run git.
-    "&('gi'+'t') push -qf origin main", "echo 'git push -qf origin main' | iex",
+    "&('gi'+'t') push -qf origin main",
+    // A PowerShell alias for git, with the value before the name.
+    "sal -Value git g; g push -qf origin main", "Set-Alias -Value git -Name g; g push -qf origin main", "echo 'git push -qf origin main' | iex",
     // A PowerShell line can start with `|` to continue the pipeline from the line before.
     "echo 'git push -qf origin main'\n| iex", "Write-Output 'git push -qf origin main'\r\n| iex",
     "echo 'git push -qf origin main'\r  | iex"]) {
