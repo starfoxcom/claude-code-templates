@@ -64,16 +64,7 @@ export function validate(a) {
   check(["gitflow", "trunk"].includes(adv.branching), `unknown branching model "${adv.branching}"`);
   check(MERGE_STYLES.includes(adv.mergeStyle), `unknown merge style "${adv.mergeStyle}"`);
   check(typeof adv.devIsDefault === "boolean", "devIsDefault must be true or false");
-  const python = a.environment?.python;
-  check(python == null || (typeof python === "string" && python.length < 512 && /^(\/|[A-Za-z]:[\\/])/.test(python)
-    && !/["\u0000-\u001f]/.test(python)), "environment.python must be an absolute interpreter path");
   return a;
-}
-
-// What setup found on the user's machine. The browser page cannot probe, so it
-// leaves this out and machine-specific pieces (the push-guard hook) are skipped.
-function pythonPath(a) {
-  return a.environment?.python || null;
 }
 
 // Every toggle name the templates use must resolve here to true or false.
@@ -90,7 +81,6 @@ export function flagsFor(a) {
     branching_model_gitflow: adv.branching === "gitflow",
     branching_model_trunk: adv.branching === "trunk",
     default_branch_is_dev: adv.branching === "gitflow" && adv.devIsDefault,
-    push_guard_hook: pythonPath(a) !== null,
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
@@ -137,7 +127,5 @@ export function valuesFor(a, { year = new Date().getFullYear() } = {}) {
     TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE: upperSnake(a.advanced.codeResearch),
     TOOLS_CODE_RESEARCH_BYPASS_MARKER: tool.bypass || "RESEARCH_BYPASS:",
     TOOLS_CODE_RESEARCH_MATCH: tool.match || "(?!)",
-    // Written inside a JSON string, so escape it as one.
-    PYTHON_EXE: pythonPath(a) ? JSON.stringify(pythonPath(a)).slice(1, -1) : "",
   };
 }

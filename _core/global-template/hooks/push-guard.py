@@ -11,17 +11,18 @@ Permission rules match command text, so `-f` bundled with other short flags
 overwrite work the local repo has not seen.
 
 Exit 2 blocks the call and shows the reason to Claude. Any other outcome,
-including a parse error, lets the call through, and the deny rules in
-`settings.local.json` still apply.
+including a parse error, lets the call through, and the project's deny rules
+still apply.
 
-Setup registers the hook only after finding a Python 3.8+ interpreter, and
-names that interpreter by its absolute path, so no `python3`/`python`/`py`
-guess is made; with no interpreter the hook is left out and the deny rules
-remain. It is registered in exec form (`command` plus `args`), so no shell is
-involved and Claude Code fills in `${CLAUDE_PROJECT_DIR}` on every platform.
-It runs through a `runpy` one-liner instead of `python3 <path>` because
-Python exits 2 when it cannot open a script, which would block every call;
-through `runpy` a missing file is an ordinary error and the call proceeds.
+Setup installs this file as `~/.claude/hooks/push-guard.py` and registers it
+in `~/.claude/settings.json`, never in a project's settings: some tools copy
+the launcher of existing project hooks into their own hook entries. Setup
+registers it only after finding a Python 3.8+ interpreter, naming both the
+interpreter and this file by absolute path, in exec form (`command` plus
+`args`), so no shell and no `python3`/`python`/`py` guess is involved. It runs
+through a `runpy` one-liner instead of `python <path>` because Python exits 2
+when it cannot open a script, which would block every call; through `runpy` a
+missing file is an ordinary error and the call proceeds.
 """
 import json
 import re

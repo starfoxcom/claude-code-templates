@@ -14,6 +14,7 @@ global-template/
 └── hooks/
     ├── code-research-first.py.template    # Generic PreToolUse hook (rendered at bind time)
     ├── code-research-profiles.json        # Per-tool profiles consumed by the renderer
+    ├── push-guard.py                      # PreToolUse hook that blocks force pushes in any spelling
     └── time-injection.snippet.md          # Optional UserPromptSubmit hook — injects [time] ... per prompt
 ```
 
@@ -144,6 +145,14 @@ It's project-agnostic, parameter-free (the zone comes from the OS at call time �
 To install, follow the worked example in `hooks/time-injection.snippet.md` — it documents the Node command (with a Python fallback), the JSON entry to append to `~/.claude/settings.json` under `hooks.UserPromptSubmit`, and the verification step. The hook composes cleanly with the code-research-first hook from § 3; they register under different slots and never conflict.
 
 The AI-side counterpart — instructions that tell the model to attend to the `[time]` lines rather than ignore them — lives in `CLAUDE.md.additions` under the "Time-of-day awareness" section, so step 1 above already covered it.
+
+---
+
+## 4b. Install the push guard (recommended)
+
+The project's deny rules match command text, so a force push written as a bundle of short flags (`git push -qf`) gets past them. `hooks/push-guard.py` reads the actual `git push` arguments and blocks `--force`, `-f` inside any flag bundle, and `+` refspecs. `--force-with-lease` and `--force-if-includes` stay allowed.
+
+SETUP.md § Phase 7c installs it to `~/.claude/hooks/push-guard.py`, registers it in `~/.claude/settings.json` by the absolute path of a Python 3.8+ interpreter found on the machine, and only then auto-approves `git push` globally. Without Python it is skipped, and pushes other than a bare `git push` ask for approval. Phase 7c has the exact entry, including the `runpy` launcher that keeps a missing file from blocking every command.
 
 ---
 

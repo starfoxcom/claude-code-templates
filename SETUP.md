@@ -201,7 +201,6 @@ On `apply`:
      - `{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}` ← the profile JSON key itself when `tools.code_research` is one of the built-in values (`tokensave`, `ast-grep`, `sourcegraph`, `ctags`, `semgrep` — all already kebab-shaped, so the substituted value equals the manifest's `tools.code_research` value verbatim). For the `custom` profile, computed from the user-supplied name per Phase 7a step "Compute custom-case placeholders". **Substituted into template files** — notably `_core/project-template/CLAUDE.md`, `_core/project-template/.claude/skills/find/SKILL.md`, and `_core/global-template/CLAUDE.md.additions`, wherever the hook filename `~/.claude/hooks/<name-kebab>-first.py` appears in the shared/header sections (which apply to every bind) or inside `:code_research_first` / `:code_research:custom` blocks.
      - `{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}` ← UPPER_SNAKE form of the same source (used inside `code-research-profiles.json` for the `custom` profile's `bypass_marker` derivation — not otherwise referenced directly in template files; the resolved `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` placeholder carries the final value into template files).
      - For `tools.code_research === "none"`, substitute the literal string `(no hook)` for `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` — the find skill's fallback block doesn't render in any non-tokensave-entry-point case anyway.
-   - `{{PYTHON_EXE}}` ← the absolute path of a Python 3.8+ interpreter on the user's machine, found by running `python -c "import sys; assert sys.version_info >= (3, 8); print(sys.executable)"`, then the same with `python3`, then `py -3`, and taking the first that prints a path. Write it JSON-escaped (on Windows each `\` becomes `\\`), because it lands inside a JSON string. This also decides the `push_guard_hook` toggle, which no bundle sets: **ON** when a path was found, **OFF** when none was. When OFF, strip its block from `.claude/settings.local.json.template` and skip `.claude/hooks/push-guard.py` during the copy; the force-push deny rules in the same file still apply.
 
 3. **Resolve toggles + placeholders in the correct order** (strip first, then substitute — so placeholder substitution doesn't waste work on about-to-be-stripped blocks):
 
@@ -351,6 +350,28 @@ On `apply`:
      ```
    - On Windows, swap the path to absolute: `bash "C:/Users/<name>/.claude/statusline-command.sh"`.
    - Verify by starting a Claude Code session — the status line should show `<model> | <last2dirs> | <branch> | ctx:N%`.
+
+7c. **Install the push guard GLOBALLY** (every bind; it protects every project on the machine):
+   - **Why:** the project's deny rules match command text, so a force push spelled as a bundle of short flags (`git push -qf`) slips past them. The hook reads the actual `git push` arguments and blocks any force flag or `+` refspec, while `--force-with-lease` stays allowed. It lives in `~/.claude`, never in a project's settings, for the reason in Phase 7a's "Why not project-local?" note.
+   - **Find Python 3.8+.** Run `python -c "import sys; assert sys.version_info >= (3, 8); print(sys.executable)"`, then the same with `python3`, then `py -3`, and keep the first absolute path printed. If none prints one, skip this step and tell the user: *"No Python 3.8+ found, so the push guard is not installed. Pushes other than a bare `git push` will ask for approval; install Python and re-run setup to add the guard."*
+   - **Copy** `claude-code-templates/_core/global-template/hooks/push-guard.py` to `~/.claude/hooks/push-guard.py` (atomic write, as in Phase 7a). If a file is already there, replace it: the canonical copy is the current version.
+   - **Register it** in `~/.claude/settings.json` under `hooks.PreToolUse`, using Phase 7a's backup, shape normalization and atomic-write rules. First remove any existing entry whose `args` mention `push-guard.py`, so a re-run never registers it twice. Then append, with `<python>` the path found above and `<home>` the absolute home directory written with forward slashes (`C:/Users/<name>` on Windows). Escape `<python>` as a JSON string: on Windows each backslash in it is doubled.
+     ```json
+     {
+       "matcher": "Bash|PowerShell",
+       "hooks": [
+         {
+           "type": "command",
+           "command": "<python>",
+           "args": ["-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')", "<home>/.claude/hooks/push-guard.py"],
+           "timeout": 10
+         }
+       ]
+     }
+     ```
+     Exec form (`command` plus `args`) runs without a shell, so paths with spaces need no quoting. The `runpy` launcher keeps a missing or moved file from blocking every command: Python exits 2 when it cannot open a script, and exit 2 is what blocks.
+   - **Auto-approve pushes only with the guard in place.** The project settings allow only a bare `git push`. With the hook registered, add `"Bash(git push:*)"` to `permissions.allow` in `~/.claude/settings.json` (skip it if already there), in the same atomic write. The project's deny rules still take precedence.
+   - **Verify** by piping `{"tool_name": "Bash", "tool_input": {"command": "git push -qf origin main"}}` into the registered command and arguments: it must exit 2. The same input with `--force-with-lease` must exit 0.
 
 8. **Initialize per-project memory.** If `memory_system` is ON, copy `_core/global-template/memory-template/MEMORY.md` to `~/.claude/projects/<slug>/memory/MEMORY.md` (only if it doesn't already exist). `<slug>` is auto-derived by Claude Code from the project's working-directory path.
 

@@ -1,5 +1,4 @@
 [
-  ".claude/hooks/push-guard.py",
   ".claude/rules/architecture/README.md",
   ".claude/rules/architecture/clean.md",
   ".claude/rules/architecture/ddd.md",

@@ -215,6 +215,15 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
     "git push -u origin feature/x", "git push --follow-tags origin x"]) {
     assert.ok(!denied(cmd), `${cmd} should be allowed`);
   }
+  // Short-flag bundles like `-qf` cannot be denied by text rules without also denying
+  // `--force-with-lease`; only the global push guard catches them. Without it, they must
+  // at least not be auto-approved, so the person sees the command before it runs.
+  const allows = settings.permissions.allow.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map(toRegex);
+  for (const cmd of ["git push -qf origin main", "git push -vf origin main", "git push -uqf origin main",
+    "git push origin main -qf", "git push -u origin x -qf"]) {
+    assert.ok(!allows.some((r) => r.test(cmd)), `${cmd} must not be auto-approved`);
+  }
+  assert.ok(allows.some((r) => r.test("git push")), "a bare git push stays auto-approved");
 });
 
 // `python` first: on Windows, `python3` is often an App Execution Alias, and starting
@@ -271,34 +280,25 @@ test("the adherence script counts only code searches", { skip: !python && "needs
 });
 
 test("the push guard blocks force pushes in any flag bundle", { skip: !python && "needs Python 3.8+" }, async () => {
-  const parse = (files) => JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
+  // The guard is installed globally by setup, never shipped into the project.
+  assert.ok(!coreFiles.some((f) => f.includes("push-guard")), "no project copy of the push guard");
+  assert.equal(JSON.parse((await run(defaults())).get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, "")).hooks,
+    undefined, "no project-level hooks");
 
-  // Without an interpreter from setup (the browser page), the hook is left out entirely.
-  const plain = await run(defaults());
-  assert.equal(parse(plain).hooks, undefined, "no hook without a known interpreter");
-  assert.ok(!plain.has(".claude/hooks/push-guard.py"));
-
-  // With one, the hook is registered to that exact interpreter and runs as registered:
-  // exec form (no shell), with Claude Code's `${CLAUDE_PROJECT_DIR}` substitution.
+  // Register it exactly as SETUP.md Phase 7c documents: its JSON entry, with this
+  // machine's interpreter and a temporary home. Exec form, so no shell is involved.
+  const setup = readFileSync(join(repo, "SETUP.md"), "utf8");
+  const step = setup.slice(setup.indexOf("7c. **Install the push guard GLOBALLY**"));
   const exe = spawnSync(python, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
-  const a = defaults();
-  a.environment = { python: exe };
-  const files = await run(a);
-  const entry = parse(files).hooks.PreToolUse.flatMap((h) => h.hooks).find((x) => (x.args || []).some((s) => s.includes("push-guard.py")));
-  assert.ok(entry, "hook is registered");
+  const home = mkdtempSync(join(tmpdir(), "push-guard-")).split("\\").join("/");
+  const entry = JSON.parse(step.match(/```json\r?\n([\s\S]*?)```/)[1]
+    .replace("<python>", JSON.stringify(exe).slice(1, -1)).replace("<home>", home)).hooks[0];
   assert.equal(entry.command, exe);
   assert.ok(Array.isArray(entry.args), "exec form, so no shell expands the path");
-  for (const bad of ["python3", "C:/x\"y/python.exe", "/usr/bin/python\n"]) {
-    const b = defaults();
-    b.environment = { python: bad };
-    await assert.rejects(run(b), /environment.python/, `rejects ${JSON.stringify(bad)}`);
-  }
-  const project = mkdtempSync(join(tmpdir(), "push-guard-"));
-  mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
-  writeFileSync(join(project, ".claude", "hooks", "push-guard.py"), files.get(".claude/hooks/push-guard.py"));
-  const runHook = (root, input) => spawnSync(entry.command, entry.args.map((s) => s.split("${CLAUDE_PROJECT_DIR}").join(root)),
-    { input, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: root } }).status;
-  const verdict = (tool, command) => runHook(project, JSON.stringify({ tool_name: tool, tool_input: { command } }));
+  mkdirSync(join(home, ".claude", "hooks"), { recursive: true });
+  writeFileSync(join(home, ".claude", "hooks", "push-guard.py"), readFileSync(join(repo, "_core/global-template/hooks/push-guard.py")));
+  const runHook = (root, input) => spawnSync(entry.command, entry.args.map((s) => s.split(home).join(root)), { input, encoding: "utf8" }).status;
+  const verdict = (tool, command) => runHook(home, JSON.stringify({ tool_name: tool, tool_input: { command } }));
   const missing = runHook(mkdtempSync(join(tmpdir(), "no-hook-")), JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }));
   assert.notEqual(missing, 2, "a missing hook file must not block every call");
   const blocked = [
@@ -313,7 +313,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin x --force-with-lease=x:abc", "git push --force-if-includes --force-with-lease origin x",
     "git push --follow-tags origin x", "git push -o ci.skip origin x", "git push -uo f origin x",
     "git push --push-option f origin x", "git commit -m \"push -f later\"", "echo \"git push -f\"", "git log -f",
-    "git push origin main:+notes",
+    // The first word after `--` is still the remote, so this pushes to a remote named "+main".
+    "git push origin main:+notes", "git push -- +main",
   ];
   for (const cmd of blocked) {
     assert.equal(verdict("Bash", cmd), 2, `Bash should block: ${cmd}`);
@@ -321,7 +322,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   }
   for (const cmd of allowed) assert.equal(verdict("Bash", cmd), 0, `should allow: ${cmd}`);
   assert.equal(verdict("Read", "git push -f"), 0, "other tools pass");
-  assert.equal(runHook(project, "not json"), 0, "bad input fails open");
+  assert.equal(runHook(home, "not json"), 0, "bad input fails open");
 });
 
 test("bad answers are rejected", async () => {
