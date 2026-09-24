@@ -328,13 +328,18 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // The first word after `--` is still the remote, so this pushes to a remote named "+main".
     "git push origin main:+notes", "git push -- +main", "git push --no-mirror origin x",
     "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
-    "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
-    "cat <<-EOF > notes.md\n\tgit push --force\n\tEOF",
-    "git push origin x # never -f here",
+    "cat > notes.md <<'EOF'\nnotes\nEOF\ngit push origin x", "cat <<-EOF > notes.md\n\tnotes\n\tEOF",
+    "git push origin x # never -f here", "(( n = 1 << 2 ))\necho done",
   ];
   // Pushes the guard cannot read with confidence go to the permission prompt.
   const asked = ["a & git push -qf origin main", "sudo -u me git push -qf origin main", "echo $(git push -qf origin main)",
-    "git commit -m \"unbalanced && git push -f"];
+    "git commit -m \"unbalanced && git push -f",
+    // Skipped text (here-document bodies, comments, here-strings) that mentions a push is never
+    // silently dropped, including a shift misread as a here-document that swallows later lines.
+    "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF", "cat <<-EOF > notes.md\n\tgit push --force\n\tEOF",
+    "(( n = 1 << 2 ))\ngit push -qf origin main", "echo $((x << y))\ngit push -qf origin main",
+    "cat <<EOF\nnever closed\ngit push -qf origin main", "echo hi # && git push -qf origin main"];
+  assert.equal(verdict("PowerShell", "$s = @'\nnever closed\ngit push -qf origin main"), "ask", "unclosed here-string");
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
     assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);

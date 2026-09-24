@@ -44,13 +44,23 @@ PREFIXES = {"sudo", "env", "command", "builtin", "nice", "nohup", "time", "timeo
 HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z0-9_.-]+)\2")
 
 
+def mentions_push(text):
+    return bool(re.search(r"\bgit", text, re.I) and re.search(r"\bpush\b", text, re.I))
+
+
 def segments(command, tool):
     """Split a command where the shell would: at unquoted `&&`, `||`, `;`, `|`
     and newlines. Escapes and comments are honored, and here-document and
     PowerShell here-string bodies are skipped, since they are text, not
-    commands."""
+    commands.
+
+    Returns the segments and whether skipped text mentions git and push, so
+    skipping can never hide a push. A body that never closes runs to the end
+    of the command, which also covers a misread `<<` such as the shift in
+    `(( 1 << 2 ))`."""
     escape = "`" if tool == "PowerShell" else "\\"
     parts, current, quote, pending, i, n = [], [], None, [], 0, len(command)
+    skipped = []
     while i < n:
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
@@ -65,13 +75,17 @@ def segments(command, tool):
             quote = ch
             current.append(ch)
         elif ch == "#" and (not current or current[-1][-1:].isspace()):
-            while i < n and command[i] != "\n":
-                i += 1
+            end = command.find("\n", i)
+            end = n if end < 0 else end
+            skipped.append(command[i:end])
+            i = end
             continue
         elif tool == "PowerShell" and command.startswith(("@'", '@"'), i):
             end = command.find("\n" + command[i + 1] + "@", i)
+            end = n if end < 0 else end + 3
+            skipped.append(command[i:end])
             current.append(" ''")
-            i = n if end < 0 else end + 3
+            i = end
             continue
         elif tool != "PowerShell" and command.startswith("<<", i) and not command.startswith("<<<", i):
             match = HEREDOC.match(command, i)
@@ -88,18 +102,22 @@ def segments(command, tool):
         elif ch in ";|\n":
             parts.append("".join(current))
             current = []
-            if ch == "\n":
-                i = skip_bodies(command, i + 1, pending) - 1
+            if ch == "\n" and pending:
+                start = i + 1
+                i = skip_bodies(command, start, pending)
+                skipped.append(command[start:i])
                 pending = []
+                continue
         else:
             current.append(ch)
         i += 1
     parts.append("".join(current))
-    return parts
+    return parts, any(mentions_push(text) for text in skipped)
 
 
 def skip_bodies(command, i, pending):
-    """Skip the here-document bodies opened on the line that just ended."""
+    """Skip the here-document bodies opened on the line that just ended, and
+    return where the next line starts (the end, when a body never closes)."""
     for delimiter, strip_tabs in pending:
         while i < len(command):
             end = command.find("\n", i)
@@ -108,7 +126,7 @@ def skip_bodies(command, i, pending):
             i = end + 1
             if (line.lstrip("\t") if strip_tabs else line).rstrip("\r") == delimiter:
                 break
-    return i
+    return min(i, len(command))
 
 
 def words(segment, tool):
@@ -184,7 +202,7 @@ def force_reason(args):
 def unread_push(segment, tokens):
     """True when a segment mentions git and push but was not read as `git push`."""
     if tokens is None:
-        return bool(re.search(r"\bgit", segment) and re.search(r"\bpush\b", segment))
+        return mentions_push(segment)
     gits = [k for k, token in enumerate(tokens) if program(token) == "git"]
     return any("push" in tokens[k + 1:] for k in gits)
 
@@ -198,8 +216,8 @@ def main():
     if tool not in ("Bash", "PowerShell"):
         return 0
     command = (data.get("tool_input") or {}).get("command") or ""
-    unsure = False
-    for segment in segments(command, tool):
+    parts, unsure = segments(command, tool)
+    for segment in parts:
         tokens = words(segment, tool)
         args = push_args(tokens) if tokens is not None else None
         if args is None:
