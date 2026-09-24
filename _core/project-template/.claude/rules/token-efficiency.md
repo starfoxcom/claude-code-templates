@@ -40,9 +40,10 @@ When everything is green, merge per `git.md` § Merging. On a red check, read th
 Diffs with no source files (docs, rules, `.claude/**`) pass both review checks in about 30 seconds. Skip the monitor: wait about 90 seconds, check `gh pr view <pr> --json mergeable,mergeStateStatus`, then merge per `git.md` § Merging:
 
 - `MERGEABLE` and `CLEAN`: merge.
-- Anything else, including `BLOCKED`: stop and report the state. Never merge past a rule.
+- `BLOCKED` on a required approval: a reviewer other than the author approves it; until then, wait.
+- Anything else: stop and report the state. Never merge past a rule.
 
-Approval to open the PR covers this merge.
+Approval to open the PR covers this merge, except for a PR that changes `.github/workflows/`: no AI reviews it, so it merges only after the maintainer has read the diff (`review-tiers.md`).
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
 
 ## Long sessions

@@ -7,7 +7,7 @@ Every PR gets an AI review with a pass or block verdict, run by `.github/workflo
 | Routine | Every PR (`claude-code-review.yml`) | `{{REVIEW_ROUTINE_MODEL}}` | `Evaluate review outcome` |
 | Deep | A comment starting with `@claude review this PR` (`claude.yml`) | `{{REVIEW_DEEP_MODEL}}` | `Claude On-Demand` |
 
-Both checks are required on protected branches. Docs-only and other non-reviewable diffs pass both automatically in about 30 seconds. Model pins change only after a side-by-side comparison of candidate models on the same saved PRs, never just because a newer model exists.
+Both checks are required on protected branches, and branch protection has no bypass actors. With a single maintainer, require zero approvals so the two checks alone decide, since authors cannot approve their own PRs. With more people, also require one approval from someone other than the author. Docs-only and other non-reviewable diffs pass both automatically in about 30 seconds. Model pins change only after a side-by-side comparison of candidate models on the same saved PRs, never just because a newer model exists.
 
 ## The verdict rule (both tiers)
 
@@ -44,7 +44,12 @@ Fix on the same PR branch and push; the review re-runs. Then search the codebase
 
 ## PRs that edit the review workflow
 
-The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so those PRs get no verdict. Keep such an edit in a PR of its own. When the job log says `Workflow validation failed`, stop and report it to the maintainer; never merge past a missing verdict. For any other failure, fix the cause.
+The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so the review must never start on them. Triage reviews only source files, so a PR that changes only workflow files (and docs) is non-reviewable: both checks pass without a review. That makes two rules:
+
+- A workflow edit ships in a PR of its own, with no source files. Mixed with code, the review starts, fails `Workflow validation failed`, and the PR can never merge; split it.
+- No AI reviews a workflow-only PR, so the maintainer reads its whole diff before it merges.
+
+For any other failure, fix the cause.
 
 ## Local session's job
 

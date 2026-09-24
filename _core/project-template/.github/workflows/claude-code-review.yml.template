@@ -39,8 +39,9 @@
 #   head ref is byte-identical to the version on the default branch before granting
 #   an OIDC-exchanged token. Any PR that edits .github/workflows/claude-code-review.yml
 #   therefore fails the token exchange and the routine review action cannot post a
-#   verdict. Confirm via `gh run view --job <id> --log-failed`, keep the edit in its
-#   own PR, and report it to the maintainer. Never merge past the missing verdict.
+#   verdict. Triage below reviews only source files, so a PR that changes only
+#   workflow files (and docs) is non-reviewable and passes without a review. Keep
+#   workflow edits in PRs of their own; the maintainer reads those diffs before merge.
 
 name: Claude Code Review
 
