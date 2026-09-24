@@ -210,11 +210,15 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
     "git push origin -f", "git push -fu origin x", "git push origin x -fu", "git push -uf origin x", "git push origin -uf x",
     "git push origin +main", "git push --mirror origin", "git push origin --mirror",
     // `--upload-pack` runs a shell command, so the `git fetch`/`git pull` allows must not approve it.
-    "git fetch --upload-pack=x .", "git fetch origin --upl=x", "git pull --upload-pack=x . main"]) {
+    "git fetch --upload-pack=x .", "git fetch origin --upl=x", "git pull --upload-pack=x . main",
+    // A mirror remote turns a later bare `git push`, which the allow list approves, into a mirror force push.
+    "git remote add --mirror=push origin https://x/y", "git remote add --mi origin https://x/y",
+    "git remote -v add --mirror=push origin https://x/y"]) {
     assert.ok(denied(cmd), `${cmd} should be denied`);
   }
   for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x",
-    "git push -u origin feature/x", "git push --follow-tags origin x"]) {
+    "git push -u origin feature/x", "git push --follow-tags origin x",
+    "git remote add upstream https://x/y", "git remote -v", "git fetch origin", "git pull origin main"]) {
     assert.ok(!denied(cmd), `${cmd} should be allowed`);
   }
   // Short-flag bundles like `-qf` cannot be denied by text rules without also denying

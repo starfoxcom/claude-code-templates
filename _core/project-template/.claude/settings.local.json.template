@@ -58,6 +58,7 @@
       "Bash(git push *--mirror*)",
       "Bash(git fetch *--upl*)",
       "Bash(git pull *--upl*)",
+      "Bash(git remote *--mi*)",
       "Bash(git reset --hard:*)",
       "Bash(git clean -f:*)",
       "Bash(git branch -D main)",
