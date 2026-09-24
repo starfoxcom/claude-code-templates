@@ -138,12 +138,15 @@ def scan(command, tool, text=False, keywords=True):
             # Inside `$'...'` the pair is an escape, never a join.
             rest = command[i + 1:i + 3]
             if quote != "$'" and (rest.startswith("\n") or (tool == "PowerShell" and rest.startswith("\r"))):
-                # Remember what came before the join (across several joins in a
-                # row): the next word's start is decided by it, not by the newline.
-                if joined_to != i:
+                # Bash joins the lines before it splits words, so the next word's
+                # start is decided by what came before the join (across several
+                # joins in a row). In PowerShell a continuation is whitespace, so
+                # the newline itself still ends the word.
+                if tool != "PowerShell" and joined_to != i:
                     joined_from, joined_before, joined_escaped = i, command[i - 1:i], escaped_end == i
                 i += 3 if rest == "\r\n" else 2
-                joined_to = i
+                if tool != "PowerShell":
+                    joined_to = i
                 continue
             if not stack:
                 current.append(command[i:i + 2])
@@ -200,10 +203,13 @@ def scan(command, tool, text=False, keywords=True):
             # the group; count `case` and `esac` in command position.
             keyword = re.match(r"(case|esac)(?=[\s;)]|$)", command[i:i + 5]) if keywords and ch in "ce" else None
             # `^` may only match at the group's own start, so a cut-off window
-            # gets a leading word character. A `then`, `do`, `else` or `elif`
-            # before it counts only when it is itself in command position.
+            # gets a leading word character. A reserved word before it (`then`,
+            # `do`, `if`, `!`, ...) counts only when it is itself in command
+            # position. Counting too much is undone by the second reading in
+            # `check`; counting too little is not, so the list errs wide.
             window = command[start:i] if i - start <= 40 else "x" + command[i - 40:i]
-            if keyword and re.search(r"(^|[;&|(\n])[ \t]*((then|do|else|elif)[ \t]+)?$", window):
+            if keyword and re.search(r"(^|[;&|({!\n])[ \t]*((then|do|else|elif|if|while|until|time|!)[ \t]+)*$",
+                                     window):
                 stack[-1][4] = cases + 1 if keyword.group(1) == "case" else max(cases - 1, 0)
                 i += 4
                 continue

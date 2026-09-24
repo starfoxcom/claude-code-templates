@@ -371,7 +371,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git commit -m (git push -qf origin main)",
     // In PowerShell 7 a mid-line `&` starts a background job and ends the statement; so does a lone CR.
     "git commit -m wip & git push -qf origin main", "echo x & git push -qf origin main",
-    "Write-Output x & git push -qf origin main", "git commit -m wip\rgit push -qf origin main"];
+    "Write-Output x & git push -qf origin main", "git commit -m wip\rgit push -qf origin main",
+    // The comment after a backtick continuation hides its quote, so the push is read.
+    "Write-Output x`\n# \"\ngit push -qf origin main"];
   // Silent passes: pushes on the allow-list, commands that never push, and text that only mentions one.
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
@@ -456,6 +458,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "x=$(echo just in case); git push -qf origin main", "x=$(echo do case); git push -qf origin main",
     // A line continuation joins before words are split: `x=1\<LF>#` is the word `x=1#`.
     "x=1\\\n#; git push -qf origin main", "x=1\\\n\\\n#; git push -qf origin main",
+    // A `case` after `{`, `!` or another reserved word is counted too.
+    "x=\"$({ case a in a) echo \"it's\";; esac; })\"; git push -qf origin main",
+    "x=$(if case a in a) true;; esac; then echo \"it's\"; fi); git push -qf origin main",
     "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case where the lock is stale\nEOF\n)\" && git push -f origin main",
     // In an unquoted heredoc body, quotes and `#` are text and `$(...)` still runs.
     "cat <<EOF\ndon't\n$(git push -qf origin main)\nEOF", "cat <<EOF\n# $(git push -qf origin main)\nEOF",
@@ -517,6 +522,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   for (const cmd of ["git push origin feature/x 2>&1 | Select-Object -Last 1", "git push origin x 2>&1 | tail -1",
     // A carriage return ends a PowerShell line, so the `#` after it starts a comment.
     "git push origin main\r# -qf",
+    // A backtick continuation is whitespace in PowerShell, so the `#` after it starts a comment.
+    "Write-Output a`\n#; git push -qf origin main",
     // A parenthesized argument is one value; its words are not the push's.
     "git push origin (\"release/{0}\" -f $version)", "git push origin $(git branch --show-current)",
     "git push -u origin feature/x 2>&1 | Select-String -NotMatch remote"]) {
