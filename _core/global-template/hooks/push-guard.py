@@ -7,10 +7,12 @@ Permission rules match command text, so `-f` bundled with other short flags
 - `--force` and `-f`, alone or inside a short-flag bundle;
 - `--mirror`, which force-updates and deletes every remote ref;
 - a refspec starting with `+` (a force push of that one ref);
-- `-c remote.<name>.push=+...` or `-c remote.<name>.mirror=...` on the push itself;
-- a one-off alias that forces (`git -c alias.p='push -f' p`);
-- a push of a branch the same command deleted (`git push origin --delete
-  main && git push origin main`), which drops remote commits like a force push.
+- `-c remote.<name>.push=+...` or a true `-c remote.<name>.mirror` on the push itself;
+- a one-off alias that forces (`git -c alias.p='push -f' p`, also through
+  another alias or a `!` shell alias);
+- a push of a branch the same command deleted on the same remote (`git push
+  origin --delete main && git push origin main`), which drops remote commits
+  like a force push.
 
 `--force-with-lease` and `--force-if-includes` stay allowed: they refuse to
 overwrite work the local repo has not seen. The same checks cover git's push
@@ -20,17 +22,21 @@ The hook only ever blocks or stays silent; it never asks. Every other command
 runs exactly as it would without the hook, so it adds no prompts to normal
 work. It blocks only what it can read for certain: a `git push` anywhere in a
 statement, also after wrappers such as `sudo -u me` or `timeout 5`, inside a
-`(...)`, `$(...)` or `{ ...; }` group, after an assignment, or inside a
-literal command string (`sh -c '...'`, `pwsh -Command '...'`, `eval '...'`),
-with a force flag among its own words. Text that only prints or commits
-(`echo`, `printf`, `git commit`, without a redirect) is never read as a push,
-and neither are comments.
+`(...)`, `$(...)`, backtick or `{ ...; }` group, after an assignment, or
+inside a literal command string (`sh -c '...'`, `bash -l -c '...'`, `pwsh
+-Command '...'`, `eval '...'`), with a force flag among its own words, also
+when written in Bash's `$'...'` quoting or with a redirect glued to it
+(`-qf>/dev/null`). A separator inside a substitution does not end the
+statement around it. Text that only prints or commits (`echo`, `printf`,
+`git commit`, without a redirect) is never read as a push, and neither are
+comments.
 
 Out of reach, so these run without a block:
 
 - a command this hook cannot split into statements for certain: one with a
   heredoc (`<<`), a PowerShell here-string, block comment or `--%`,
-  unbalanced quotes, or, in PowerShell, characters outside ASCII;
+  unbalanced quotes or groups, or, in PowerShell, characters outside ASCII;
+- remote branch and tag deletions (`--delete`, `:branch`, `--prune`);
 - a force flag the shell builds at run time (`git push $FLAGS`, `xargs`,
   brace expansion, text piped into a shell or `iex`);
 - git config or aliases that force a later plain `git push` (`git config
@@ -109,17 +115,49 @@ def join_lines(command, tool):
 
 
 def scan(command, tool):
-    """Split a command at unquoted separators and drop comments. Returns the
-    segments and whether the split is certain: a heredoc, a PowerShell
-    here-string or `--%`, or quotes that never close make it uncertain."""
+    """Split a command at unquoted separators and drop comments. A separator
+    inside a substitution (`$(...)`, backticks, `${...}`, `<(...)`, PowerShell
+    `$(...)` and `@(...)`) does not end the statement around it. Returns the
+    statements, the text of each command substitution (checked as a command
+    of its own), and whether the split is certain: a heredoc, a PowerShell
+    here-string or `--%`, or quotes or groups that never close make it
+    uncertain."""
     escape = "`" if tool == "PowerShell" else "\\"
-    parts, current, quote, readable, i, n = [], [], None, True, 0, len(command)
+    openers = ("$(", "@(") if tool == "PowerShell" else ("$(", "<(", ">(", "${")
+    parts, current, groups, stack = [], [], [], []
+    quote, readable, i, n = None, True, 0, len(command)
     while i < n:
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
             current.append(command[i:i + 2])
             i += 2
             continue
+        # Substitutions open outside single quotes, inside double quotes too,
+        # and start a fresh quoting context.
+        opener = next((o for o in openers if command.startswith(o, i)), None)
+        if quote != "'" and (opener or (ch == "`" and tool != "PowerShell" and not (stack and stack[-1][0] == "`"))):
+            opener = opener or "`"
+            stack.append([opener, i + len(opener), quote, 0])
+            current.append(opener)
+            quote = None
+            i += len(opener)
+            continue
+        if stack and quote is None:
+            kind, start, outer, depth = stack[-1]
+            closer = {"`": "`", "${": "}"}.get(kind, ")")
+            nested = {"`": None, "${": "{"}.get(kind, "(")
+            if ch == nested:
+                stack[-1][3] += 1
+            elif ch == closer and depth:
+                stack[-1][3] -= 1
+            elif ch == closer:
+                stack.pop()
+                if kind != "${":
+                    groups.append(command[start:i])
+                quote = outer
+                current.append(ch)
+                i += 1
+                continue
         if quote:
             if ch == quote:
                 quote = None
@@ -129,11 +167,16 @@ def scan(command, tool):
             quote = ch
         elif command.startswith("<<", i) or (tool == "PowerShell" and command.startswith("<#", i)):
             readable = False
-        # A `#` that starts a word starts a comment, which runs to the end of the line.
-        elif ch == "#" and (i == 0 or command[i - 1] in " \t\r\n;|&("):
+        # A `#` that starts a word starts a comment, which runs to the end of the
+        # line. Only PowerShell ends words at a carriage return; in Bash `\r#` is
+        # part of a word.
+        elif ch == "#" and (i == 0 or command[i - 1] in " \t\n;|&"
+                            or (tool == "PowerShell" and command[i - 1] == "\r")):
             while i < n and command[i] != "\n":
                 i += 1
             continue
+        elif stack:
+            pass
         elif command.startswith(("&&", "||"), i):
             parts.append("".join(current))
             current = []
@@ -153,6 +196,8 @@ def scan(command, tool):
         current.append(ch)
         i += 1
     parts.append("".join(current))
+    if stack:
+        readable = False
     # PowerShell also reads curly quotes as quotes and Unicode spaces, vertical
     # tab and form feed as whitespace; shlex does not.
     if tool == "PowerShell" and re.search(r"[^\x00-\x7f]|[\v\f]", command):
@@ -161,7 +206,65 @@ def scan(command, tool):
     # separators included.
     if tool == "PowerShell" and "--%" in command:
         readable = False
-    return parts, readable and quote is None
+    return parts, groups, readable and quote is None
+
+
+ANSI_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r",
+                "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+
+
+def ansi_escape(text, j):
+    """Decode the backslash escape at text[j] inside Bash's `$'...'`; returns
+    the characters and the index after the escape."""
+    rest = text[j + 1:]
+    if rest[:1] in ANSI_ESCAPES:
+        return ANSI_ESCAPES[rest[0]], j + 2
+    for pattern, base in ((r"[0-7]{1,3}", 8), (r"x([0-9A-Fa-f]{1,2})", 16),
+                          (r"u([0-9A-Fa-f]{1,4})", 16), (r"U([0-9A-Fa-f]{1,8})", 16)):
+        m = re.match(pattern, rest)
+        if m:
+            code = int(m.group(m.lastindex or 0), base)
+            return (chr(code & 0xFF) if base == 8 else chr(min(code, 0x10FFFF))), j + 1 + m.end()
+    if rest[:1] == "c" and len(rest) > 1:
+        return chr(ord(rest[1]) & 0x1F), j + 3
+    return "\\" + rest[:1], j + 2
+
+
+def bash_quotes(command):
+    """Rewrite Bash's `$'...'` as a plain single-quoted word with its escapes
+    decoded, and `$"..."` as `"..."`, so shlex reads them as Bash does:
+    `$'-qf'` and `$'\\x2dqf'` are `-qf`."""
+    out, quote, i, n = [], None, 0, len(command)
+    while i < n:
+        ch = command[i]
+        if ch == "\\" and quote != "'" and i + 1 < n:
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote is None and command.startswith("$'", i):
+            j, text = i + 2, []
+            while j < n and command[j] != "'":
+                if command[j] == "\\" and j + 1 < n:
+                    decoded, j = ansi_escape(command, j)
+                    text.append(decoded)
+                    continue
+                text.append(command[j])
+                j += 1
+            if j >= n:
+                return command
+            out.append("'" + "".join(text).replace("'", "'\\''") + "'")
+            i = j + 1
+            continue
+        if quote is None and command.startswith('$"', i):
+            i += 1
+            continue
+        if quote and ch == quote:
+            quote = None
+        elif not quote and ch in "'\"":
+            quote = ch
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def words(segment, tool):
@@ -171,6 +274,8 @@ def words(segment, tool):
     lexer = shlex.shlex(segment, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
+    # Bash does not split words at a carriage return.
+    lexer.whitespace = " \t\n" if tool == "Bash" else " \t\r\n"
     if tool == "PowerShell":
         lexer.escape = "`"
         # An unquoted comma builds an array, and PowerShell passes each element
@@ -220,12 +325,12 @@ def program(token):
     return re.sub(r"\.exe$", "", name)
 
 
-def push_reason(tokens, deleted):
+def push_reason(tokens, deleted, depth):
     """Why the first push in the tokens forces, or None. Every git word is
     checked, not only the first word, so wrappers with their own options
     (`sudo -u me`, `timeout 5`, `nice -n 5`, `command -p`) and shell keywords
     (`case x in a)`) cannot hide a push. `deleted` collects the branches
-    deleted so far in the command."""
+    deleted so far in the command, by remote."""
     for k, token in enumerate(tokens):
         # `git-push` (git's libexec program) is push itself.
         if program(token) in PUSH_PROGRAMS:
@@ -241,16 +346,37 @@ def push_reason(tokens, deleted):
             continue
         # A redirect glued to the subcommand ends it: `push>/dev/null` is push.
         name, args = re.split(r"[<>&]", tokens[i], 1)[0], tokens[i + 1:]
-        # A one-off alias (`-c alias.p='push -f'`, or `'!git push -f'`) runs
-        # its words in place of the alias name.
+        # A one-off alias (`-c alias.p='push -f'`) runs its words in place of
+        # the alias name; a `!` alias runs its text in a shell with the
+        # arguments appended. Config keys ignore case, and an alias can name
+        # another alias.
+        aliases = {}
         for setting in config:
-            alias = re.match(r"(?i)alias\.([^=]+)=!?\s*(?:git\s+)?(.*)", setting, re.S)
-            if alias and alias.group(1) == name and alias.group(2).split():
-                expanded = alias.group(2).split()
-                name, args = expanded[0], expanded[1:] + args
+            alias = re.match(r"(?i)alias\.([^=]+)=(.*)", setting, re.S)
+            if alias:
+                aliases[alias.group(1).lower()] = alias.group(2).strip()
+        seen = set()
+        while name.lower() in aliases and name not in PUSH_SUBCOMMANDS and name.lower() not in seen:
+            seen.add(name.lower())
+            value = aliases[name.lower()]
+            if value.startswith("!"):
+                inner = value[1:] + "".join(" " + shlex.quote(a) for a in args)
+                reason = check(inner, "Bash", depth + 1) if depth < MAX_DEPTH else None
+                if reason:
+                    return reason
+                name = ""
+                break
+            try:
+                expanded = shlex.split(value)
+            except ValueError:
+                expanded = value.split()
+            if not expanded:
+                break
+            name, args = expanded[0], expanded[1:] + args
         if name in PUSH_SUBCOMMANDS:
             for setting in config:
-                if re.match(r"(?i)remote\.[^=]+\.(push=\s*\+|mirror(=|$))", setting):
+                # `remote.<name>.mirror` with no value is true.
+                if re.match(r"(?i)remote\.[^=]+\.(push=\s*\+|mirror(=\s*(true|yes|on|1)\s*$|$))", setting):
                     return f"`-c {setting}` (a forcing push setting)"
             return check_push(args, deleted)
     return None
@@ -262,8 +388,9 @@ def check_push(args, deleted):
         return reason
     # The first positional is the repository even after `--` (git push
     # [<options>] [<repository> [<refspec>...]]), so refspecs start at [1].
+    remote = refs[0] if refs else ""
     for ref in refs[1:]:
-        target = re.sub(r"^refs/heads/", "", ref.split(":")[-1])
+        target = (remote, re.sub(r"^refs/heads/", "", ref.split(":")[-1]))
         if delete or ref.startswith(":"):
             deleted.add(target)
         elif target in deleted:
@@ -278,11 +405,19 @@ def force_reason(args):
     positional arguments and whether the push deletes (`--delete`, `-d`)."""
     positional, i, only_refs, delete = [], 0, False, False
     while i < len(args):
-        arg = args[i]
-        # A redirect (`2>&1`, `>out.txt`, or `>` before a file name) is no argument.
-        if re.search(r"[<>]", arg):
-            i += 2 if re.fullmatch(r"\d*[<>]+[&|]?", arg) else 1
-            continue
+        arg, extra = args[i], 0
+        # A redirect glued to an argument ends it, as in the shell: `-qf>/dev/null`
+        # passes `-qf`. A word that starts with a redirect (`2>&1`, `>out.txt`) is
+        # no argument. A bare operator (`>`, `2>`, `-qf>`) takes the next word
+        # as its file.
+        cut = re.search(r"[<>&]", arg)
+        if cut:
+            head, operator = arg[:cut.start()], arg[cut.start():]
+            extra = 1 if re.fullmatch(r"[<>&|]+", operator) else 0
+            if not head or head.isdigit():
+                i += 1 + extra
+                continue
+            arg = head
         if only_refs or not arg.startswith("-") or arg == "-":
             positional.append(arg)
         elif arg == "--":
@@ -310,7 +445,7 @@ def force_reason(args):
                     if pos == len(arg) - 2:
                         i += 1
                     break
-        i += 1
+        i += 1 + extra
     for ref in positional[1:]:
         if ref.startswith("+"):
             return f"`{ref}` (a leading + forces that ref)", positional, delete
@@ -338,8 +473,8 @@ def nested_reason(tokens, tool, depth):
         inner = None
         if name in EVAL_COMMANDS and rest:
             inner, inner_tool = " ".join(rest), tool
-        elif name in SHELLS and len(rest) > 1 and re.fullmatch(r"-[a-z]*c", rest[0]):
-            inner, inner_tool = rest[1], "Bash"
+        elif name in SHELLS:
+            inner, inner_tool = shell_command_string(rest), "Bash"
         elif name in POWERSHELLS:
             flag = next((j for j, t in enumerate(rest) if re.fullmatch(r"(?i)-c(o(m(m(a(nd?)?)?)?)?)?", t)), None)
             if flag is not None and flag + 1 < len(rest):
@@ -351,13 +486,38 @@ def nested_reason(tokens, tool, depth):
     return None
 
 
+def shell_command_string(args):
+    """The command string a shell runs with `-c`, after its other options:
+    `sh -c '...'`, `bash -l -c '...'`, `bash --login -c '...'`, `bash -cx '...'`,
+    `bash -euo pipefail -c '...'`, `bash -c -- '...'`; None without `-c`."""
+    has_c, j = False, 0
+    while j < len(args):
+        arg = args[j]
+        if arg == "--":
+            j += 1
+            break
+        if arg in ("--rcfile", "--init-file"):
+            j += 2
+        elif arg.startswith("--"):
+            j += 1
+        elif re.fullmatch(r"[-+][A-Za-z]+", arg):
+            has_c = has_c or (arg[0] == "-" and "c" in arg)
+            # `-o` and `-O` (also at the end of a bundle) take the next word.
+            j += 2 if arg[-1] in "oO" else 1
+        else:
+            break
+    return args[j] if has_c and j < len(args) else None
+
+
 def check(command, tool, depth=0):
     """Why a command certainly force-pushes, or None."""
     command = join_lines(command, tool)
+    if tool == "Bash":
+        command = bash_quotes(command)
     # Quotes and escapes inside a word (`pu''sh`) are removed by the shell.
     if not re.search(r"push|send-pack", re.sub(r"[\"'`\\]", "", command), re.I) or len(command) > MAX_COMMAND:
         return None
-    parts, readable = scan(command, tool)
+    parts, groups, readable = scan(command, tool)
     if not readable:
         return None
     deleted = set()
@@ -366,7 +526,12 @@ def check(command, tool, depth=0):
         # A print or commit only carries push text; it never runs it.
         if not tokens or only_data(part, tokens):
             continue
-        reason = push_reason(tokens, deleted) or (depth < MAX_DEPTH and nested_reason(tokens, tool, depth))
+        reason = push_reason(tokens, deleted, depth) or (depth < MAX_DEPTH and nested_reason(tokens, tool, depth))
+        if reason:
+            return reason
+    # A command substitution runs as a command of its own.
+    for group in groups:
+        reason = check(group, tool, depth + 1) if depth < MAX_DEPTH else None
         if reason:
             return reason
     return None
