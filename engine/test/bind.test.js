@@ -345,7 +345,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "wc -c <<< hello\ngit push -qf origin main", "cat <<EOF\nnever closed\ngit push -qf origin main",
     // Settings that make a later plain `git push` force or mirror.
     "git -c remote.origin.push=+main:main push origin", "git remote add --mirror=push b https://example.com/b.git",
-    "git config remote.b.mirror true",
+    "git config remote.b.mirror true", "git remote add --mirror b https://example.com/b.git",
+    "git remote add --mirr=push b https://example.com/b.git",
+    // xargs appends its input as arguments, so the push's own words do not show the flag.
+    "echo -qf | xargs git push origin main",
   ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
@@ -355,7 +358,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   for (const cmd of powershellOnly) assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   for (const cmd of allowed) assert.equal(verdict("Bash", cmd), "allow", `should allow: ${cmd}`);
   for (const cmd of asked) assert.equal(verdict("Bash", cmd), "ask", `should ask: ${cmd}`);
-  for (const cmd of ["$s = @'\ngit push -qf origin main\n'@", "git push @args", "git push $flags origin main"]) {
+  for (const cmd of ["$s = @'\ngit push -qf origin main\n'@", "git push @args", "git push $flags origin main",
+    // PowerShell reads curly quotes as quotes and Unicode spaces as whitespace.
+    "git push origin main “-qf”", "git push origin \"x“ -qf “y\"", "git push origin main -qf"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.

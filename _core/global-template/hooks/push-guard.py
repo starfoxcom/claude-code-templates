@@ -47,7 +47,9 @@ GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--e
 PUSH_VALUE_OPTIONS = {"--repo", "--push-option", "--receive-pack", "--exec"}
 # Words that can stand before a command without changing which program runs.
 PREFIXES = {"sudo", "env", "command", "builtin", "nice", "nohup", "time", "timeout", "stdbuf", "noglob",
-            "exec", "xargs", "do", "then", "else", "elif", "!", "&"}
+            "exec", "do", "then", "else", "elif", "!", "&"}
+# Not `xargs`: it appends words from its input, so `echo -qf | xargs git push`
+# forces a push its own arguments do not show.
 
 
 def join_lines(command, tool):
@@ -110,6 +112,10 @@ def scan(command, tool):
         current.append(ch)
         i += 1
     parts.append("".join(current))
+    # PowerShell also reads curly quotes as quotes and Unicode spaces, vertical
+    # tab and form feed as whitespace; shlex does not, so such a command is not plain.
+    if tool == "PowerShell" and re.search(r"[^\x00-\x7f]|[\v\f]", command):
+        plain = False
     return parts, plain and quote is None
 
 
@@ -194,7 +200,8 @@ def configures_push(tokens):
     mirror without a force flag in sight."""
     if any(re.match(r"(?i)^remote\..+\.(push|mirror)(=|$)", t) for t in tokens):
         return True
-    return "remote" in tokens and any(t.startswith("--mirror") for t in tokens)
+    # `--mi` is the shortest unambiguous abbreviation (`--m` also matches `--master`).
+    return "remote" in tokens and any(t.startswith("--mi") for t in tokens)
 
 
 def main():
@@ -206,7 +213,7 @@ def main():
     if tool not in ("Bash", "PowerShell"):
         return 0
     command = join_lines((data.get("tool_input") or {}).get("command") or "", tool)
-    if not re.search(r"\b(push|mirror)\b", command, re.I):
+    if not re.search(r"\bpush\b|\bmirror\b|--mi", command, re.I):
         return 0
     parts, plain = scan(command, tool)
     unsure = not plain
