@@ -374,6 +374,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git clone --mi ../stale d && cd d && git push origin",
     // An option the guard does not know could take the next word as its value.
     "git --super-prefix x push -qf origin main",
+    // `--output=` writes a file without a redirect, here git's own config.
+    "git log -1 --format='[remote \"origin\"]%n\tpush = +main:main' --output=/home/u/.config/git/config && git push origin",
+    "git diff --output=.git/config && git push origin", "git log --out=notes && git push origin",
   ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);

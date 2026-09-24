@@ -152,7 +152,7 @@ The AI-side counterpart — instructions that tell the model to attend to the `[
 
 The project's deny rules match command text, so a force push written as a bundle of short flags (`git push -qf`) gets past them. `hooks/push-guard.py` reads the actual `git push` arguments and blocks `--force`, `-f` inside any flag bundle, and `+` refspecs. `--force-with-lease` and `--force-if-includes` stay allowed.
 
-SETUP.md § Phase 7c installs it to `~/.claude/hooks/push-guard.py`, registers it in `~/.claude/settings.json` by the absolute path of a Python 3.8+ interpreter found on the machine, and only then auto-approves `git push` globally. Without Python it is skipped, and pushes other than a bare `git push` ask for approval. Phase 7c has the exact entry, including the `runpy` launcher that keeps a missing file from blocking every command.
+SETUP.md § Phase 7c installs it to `~/.claude/hooks/push-guard.py`, registers it in `~/.claude/settings.json` by the absolute path of a Python 3.8+ interpreter found on the machine, and then asks whether safe pushes should run without a prompt in every project. Without Python, or if you say no, pushes other than a bare `git push` ask for approval. Phase 7c has the exact entry, including the `runpy` launcher that keeps a missing file from blocking every command.
 
 ---
 

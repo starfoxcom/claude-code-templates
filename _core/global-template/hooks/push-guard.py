@@ -40,8 +40,9 @@ know (a variable, a substitution, a redirect glued to a word, a quote inside
 `push`, a config setting that forces later) ends in a prompt, never in a
 silent pass. That is what makes a global `git push` allow rule safe next to
 it. In `bypassPermissions` mode Claude Code turns an ask into an allow, so
-there only the blocks in step 1 apply. An internal error lets the call
-through, and the project's deny rules still apply.
+there only the blocks in step 1 apply. Input that is not JSON lets the call
+through (the project's deny rules still apply); an error while reading a Bash
+or PowerShell command asks.
 
 Setup installs this file as `~/.claude/hooks/push-guard.py` and registers it
 in `~/.claude/settings.json`, never in a project's settings: some tools copy
@@ -272,8 +273,9 @@ def push_related(tokens):
                 return True
     if any(re.search(r"(?i)remote\.[^=\s]+\.(push|mirror)(=|$)|git_config", t) for t in tokens):
         return True
-    # A path into `.git/` or a gitconfig file, such as a redirect into `.git/config`.
-    if any(re.search(r"(?i)(^|[/\\])\.git([/\\]|$)|gitconfig", t) for t in tokens):
+    # A path into `.git/`, a gitconfig file or `~/.config/git/`, such as a
+    # redirect into `.git/config` or `--output=.git/config`.
+    if any(re.search(r"(?i)(^|[/\\=])\.git([/\\]|$)|gitconfig|[/\\]git[/\\]config", t) for t in tokens):
         return True
     if "remote" in tokens and any(t.startswith("--mi") for t in tokens):
         return True
@@ -289,7 +291,10 @@ def inert(segment, tokens):
     printing, and git subcommands that do not touch config or remotes."""
     if only_data(segment, tokens) or tokens[0] in ("cd", "pwd", "true", "Set-Location", "sl"):
         return True
-    return tokens[0] == "git" and len(tokens) > 1 and tokens[1] in INERT_GIT and ">" not in segment
+    # `--output=<file>` (or any abbreviation of it) makes `git log`, `diff` and
+    # `show` write a file without a redirect, for example git's own config.
+    return (tokens[0] == "git" and len(tokens) > 1 and tokens[1] in INERT_GIT and ">" not in segment
+            and not any(t.startswith("--o") for t in tokens))
 
 
 def safe_push(segment):
@@ -326,6 +331,16 @@ def main():
         data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except ValueError:
         return 0
+    if not isinstance(data, dict) or data.get("tool_name") not in ("Bash", "PowerShell"):
+        return 0
+    try:
+        return decide(data)
+    except Exception:
+        # A shell command the guard could not finish reading is never a silent pass.
+        return ask()
+
+
+def decide(data):
     tool = data.get("tool_name")
     if tool not in ("Bash", "PowerShell"):
         return 0
