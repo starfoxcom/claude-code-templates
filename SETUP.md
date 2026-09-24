@@ -166,6 +166,7 @@ Produce a concise HTML plan file `claude-code-setup-plan.html` in the project ro
 - The full list of sections that will be stripped
 - The full list of files that will be deleted / skipped (file-scoped OFF toggles)
 - The `~/.claude/` merge plan (if `memory_system` or `code_research_first` is ON)
+- The push guard plan (always; Phase 7c): the file it copies to `~/.claude/hooks/push-guard.py`, the `PreToolUse` hook it registers in `~/.claude/settings.json` with the interpreter found (or "skipped: no Python 3.8+", with the entry, allow rule and file the skip branch would remove), that the hook then runs on every Bash and PowerShell call in every project on the machine, and that setup will ask separately whether safe pushes may skip the prompt everywhere
 - The proposed commit message and the diff scope
 
 Tell the user: *"Open `claude-code-setup-plan.html` in your browser to review. Reply `apply` to execute, or describe what to change."*
