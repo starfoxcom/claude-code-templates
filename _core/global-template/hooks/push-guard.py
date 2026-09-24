@@ -125,8 +125,10 @@ def scan(command, tool):
     """Split a command at unquoted separators and drop comments. A separator
     inside a substitution (`$(...)`, backticks, `${...}`, `<(...)`, PowerShell
     `$(...)` and `@(...)`) does not end the statement around it, and a Bash
-    heredoc body is text, not commands. Unquoted redirect characters come out
-    as REDIRECT marks, so a quoted `>` is never read as a redirect. Returns
+    heredoc body is text, not commands. A substitution comes out as one empty
+    word (`$()`), so the words of the command inside it are never read as the
+    outer command's own. Unquoted redirect characters come out as REDIRECT
+    marks, so a quoted `>` is never read as a redirect. Returns
     the statements, the text of each outermost command substitution (checked
     as a command of its own, including those in an unquoted heredoc body), and
     whether the split is certain: a PowerShell here-string, block comment or
@@ -143,7 +145,8 @@ def scan(command, tool):
     while i < n:
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
-            current.append(command[i:i + 2])
+            if not stack:
+                current.append(command[i:i + 2])
             i += 2
             escaped_end = i
             continue
@@ -164,9 +167,7 @@ def scan(command, tool):
                         return parts + ["".join(current)], groups, False
                     j = end + 1
             heredocs = []
-            if stack:
-                current.append("\n")
-            else:
+            if not stack:
                 parts.append("".join(current))
                 current = []
             i = j
@@ -174,10 +175,12 @@ def scan(command, tool):
         # Substitutions open outside single quotes, inside double quotes too,
         # and start a fresh quoting context.
         opener = next((o for o in openers if command.startswith(o, i)), None)
-        if quote != "'" and (opener or (ch == "`" and tool != "PowerShell" and not (stack and stack[-1][0] == "`"))):
+        if quote not in ("'", "$'") and (opener or (ch == "`" and tool != "PowerShell"
+                                                  and not (stack and stack[-1][0] == "`"))):
             opener = opener or "`"
+            if not stack:
+                current.append(mark(opener))
             stack.append([opener, i + len(opener), quote, 0])
-            current.append(mark(opener))
             quote = None
             i += len(opener)
             continue
@@ -196,12 +199,20 @@ def scan(command, tool):
                 if kind != "${" and all(s[0] == "${" for s in stack):
                     groups.append(command[start:i])
                 quote = outer
-                current.append(ch)
+                if not stack:
+                    current.append(ch)
                 i += 1
                 continue
         if quote:
-            if ch == quote:
+            if ch == quote[-1]:
                 quote = None
+        # Bash's `$'...'` quoting, where a backslash escapes the next character.
+        elif tool != "PowerShell" and command.startswith("$'", i):
+            if not stack:
+                current.append("$'")
+            quote = "$'"
+            i += 2
+            continue
         elif ch in "'\"":
             if tool == "PowerShell" and command[i - 1:i] == "@":
                 readable = False
@@ -212,6 +223,14 @@ def scan(command, tool):
             current.append(mark("<<<"))
             i += 3
             continue
+        # A `<<` inside `$((...))` or before a number is an arithmetic shift.
+        elif command.startswith("<<", i) and (
+                re.match(r"<<-?[ \t]*[0-9]", command[i:])
+                or any(s[0] == "$(" and command[s[1]:s[1] + 1] == "(" for s in stack)):
+            if not stack:
+                current.append(mark("<<"))
+            i += 2
+            continue
         elif command.startswith("<<", i):
             here = re.match(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|(\\?)([A-Za-z0-9_.-]+))", command[i:])
             if not here:
@@ -220,7 +239,8 @@ def scan(command, tool):
                 delimiter = next(g for g in (here.group(2), here.group(3), here.group(5)) if g is not None)
                 literal = here.group(5) is None or bool(here.group(4))
                 heredocs.append((delimiter, bool(here.group(1)), literal))
-                current.append(mark(here.group(0)))
+                if not stack:
+                    current.append(mark(here.group(0)))
                 i += here.end()
                 continue
         # A `#` that starts a word starts a comment, which runs to the end of the
@@ -253,7 +273,8 @@ def scan(command, tool):
             current = []
             i += 1
             continue
-        current.append(mark(ch) if quote is None else ch)
+        if not stack:
+            current.append(mark(ch) if quote is None else ch)
         i += 1
     parts.append("".join(current))
     if stack or heredocs:
@@ -329,8 +350,7 @@ def bash_quotes(command):
 
 def words(segment, tool):
     """Shell words of one segment, or None when its quotes do not balance."""
-    if tool == "PowerShell":
-        segment = powershell_quotes(segment)
+    segment = powershell_quotes(segment) if tool == "PowerShell" else bash_quotes(segment)
     lexer = shlex.shlex(segment, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
@@ -572,8 +592,6 @@ def shell_command_string(args):
 def check(command, tool, depth=0):
     """Why a command certainly force-pushes, or None."""
     command = join_lines(command, tool)
-    if tool == "Bash":
-        command = bash_quotes(command)
     # Quotes and escapes inside a word (`pu''sh`) are removed by the shell.
     if not re.search(r"push|send-pack", re.sub(r"[\"'`\\]", "", command), re.I) or len(command) > MAX_COMMAND:
         return None

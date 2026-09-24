@@ -382,6 +382,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Redirected output, and a mirror setting that is off.
     "git push origin main > /tmp/log 2>&1", "git push -u origin feature/x 2> err.txt",
     "git -c remote.origin.mirror=false push origin", "git -c remote.origin.mirror=0 push origin",
+    // Flags of a command inside a substitution belong to that command, not the push.
+    "git push origin $(git rev-parse --abbrev-ref HEAD | cut -d/ -f2)", "git push -u origin \"$(git branch --show-current)\"",
+    "git push origin `git config -f x.cfg branch.name`",
     // Push text inside a heredoc body is not a command.
     "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
     "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
@@ -428,6 +431,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git commit -q -F - <<'EOF'\nmsg\nEOF\ngit push -qf origin main", "cat <<-EOF\n\tnotes\n\tEOF\ngit push -qf origin main",
     "git commit -m \"$(cat <<'EOF'\nfix: push retries\nEOF\n)\" && git push -qf origin main",
     "wc -c <<< hello\ngit push -qf origin main",
+    // An arithmetic shift is no heredoc, and a heredoc apostrophe does not hide a later `$'...'`.
+    "(( n = 1 << 2 ))\ngit push -qf origin main", "echo $((x << y))\ngit push -qf origin main",
+    "cat <<'EOF'\ndon't\nEOF\ngit push origin main $'-qf'",
     // An escaped space before `#`, a `#` inside `${...}` and a quoted `>` start no comment or redirect.
     "A=\\ # git push -qf origin main", "X=main; git push origin ${X:-;#} -qf", "git push --repo=\">\" -qf origin main",
     // Forcing settings and one-off aliases on the push itself.
@@ -460,7 +466,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git commit -m \"unbalanced && git push -f", "git push -o ci.skip origin x", "git push origin main:+notes",
     "git push -- +main", "git push --repo=origin", "git push $FLAGS origin main",
     "git push origin {-qf,x}", "git push origin x # never -f here", "echo hi # && git push -qf origin main",
-    "(( n = 1 << 2 ))\ngit push -qf origin main", "cat <<EOF\nnever closed\ngit push -qf origin main",
+    "cat <<EOF\nnever closed\ngit push -qf origin main",
     "git remote add --mirror=push b https://example.com/b.git", "git config remote.b.mirror true",
     "git config alias.p 'push -f'", "git config --global alias.p 'push -f'",
     "hash -p /usr/bin/git g; g push -qf origin main", "alias g=git\ng push -qf origin main",
