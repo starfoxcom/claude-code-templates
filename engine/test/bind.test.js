@@ -312,34 +312,38 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git -C repo push -f", "cd repo && git push --force origin x", "echo hi; git push -qf", "GIT_TRACE=1 git push -f",
     "/usr/bin/git push -f", "git push --force=true origin x", "git push --mirror origin", "git push --mirr origin",
     "git push --m origin", "git --config-env core.x=HOME push -f origin main", "git --attr-source HEAD push -qf origin main",
-    "(git push -qf origin main)", "{ git push -qf origin main; }", "if x; then git push -qf origin main; fi",
+    "(git push -qf origin main)", "if x; then git push -qf origin main; fi",
     "for r in a; do git push -qf origin main; done", "GIT.EXE push -f origin main",
   ];
   const bashOnly = [
-    "git commit -m \"fix \\\"x\" && git push -qf origin main",
-    "cat > notes.md <<'EOF'\nnotes\nEOF\ngit push -qf origin main",
+    "git commit -m \"fix \\\"x\" && git push -qf origin main", "a & git push -qf origin main",
+    // Line continuations are joined first, as the shell does.
+    "git push origin main \\\n-qf", "cd repo && \\\ngit push -qf origin main",
   ];
-  const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f"];
+  const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
+    "git push origin main `\n-qf"];
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
     "git push origin x --force-with-lease=x:abc", "git push --force-if-includes --force-with-lease origin x",
     "git push --follow-tags origin x", "git push -o ci.skip origin x", "git push -uo f origin x",
-    "git push --push-option f origin x", "git commit -m \"push -f later\"", "echo \"git push -f\"", "git log -f",
+    "git push --push-option f origin x", "git commit -m \"push -f later\"", "git log -f",
     // The first word after `--` is still the remote, so this pushes to a remote named "+main".
     "git push origin main:+notes", "git push -- +main", "git push --no-mirror origin x",
-    "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
-    "cat > notes.md <<'EOF'\nnotes\nEOF\ngit push origin x", "cat <<-EOF > notes.md\n\tnotes\n\tEOF",
-    "git push origin x # never -f here", "(( n = 1 << 2 ))\necho done",
+    "git push origin x 2>&1", "cat <<-EOF > notes.md\n\tnotes\n\tEOF", "(( n = 1 << 2 ))\necho done",
   ];
-  // Pushes the guard cannot read with confidence go to the permission prompt.
-  const asked = ["a & git push -qf origin main", "sudo -u me git push -qf origin main", "echo $(git push -qf origin main)",
-    "git commit -m \"unbalanced && git push -f",
-    // Skipped text (here-document bodies, comments, here-strings) that mentions a push is never
-    // silently dropped, including a shift misread as a here-document that swallows later lines.
-    "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF", "cat <<-EOF > notes.md\n\tgit push --force\n\tEOF",
+  // A command that mentions a push but is not plain, or whose push cannot be placed, goes to
+  // the permission prompt: never a guess, and never a silent pass.
+  const asked = [
+    "sudo -u me git push -qf origin main", "echo \"git push -f\"", "eval \"git push -qf origin main\"",
+    "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"", "git commit -m \"unbalanced && git push -f",
+    "echo $(git push -qf origin main)", "out=$(git push -qf origin main 2>&1)", "echo \"$(git push -qf origin main)\"",
+    "x=`git push -qf origin main`", "diff <(git push -qf origin main) x", "git push $FLAGS origin main",
+    "git push origin {-qf,x}", "{ git push -qf origin main; }", "git push origin x # never -f here",
+    "echo hi # && git push -qf origin main", "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
+    "cat > notes.md <<'EOF'\nnotes\nEOF\ngit push -qf origin main", "cat <<EOF\n$(git push -qf origin main)\nEOF",
     "(( n = 1 << 2 ))\ngit push -qf origin main", "echo $((x << y))\ngit push -qf origin main",
-    "cat <<EOF\nnever closed\ngit push -qf origin main", "echo hi # && git push -qf origin main"];
-  assert.equal(verdict("PowerShell", "$s = @'\nnever closed\ngit push -qf origin main"), "ask", "unclosed here-string");
+    "wc -c <<< hello\ngit push -qf origin main", "cat <<EOF\nnever closed\ngit push -qf origin main",
+  ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
     assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
@@ -348,6 +352,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   for (const cmd of powershellOnly) assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   for (const cmd of allowed) assert.equal(verdict("Bash", cmd), "allow", `should allow: ${cmd}`);
   for (const cmd of asked) assert.equal(verdict("Bash", cmd), "ask", `should ask: ${cmd}`);
+  for (const cmd of ["$s = @'\ngit push -qf origin main\n'@", "git push @args", "git push $flags origin main"]) {
+    assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
+  }
   assert.equal(verdict("Read", "git push -f"), "allow", "other tools pass");
   assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
 });

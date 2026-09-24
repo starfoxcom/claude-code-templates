@@ -11,23 +11,26 @@ Permission rules match command text, so `-f` bundled with other short flags
 `--force-with-lease` and `--force-if-includes` stay allowed: they refuse to
 overwrite work the local repo has not seen.
 
-Exit 2 blocks the call and shows the reason to Claude. When a command holds a
-`git push` the hook cannot read with confidence (inside a loop body it does not
-parse, after an unknown prefix, or with unbalanced quotes), it asks for
-approval instead of guessing, so a missed force push reaches the permission
-prompt rather than a global `git push` allow rule. Any other outcome,
-including an internal error, lets the call through, and the project's deny
-rules still apply.
+The hook only reads plain commands: words, quotes, escapes and the `&&`, `||`,
+`;`, `|`, `&` and newline separators. A command that mentions a push and uses
+anything else (variables, command or process substitution, here-documents,
+braces, globs, comments, PowerShell splatting and here-strings) gets an
+approval prompt instead of a guess, and so does a plain command whose push it
+cannot place. It blocks with exit 2 only when it is certain. Every doubt ends
+in a prompt, never in a silent pass, which is what makes a global `git push`
+allow rule safe next to it. An internal error lets the call through, and the
+project's deny rules still apply.
 
 Setup installs this file as `~/.claude/hooks/push-guard.py` and registers it
 in `~/.claude/settings.json`, never in a project's settings: some tools copy
 the launcher of existing project hooks into their own hook entries. Setup
-registers it only after finding a Python 3.8+ interpreter, naming both the
-interpreter and this file by absolute path, in exec form (`command` plus
-`args`), so no shell and no `python3`/`python`/`py` guess is involved. It runs
-through a `runpy` one-liner instead of `python <path>` because Python exits 2
-when it cannot open a script, which would block every call; through `runpy` a
-missing file is an ordinary error and the call proceeds.
+registers it only after finding a Python 3.8+ interpreter outside any virtual
+environment, naming both the interpreter and this file by absolute path, in
+exec form (`command` plus `args`), so no shell and no `python3`/`python`/`py`
+guess is involved. It runs through a `runpy` one-liner instead of
+`python <path>` because Python exits 2 when it cannot open a script, which
+would block every call; through `runpy` a missing file is an ordinary error
+and the call proceeds.
 """
 import json
 import re
@@ -40,93 +43,70 @@ GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--e
 PUSH_VALUE_OPTIONS = {"--repo", "--push-option", "--receive-pack", "--exec"}
 # Words that can stand before a command without changing which program runs.
 PREFIXES = {"sudo", "env", "command", "builtin", "nice", "nohup", "time", "timeout", "stdbuf", "noglob",
-            "exec", "xargs", "do", "then", "else", "elif", "!", "{", "&"}
-HEREDOC = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z0-9_.-]+)\2")
+            "exec", "xargs", "do", "then", "else", "elif", "!", "&"}
 
 
-def mentions_push(text):
-    return bool(re.search(r"\bgit", text, re.I) and re.search(r"\bpush\b", text, re.I))
-
-
-def segments(command, tool):
-    """Split a command where the shell would: at unquoted `&&`, `||`, `;`, `|`
-    and newlines. Escapes and comments are honored, and here-document and
-    PowerShell here-string bodies are skipped, since they are text, not
-    commands.
-
-    Returns the segments and whether skipped text mentions git and push, so
-    skipping can never hide a push. A body that never closes runs to the end
-    of the command, which also covers a misread `<<` such as the shift in
-    `(( 1 << 2 ))`."""
+def join_lines(command, tool):
+    """Drop line continuations (the escape character before a newline, outside
+    single quotes), as the shell does before it reads the words."""
     escape = "`" if tool == "PowerShell" else "\\"
-    parts, current, quote, pending, i, n = [], [], None, [], 0, len(command)
-    skipped = []
+    out, quote, i, n = [], None, 0, len(command)
+    while i < n:
+        ch = command[i]
+        if ch == escape and quote != "'" and i + 1 < n:
+            rest = command[i + 1:i + 3]
+            if rest.startswith("\n") or rest == "\r\n":
+                i += 2 if rest.startswith("\n") else 3
+                continue
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote and ch == quote:
+            quote = None
+        elif not quote and ch in "'\"":
+            quote = ch
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def scan(command, tool):
+    """Split a command at unquoted separators. Returns the segments and whether
+    the command is plain, meaning it uses no syntax that can run or produce
+    words this hook does not see."""
+    escape = "`" if tool == "PowerShell" else "\\"
+    parts, current, quote, plain, i, n = [], [], None, True, 0, len(command)
     while i < n:
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
             current.append(command[i:i + 2])
             i += 2
             continue
+        # Expansion and substitution work inside double quotes too.
+        if quote != "'" and (ch == "$" or (ch == "`" and tool != "PowerShell")):
+            plain = False
         if quote:
-            current.append(ch)
             if ch == quote:
                 quote = None
         elif ch in "'\"":
             quote = ch
-            current.append(ch)
-        elif ch == "#" and (not current or current[-1][-1:].isspace()):
-            end = command.find("\n", i)
-            end = n if end < 0 else end
-            skipped.append(command[i:end])
-            i = end
-            continue
-        elif tool == "PowerShell" and command.startswith(("@'", '@"'), i):
-            end = command.find("\n" + command[i + 1] + "@", i)
-            end = n if end < 0 else end + 3
-            skipped.append(command[i:end])
-            current.append(" ''")
-            i = end
-            continue
-        elif tool != "PowerShell" and command.startswith("<<", i) and not command.startswith("<<<", i):
-            match = HEREDOC.match(command, i)
-            if match:
-                pending.append((match.group(3), match.group(1) == "-"))
-                current.append(match.group(0))
-                i = match.end()
-                continue
-            current.append(ch)
+        elif ch in "{}*?[#" or (ch == "@" and tool == "PowerShell") or command.startswith(("<<", "<(", ">("), i):
+            plain = False
         elif command.startswith(("&&", "||"), i):
             parts.append("".join(current))
             current = []
-            i += 1
-        elif ch in ";|\n":
+            i += 2
+            continue
+        elif ch in ";|\n" or (ch == "&" and tool != "PowerShell" and command[i - 1:i] not in "<>"
+                               and command[i + 1:i + 2] != ">"):
             parts.append("".join(current))
             current = []
-            if ch == "\n" and pending:
-                start = i + 1
-                i = skip_bodies(command, start, pending)
-                skipped.append(command[start:i])
-                pending = []
-                continue
-        else:
-            current.append(ch)
+            i += 1
+            continue
+        current.append(ch)
         i += 1
     parts.append("".join(current))
-    return parts, any(mentions_push(text) for text in skipped)
-
-
-def skip_bodies(command, i, pending):
-    """Skip the here-document bodies opened on the line that just ended, and
-    return where the next line starts (the end, when a body never closes)."""
-    for delimiter, strip_tabs in pending:
-        while i < len(command):
-            end = command.find("\n", i)
-            end = len(command) if end < 0 else end
-            line = command[i:end]
-            i = end + 1
-            if (line.lstrip("\t") if strip_tabs else line).rstrip("\r") == delimiter:
-                break
-    return min(i, len(command))
+    return parts, plain and quote is None
 
 
 def words(segment, tool):
@@ -144,7 +124,7 @@ def words(segment, tool):
 
 def program(token):
     """The program a word names: `/usr/bin/git`, `(git` and `GIT.EXE` are all git."""
-    name = token.lstrip("($`{").replace("\\", "/").split("/")[-1].lower()
+    name = token.lstrip("(").replace("\\", "/").split("/")[-1].lower()
     return re.sub(r"\.exe$", "", name)
 
 
@@ -199,12 +179,8 @@ def force_reason(args):
     return None
 
 
-def unread_push(segment, tokens):
-    """True when a segment mentions git and push but was not read as `git push`."""
-    if tokens is None:
-        return mentions_push(segment)
-    gits = [k for k, token in enumerate(tokens) if program(token) == "git"]
-    return any("push" in tokens[k + 1:] for k in gits)
+def mentions_push(text):
+    return bool(re.search(r"\bgit", text, re.I) and re.search(r"\bpush\b", text, re.I))
 
 
 def main():
@@ -215,24 +191,28 @@ def main():
     tool = data.get("tool_name")
     if tool not in ("Bash", "PowerShell"):
         return 0
-    command = (data.get("tool_input") or {}).get("command") or ""
-    parts, unsure = segments(command, tool)
-    for segment in parts:
-        tokens = words(segment, tool)
-        args = push_args(tokens) if tokens is not None else None
-        if args is None:
-            unsure = unsure or unread_push(segment, tokens)
-            continue
-        reason = force_reason(args)
-        if reason:
-            print(f"Blocked a force push: {reason}. Use `--force-with-lease` instead, "
-                  "which refuses to overwrite commits you have not fetched.", file=sys.stderr)
-            return 2
+    command = join_lines((data.get("tool_input") or {}).get("command") or "", tool)
+    if not re.search(r"\bpush\b", command, re.I):
+        return 0
+    parts, plain = scan(command, tool)
+    unsure = not plain
+    if plain:
+        for segment in parts:
+            tokens = words(segment, tool)
+            args = push_args(tokens) if tokens is not None else None
+            if args is not None:
+                reason = force_reason(args)
+                if reason:
+                    print(f"Blocked a force push: {reason}. Use `--force-with-lease` instead, "
+                          "which refuses to overwrite commits you have not fetched.", file=sys.stderr)
+                    return 2
+            elif tokens is None or any(t.lower() == "push" or mentions_push(t) for t in tokens):
+                unsure = True
     if unsure:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "ask",
-            "permissionDecisionReason": "This command contains a git push the push guard could not read, so it needs approval.",
+            "permissionDecisionReason": "This command mentions a git push the push guard could not read with certainty, so it needs approval.",
         }}))
     return 0
 
