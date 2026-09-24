@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind, STAGING } from "../bind.js";
-import { defaults, DEFERRED, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES } from "../model.js";
+import { defaults, flagsFor, DEFERRED, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES } from "../model.js";
 import { listCore } from "../list-core.js";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -88,6 +88,47 @@ test("license body is filled with holder and year", async () => {
   a.project.licenseHolder = "Ada Lovelace";
   const license = (await run(a)).get(`${STAGING}LICENSE`);
   assert.match(license, /Copyright \(c\) 2026 Ada Lovelace/);
+});
+
+test("merge style picks the matching merge command", async () => {
+  for (const style of ["squash", "merge", "rebase"]) {
+    const a = defaults();
+    a.advanced.mergeStyle = style;
+    const git = (await run(a)).get(".claude/rules/git.md");
+    assert.match(git, new RegExp(`gh pr merge <pr> --${style} --delete-branch`));
+    for (const other of ["squash", "rebase"].filter((s) => s !== style)) {
+      assert.doesNotMatch(git, new RegExp(`gh pr merge <pr> --${other}`), `${style} bind mentions --${other}`);
+    }
+    assert.match(git, /Release PRs .* always use `--merge`/, "gitflow releases stay merge commits");
+  }
+});
+
+test("default-branch choice flips the workflow-change guidance", async () => {
+  const a = defaults();
+  const mainDefault = (await run(a)).get(".claude/rules/git.md");
+  assert.match(mainDefault, /lands on `main` first as a `hotfix\/<name>` PR/);
+  a.advanced.devIsDefault = true;
+  const devDefault = (await run(a)).get(".claude/rules/git.md");
+  assert.match(devDefault, /workflow changes are ordinary work PRs into `develop`/);
+  assert.doesNotMatch(devDefault, /always pass `--base develop`/);
+});
+
+test("rules carry no stale model names or polling loops", async () => {
+  const files = await run(defaults({ team: true, client: true }));
+  for (const [path, text] of files) {
+    if (!path.startsWith(".claude/rules/") && !path.endsWith("CONTRIBUTING.md")) continue;
+    assert.doesNotMatch(text, /\b(Sonnet|Opus)\b/, `${path} names a model`);
+    assert.doesNotMatch(text, /sleep 420/, `${path} teaches a sleep loop`);
+  }
+});
+
+test("every flag is read by a template or by bind.js", () => {
+  const templates = coreFiles.map((f) => readFileSync(join(repo, "_core/project-template", f), "utf8")).join("\n");
+  const bindSource = readFileSync(join(repo, "engine/bind.js"), "utf8");
+  for (const name of Object.keys(flagsFor(defaults()))) {
+    const used = templates.includes(`TOGGLE:${name} `) || templates.includes(`TOGGLE:${name}:off `) || bindSource.includes(`flags.${name}`);
+    assert.ok(used, `flag "${name}" controls nothing`);
+  }
 });
 
 test("bad answers are rejected", async () => {

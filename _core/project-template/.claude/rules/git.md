@@ -1,191 +1,117 @@
 # Git rules
 
-## Atomic commits
+## Commits
 
-One logical change per commit. No mixing features with refactors or fixes with config.
-
-### Format
+One logical change per commit. Never mix a feature with a refactor, or a fix with config.
 
 ```
 <type>(<scope>): <imperative description>
 ```
 
-- Max 72 characters
-- Imperative: `add`, `fix`, `remove`, `update`, `refactor`, `extract`
-- `scope` = system or layer
-- **NEVER** include any AI-attribution markers anywhere — not in commit messages, not in PR titles, not in PR bodies. Specifically banned strings and patterns:
-  - `Co-Authored-By: Claude <…>` (or any Claude email)
-  - `Co-Authored-By:` referencing Claude in any form
-  - `🤖 Generated with [Claude Code](…)` or any variant
-  - `🤖 Generated with Claude Code`
-  - Any sentence ending with "Claude", "via Claude Code", "with Claude", etc., as an attribution line
-  - Any link to `claude.com/claude-code`, `claude.ai`, or `anthropic.com` in commit/PR footers
-- These bans apply to commits AND PR bodies AND PR titles AND issue comments authored programmatically. The work itself is attributed via authorship metadata if at all — never via a body footer.
-
-### Valid types
-
-| Type | When |
-|---|---|
-| `feat` | New feature |
-| `fix` | Bug fix |
-| `refactor` | No new functionality or fix |
-| `perf` | Performance improvement |
-| `test` | Tests |
-| `docs` | Documentation, README, ROADMAP, ADRs |
-| `chore` | Build, CI, tooling, dependency bumps |
-| `data` | Game/app data, configs, assets |
-| `style` | Formatting only (no logic change) |
+- 72 characters max. Imperative verb: `add`, `fix`, `remove`, `update`, `refactor`, `extract`.
+- `scope` is the system or layer touched.
+- Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore` (build, CI, tooling, deps), `data` (app data, configs, assets), `style` (formatting only).
+- No AI-attribution lines anywhere: no co-author trailers, "generated with" footers or session links in commits, PR titles, PR bodies or comments.
 
 ---
 
 <!-- TOGGLE:branching_model_gitflow START -->
 ## Branches (Gitflow)
 
-| Branch | Prefix | Purpose |
+| Branch | From | Merges into |
 |---|---|---|
-| Production | `{{MAIN_BRANCH}}` | Stable releases only |
-| Development | `{{DEV_BRANCH}}` | Base for all work |
-| Feature | `feature/<n>` | From `{{DEV_BRANCH}}`, merges back to `{{DEV_BRANCH}}` |
-| Release | `release/<v>` | From `{{DEV_BRANCH}}`, merges to `{{MAIN_BRANCH}}` + `{{DEV_BRANCH}}` |
-| Hotfix | `hotfix/<n>` | From `{{MAIN_BRANCH}}`, merges to `{{MAIN_BRANCH}}` + `{{DEV_BRANCH}}` |
+| `{{MAIN_BRANCH}}` | | Production. Every release commit is tagged. |
+| `{{DEV_BRANCH}}` | | Integration. Base for all work. |
+| `feature/<name>` | `{{DEV_BRANCH}}` | `{{DEV_BRANCH}}` |
+| `release/<version>` | `{{DEV_BRANCH}}` | `{{MAIN_BRANCH}}`, then cascade to `{{DEV_BRANCH}}` |
+| `hotfix/<name>` | `{{MAIN_BRANCH}}` | `{{MAIN_BRANCH}}`, then cascade to `{{DEV_BRANCH}}` |
 
-- Kebab-case branch names: `feature/user-auth-flow`
-- **Always** `gh pr create --base {{DEV_BRANCH}}` — repo default may be `{{MAIN_BRANCH}}`, override explicitly
-- **Always** merge commit — never squash or rebase
-- **Never** push directly to `{{MAIN_BRANCH}}` or `{{DEV_BRANCH}}`
-
-### Scope discipline
-
-If a branch is `feature/<name>`, only files within that feature's directory tree should change. Cross-cutting changes (shared utilities, core layers) need their own branch and a merged-to-dev pre-requisite.
-
-### When `{{DEV_BRANCH}}` advances
-
-Cascade to all open feature branches before resuming work on them:
-
-```bash
-git fetch origin
-git checkout feature/<n>
-git merge origin/{{DEV_BRANCH}}
-git push origin feature/<n>
-```
+- Kebab-case names: `feature/user-auth-flow`.
+- Never push directly to `{{MAIN_BRANCH}}` or `{{DEV_BRANCH}}`.
+<!-- TOGGLE:default_branch_is_dev START -->
+- `{{DEV_BRANCH}}` is the GitHub default branch, so `gh pr create` targets it automatically. Pass `--base {{MAIN_BRANCH}}` only for release and hotfix PRs.
+<!-- TOGGLE:default_branch_is_dev END -->
+<!-- TOGGLE:default_branch_is_dev:off START -->
+- The GitHub default branch is `{{MAIN_BRANCH}}`, so always pass `--base {{DEV_BRANCH}}` to `gh pr create` for work PRs.
+<!-- TOGGLE:default_branch_is_dev:off END -->
 <!-- TOGGLE:branching_model_gitflow END -->
 
 <!-- TOGGLE:branching_model_trunk START -->
 ## Branches (trunk-based)
 
-| Branch | Prefix | Purpose |
+| Branch | From | Merges into |
 |---|---|---|
-| Trunk | `{{MAIN_BRANCH}}` | The single long-lived branch; all work merges here |
-| Feature | `feature/<n>` | From `{{MAIN_BRANCH}}`, merges back to `{{MAIN_BRANCH}}` |
-| Hotfix | `hotfix/<n>` | From `{{MAIN_BRANCH}}`, fast-merge back |
+| `{{MAIN_BRANCH}}` | | The only long-lived branch. Release commits are tagged. |
+| `feature/<name>` | `{{MAIN_BRANCH}}` | `{{MAIN_BRANCH}}` |
+| `hotfix/<name>` | `{{MAIN_BRANCH}}` | `{{MAIN_BRANCH}}` |
 
-- Kebab-case branch names: `feature/user-auth-flow`
-- **Always** `gh pr create --base {{MAIN_BRANCH}}`
-- **Always** merge commit — never squash or rebase
-- **Never** push directly to `{{MAIN_BRANCH}}`
+- Kebab-case names: `feature/user-auth-flow`.
+- Never push directly to `{{MAIN_BRANCH}}`.
+<!-- TOGGLE:branching_model_trunk END -->
 
-### Scope discipline
+### Keep branches current
 
-If a branch is `feature/<name>`, only files within that feature's directory tree should change. Cross-cutting changes need their own branch.
+When the base branch advances, merge it into your open branches before continuing (`git fetch origin`, then `git merge origin/{{DEV_BRANCH}}` on the work branch, then push). Never rewrite a branch someone else has pulled.
 
-### When `{{MAIN_BRANCH}}` advances
+### Scope
 
-Cascade to all open feature branches before resuming work on them:
+A branch changes one concern. A tangential bug gets its own branch. Before coding, list the directories the work will touch; anything outside the branch's scope becomes a prerequisite branch and PR that merges first.
+
+### Check the branch before the first edit
+
+Run `git branch --show-current` before editing. Switch or branch first, then edit. If you notice you edited on the wrong branch, stop and say so instead of stashing and moving the work silently.
+
+---
+
+## Merging
+
+<!-- TOGGLE:merge_style:squash START -->
+- Work PRs squash-merge: `gh pr merge <pr> --squash --delete-branch`. The PR title becomes the commit, so it must follow the commit format above, in 64 characters or fewer (GitHub appends ` (#123)`). One PR is one logical change; the commits inside it serve review only.
+- A branch stacked on a PR that was just squash-merged still carries the parent's commits. Before continuing, run `git rebase --onto origin/{{DEV_BRANCH}} <old-parent-tip>` and force-push the stacked branch.
+<!-- TOGGLE:merge_style:squash END -->
+<!-- TOGGLE:merge_style:merge START -->
+- Every PR merges with a merge commit: `gh pr merge <pr> --merge --delete-branch`. Keep each commit buildable, and read history with `git log --first-parent`.
+<!-- TOGGLE:merge_style:merge END -->
+<!-- TOGGLE:merge_style:rebase START -->
+- Work PRs rebase-merge: `gh pr merge <pr> --rebase --delete-branch`. Every commit must build on its own, so squash fixup commits on the branch before merging.
+<!-- TOGGLE:merge_style:rebase END -->
+<!-- TOGGLE:branching_model_gitflow START -->
+- Release PRs (`{{DEV_BRANCH}}` into `{{MAIN_BRANCH}}`) and cascade PRs (`{{MAIN_BRANCH}}` into `{{DEV_BRANCH}}`) always use `--merge`. Squashing them makes the two branches diverge and turns the next release into a conflict.
+<!-- TOGGLE:branching_model_gitflow END -->
+- After merging: `--delete-branch` removes the remote branch, but the local one only when it is checked out. Run `git branch -D <name>` if it remains, then confirm with `git branch`.
+- Re-run a failed CI workflow as a whole (or push again). Re-running only the failed job can leave a required check stuck.
+
+<!-- TOGGLE:branching_model_gitflow START -->
+### Cascade after every merge into `{{MAIN_BRANCH}}`
+
+GitHub does not copy `{{MAIN_BRANCH}}` back into `{{DEV_BRANCH}}`. After a hotfix or release merges:
 
 ```bash
 git fetch origin
-git checkout feature/<n>
-git merge origin/{{MAIN_BRANCH}}
-git push origin feature/<n>
-```
-<!-- TOGGLE:branching_model_trunk END -->
-
----
-
-## Branch verification before editing
-
-Verify your current branch BEFORE editing any file whose correct home depends on category. Open the editor SECOND, not first.
-
-| File category | Correct home |
-|---|---|
-| `.github/workflows/*` (live workflows) | `hotfix/<n>` from `{{MAIN_BRANCH}}` |
-| Canonical / template files the project ships verbatim to downstream consumers (shipped config templates, reference files copy-pasted into bind output, etc.) | `feature/<n>` or `chore/<n>` from `{{DEV_BRANCH}}` |
-<!-- TOGGLE:branching_model_gitflow START -->
-| Release-prep fixes (reviewer findings on an open release) | `release/<v>` (already cut from `{{DEV_BRANCH}}`) |
-<!-- TOGGLE:branching_model_gitflow END -->
-| Lockstep pairs (e.g. UI source ↔ inlined bundle, canonical ↔ live mirror) | Whichever branch the pair already lives on; edit both |
-
-- Before the first edit of a task, run `git branch --show-current`. Switch first, branch second, then edit.
-- Never edit on the wrong branch and rely on `git stash → checkout → branch → stash pop` to recover. The stash dance works mechanically but hides the scope violation that put you on the wrong branch, and trains you to skip verification next time. If you find yourself reaching for it, pause — that's the signal that the up-front check got skipped.
-- Bolting a workflow change onto a different-scope PR because the cursor was already on that branch tempts the App-auth OIDC failure → admin-merge bypass → mixed-scope merge on a published branch. Three downstream mistakes from one missed `git branch --show-current` call. The cost of the check is ~0; the cost of the recovery can be a published revert.
-
----
-
-<!-- TOGGLE:branching_model_gitflow START -->
-## Cascade after every merge to `{{MAIN_BRANCH}}`
-
-Gitflow's "hotfix merges to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`" is a **discipline you execute, not a GitHub feature.** No platform auto-cascades from `{{MAIN_BRANCH}}` to `{{DEV_BRANCH}}` for you. Same applies to `release/*` merges — they also need a cascade-to-`{{DEV_BRANCH}}` PR.
-
-**The merge-to-`{{MAIN_BRANCH}}` sequence is a triple, not a single:**
-
-```bash
-# 1. Land the hotfix or release PR on {{MAIN_BRANCH}}
-gh pr merge <pr> --merge [--admin] --delete-branch
-
-# 2. Open the cascade PR
-git fetch origin && git checkout {{DEV_BRANCH}} && git pull --ff-only
-git checkout -b chore/cascade-<hotfix-or-release-name>
+git checkout -b chore/cascade-<name> origin/{{DEV_BRANCH}}
 git merge --no-ff origin/{{MAIN_BRANCH}} -m "chore: cascade <name> into {{DEV_BRANCH}}"
-git push -u origin chore/cascade-<hotfix-or-release-name>
-gh pr create --base {{DEV_BRANCH}} --head chore/cascade-<hotfix-or-release-name> ...
-
-# 3. Close the cascade — wait for routine verdict, merge, delete branch local + remote
+git push -u origin chore/cascade-<name>
+gh pr create --base {{DEV_BRANCH}} --title "chore: cascade <name> into {{DEV_BRANCH}}" --body-file <file>
 ```
 
-- **The hotfix/release is not "done" until step 3 completes.** Mark the task complete only after the cascade PR is merged and its branch is cleaned up. "Merged to `{{MAIN_BRANCH}}`" is half the job.
-- **Bundle multiple back-to-back hotfixes** into one cascade PR only if no `{{DEV_BRANCH}}` work landed between them. Otherwise each gets its own cascade PR — merge history stays readable.
-- **Drift is silent and compounds.** A hotfix that fixes a workflow file on `{{MAIN_BRANCH}}` but never lands on `{{DEV_BRANCH}}` means every PR off `{{DEV_BRANCH}}` runs under stale workflow logic, and the next release branch cut from `{{DEV_BRANCH}}` starts from the wrong baseline.
+The hotfix or release is done only when the cascade PR is merged and its branch deleted.
+
+### Workflow file changes
+
+Review workflows triggered by comments or schedules run the copy on the GitHub default branch, and the review action refuses to run when a PR's workflow file differs from that copy.
+<!-- TOGGLE:default_branch_is_dev START -->
+Because `{{DEV_BRANCH}}` is the default branch, workflow changes are ordinary work PRs into `{{DEV_BRANCH}}`. They reach `{{MAIN_BRANCH}}` with the next release. A hotfix cut while `{{DEV_BRANCH}}` holds unreleased workflow changes will fail that check; release first or merge the hotfix with admin rights.
+<!-- TOGGLE:default_branch_is_dev END -->
+<!-- TOGGLE:default_branch_is_dev:off START -->
+Because `{{MAIN_BRANCH}}` is the default branch, a change to `.github/workflows/` lands on `{{MAIN_BRANCH}}` first as a `hotfix/<name>` PR, then cascades to `{{DEV_BRANCH}}`. A workflow change made on a feature branch fails the review check.
+<!-- TOGGLE:default_branch_is_dev:off END -->
 <!-- TOGGLE:branching_model_gitflow END -->
 
 ---
 
-## Review tiers
+## Pull requests
 
-Two review tiers, both fully workflow-driven via `.github/workflows/`:
-
-| Tier | Trigger | Cost | What it does |
-|---|---|---|---|
-| **Routine** | Auto on every PR (`claude-code-review.yml`) | Subscription-included (Sonnet) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Required check — exits red on 🔴, merge blocked. |
-| **On-demand deep** | `@claude review this PR` comment (`claude.yml`) | Subscription-included (Opus) | Depth pass on the focus the routine review escalated to. Same binary 🔴/🟢 rule. **Required** when `Claude On-Demand` is added to branch protection (recommended) — verdict PATCHed into the check via the Checks API; merge blocked on 🔴. Advisory when omitted from the required-checks ruleset. |
-
-<!-- TOGGLE:github_actions_deep_review_auto_fire START -->
-The deep review **auto-fires** when the routine review's Step 2.5 detects the diff touches the trigger surface (parsers, threading, public API, auth, migrations) — see `review-tiers.md`.
-<!-- TOGGLE:github_actions_deep_review_auto_fire END -->
-
-<!-- TOGGLE:github_actions_deep_review_auto_fire:off START -->
-The deep review is **opt-in** — fire it manually with `@claude review this PR` when the routine review flags uncertainty, or when you know the PR touches an architecturally-critical area (see `review-tiers.md` for the trigger list).
-<!-- TOGGLE:github_actions_deep_review_auto_fire:off END -->
-
-### Binary verdict rule
-
-- **🟢 LGTM ONLY when fully clean** — zero caveats, zero nits, zero "with caveats" headings.
-- **🔴 Blocking when ANY real finding exists.**
-- The only legitimate omission is style preferences or future-proofing for hypothetical changes — those get **DROPPED**, not labeled non-blocking.
-
-A 🟢 with "minor non-blocking" findings tucked in the body becomes useless — the findings rot, the merge proceeds, they re-surface weeks later as the same review.
-
-### Local Claude's role
-
-Local-session Claude (this harness) does NOT auto-fire reviews. The workflow does. Local responsibilities:
-
-- Push the branch + open the PR per PR format below.
-- Run the CI polling loop (`token-efficiency.md` § "CI monitoring + auto-merge") and report PR state.
-- On approval (🟢), merge via `gh pr merge --merge` and clean up branches (standing authorization).
-- On 🔴, fetch failing logs, propose the fix in one sentence, apply it, push. Re-enter polling loop.
-
----
-
-## PR format
+Write the body to a file and pass `--body-file <path>`. Inline bodies get truncated or mangled by the shell.
 
 ```
 ## What
@@ -195,56 +121,40 @@ Local-session Claude (this harness) does NOT auto-fire reviews. The workflow doe
 <1-2 lines>
 
 ## Notes (optional)
-<Non-obvious decisions, perf implications, required manual steps>
+<non-obvious decisions, performance impact, manual steps>
 ```
 
-No empty sections. No generic testing checklist. The reviewer reads the diff, not the PR body — the body is for context the diff can't show.
+No empty sections and no generic testing checklist. The body carries what the diff cannot show.
+
+Review tiers, the verdict rule and CI watching live in `review-tiers.md` and `token-efficiency.md`.
 
 ---
 
-## Definition of "feature complete"
+## Dead code does not ship
 
-A feature is complete when it can be exercised end-to-end in the running app — not when the code compiles. CI green ≠ feature complete. See `CLAUDE.md` § "SESSION CLOSE / 0. Definition-of-done verification".
+Code with no remaining caller is deleted in the same PR that orphaned it. Check with the project's lint or dead-code tool, then judge the result: a symbol reached only through reflection, dependency injection, bindings or serialization is not dead. If a tool reports a false positive, record the exception where the tool reads it instead of silencing the tool.
 
----
+## Definition of done
+
+A feature is done when it works end to end in the running app, not when it compiles. CI green is necessary, not sufficient.
 
 <!-- TOGGLE:precommit_hooks_scaffold START -->
+---
+
 ## Pre-commit hooks
 
-`tools.precommit` selects the pre-commit manager (or `none`); the line below states the config file and activation command for that choice (for `none`, nothing is scaffolded — checks run via CI).
-
 <!-- TOGGLE:precommit:lefthook START -->
-Pre-commit gate: **lefthook** — config `lefthook.yml`. Activate: `lefthook install`. Bypass one commit: `git commit --no-verify`.
+Gate: **lefthook**, config `lefthook.yml`. Activate with `lefthook install`.
 <!-- TOGGLE:precommit:lefthook END -->
 <!-- TOGGLE:precommit:husky START -->
-Pre-commit gate: **husky** — config `.husky/pre-commit` (the pre-commit gate; commit-msg + pre-push hooks ship as documented opt-in siblings). Activate: `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`. Bypass one commit: `git commit --no-verify`.
+Gate: **husky**, config `.husky/pre-commit`. Activate with `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`.
 <!-- TOGGLE:precommit:husky END -->
 <!-- TOGGLE:precommit:pre-commit START -->
-Pre-commit gate: **pre-commit** — config `.pre-commit-config.yaml`. Activate: `pre-commit install`. Bypass one commit: `git commit --no-verify`.
+Gate: **pre-commit**, config `.pre-commit-config.yaml`. Activate with `pre-commit install`.
 <!-- TOGGLE:precommit:pre-commit END -->
 <!-- TOGGLE:precommit:simple-git-hooks START -->
-Pre-commit gate: **simple-git-hooks** — config `.simple-git-hooks.json`. Activate: `npx simple-git-hooks`. Bypass one commit: `git commit --no-verify`.
+Gate: **simple-git-hooks**, config `.simple-git-hooks.json`. Activate with `npx simple-git-hooks`.
 <!-- TOGGLE:precommit:simple-git-hooks END -->
-<!-- TOGGLE:precommit:none START -->
-No hook manager is scaffolded — run lint / typecheck / test before pushing; CI is the backstop.
-<!-- TOGGLE:precommit:none END -->
-<!-- TOGGLE:precommit:custom START -->
-Pre-commit gate: **{{TOOLS_PRECOMMIT_NAME}}** ({{TOOLS_PRECOMMIT_URL}}) — configured per its own docs. Bypass one commit: `git commit --no-verify`.
-<!-- TOGGLE:precommit:custom END -->
 
----
+The hook runs lint, type check and tests before each commit. Do not bypass it with `--no-verify`; fix the failure.
 <!-- TOGGLE:precommit_hooks_scaffold END -->
-
-<!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
-## Auto-merge on fast-path PRs
-
-PRs whose diff the routine reviewer will skip (no source-extension files changed — typically docs-only, rules-only, `.claude/**`, manifest tweaks) cause the workflow to fire, `triage` to classify the diff as non-reviewable, and `evaluate-review-outcome` to run via `if: always()` — taking the non-reviewable-diff path, PATCHing `Claude On-Demand` to `skipped`, and exiting 0 (gate passes). The whole run completes in ~30 seconds. Don't sit on a 7-minute polling loop — but also **don't foreground-sleep**; both cadences run in the background.
-
-1. **Background-poll** with `run_in_background: true` and an until-loop that sleeps 90 s per check (see `token-efficiency.md` § "Fast-path / auto-pass" for the exact pattern). The harness notifies on exit; work on the next thing in the meantime.
-2. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS`, and `Claude On-Demand: SKIPPED`.
-3. **Verify mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approval gate, which `--admin` resolves for the maintainer).
-4. `gh pr merge <pr> --merge --admin` (merge commit; `--admin` bypasses the required-approval gate maintainers can self-clear).
-5. Delete local + remote branch.
-
-User authorization for this fast path is implied by approval to open the PR; it's part of the same task. Do not ask per-PR.
-<!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->

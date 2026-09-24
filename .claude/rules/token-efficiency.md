@@ -46,7 +46,7 @@ while true; do
 done
 ```
 
-**On all-green (🟢 verdict):** merge with `gh pr merge --merge` — a true merge commit. Never `--squash` or `--rebase`; merge history matters for GUI git clients.
+**On all-green (🟢 verdict):** merge work PRs with `gh pr merge --squash`; release and cascade PRs with `gh pr merge --merge` so `main` and `develop` never diverge.
 
 **On any-red (🔴 verdict or workflow failure):** fetch failing logs with `gh run view <id> --log-failed`, identify the offending job + step, propose the fix in one sentence, apply it, push. The push triggers a fresh polling loop on the new SHA. Don't ask permission for routine breakages (compile errors, missing-file paths, lint, dependency-version pins) — fix and push. Ask only when the failure is genuinely ambiguous (flaky test, infra outage, behavior-change-vs-test disagreement).
 
@@ -66,7 +66,7 @@ After the notification:
 
 1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS`, and `Claude On-Demand: SKIPPED`.
 2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN` (or `BLOCKED` only on the required-approving-review gate, which `--admin` resolves).
-3. **Auto-merge** with `gh pr merge <pr> --merge --admin`.
+3. **Auto-merge** with `gh pr merge <pr> --squash --admin`.
 4. **Delete branches** (local + remote) per standing authorization.
 
 This fast path is **only** for PRs the routine reviewer skips — if `Diff triage` reports `run_review=true`, fall back to the standard 7-minute polling loop and read the verdict comment.
