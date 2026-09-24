@@ -24,10 +24,11 @@ Rename the project to **Bindwright** and rebuild it so the path from "land on th
 | Choices | Two questions (just me or a team; my project or a client's) plus an Advanced drawer with at most seven switches. |
 | Bind | Deterministic. The page renders `_core/` in the browser and the zip is a ready overlay for the repo root. Claude only does judgment work afterward (`TAILOR.md`, about 5 KB). |
 | Review gate | One required check, "Review gate". Shared logic in `.github/scripts/review_gate.py`, settings in `.github/review-gate.yml` and repo variables, so the workflow file is identical for every user. Primary model Fable 5.1 (low effort), one-shot fallback Opus 5.5 (medium). |
-| Code-research tools | Keep several options, but only ones that research shows are good. Each tool is a small data profile, not install prose. |
+| Code-research tools | Offer tokensave, Claude Code LSP plugins, CodeGraph, Serena, codebase-memory-mcp, none, and custom. Drop Semgrep, Sourcegraph and ctags (wrong category or audience). Each tool is a small data profile, not install prose. See `research/code-research-tools.md`. |
 | Guard hooks | Ship in the repo (`.claude/hooks/`), registered in the committed `.claude/settings.json`, with `attribution` turned off, so cloud sessions and teammates get them. |
 | Licensing | Repo stays MIT. Generated output ships under MIT-0 so users owe no attribution. Add a non-affiliation notice, `SECURITY.md`, and a code of conduct. |
-| Merge style and branching | Not a fixed rule. Merge method (merge commit, squash, rebase) and branching model become Advanced choices with a researched default. Research in progress; the result also applies to this repo, Emberholm and Stockra. |
+| Branching | Default stays `main` for production and `develop` for integration. GitHub flow and trunk-based are Advanced options. Whether `develop` becomes the GitHub default branch is being analysed per project (this repo: 19 of the last 43 merged PRs were hotfix or cascade PRs caused by the default-branch mismatch). |
+| Merge style | Work PRs into `develop` squash-merge (one PR, one commit). Release (`develop` to `main`) and cascade (`main` to `develop`) PRs stay merge commits so the branches never diverge. Merge commit and rebase are Advanced options. Applies to this repo, Emberholm and Stockra. See `research/merge-and-branching.md`. |
 | Version | v2.0.0 (breaking: toggle model, bind format, review gate). |
 
 ## Phases
