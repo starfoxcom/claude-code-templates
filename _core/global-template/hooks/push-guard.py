@@ -35,9 +35,13 @@ comments.
 Out of reach, so these run without a block:
 
 - a command this hook cannot split into statements for certain: one with a
-  heredoc that never reaches its closing line, a PowerShell here-string,
-  block comment or `--%`,
-  unbalanced quotes or groups, or, in PowerShell, characters outside ASCII;
+  heredoc that never reaches its closing line, a `<<` it cannot place, a
+  `case` inside a substitution, a PowerShell here-string, block comment or
+  `--%`,
+  unbalanced quotes or groups, or, in PowerShell, characters outside ASCII,
+  a vertical tab or a form feed;
+- a push nested more than MAX_DEPTH levels deep in substitutions, shell
+  strings or `eval`;
 - remote branch and tag deletions (`--delete`, `:branch`, `--prune`);
 - a force flag the shell builds at run time (`git push $FLAGS`, `xargs`,
   brace expansion, text piped into a shell or `iex`);
@@ -94,33 +98,6 @@ REDIRECT_MARK = str.maketrans("<>&", "\ue000\ue001\ue002")
 UNMARK = str.maketrans("\ue000\ue001\ue002", "<>&")
 
 
-def join_lines(command, tool):
-    """Drop line continuations (the escape character before a newline, outside
-    single quotes), as the shell does before it reads the words."""
-    escape = "`" if tool == "PowerShell" else "\\"
-    out, quote, i, n = [], None, 0, len(command)
-    while i < n:
-        ch = command[i]
-        if ch == escape and quote != "'" and i + 1 < n:
-            rest = command[i + 1:i + 3]
-            # Bash joins only backslash + LF: backslash + CR is an escaped CR, so the
-            # LF after it still ends the command. PowerShell joins a backtick
-            # before LF, CRLF or a lone CR.
-            if rest.startswith("\n") or (tool == "PowerShell" and rest.startswith("\r")):
-                i += 3 if rest == "\r\n" else 2
-                continue
-            out.append(command[i:i + 2])
-            i += 2
-            continue
-        if quote and ch == quote:
-            quote = None
-        elif not quote and ch in "'\"":
-            quote = ch
-        out.append(ch)
-        i += 1
-    return "".join(out)
-
-
 def scan(command, tool):
     """Split a command at unquoted separators and drop comments. A separator
     inside a substitution (`$(...)`, backticks, `${...}`, `<(...)`, PowerShell
@@ -137,14 +114,22 @@ def scan(command, tool):
     escape = "`" if tool == "PowerShell" else "\\"
     openers = ("$(", "@(") if tool == "PowerShell" else ("$(", "<(", ">(", "${")
     parts, current, groups, stack, heredocs = [], [], [], [], []
-    quote, readable, escaped_end, i, n = None, True, -1, 0, len(command)
+    quote, readable, escaped_end, closed_at, i, n = None, True, -1, -1, 0, len(command)
 
     def mark(text):
         return text.translate(REDIRECT_MARK)
 
     while i < n:
         ch = command[i]
-        if ch == escape and quote != "'" and i + 1 < n:
+        if ch == escape and quote not in ("'", "$'") and i + 1 < n:
+            # A line continuation joins the lines, as the shell does before it
+            # reads the words. Bash joins only backslash + LF (backslash + CR
+            # is an escaped CR); PowerShell joins a backtick before LF, CRLF or
+            # a lone CR.
+            rest = command[i + 1:i + 3]
+            if rest.startswith("\n") or (tool == "PowerShell" and rest.startswith("\r")):
+                i += 3 if rest == "\r\n" else 2
+                continue
             if not stack:
                 current.append(command[i:i + 2])
             i += 2
@@ -175,6 +160,13 @@ def scan(command, tool):
         # Substitutions open outside single quotes, inside double quotes too,
         # and start a fresh quoting context.
         opener = next((o for o in openers if command.startswith(o, i)), None)
+        # A PowerShell `(...)` in argument position is one value. At the start
+        # of a statement or after the call operator it names the program, so
+        # it stays in the statement there.
+        so_far = "".join(current).rstrip()
+        if (tool == "PowerShell" and not opener and quote is None and not stack and ch == "("
+                and so_far and so_far[-1] not in "\ue002." and command[i - 1] in " \t,="):
+            opener = "("
         if quote not in ("'", "$'") and (opener or (ch == "`" and tool != "PowerShell"
                                                   and not (stack and stack[-1][0] == "`"))):
             opener = opener or "`"
@@ -198,6 +190,9 @@ def scan(command, tool):
                 # found again when its group is checked, so the time stays linear.
                 if kind != "${" and all(s[0] == "${" for s in stack):
                     groups.append(command[start:i])
+                if re.search(r"(^|[\s;&|(])case\s", command[start:i]):
+                    readable = False
+                closed_at = i + 1
                 quote = outer
                 if not stack:
                     current.append(ch)
@@ -248,7 +243,9 @@ def scan(command, tool):
         # PowerShell ends words at a carriage return, and inside `${...}` Bash
         # reads `#` as text.
         elif (ch == "#" and escaped_end != i and not (stack and stack[-1][0] == "${")
-              and (i == 0 or command[i - 1] in " \t\n;|&" or (tool == "PowerShell" and command[i - 1] == "\r"))):
+              and (i == 0 or command[i - 1] in " \t\n;|&"
+                   or (tool == "PowerShell" and command[i - 1] == "\r")
+                   or (tool != "PowerShell" and command[i - 1] in "()" and closed_at != i))):
             while i < n and command[i] != "\n":
                 i += 1
             continue
@@ -552,7 +549,9 @@ def nested_reason(tokens, tool, depth):
         name, rest = program(token), tokens[k + 1:]
         inner = None
         if name in EVAL_COMMANDS and rest:
-            inner, inner_tool = " ".join(rest), tool
+            # Its string already holds every later word of the statement, so one
+            # check covers them; checking each later `eval` too would multiply.
+            return check(" ".join(rest), tool, depth + 1)
         elif name in SHELLS:
             inner, inner_tool = shell_command_string(rest), "Bash"
         elif name in POWERSHELLS:
@@ -591,9 +590,10 @@ def shell_command_string(args):
 
 def check(command, tool, depth=0):
     """Why a command certainly force-pushes, or None."""
-    command = join_lines(command, tool)
-    # Quotes and escapes inside a word (`pu''sh`) are removed by the shell.
-    if not re.search(r"push|send-pack", re.sub(r"[\"'`\\]", "", command), re.I) or len(command) > MAX_COMMAND:
+    # Quotes, escapes and line continuations inside a word (`pu''sh`) are
+    # removed by the shell.
+    bare = re.sub(r"[\"'`\\]", "", re.sub(r"[\\`]\r?\n|`\r", "", command))
+    if not re.search(r"push|send-pack", bare, re.I) or len(command) > MAX_COMMAND:
         return None
     parts, groups, readable = scan(command, tool)
     if not readable:

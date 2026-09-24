@@ -434,6 +434,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // An arithmetic shift is no heredoc, and a heredoc apostrophe does not hide a later `$'...'`.
     "(( n = 1 << 2 ))\ngit push -qf origin main", "echo $((x << y))\ngit push -qf origin main",
     "cat <<'EOF'\ndon't\nEOF\ngit push origin main $'-qf'",
+    // An apostrophe in a heredoc body or a comment does not stop line continuations.
+    "cat > CHANGELOG.md <<'EOF'\nIt's fixed.\nEOF\ngit -C repo \\\n  push --force origin main",
+    "cat > x.md <<'EOF'\nIt's fixed.\nEOF\ngit push origin main \\\n-qf",
+    "# don't push yet\ncd repo && \\\ngit push -qf origin main",
+    // `#` right after `(` starts a comment.
+    "(#'\ngit push -qf origin main #'\n)",
     // An escaped space before `#`, a `#` inside `${...}` and a quoted `>` start no comment or redirect.
     "A=\\ # git push -qf origin main", "X=main; git push origin ${X:-;#} -qf", "git push --repo=\">\" -qf origin main",
     // Forcing settings and one-off aliases on the push itself.
@@ -462,6 +468,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const unguarded = [
     "git push origin --delete old-branch", "git push -d origin old-branch",
     "git push origin --delete main && git push -u origin HEAD",
+    // A `case` inside a substitution, and a push nested past the depth limit.
+    "git push $(case x in x) echo;; esac) -qf origin main",
+    "echo " + "$(echo ".repeat(9) + "git push -qf origin main" + ")".repeat(9),
     "git push origin x 2>&1 | tail -1 | sh", "git push origin x | tee .git/config",
     "git commit -m \"unbalanced && git push -f", "git push -o ci.skip origin x", "git push origin main:+notes",
     "git push -- +main", "git push --repo=origin", "git push $FLAGS origin main",
@@ -490,6 +499,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   for (const cmd of ["git push origin feature/x 2>&1 | Select-Object -Last 1", "git push origin x 2>&1 | tail -1",
     // A carriage return ends a PowerShell line, so the `#` after it starts a comment.
     "git push origin main\r# -qf",
+    // A parenthesized argument is one value; its words are not the push's.
+    "git push origin (\"release/{0}\" -f $version)", "git push origin $(git branch --show-current)",
     "git push -u origin feature/x 2>&1 | Select-String -NotMatch remote"]) {
     assert.equal(verdict("PowerShell", cmd), "allow", `PowerShell should allow: ${cmd}`);
   }
@@ -527,6 +538,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     assert.equal(verdict("Bash", long), "allow", `a ${long.length}-character command passes`);
     assert.ok(Date.now() - started < 3000, `a ${long.length}-character command answers quickly`);
   }
+  // Many `eval` words stay linear: one check covers the rest of the statement.
+  const evals = "eval ".repeat(30) + "echo push; git push -qf origin main";
+  const evalStart = Date.now();
+  assert.equal(verdict("Bash", evals), "deny", "a push after many eval words blocks");
+  assert.ok(Date.now() - evalStart < 3000, "many eval words answer quickly");
+  assert.equal(verdict("PowerShell", "# it's\ngit push origin main `\n-qf"), "deny", "PowerShell continuation after a comment");
   // Deeply nested substitutions stay linear: only the outermost groups are checked again.
   const nested = "x=" + "$(echo ".repeat(2400) + ")".repeat(2400) + "; git push -qf origin main";
   const nestedStart = Date.now();
