@@ -1,60 +1,35 @@
-# Confidentiality — client / NDA work
+# Confidentiality
 
-This rule binds when the project is under NDA or has a confidentiality stake. The discipline is twofold: (1) what stays out of memory, (2) what gets logged for audit.
+Applies to client or NDA work. Two jobs: keep client secrets out of memory, and keep a record the client can audit.
 
----
+## Keep out of memory
 
-## What stays OUT of memory
+Memory files under `~/.claude/projects/<slug>/memory/` live on your machine and persist indefinitely. Treat them like email:
 
-Memory is at `~/.claude/projects/<slug>/memory/` — files on your laptop, not the client's. **The client doesn't see them**, but they persist forever and are easy to forget about. Apply NDA reasoning as if they were emails:
+- No client trade secrets: algorithms, formulas, revenue or growth numbers, internal codenames, unannounced products.
+- No personal data: customer names, employee names beyond your direct contacts, internal emails.
+- No verbatim copies of client documents, contracts or prompts.
+- No credentials or vendor keys the client gave you.
 
-- **No client trade secrets** — algorithms, formulas, growth numbers, revenue, churn, internal codenames, unannounced products.
-- **No client PII** — customer names, employee names beyond the people you directly interact with, internal emails, contact lists.
-- **No verbatim copy-pastes** of client docs, contracts, or sensitive prompts.
-- **No third-party-vendor secrets** the client gave you access to (API keys for vendor X, credentials, etc.).
+Fine to keep: your role and scope, how you work with this client, and pointers to where things live ("tickets are in Linear") without their contents. When unsure, leave it out.
 
-What's OK in memory:
-- Your role and the scope of work ("client X engagement, consultant role, focus on auth refactor").
-- Conventions and decisions that are about HOW you work, not WHAT the client does.
-- Pointers to where things live ("client uses Linear for tickets") — without the ticket contents.
+## Audit trail
 
-When in doubt, **omit**. A memory you can't write is one less liability.
+If the client needs a record of AI-assisted work:
 
----
+- Session transcripts under `~/.claude/projects/<slug>/*.jsonl` are the source; keep them exportable.
+- Each PR lists the AI-assisted changes in its description (the PR template has the section).
+- Follow the client's own convention for marking AI-generated commits. Add no attribution lines unless the client asks for them.
 
-## What gets LOGGED for audit
+## One machine, several clients
 
-Some engagements require auditable records of AI-assisted work. If the client asks for an audit trail:
-
-- **Per session:** keep the session transcript exportable. Claude Code transcripts at `~/.claude/projects/<slug>/*.jsonl` are the source.
-- **Per PR:** the PR description includes a section listing AI-assisted changes (commits touched, scope) — see the `audit_trail_commits` toggle and the matching PR-template section.
-- **Per change:** if the client's policy requires identifying AI-generated commits, follow their convention (e.g., commit footer line, label, separate branch). Do NOT add `Co-Authored-By: Claude` lines unless the client explicitly requests them — most clients prefer no AI attribution in commit messages.
-
----
-
-## On-machine isolation
-
-If multiple clients are on the same workstation:
-
-- **Per-project memory** is already isolated by Claude Code (each project gets its own `~/.claude/projects/<slug>/`).
-- **Global memory** (`~/.claude/CLAUDE.md`) is shared across projects — keep client-specific facts OUT of it.
-- **Permissions** (`.claude/settings.local.json`) are per-project — review what's allowed and ensure no cross-project tooling leak.
-- **Code-research tool indexes / artifacts** are per-project — never commit them to the client's repo. Depending on `tools.code_research`: `.tokensave/` (tokensave's index dir), `tags` (ctags), `.ast-grep.yml` runtime artifacts, Sourcegraph local caches, `.semgrep` config dirs. Add the relevant entries to the project `.gitignore`.
-
----
+- Keep client facts out of `~/.claude/CLAUDE.md`, which every project shares.
+- Review `.claude/settings.json` permissions so no tooling allowed for one client leaks into another.
+- Keep code-research indexes and caches out of the client's repo: add them to `.gitignore`.
 
 ## When the engagement ends
 
-At wrap-up:
-
-1. **Export** any deliverables the client owns (code is in their repo; that's handled by Gitflow).
-2. **Archive** the local memory directory to encrypted storage if you need it for tax / dispute reasons. Otherwise delete it.
-3. **Remove** client-specific allowlist entries from `~/.claude/CLAUDE.md` and global permissions.
-4. **Rotate** any client-issued credentials still in your local env.
-
----
-
-## See
-
-- `.claude/rules/git.md` for the audit trail commit convention (when `audit_trail_commits` is ON).
-- The session-close skill's "Billable handoff summary" step (when `billable_handoff_summary` is ON) — what gets emailed to the client after each session.
+1. Confirm every deliverable is in the client's repo.
+2. Archive the project's memory folder to encrypted storage if you need it for tax or dispute reasons; otherwise delete it.
+3. Remove client-specific entries from global config and permissions.
+4. Rotate any client credentials still on your machine.
