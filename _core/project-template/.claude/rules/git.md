@@ -66,7 +66,8 @@ Run `git branch --show-current` before editing. Switch or branch first, then edi
 ## Merging
 
 <!-- TOGGLE:merge_style:squash START -->
-- Work PRs squash-merge: `gh pr merge <pr> --squash --delete-branch`. The PR title becomes the commit, so it must follow the commit format above.
+- Work PRs squash-merge: `gh pr merge <pr> --squash --delete-branch`. The PR title becomes the commit, so it must follow the commit format above, in 64 characters or fewer (GitHub appends ` (#123)`). One PR is one logical change; the commits inside it serve review only.
+- A branch stacked on a PR that was just squash-merged still carries the parent's commits. Before continuing, run `git rebase --onto origin/{{DEV_BRANCH}} <old-parent-tip>` and force-push the stacked branch.
 <!-- TOGGLE:merge_style:squash END -->
 <!-- TOGGLE:merge_style:merge START -->
 - Every PR merges with a merge commit: `gh pr merge <pr> --merge --delete-branch`. Keep each commit buildable, and read history with `git log --first-parent`.
