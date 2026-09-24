@@ -36,8 +36,7 @@ Out of reach, so these run without a block:
 
 - a command this hook cannot split into statements for certain: one with a
   heredoc that never reaches its closing line, a `<<` it cannot place, a
-  `case` inside a substitution, a PowerShell here-string, block comment or
-  `--%`,
+  PowerShell here-string, block comment or `--%`,
   unbalanced quotes or groups, or, in PowerShell, characters outside ASCII,
   a vertical tab or a form feed;
 - a push nested more than MAX_DEPTH levels deep in substitutions, shell
@@ -98,7 +97,7 @@ REDIRECT_MARK = str.maketrans("<>&", "\ue000\ue001\ue002")
 UNMARK = str.maketrans("\ue000\ue001\ue002", "<>&")
 
 
-def scan(command, tool):
+def scan(command, tool, text=False):
     """Split a command at unquoted separators and drop comments. A separator
     inside a substitution (`$(...)`, backticks, `${...}`, `<(...)`, PowerShell
     `$(...)` and `@(...)`) does not end the statement around it, and a Bash
@@ -146,7 +145,7 @@ def scan(command, tool):
                     line = command[j:n if end < 0 else end]
                     if (line.lstrip("\t") if strip_tabs else line) == delimiter:
                         if not literal:
-                            groups.extend(scan(command[start:j], tool)[1])
+                            groups.extend(scan(command[start:j], tool, text=True)[1])
                         j = n if end < 0 else end + 1
                         break
                     if end < 0:
@@ -174,32 +173,45 @@ def scan(command, tool):
             opener = opener or "`"
             if not stack:
                 current.append(mark(opener))
-            stack.append([opener, i + len(opener), quote, 0])
+            stack.append([opener, i + len(opener), quote, 0, 0])
             quote = None
             i += len(opener)
             continue
         if stack and quote is None:
-            kind, start, outer, depth = stack[-1]
+            kind, start, outer, depth, cases = stack[-1]
             closer = {"`": "`", "${": "}"}.get(kind, ")")
             nested = {"`": None, "${": "{"}.get(kind, "(")
+            # A `case` statement's patterns end in `)`, which must not close
+            # the group; count `case` and `esac` in command position.
+            keyword = re.match(r"(case|esac)(?=[\s;)]|$)", command[i:i + 5]) if ch in "ce" else None
+            if keyword and re.search(r"(^|[;&|(\n]|\b(then|do|else|elif|in))[ \t]*$",
+                                     command[max(start, i - 40):i] if i - start > 40 else command[start:i]):
+                stack[-1][4] = cases + 1 if keyword.group(1) == "case" else max(cases - 1, 0)
+                i += 4
+                continue
             if ch == nested:
                 stack[-1][3] += 1
             elif ch == closer and depth:
                 stack[-1][3] -= 1
+            elif ch == closer and cases and closer == ")":
+                pass
             elif ch == closer:
                 stack.pop()
                 # Only the outermost substitutions are kept; a nested one is
                 # found again when its group is checked, so the time stays linear.
                 if kind != "${" and all(s[0] == "${" for s in stack):
                     groups.append(command[start:i])
-                if re.search(r"(^|[\s;&|(])case\s", command[start:i]):
-                    readable = False
                 closed_at = i + 1
                 quote = outer
                 if not stack:
                     current.append(ch)
                 i += 1
                 continue
+        # In an unquoted heredoc body (`text`), only escapes and substitutions
+        # are special: quotes and `#` are plain characters there.
+        if text and not stack:
+            i += 1
+            continue
         if quote:
             if ch == quote[-1]:
                 quote = None

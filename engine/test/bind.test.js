@@ -387,6 +387,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin `git config -f x.cfg branch.name`",
     // An escaped quote inside `$'...'` keeps the push text inside the string.
     "echo $'x\\' ; git push -f origin main ; \\'' ''",
+    "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case\nEOF\n)\" && git push origin feature/x",
+    "echo showcase; git push origin x",
     // Push text inside a heredoc body is not a command.
     "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
     "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
@@ -444,6 +446,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "(#'\ngit push -qf origin main #'\n)",
     // Inside `$'...'` a backslash escapes the quote.
     "echo $'it\\'s done'\ngit push -qf origin main", "git commit -m $'don\\'t' && git push -qf origin main",
+    // A `case` pattern's `)` does not close the substitution; the word "case" in text changes nothing.
+    "git push $(case x in x) echo;; esac) -qf origin main",
+    "x=$(case $y in a) echo a;; b) echo b;; esac); git push -qf origin main",
+    "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case where the lock is stale\nEOF\n)\" && git push -f origin main",
+    // In an unquoted heredoc body, quotes and `#` are text and `$(...)` still runs.
+    "cat <<EOF\ndon't\n$(git push -qf origin main)\nEOF", "cat <<EOF\n# $(git push -qf origin main)\nEOF",
     // An escaped space before `#`, a `#` inside `${...}` and a quoted `>` start no comment or redirect.
     "A=\\ # git push -qf origin main", "X=main; git push origin ${X:-;#} -qf", "git push --repo=\">\" -qf origin main",
     // Forcing settings and one-off aliases on the push itself.
@@ -473,7 +481,6 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin --delete old-branch", "git push -d origin old-branch",
     "git push origin --delete main && git push -u origin HEAD",
     // A `case` inside a substitution, and a push nested past the depth limit.
-    "git push $(case x in x) echo;; esac) -qf origin main",
     "echo " + "$(echo ".repeat(9) + "git push -qf origin main" + ")".repeat(9),
     "git push origin x 2>&1 | tail -1 | sh", "git push origin x | tee .git/config",
     "git commit -m \"unbalanced && git push -f", "git push -o ci.skip origin x", "git push origin main:+notes",
