@@ -24,6 +24,7 @@ function included(path, a, flags) {
     ".claude/rules/collaboration.md": a.team,
     ".claude/rules/confidentiality.md": adv.confidentiality,
     ".claude/rules/clean-room.md": adv.cleanRoom,
+    ".claude/rules/shipped-text.md": adv.plainWriting,
     ".claude/rules/visual.md": adv.uiRule,
     ".claude/rules/review-tiers.md": adv.aiReview,
     ".github/workflows/claude-code-review.yml.template": flags.github_actions_routine_review,

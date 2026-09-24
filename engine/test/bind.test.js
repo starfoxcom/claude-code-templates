@@ -131,6 +131,25 @@ test("every flag is read by a template or by bind.js", () => {
   }
 });
 
+test("always-on rules ship to every setup, the writing rule only on request", async () => {
+  const a = defaults();
+  let files = await run(a);
+  for (const rule of ["task-tracking.md", "testing.md", "code-size.md"]) {
+    assert.ok(files.has(`.claude/rules/${rule}`), `${rule} missing`);
+  }
+  assert.ok(!files.has(".claude/rules/shipped-text.md"));
+  a.advanced.plainWriting = true;
+  files = await run(a);
+  assert.ok(files.has(".claude/rules/shipped-text.md"));
+});
+
+test("path-scoped rules keep their frontmatter at the top", async () => {
+  const files = await run(defaults());
+  for (const rule of ["testing.md", "code-size.md"]) {
+    assert.match(files.get(`.claude/rules/${rule}`), /^---\npaths:\n/, `${rule} lost its paths frontmatter`);
+  }
+});
+
 test("bad answers are rejected", async () => {
   const a = defaults();
   a.project.name = "../escape";
