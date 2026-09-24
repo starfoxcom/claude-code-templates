@@ -27,6 +27,7 @@ Rename the project to **Bindwright** and rebuild it so the path from "land on th
 | Code-research tools | Keep several options, but only ones that research shows are good. Each tool is a small data profile, not install prose. |
 | Guard hooks | Ship in the repo (`.claude/hooks/`), registered in the committed `.claude/settings.json`, with `attribution` turned off, so cloud sessions and teammates get them. |
 | Licensing | Repo stays MIT. Generated output ships under MIT-0 so users owe no attribution. Add a non-affiliation notice, `SECURITY.md`, and a code of conduct. |
+| Merge style and branching | Not a fixed rule. Merge method (merge commit, squash, rebase) and branching model become Advanced choices with a researched default. Research in progress; the result also applies to this repo, Emberholm and Stockra. |
 | Version | v2.0.0 (breaking: toggle model, bind format, review gate). |
 
 ## Phases
