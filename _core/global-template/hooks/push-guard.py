@@ -413,7 +413,7 @@ def program(token):
     `("git")` are all git. A redirect glued to the name ends it, as in the
     shell: `git>/dev/null` is git."""
     token = re.sub(r"^(?:[A-Za-z_][A-Za-z0-9_]*=)?[$`(&<>\ue000-\ue002]+", "", token)
-    name = re.split(r"[\ue000-\ue002]", token, 1)[0].rstrip(")")
+    name = re.split(r"[\ue000-\ue002]", token, maxsplit=1)[0].rstrip(")")
     name = name.replace("\\", "/").split("/")[-1].lower()
     return re.sub(r"\.exe$", "", name)
 
@@ -438,7 +438,7 @@ def push_reason(tokens, deleted, depth):
         if i >= len(tokens):
             continue
         # A redirect glued to the subcommand ends it: `push>/dev/null` is push.
-        name, args = re.split(r"[\ue000-\ue002]", tokens[i], 1)[0], tokens[i + 1:]
+        name, args = re.split(r"[\ue000-\ue002]", tokens[i], maxsplit=1)[0], tokens[i + 1:]
         # A one-off alias (`-c alias.p='push -f'`) runs its words in place of
         # the alias name; a `!` alias runs its text in a shell with the
         # arguments appended. Config keys ignore case, and an alias can name

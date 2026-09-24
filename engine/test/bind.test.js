@@ -542,6 +542,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push -qf origin main" } }) });
   assert.equal(decide(inShadow), "deny", "a project json.py must not disable the guard");
   assert.equal(verdict("Read", "git push -f"), "allow", "other tools pass");
+  // An allowed push prints nothing at all, and no call relies on a positional
+  // `maxsplit`, which Python 3.13 warns about on stderr.
+  const lease = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push --force-with-lease origin x" } }));
+  assert.equal(`${lease.stdout}${lease.stderr}`, "", "an allowed push prints nothing");
+  assert.doesNotMatch(readFileSync(join(repo, "_core/global-template/hooks/push-guard.py"), "utf8"),
+    /re\.split\([^)]*,\s*\d+\)/, "maxsplit is passed by keyword");
   assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
   // A timed-out hook lets the call through, so long commands must answer well inside the timeout.
   // Over MAX_COMMAND characters the guard passes without parsing.
