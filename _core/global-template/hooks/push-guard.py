@@ -97,6 +97,15 @@ REDIRECT_MARK = str.maketrans("<>&", "\ue000\ue001\ue002")
 UNMARK = str.maketrans("\ue000\ue001\ue002", "<>&")
 
 
+def comment_start(prev, at, closed_at, tool):
+    """Whether a `#` at index `at`, after the character `prev`, starts a word
+    and so a comment. A `)` that closed a substitution (`$(a)#b`) is part of
+    the same word."""
+    return (prev == "" or prev in " \t\n;|&"
+            or (tool == "PowerShell" and prev == "\r")
+            or (tool != "PowerShell" and prev in "()" and closed_at != at))
+
+
 def scan(command, tool, text=False, keywords=True):
     """Split a command at unquoted separators and drop comments. A separator
     inside a substitution (`$(...)`, backticks, `${...}`, `<(...)`, PowerShell
@@ -114,6 +123,7 @@ def scan(command, tool, text=False, keywords=True):
     openers = ("$(", "@(") if tool == "PowerShell" else ("$(", "<(", ">(", "${")
     parts, current, groups, stack, heredocs = [], [], [], [], []
     quote, readable, escaped_end, closed_at, i, n = None, True, -1, -1, 0, len(command)
+    joined_to, joined_from, joined_before, joined_escaped = -1, -1, "", False
 
     def mark(text):
         return text.translate(REDIRECT_MARK)
@@ -128,7 +138,12 @@ def scan(command, tool, text=False, keywords=True):
             # Inside `$'...'` the pair is an escape, never a join.
             rest = command[i + 1:i + 3]
             if quote != "$'" and (rest.startswith("\n") or (tool == "PowerShell" and rest.startswith("\r"))):
+                # Remember what came before the join (across several joins in a
+                # row): the next word's start is decided by it, not by the newline.
+                if joined_to != i:
+                    joined_from, joined_before, joined_escaped = i, command[i - 1:i], escaped_end == i
                 i += 3 if rest == "\r\n" else 2
+                joined_to = i
                 continue
             if not stack:
                 current.append(command[i:i + 2])
@@ -258,11 +273,12 @@ def scan(command, tool, text=False, keywords=True):
         # A `#` that starts a word starts a comment, which runs to the end of the
         # line. The character before it must be an unescaped delimiter; only
         # PowerShell ends words at a carriage return, and inside `${...}` Bash
-        # reads `#` as text.
-        elif (ch == "#" and escaped_end != i and not (stack and stack[-1][0] == "${")
-              and (i == 0 or command[i - 1] in " \t\n;|&"
-                   or (tool == "PowerShell" and command[i - 1] == "\r")
-                   or (tool != "PowerShell" and command[i - 1] in "()" and closed_at != i))):
+        # reads `#` as text. After a line continuation the character before the
+        # join counts: `a\<LF>#b` is the word `a#b`.
+        elif (ch == "#" and not (stack and stack[-1][0] == "${")
+              and not (joined_escaped if joined_to == i else escaped_end == i)
+              and comment_start(joined_before if joined_to == i else command[i - 1:i],
+                                joined_from if joined_to == i else i, closed_at, tool)):
             while i < n and command[i] != "\n":
                 i += 1
             continue

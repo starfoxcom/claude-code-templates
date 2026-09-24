@@ -389,6 +389,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "echo $'x\\' ; git push -f origin main ; \\'' ''",
     "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case\nEOF\n)\" && git push origin feature/x",
     "echo showcase; git push origin x",
+    // A continuation after a space leaves the `#` at a word start, so it is a comment.
+    "echo a \\\n# git push -f\ngit push origin x",
     // Push text inside a heredoc body is not a command.
     "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
     "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
@@ -452,6 +454,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "x=$(" + "echo a; ".repeat(10) + "case $y in a) echo a;; esac); git push -qf origin main",
     "x=$(grep -in case f); git push -qf origin main",
     "x=$(echo just in case); git push -qf origin main", "x=$(echo do case); git push -qf origin main",
+    // A line continuation joins before words are split: `x=1\<LF>#` is the word `x=1#`.
+    "x=1\\\n#; git push -qf origin main", "x=1\\\n\\\n#; git push -qf origin main",
     "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case where the lock is stale\nEOF\n)\" && git push -f origin main",
     // In an unquoted heredoc body, quotes and `#` are text and `$(...)` still runs.
     "cat <<EOF\ndon't\n$(git push -qf origin main)\nEOF", "cat <<EOF\n# $(git push -qf origin main)\nEOF",
