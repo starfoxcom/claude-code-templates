@@ -421,7 +421,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "echo '; git push -qf origin main' | git commit --allow-empty -F - | sh",
     // `gh alias set --shell` and `gh extension` run commands.
     "gh alias set --shell p 'git \"$@\"'; gh p push -qf origin main",
-    "gh alias set p '!git \"$@\"'; gh p push -qf origin main",
+    "gh alias set p '!git \"$@\"'; gh p push -qf origin main", "gh extension exec pusher push -qf origin main",
     "git remote add --mirr=push b https://example.com/b.git",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
     "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main:main'\" git push origin",
@@ -470,6 +470,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "&('gi'+'t') push -qf origin main",
     // A PowerShell alias for git, with the value before the name.
     "sal -Value git g; g push -qf origin main", "Set-Alias -Value git -Name g; g push -qf origin main", "echo 'git push -qf origin main' | iex",
+    "Write-Output '; git push -qf origin main' | git commit --allow-empty -F - | iex",
     // A PowerShell line can start with `|` to continue the pipeline from the line before.
     "echo 'git push -qf origin main'\n| iex", "Write-Output 'git push -qf origin main'\r\n| iex",
     "echo 'git push -qf origin main'\r  | iex"]) {
