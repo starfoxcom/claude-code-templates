@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -177,7 +177,76 @@ test("the adherence script ships only with a code-research tool", async () => {
   }
 });
 
-const python = ["python3", "python"].find((cmd) => spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8)"]).status === 0);
+test("the deny list blocks force pushes but allows --force-with-lease", async () => {
+  const files = await run(defaults());
+  // Deferred placeholders are filled by setup later; blank them to parse.
+  const settings = JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
+  // Bash rule matching as documented at code.claude.com/docs/en/permissions#wildcard-patterns:
+  // `*` matches any text including spaces, at any position; a trailing `:*` equals a trailing
+  // ` *`; and a trailing ` *` that is the rule's only wildcard also matches the bare command.
+  const toRegex = (rule) => {
+    const p = rule.replace(/:\*$/, " *");
+    const esc = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    if (p.endsWith(" *") && p.indexOf("*") === p.length - 1) return new RegExp(`^${esc(p.slice(0, -2))}( .*)?$`);
+    return new RegExp("^" + p.split("*").map(esc).join(".*") + "$");
+  };
+  // The matcher must reproduce the docs' own example table before it judges our rules.
+  for (const [rule, yes, no] of [
+    ["npm run *", ["npm run build", "npm run test --watch", "npm run"], ["npm install"]],
+    ["git log * main", ["git log --oneline main", "git log -5 main"], ["git log main", "git push origin main"]],
+    ["git * main", ["git merge main", "git push origin main"], ["git log"]],
+    ["* --version", ["node --version"], ["node -v"]],
+    ["ls *", ["ls -la", "ls"], ["lsof"]],
+    ["ls:*", ["ls -la", "ls"], ["lsof"]],
+    ["ls*", ["ls -la", "lsof"], []],
+    ["* --help *", ["npm --help x"], ["npm --help"]],
+  ]) {
+    for (const cmd of yes) assert.ok(toRegex(rule).test(cmd), `matcher: ${rule} should match ${cmd}`);
+    for (const cmd of no) assert.ok(!toRegex(rule).test(cmd), `matcher: ${rule} should not match ${cmd}`);
+  }
+  const rules = settings.permissions.deny.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map(toRegex);
+  const denied = (cmd) => rules.some((r) => r.test(cmd));
+  for (const cmd of ["git push --force", "git push --force origin x", "git push origin x --force", "git push -f origin x",
+    "git push origin -f", "git push -fu origin x", "git push origin x -fu", "git push -uf origin x", "git push origin -uf x",
+    "git push origin +main", "git push --mirror origin", "git push origin --mirror",
+    // `--upload-pack` runs a shell command, so the `git fetch`/`git pull` allows must not approve it.
+    "git fetch --upload-pack=x .", "git fetch origin --upl=x", "git pull --upload-pack=x . main",
+    // A mirror remote turns a later bare `git push`, which the allow list approves, into a mirror force push.
+    "git remote add --mirror=push origin https://x/y", "git remote add --mi origin https://x/y",
+    "git remote -v add --mirror=push origin https://x/y",
+    // `gh repo sync --force` hard-resets a branch on GitHub.
+    "gh repo sync --force", "gh repo sync owner/fork --branch main --force"]) {
+    assert.ok(denied(cmd), `${cmd} should be denied`);
+  }
+  for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x",
+    "git push -u origin feature/x", "git push --follow-tags origin x",
+    "git remote add upstream https://x/y", "git remote -v", "git fetch origin", "git pull origin main"]) {
+    assert.ok(!denied(cmd), `${cmd} should be allowed`);
+  }
+  // Short-flag bundles like `-qf` cannot be denied by text rules without also denying
+  // `--force-with-lease`; only the global push guard catches them. Without it, they must
+  // at least not be auto-approved, so the person sees the command before it runs.
+  const allows = settings.permissions.allow.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map(toRegex);
+  for (const cmd of ["git push -qf origin main", "git push -vf origin main", "git push -uqf origin main",
+    "git push origin main -qf", "git push -u origin x -qf"]) {
+    assert.ok(!allows.some((r) => r.test(cmd)), `${cmd} must not be auto-approved`);
+  }
+  assert.ok(allows.some((r) => r.test("git push")), "a bare git push stays auto-approved");
+  // The page's stack-command chips must not offer `git push`: Phase 5 would render it as `git push:*`.
+  for (const page of ["index.html", "redesign/data.jsx"]) {
+    const catalog = readFileSync(join(repo, page), "utf8").match(/"Git · GitHub":\s*\[([^\]]*)\]/)[1];
+    assert.ok(!/"git push/.test(catalog), `${page} must not offer a git push chip`);
+  }
+  // The page's built-in fallback copy of SETUP.md must carry the same skip rule.
+  for (const page of ["index.html", "redesign/bind.jsx"]) {
+    assert.match(readFileSync(join(repo, page), "utf8"), /stack command that is \\`git push\\` or starts with it/,
+      `${page} fallback setup must skip git push stack commands`);
+  }
+});
+
+// `python` first: on Windows, `python3` is often an App Execution Alias, and starting
+// an interpreter by its full path after that alias crashes Node 20's process spawner.
+const python = ["python", "python3"].find((cmd) => spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8)"]).status === 0);
 
 test("the adherence script counts only code searches", { skip: !python && "needs Python 3.8+" }, async () => {
   const a = defaults();
@@ -226,6 +295,205 @@ test("the adherence script counts only code searches", { skip: !python && "needs
   const out = spawnSync(python, [script, transcript], { encoding: "utf8" });
   assert.equal(out.status, 0, out.stderr);
   assert.match(out.stdout, /1 calls, plain code searches: 8 \(plus 1 marked bypasses\) -> 11%/);
+});
+
+test("the push guard blocks force pushes in any flag bundle", { skip: !python && "needs Python 3.8+" }, async () => {
+  // The guard is installed globally by setup, never shipped into the project.
+  assert.ok(!coreFiles.some((f) => f.includes("push-guard")), "no project copy of the push guard");
+  assert.equal(JSON.parse((await run(defaults())).get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, "")).hooks,
+    undefined, "no project-level hooks");
+
+  // Register it exactly as SETUP.md Phase 7c documents: its JSON entry, with this
+  // machine's interpreter and a temporary home. Exec form, so no shell is involved.
+  const setup = readFileSync(join(repo, "SETUP.md"), "utf8");
+  // A "git push" stack-command chip must not come back as a project-level `git push:*`.
+  const stackStep = setup.slice(setup.indexOf("5. **Render `{{STACK_COMMANDS_ALLOWLIST}}`**"), setup.indexOf("6.", setup.indexOf("5. **Render `{{STACK_COMMANDS_ALLOWLIST}}`**")));
+  assert.match(stackStep, /Never widen `git push` here\.\*\* Skip any entry that is `git push`/);
+  const step = setup.slice(setup.indexOf("7c. **Install the push guard GLOBALLY**"));
+  const exe = spawnSync(python, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+  const home = mkdtempSync(join(tmpdir(), "push-guard-")).split("\\").join("/");
+  const entry = JSON.parse(step.match(/```json\r?\n([\s\S]*?)```/)[1]
+    .replace("<python>", JSON.stringify(exe).slice(1, -1)).replace("<home>", home)).hooks[0];
+  assert.equal(entry.command, exe);
+  assert.ok(Array.isArray(entry.args), "exec form, so no shell expands the path");
+  mkdirSync(join(home, ".claude", "hooks"), { recursive: true });
+  writeFileSync(join(home, ".claude", "hooks", "push-guard.py"), readFileSync(join(repo, "_core/global-template/hooks/push-guard.py")));
+  const runHook = (root, input) => spawnSync(entry.command, entry.args.map((s) => s.split(home).join(root)), { input, encoding: "utf8" });
+  // "deny" is exit 2; "ask" is exit 0 with an ask decision on stdout; "allow" is a silent exit 0.
+  const decide = (r) => r.status === 2 ? "deny"
+    : r.status === 0 && /"permissionDecision": "ask"/.test(r.stdout) ? "ask"
+    : r.status === 0 && r.stdout === "" ? "allow" : `exit ${r.status}: ${r.stdout}${r.stderr}`;
+  const verdict = (tool, command) => decide(runHook(home, JSON.stringify({ tool_name: tool, tool_input: { command } })));
+  const missing = runHook(mkdtempSync(join(tmpdir(), "no-hook-")), JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }));
+  assert.notEqual(missing.status, 2, "a missing hook file must not block every call");
+  // Certain force pushes in plain commands are blocked.
+  const both = [
+    "git push --force", "git push origin main --force", "git push -f origin x", "git push origin x -f",
+    "git push -fu origin x", "git push -uf origin x", "git push -qf origin main", "git push -vf origin main",
+    "git push origin main -qf", "git push -uqf origin main", "git push origin +main", "git push origin -- +main",
+    "git -C repo push -f", "cd repo && git push --force origin x", "echo hi; git push -qf", "GIT_TRACE=1 git push -f",
+    "/usr/bin/git push -f", "git push --force=true origin x", "git push --mirror origin", "git push --mirr origin",
+    "git push --m origin", "git --config-env core.x=HOME push -f origin main", "git --attr-source HEAD push -qf origin main",
+    "(git push -qf origin main)", "if x; then git push -qf origin main; fi",
+    "for r in a; do git push -qf origin main; done", "GIT.EXE push -f origin main",
+    // Wrappers with their own options cannot hide the push.
+    "sudo -u me git push -qf origin main", "timeout 5 git push -f origin main", "nice -n 5 git push -qf origin main",
+    "command -p git push -qf origin main", "env -i git push -qf origin main", "time -p git push -qf origin main",
+  ];
+  const bashOnly = [
+    "git commit -m \"fix \\\"x\" && git push -qf origin main", "a & git push -qf origin main",
+    // Line continuations are joined first, and quotes or escapes inside `push` are read as the shell reads them.
+    "git push origin main \\\n-qf", "cd repo && \\\ngit push -qf origin main",
+    "git pu''sh -qf origin main", "git \"pu\"sh -qf origin main", "git pu\\sh -qf origin main",
+    // A redirect glued to the program name, and git's own dashed push program.
+    "git>/dev/null push -qf origin main", "git</dev/null push -qf origin main", "git&>/dev/null push -qf origin main",
+    "/usr/lib/git-core/git-push -qf origin main",
+    "case x in a) git push -qf origin main;; esac", "if git push -qf origin main; then echo ok; fi",
+    "while git push -qf origin main; do break; done",
+    // Backslash + CR is an escaped CR in bash, so the LF after it still ends the command.
+    "echo x \\\r\ngit push -qf origin main", "git commit -m wip \\\r\ngit push -qf origin main",
+    // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
+    "git commit -m \"fix “x”\" && git push -qf origin main",
+  ];
+  const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
+    "git push origin main `\n-qf", "git push origin main `\r-qf", "git push origin main `\r\n-qf",
+    ". git push -qf origin main",
+    // An unquoted comma passes array elements as separate arguments, and a
+    // backtick inside double quotes before a plain character is dropped.
+    "git push origin main,-qf", "git push origin main,+main", "git push origin main ,-qf",
+    "git push origin main \"`-qf\"", "git push origin main \"`--force\"", "git push origin \"`+main\"",
+    // The call operator glued to git, around a parenthesized name, or a command lookup.
+    "&git push -qf origin main", "&'git' push -qf origin main", "& (\"git\") push -qf origin main",
+    "&git.exe push -qf origin main", "&(Get-Command git) push -qf origin main",
+    "& (gcm git) push -qf origin main", "git>out.txt push -qf origin main",
+    // PowerShell runs a parenthesized argument as a command, so these push for certain.
+    "Write-Output (git push -qf origin main)", "echo (git push -qf origin main)",
+    "git commit -m (git push -qf origin main)",
+    // In PowerShell 7 a mid-line `&` starts a background job and ends the statement; so does a lone CR.
+    "git commit -m wip & git push -qf origin main", "echo x & git push -qf origin main",
+    "Write-Output x & git push -qf origin main", "git commit -m wip\rgit push -qf origin main"];
+  // Silent passes: pushes on the allow-list, commands that never push, and text that only mentions one.
+  const allowed = [
+    "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
+    "git push origin x --force-with-lease=x:abc", "git push --force-if-includes --force-with-lease origin x",
+    "git push --follow-tags origin x", "git push --tags",
+    "git push origin HEAD:refs/heads/x", "cd repo && git push -u origin feature/x", "git push origin x 2>&1",
+    "git log -f", "git commit -m \"push -f later\"", "echo \"git push -f\"",
+    "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
+    "cat <<-EOF > notes.md\n\tnotes\n\tEOF", "(( n = 1 << 2 ))\necho done", "git remote add origin https://example.com/a.git",
+    // Pushes that are not git's, and a push next to segments known to leave git alone.
+    "git stash push -m wip", "gh run list --event push", "docker push img:1",
+    "git add . && git commit -m \"x\" && git push origin x", "git fetch origin && git push -u origin x",
+    "echo git push -f", "printf 'fix push retries' | git commit -F -",
+    "gh pr create --title \"fix push retries\" --body \"Pushes now retry.\"", "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
+  ];
+  // Everything else that mentions a push asks: never a guess, never a silent pass.
+  const asked = [
+    // A delete followed by a push drops remote commits like a force push, so deletes ask.
+    "git push origin --delete old-branch", "git push -d origin old-branch",
+    "git push origin --delete main && git push origin main",
+    "eval \"git push -qf origin main\"", "git commit -m \"unbalanced && git push -f",
+    "git push -o ci.skip origin x", "git push origin main:+notes", "git push -- +main", "git push --repo=origin",
+    "echo $(git push -qf origin main)", "out=$(git push -qf origin main 2>&1)", "echo \"$(git push -qf origin main)\"",
+    "x=`git push -qf origin main`", "diff <(git push -qf origin main) x", "git push $FLAGS origin main",
+    "git push origin {-qf,x}", "{ git push -qf origin main; }", "git push origin x # never -f here",
+    "echo hi # && git push -qf origin main", "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
+    "cat > notes.md <<'EOF'\nnotes\nEOF\ngit push -qf origin main", "cat <<EOF\n$(git push -qf origin main)\nEOF",
+    "(( n = 1 << 2 ))\ngit push -qf origin main", "echo $((x << y))\ngit push -qf origin main",
+    "wc -c <<< hello\ngit push -qf origin main", "cat <<EOF\nnever closed\ngit push -qf origin main",
+    // A redirect glued to `push` hides the word from a plain reading.
+    "git push>/dev/null -qf origin main", "git push<in -qf origin main", "git push&>/dev/null -qf origin main",
+    // Settings that make a later plain `git push` force or mirror, from the command line or the environment.
+    "git -c remote.origin.push=+main:main push origin", "git remote add --mirror=push b https://example.com/b.git",
+    "git config remote.b.mirror true", "git remote add --mirror b https://example.com/b.git",
+    // An alias can turn any later word into a push.
+    "git -c alias.p='push -f' p origin main", "git config alias.p 'push -f'",
+    "git -c alias.p=push p -f origin main", "git config --global alias.p 'push -f'",
+    "hash -p /usr/bin/git g; g push -qf origin main", "alias g=git\ng push -qf origin main",
+    // git's push plumbing has its own --force.
+    "git send-pack --force https://x/y main", "git http-push --force https://x/y main",
+    // Quotes and escapes inside a nested command string are removed by the inner shell.
+    "sh -c 'git pu\"\"sh -qf origin main'", "sh -c 'git pu\\sh -qf origin main'", "sh -c 'g\\it push -qf origin main'",
+    "bundle exec sh -c 'git pu\"\"sh -qf origin main'", "sh -c 'git\tpush -qf origin main'",
+    // The inner shell also joins words, expands globs and variables the hook never sees.
+    "bash -c 'git \"$@\"' _ push -qf origin main", "sh -c 'exec git \"$0\" \"$@\"' push -qf origin main",
+    "sh -c '/usr/bin/gi[t] push -qf origin main'", "sh -c 'G=gi; ${G}t push -qf origin main'",
+    "uv run sh -c 'git pu\"\"sh -qf origin main'", "sh -c \"git pu''sh -qf origin main\"",
+    // `git commit` prints its subject, so a print piped through it can still reach a runner.
+    "echo '; git push -qf origin main' | git commit --allow-empty -F - | python -c \"import os,sys; os.system(sys.stdin.read())\"",
+    "echo '; git push -qf origin main' | git commit --allow-empty -F - | sh",
+    // `gh alias set --shell` and `gh extension` run commands.
+    "gh alias set --shell p 'git \"$@\"'; gh p push -qf origin main",
+    "gh alias set p '!git \"$@\"'; gh p push -qf origin main", "gh extension exec pusher push -qf origin main",
+    "git remote add --mirr=push b https://example.com/b.git",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
+    "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main:main'\" git push origin",
+    // xargs appends its input as arguments, so the push's own words do not show the flag.
+    "echo -qf | xargs git push origin main",
+    "git push >| /dev/null -qf origin main", "git remote add --m''irror=push b https://example.com/b.git",
+    "git remote add --m\\irror=push b https://example.com/b.git",
+    "V=+main:main git --config-env=remote.origin.push=V push origin",
+    "git --config-env=remote.origin.mirror=HOME push origin",
+    // A redirected print writes a file (here git's config), and an environment change points git elsewhere.
+    "printf '[remote \"origin\"]\\n\\tpush = +main:main\\n' >> .git/config", "export HOME=/tmp/e; git push origin",
+    "HOME=/tmp/e; git push origin", "readonly HOME=/tmp/e; git push origin", "printf -v HOME /tmp/e; git push origin",
+    "read HOME < f; git push origin", "eval HOME=/tmp/e; git push origin",
+    // Config written by the same command without the word `push` in its text, and a mirror clone.
+    "printf '[remote \"origin\"]\\n\\tpu%sh = +main:main\\n' s >> .git/config; git push origin",
+    "git clone --mi ../stale d && cd d && git push origin",
+    // An option the guard does not know could take the next word as its value.
+    "git --super-prefix x push -qf origin main",
+    // `--output=` writes a file without a redirect, here git's own config.
+    "git log -1 --format='[remote \"origin\"]%n\tpush = +main:main' --output=/home/u/.config/git/config && git push origin",
+    "git diff --output=.git/config && git push origin", "git log --out=notes && git push origin",
+    // Printed text piped into the next command can run as a command.
+    "echo 'git push -qf origin main' | python -c \"import os,sys; os.system(sys.stdin.read())\"",
+    "echo git push -qf origin main | sh",
+    // `--upload-pack` runs its value through a shell, with or without a push next to it.
+    "git fetch --upload-pack='git config remote.origin.pu\"\"sh +main:main; git-upload-pack' . && git push origin",
+    "git fetch --upload-pack='git pu\"\"sh -qf origin main; git-upload-pack' .",
+    "git pull --upl='git pu\"\"sh -qf origin main; git-upload-pack' . main",
+  ];
+  for (const cmd of both) {
+    assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
+    assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
+  }
+  for (const cmd of bashOnly) assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
+  for (const cmd of powershellOnly) assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
+  for (const cmd of allowed) assert.equal(verdict("Bash", cmd), "allow", `should allow: ${cmd}`);
+  for (const cmd of asked) assert.equal(verdict("Bash", cmd), "ask", `should ask: ${cmd}`);
+  for (const cmd of ["$s = @'\ngit push -qf origin main\n'@", "git push @args", "git push $flags origin main",
+    // PowerShell reads curly quotes as quotes and Unicode spaces as whitespace.
+    "git push origin main \u201c-qf\u201d", "git push origin \"x\u201c -qf \u201cy\"", "git push origin main\u00a0-qf",
+    // PowerShell evaluates a parenthesized argument; Set-Item changes the environment next to a push.
+    "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin",
+    // After `--%` PowerShell passes separators through as words.
+    "git push origin main -o --% ; -qf",
+    // Push text after a first word that is not a plain program name could still run git.
+    "&('gi'+'t') push -qf origin main",
+    // A PowerShell alias for git, with the value before the name.
+    "sal -Value git g; g push -qf origin main", "Set-Alias -Value git -Name g; g push -qf origin main", "echo 'git push -qf origin main' | iex",
+    "Write-Output '; git push -qf origin main' | git commit --allow-empty -F - | iex",
+    // A PowerShell line can start with `|` to continue the pipeline from the line before.
+    "echo 'git push -qf origin main'\n| iex", "Write-Output 'git push -qf origin main'\r\n| iex",
+    "echo 'git push -qf origin main'\r  | iex"]) {
+    assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
+  }
+  // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.
+  const shadowed = mkdtempSync(join(tmpdir(), "push-guard-cwd-"));
+  writeFileSync(join(shadowed, "json.py"), "raise SystemExit(1)\n");
+  const inShadow = spawnSync(entry.command, entry.args, { cwd: shadowed, encoding: "utf8",
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push -qf origin main" } }) });
+  assert.equal(decide(inShadow), "deny", "a project json.py must not disable the guard");
+  assert.equal(verdict("Read", "git push -f"), "allow", "other tools pass");
+  assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
+  // A timed-out hook lets the call through, so long commands must answer well inside the timeout.
+  for (const repeat of [4900, 50000]) {
+    const long = "git log " + "git ".repeat(repeat) + "; echo -qf | xargs git push origin main";
+    const started = Date.now();
+    assert.equal(verdict("Bash", long), "ask", `a ${long.length}-character command asks`);
+    assert.ok(Date.now() - started < 3000, `a ${long.length}-character command answers quickly`);
+  }
 });
 
 test("bad answers are rejected", async () => {
