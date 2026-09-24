@@ -38,9 +38,11 @@ alias that pushes with force (`git p` after `alias.p = push -f`, or a shell
 alias for git), however it got there (a file edit, an earlier command). In
 the same command, alias and config settings ask. A push word built at run time
 (`git p$(echo u)sh`) is not matched by a `git push` allow rule either, so it
-reaches the prompt without this hook. Code inside an interpreter one-liner
-that an allow rule approves (`python -c`, `node -e`) can build a push the
-command text never names; only removing those allow rules closes that.
+reaches the prompt without this hook, unless an allow rule approves the
+command around it. Any allow rule for a program that runs other commands
+(`python -c`, `node -e`, and runners such as `bundle exec`, `uv`, `poetry`,
+`npx`, `docker run`, `make`) approves a push built inside it that the command
+text never names; only removing those allow rules closes that.
 
 Silence has to be earned by matching the list, so a spelling the hook does not
 know (a variable, a substitution, a redirect glued to a word, a quote inside
@@ -77,6 +79,8 @@ MAX_COMMAND = 20000
 PUSH_SUBCOMMANDS = {"push", "send-pack", "http-push"}
 PUSH_PROGRAMS = {"git-push", "git-send-pack", "git-http-push"}
 ALIAS_COMMANDS = {"alias", "hash", "set-alias", "new-alias", "sal", "nal"}
+# Programs that never run their arguments as commands.
+TEXT_PROGRAMS = {"gh"}
 # git options that take their value as the next argument.
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--config-env", "--attr-source"}
@@ -379,6 +383,18 @@ def push_related(tokens):
     return any(mentions_push(t) for t in tokens)
 
 
+def nested_command(tokens):
+    """Whether an argument could be a command string for another shell
+    (`sh -c 'git "$@"' _ push -qf`, `bundle exec sh -c '...'`): a word with
+    whitespace that mentions git or push. The inner shell expands it, so the
+    hook cannot vouch for it. `gh` never runs its arguments, so its titles and
+    bodies ("fix push retries") stay text."""
+    if program(tokens[0]) in TEXT_PROGRAMS:
+        return False
+    return any(re.search(r"\s", t) and re.search(r"(?i)git|push", re.sub(r"[\"'`\\]", "", t))
+               for t in tokens[1:])
+
+
 def mentions_push(text):
     """Whether one word holds both git and push, as `relevant()` reads text: a
     nested command string (`sh -c 'git pu""sh -qf'`) keeps its inner quotes
@@ -472,16 +488,23 @@ def decide(data):
     for index, (part, tokens) in enumerate(segments):
         # Printed text piped into the next command can become a command
         # (`echo 'git push -qf' | sh`), so only unpiped prints are skipped.
-        if not tokens or (only_data(part, tokens) and index not in piped):
+        if not tokens:
+            continue
+        # A print piped into another print or commit (`printf ... | git commit -F -`)
+        # is still only text.
+        feeds_data = index + 1 < len(segments) and segments[index + 1][1] and only_data(*segments[index + 1])
+        if only_data(part, tokens) and (index not in piped or feeds_data):
             continue
         if push_related(tokens):
             if not safe_push(part):
                 return ask()
             pushes = True
-        elif relevant(part) and not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", tokens[0]):
+        elif relevant(part) and (not re.fullmatch(r"[A-Za-z][A-Za-z0-9._-]*", tokens[0])
+                                 or nested_command(tokens)):
             # Push text passes silently only in a segment that plainly starts with
             # a program name (`docker push`, `git stash push`); a first word such
-            # as `&('gi'+'t')` could still run git.
+            # as `&('gi'+'t')` could still run git, and so could a nested
+            # command string.
             return ask()
     # Next to a push, every other segment must be known to leave git's behavior
     # alone; anything else (`readonly HOME=...`, `Set-Item Env:...`) could point

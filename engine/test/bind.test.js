@@ -382,7 +382,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Pushes that are not git's, and a push next to segments known to leave git alone.
     "git stash push -m wip", "gh run list --event push", "docker push img:1",
     "git add . && git commit -m \"x\" && git push origin x", "git fetch origin && git push -u origin x",
-    "echo git push -f", "printf 'fix push retries' | git commit -F -", "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
+    "echo git push -f", "printf 'fix push retries' | git commit -F -",
+    "gh pr create --title \"fix push retries\" --body \"Pushes now retry.\"", "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
   ];
   // Everything else that mentions a push asks: never a guess, never a silent pass.
   const asked = [
@@ -409,6 +410,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Quotes and escapes inside a nested command string are removed by the inner shell.
     "sh -c 'git pu\"\"sh -qf origin main'", "sh -c 'git pu\\sh -qf origin main'", "sh -c 'g\\it push -qf origin main'",
     "bundle exec sh -c 'git pu\"\"sh -qf origin main'", "sh -c 'git\tpush -qf origin main'",
+    // The inner shell also joins words, expands globs and variables the hook never sees.
+    "bash -c 'git \"$@\"' _ push -qf origin main", "sh -c 'exec git \"$0\" \"$@\"' push -qf origin main",
+    "sh -c '/usr/bin/gi[t] push -qf origin main'", "sh -c 'G=gi; ${G}t push -qf origin main'",
+    "uv run sh -c 'git pu\"\"sh -qf origin main'", "sh -c \"git pu''sh -qf origin main\"",
     "git remote add --mirr=push b https://example.com/b.git",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
     "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main:main'\" git push origin",
