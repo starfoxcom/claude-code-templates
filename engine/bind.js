@@ -28,6 +28,7 @@ function included(path, a, flags) {
     ".claude/rules/visual.md": adv.uiRule,
     ".claude/rules/review-tiers.md": adv.aiReview,
     ".claude/scripts/research-adherence.py": flags.code_research_first,
+    ".claude/hooks/push-guard.py": flags.push_guard_hook,
     ".github/workflows/claude-code-review.yml.template": flags.github_actions_routine_review,
     ".github/workflows/claude.yml.template": flags.github_actions_deep_review,
   };

@@ -217,7 +217,9 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
   }
 });
 
-const python = ["python3", "python"].find((cmd) => spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8)"]).status === 0);
+// `python` first: on Windows, `python3` is often an App Execution Alias, and starting
+// an interpreter by its full path after that alias crashes Node 20's process spawner.
+const python = ["python", "python3"].find((cmd) => spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8)"]).status === 0);
 
 test("the adherence script counts only code searches", { skip: !python && "needs Python 3.8+" }, async () => {
   const a = defaults();
@@ -269,19 +271,32 @@ test("the adherence script counts only code searches", { skip: !python && "needs
 });
 
 test("the push guard blocks force pushes in any flag bundle", { skip: !python && "needs Python 3.8+" }, async () => {
-  const files = await run(defaults());
-  const settings = JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
-  // Run the hook exactly as registered: exec form (no shell), with Claude Code's
-  // `${CLAUDE_PROJECT_DIR}` substitution. Only the interpreter name is swapped for
-  // the one found on this machine.
-  const entry = settings.hooks.PreToolUse.flatMap((h) => h.hooks).find((x) => (x.args || []).some((a) => a.includes("push-guard.py")));
+  const parse = (files) => JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
+
+  // Without an interpreter from setup (the browser page), the hook is left out entirely.
+  const plain = await run(defaults());
+  assert.equal(parse(plain).hooks, undefined, "no hook without a known interpreter");
+  assert.ok(!plain.has(".claude/hooks/push-guard.py"));
+
+  // With one, the hook is registered to that exact interpreter and runs as registered:
+  // exec form (no shell), with Claude Code's `${CLAUDE_PROJECT_DIR}` substitution.
+  const exe = spawnSync(python, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+  const a = defaults();
+  a.environment = { python: exe };
+  const files = await run(a);
+  const entry = parse(files).hooks.PreToolUse.flatMap((h) => h.hooks).find((x) => (x.args || []).some((s) => s.includes("push-guard.py")));
   assert.ok(entry, "hook is registered");
-  assert.equal(entry.command, "python3");
+  assert.equal(entry.command, exe);
   assert.ok(Array.isArray(entry.args), "exec form, so no shell expands the path");
+  for (const bad of ["python3", "C:/x\"y/python.exe", "/usr/bin/python\n"]) {
+    const b = defaults();
+    b.environment = { python: bad };
+    await assert.rejects(run(b), /environment.python/, `rejects ${JSON.stringify(bad)}`);
+  }
   const project = mkdtempSync(join(tmpdir(), "push-guard-"));
   mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
   writeFileSync(join(project, ".claude", "hooks", "push-guard.py"), files.get(".claude/hooks/push-guard.py"));
-  const runHook = (root, input) => spawnSync(python, entry.args.map((a) => a.split("${CLAUDE_PROJECT_DIR}").join(root)),
+  const runHook = (root, input) => spawnSync(entry.command, entry.args.map((s) => s.split("${CLAUDE_PROJECT_DIR}").join(root)),
     { input, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: root } }).status;
   const verdict = (tool, command) => runHook(project, JSON.stringify({ tool_name: tool, tool_input: { command } }));
   const missing = runHook(mkdtempSync(join(tmpdir(), "no-hook-")), JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }));

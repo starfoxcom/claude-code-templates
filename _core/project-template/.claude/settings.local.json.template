@@ -1,4 +1,21 @@
 {
+<!-- TOGGLE:push_guard_hook START -->
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{PYTHON_EXE}}",
+            "args": ["-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')", "${CLAUDE_PROJECT_DIR}/.claude/hooks/push-guard.py"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+<!-- TOGGLE:push_guard_hook END -->
   "permissions": {
     "allow": [
       "Bash(git status:*)",
@@ -60,21 +77,6 @@
       "Bash(git branch -D main)",
       "Bash(git branch -D master)",
       "Bash(git branch -D develop)"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3",
-            "args": ["-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')", "${CLAUDE_PROJECT_DIR}/.claude/hooks/push-guard.py"],
-            "timeout": 10
-          }
-        ]
-      }
     ]
   }
 }
