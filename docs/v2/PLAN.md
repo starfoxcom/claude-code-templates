@@ -25,7 +25,10 @@ Rename the project to **Bindwright** and rebuild it so the path from "land on th
 | Bind | Deterministic. Decided 2026-09-24: Bindwright ships as a Claude Code plugin. The page ends in a setup code; `/bindwright:setup <code>` renders `_core/` in the repo with the plugin's own engine and templates, then does the judgment work (merge existing `CLAUDE.md`, README and friends, fill real lint and test commands, trim the code-size table to the repo's languages, offer the `~/.claude` extras). A zip download stays as the fallback for people without plugins. |
 | Previews | Three live panes on the page: (1) the files the setup produces; (2) a small TypeScript demo app with planted problems, shown before and after for every setting that has a visible effect, as red and green diffs; (3) a Claude Code terminal replay of skills and rules in action, with and without Bindwright, chosen from a list of scenario prompts. Panes 2 and 3 come only from real recorded runs: session logs replayed as a terminal chat, never hand-written. Each recording stores a hash of the files it exercised, and a test fails when they change so stale demos cannot ship. |
 | Plugin lifecycle | `/bindwright:update` rebuilds with the answers saved in `.bindwright/` and a three-way merge against the stored pristine render, so hand edits are never overwritten silently. A once-a-day SessionStart notice (cached, silent offline) says when the plugin or the repo's files are behind. `/bindwright:audit` reads recent session logs, measures how the rules hold up, and proposes exact edits that apply only on approval. |
-| Review gate | One required check, "Review gate". Shared logic in `.github/scripts/review_gate.py`, settings in `.github/review-gate.yml` and repo variables, so the workflow file is identical for every user. Primary model Fable 5.1 (low effort), one-shot fallback Opus 5.5 (medium). |
+| Engine runtime | Decided 2026-09-24: the JS engine plus a byte-identical stdlib Python twin, held together by a golden test, so `/bindwright:setup` runs wherever Node or Python exists. Neither is guaranteed (native Windows may have only PowerShell), so the zip download stays as the fallback. |
+| Adoption | Decided 2026-09-24 after both source projects judged a whole install would cost them more than it gives (`research/adoption-impact.md`). First run on a repo with its own setup is adopt mode: it proposes diffs piece by piece, never overwrites, and the adopted result becomes the pristine base for later updates. A manifest of project-owned files and keep markers inside shared files are never touched by `/bindwright:update`. The gate and the session skills get plug-in points for project checks and steps. |
+| No admin bypass | Decided 2026-09-24: nothing Bindwright ships tells anyone to merge with admin rights, and there is no setting for it. Setup recommends rulesets with no bypass actors and zero required approvals, so the review checks alone decide. A blocked PR means fix the cause; a blocked hotfix means release first. |
+| Review gate | One required check, "Review gate", by default; two checks (routine plus deep) as an option for projects that already run them. Shared logic in `.github/scripts/review_gate.py`, settings in `.github/review-gate.yml` and repo variables, so the workflow file is identical for every user. Primary model Fable 5.1 (low effort), one-shot fallback Opus 5.5 (medium). |
 | Code-research tools | Offer tokensave, Claude Code LSP plugins, CodeGraph, Serena, codebase-memory-mcp, none, and custom. Drop Semgrep, Sourcegraph and ctags (wrong category or audience). Each tool is a small data profile, not install prose. See `research/code-research-tools.md`. |
 | Guard hooks | Ship in the repo (`.claude/hooks/`), registered in the committed `.claude/settings.json`, with `attribution` turned off, so cloud sessions and teammates get them. |
 | Licensing | Repo stays MIT. Generated output ships under MIT-0 so users owe no attribution. Add a non-affiliation notice, `SECURITY.md`, and a code of conduct. |
@@ -42,21 +45,28 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 ### Phase 1: engine
 - [x] New answer model: two questions, advanced switches, presets kept internal. Delete dead toggles and dead tool slots; bake in the always-same toggles.
 - [x] Deterministic renderer (browser JS) that resolves toggle blocks and placeholders against `_core/`.
-- [ ] Engine runtime inside the plugin: Node or a stdlib Python twin, whichever every Claude Code install can run. Research first.
+- [ ] Python twin of the engine with a golden test that fails when the two renders differ.
 - [ ] Code-research tool profiles (data file) replacing the SETUP.md hook-install prose.
 - [ ] Plugin skeleton (`plugin/`: `plugin.json`, skills, engine, templates) and `/bindwright:setup` (replaces `SETUP.md` and the planned `TAILOR.md`; installs `~/.claude` extras only with consent). Setup-code format shared with the page.
 - [x] Rules trimmed to one owner per concept (about 200 always-loaded lines), `paths:` scoping, new rules: task-tracking, testing, code-size (language profiles), shipped-text (toggle). Fix the squash and self-merge contradictions. Monitor-based CI watching replaces polling loops.
 - [x] Skills updated from Emberholm and Stockra (stop conditions, cascade step, `--body-file`, measured adherence). `architecture-graph` is held out of setups until it returns as an add-on.
-- [ ] Repo-level hooks and `attribution` settings (this repo first, then canonical).
+- [ ] Repo-level hooks and `attribution` settings (this repo first, then canonical). Hook location is a setting (repo or `~/.claude`) with duplicate detection, because Emberholm keeps hooks global only.
+- [ ] Deny-list profiles (standard and strict) in a committed `.claude/settings.json`. The force-push deny must not block `--force-with-lease`.
+- [ ] Shipped-text scope as a per-project list of globs.
+- [ ] Remove every admin-merge instruction from rules and workflow templates (#155, #156).
 
 ### Phase 2: review gate v2
 - [ ] Prototype the single-check workflow and `review_gate.py` on this repo (hotfix to `main`, then cascade).
 - [ ] Port general fixes from Emberholm: triage fail-closed, paginated file list, enforced escalation, sticky label, subagent ban, tiered verdict parsing, failure classifier, current action pin. Keep the `claude[bot]` author filter.
 - [ ] `scripts/setup-review-gate.sh` (labels, merge settings, ruleset, secret, App check) with a read-only `--check` mode used by session-start.
+- [ ] Extension points: a project pre-screen directory, project escalation triggers (paths and patterns), reviewer tool allowlist, max turns, fallback model chain with usage-limit detection, runner label (`runs-on`), one or two checks.
+- [ ] Merging PRs that edit the review workflow without a bypass. The review action refuses to run on them. Stockra's working answer: triage never reviews `.github/workflows/**`, so a workflow-only PR passes as non-reviewable. `review_gate.py` excludes that path explicitly with a comment on why, never through a file-extension accident. Two rules come with it: a workflow edit ships in a PR of its own (mixed with code it deadlocks), and the maintainer reads every workflow diff before merge, because no AI review covers it. A later option: review workflow diffs with a plain CLI or API call, which the action's check does not apply to.
 - [ ] Canonical templates follow the prototype once it has run on real PRs.
 
 ### Phase 2b: plugin lifecycle
 - [ ] `.bindwright/` state: saved answers, template version, pristine render for three-way merges.
+- [ ] Adopt mode, the project-owned manifest and keep markers.
+- [ ] Add-ons: GitHub Project board tracking in place of `ROADMAP.md`; a code-size checker with a baseline ratchet that fails CI on any new breach.
 - [ ] `/bindwright:update` and the daily SessionStart notice.
 - [ ] `/bindwright:audit`: measurements from session logs, proposed edits applied on approval.
 - [ ] Marketplace: own marketplace first, then a community-marketplace submission.
@@ -72,6 +82,7 @@ Built in visual slices of about 150 lines each, checked locally by the maintaine
 - [ ] Terminal pane: scenario picker and replay of recorded sessions.
 - [ ] Advanced drawer, URL state and Share link.
 - [ ] Setup code, zip fallback, review panel, mobile bottom bar.
+- [ ] Evidence section: numbers from `tools/receipts.py` (session logs and PR history) plus the incident stories from Emberholm and Stockra, each with the rule it produced.
 - [ ] Secondary pages: compare, all settings, how it works.
 
 ### Phase 4: rename and release
