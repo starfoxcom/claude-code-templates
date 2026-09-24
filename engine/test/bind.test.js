@@ -321,6 +321,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Line continuations are joined first, and quotes or escapes inside `push` are read as the shell reads them.
     "git push origin main \\\n-qf", "cd repo && \\\ngit push -qf origin main",
     "git pu''sh -qf origin main", "git \"pu\"sh -qf origin main", "git pu\\sh -qf origin main",
+    // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
+    "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
     "git push origin main `\n-qf"];

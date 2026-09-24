@@ -321,7 +321,9 @@ def ask():
 
 def main():
     try:
-        data = json.load(sys.stdin)
+        # Claude Code writes UTF-8. Decode it as UTF-8 instead of the platform's
+        # default encoding, and never let a bad byte turn into a silent pass.
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
     except ValueError:
         return 0
     tool = data.get("tool_name")
