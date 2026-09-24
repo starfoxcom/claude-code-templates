@@ -1,7 +1,9 @@
 // The answer model: two questions, a few advanced choices, and everything
 // derived from them. This is the single source for what a bind produces.
 
-export const REVIEW_MODELS = { routine: "claude-fable-5-1", deep: "claude-fable-5-1" };
+// Must be models the pinned claude-code-action in the workflow templates
+// accepts. Change these together with that pin, never on their own.
+export const REVIEW_MODELS = { routine: "claude-sonnet-4-6", deep: "claude-opus-4-8" };
 
 export const CODE_RESEARCH_TOOLS = {
   tokensave: { name: "tokensave", url: "https://github.com/aovestdipaperino/tokensave", bypass: "TOKENSAVE_BYPASS:" },
