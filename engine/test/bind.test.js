@@ -376,7 +376,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
     "git push origin x --force-with-lease=x:abc", "git push --force-if-includes --force-with-lease origin x",
-    "git push --follow-tags origin x", "git push --tags", "git push origin --delete old-branch",
+    "git push --follow-tags origin x", "git push --tags",
     "git push origin HEAD:refs/heads/x", "cd repo && git push -u origin feature/x", "git push origin x 2>&1",
     "git log -f", "git commit -m \"push -f later\"", "echo \"git push -f\"",
     "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
@@ -389,6 +389,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   ];
   // Everything else that mentions a push asks: never a guess, never a silent pass.
   const asked = [
+    // A delete followed by a push drops remote commits like a force push, so deletes ask.
+    "git push origin --delete old-branch", "git push -d origin old-branch",
+    "git push origin --delete main && git push origin main",
     "eval \"git push -qf origin main\"", "git commit -m \"unbalanced && git push -f",
     "git push -o ci.skip origin x", "git push origin main:+notes", "git push -- +main", "git push --repo=origin",
     "echo $(git push -qf origin main)", "out=$(git push -qf origin main 2>&1)", "echo \"$(git push -qf origin main)\"",

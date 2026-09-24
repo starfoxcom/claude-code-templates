@@ -91,10 +91,11 @@ GIT_FLAG_OPTIONS = {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-repl
                     "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
                     "--no-optional-locks", "--no-advice", "--no-lazy-fetch"}
 PUSH_VALUE_OPTIONS = {"--repo", "--push-option", "--receive-pack", "--exec"}
-# Flags a push on the allow-list may carry: none of them forces, mirrors or
-# reads a value from the next word.
+# Flags a push on the allow-list may carry: none of them forces, mirrors,
+# deletes or reads a value from the next word. A delete stays off the list:
+# deleting a branch and pushing it again drops remote commits like a force push.
 SAFE_FLAGS = {"-u", "--set-upstream", "--tags", "--follow-tags", "--force-with-lease", "--force-if-includes",
-              "--delete", "-d", "-q", "--quiet", "-v", "--verbose", "-n", "--dry-run", "--no-verify",
+              "-q", "--quiet", "-v", "--verbose", "-n", "--dry-run", "--no-verify",
               "--atomic", "--porcelain", "--progress", "--no-progress"}
 DATA_COMMANDS = {"echo", "printf", "write-output", "write-host"}
 INERT_GIT = {"add", "commit", "status", "log", "diff", "show", "fetch", "pull", "branch", "checkout", "switch",
