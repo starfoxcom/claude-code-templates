@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind, STAGING } from "../bind.js";
@@ -173,6 +175,57 @@ test("the adherence script ships only with a code-research tool", async () => {
     assert.doesNotThrow(() => new RegExp(pattern), `${tool}: bad match pattern`);
     assert.match(CODE_RESEARCH_TOOLS[tool].match, /./);
   }
+});
+
+const python = ["python3", "python"].find((cmd) => spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8)"]).status === 0);
+
+test("the adherence script counts only code searches", { skip: !python && "needs Python 3.8+" }, async () => {
+  const a = defaults();
+  a.advanced.codeResearch = "tokensave";
+  const text = (await run(a)).get(".claude/scripts/research-adherence.py");
+  const marker = text.match(/BYPASS = "(.*)"/)[1];
+  const cases = [
+    ["tokensave_search", { query: "x" }, "research"],
+    ["Grep", { pattern: "foo", path: "src" }, "fallback"],
+    ["Grep", { pattern: "foo", glob: "*.md" }, null],
+    ["Grep", { pattern: "foo", type: "md" }, null],
+    ["Glob", { pattern: "**/*.ts" }, "fallback"],
+    ["Glob", { pattern: "docs/**/*.md" }, null],
+    ["Bash", { command: "grep -rn foo src/" }, "fallback"],
+    ["Bash", { command: "rg foo" }, "fallback"],
+    ["Bash", { command: "git grep -n foo" }, "fallback"],
+    ["Bash", { command: "cd src && rg foo" }, "fallback"],
+    ["Bash", { command: "gh run view 1 --log | grep error" }, null],
+    ["Bash", { command: "cat app.log | grep -r x" }, null],
+    ["Bash", { command: "grep -rn TODO docs/*.md" }, null],
+    ["Bash", { command: 'rg "foo|bar" docs/*.md' }, null],
+    ["Bash", { command: 'grep -rn "a\\|b" src/ | head -5' }, "fallback"],
+    ["Bash", { command: "grep foo file.ts" }, null],
+    ["Bash", { command: "grep --regexp=foo file.ts" }, null],
+    ["Bash", { command: `rg foo # ${marker} reason` }, "bypass"],
+    ["PowerShell", { command: "Get-ChildItem -Recurse src | Select-String foo" }, "fallback"],
+    ["PowerShell", { command: "Get-Content x.log | Select-String err" }, null],
+    ["Read", { file_path: "src/a.ts" }, null],
+  ];
+  const dir = mkdtempSync(join(tmpdir(), "adherence-"));
+  const script = join(dir, "research_adherence.py");
+  writeFileSync(script, text);
+  const transcript = join(dir, "session.jsonl");
+  writeFileSync(transcript, cases.map(([name, input]) =>
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } })).join("\n"));
+
+  const probe = spawnSync(python, ["-c", [
+    "import importlib.util, json, sys",
+    "spec = importlib.util.spec_from_file_location('m', sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)",
+    "print(json.dumps([m.classify(n, a) for n, a in json.loads(sys.argv[2])]))",
+  ].join("\n"), script, JSON.stringify(cases.map(([n, i]) => [n, i]))], { encoding: "utf8" });
+  assert.equal(probe.status, 0, probe.stderr);
+  const got = JSON.parse(probe.stdout);
+  cases.forEach(([name, input, want], i) => assert.equal(got[i], want, `${name} ${JSON.stringify(input)}`));
+
+  const out = spawnSync(python, [script, transcript], { encoding: "utf8" });
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /1 calls, plain code searches: 8 \(plus 1 marked bypasses\) -> 11%/);
 });
 
 test("bad answers are rejected", async () => {
