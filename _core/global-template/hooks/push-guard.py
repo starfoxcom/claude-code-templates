@@ -254,7 +254,8 @@ def subcommand(tokens, k):
 
 def push_related(tokens):
     """Whether a plain segment pushes or changes how a push behaves: a git
-    whose subcommand is `push` or not a plain word, a `remote.<name>.push` or
+    whose subcommand is `push` or not a plain word, a git with `--upload-pack`
+    (it runs a shell command), a `remote.<name>.push` or
     `.mirror` setting, `GIT_CONFIG_*`, a path into `.git/` or a gitconfig
     file, `git remote ... --mi[rror]`, or a word
     that holds both git and push (`eval "git push -qf"`). `git stash push`,
@@ -263,6 +264,10 @@ def push_related(tokens):
         if program(token) == "git":
             name = subcommand(tokens, k)
             if name == "push" or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+                return True
+            # `fetch`/`pull --upload-pack=<cmd>` (any abbreviation) runs <cmd>
+            # through a shell, which can write push config or push itself.
+            if any(t.startswith("--upl") for t in tokens[k + 1:]):
                 return True
             # An option the guard does not know could take the next word as its
             # value, so the real subcommand might be a later `push`.

@@ -208,7 +208,9 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
   const denied = (cmd) => rules.some((r) => r.test(cmd));
   for (const cmd of ["git push --force", "git push --force origin x", "git push origin x --force", "git push -f origin x",
     "git push origin -f", "git push -fu origin x", "git push origin x -fu", "git push -uf origin x", "git push origin -uf x",
-    "git push origin +main", "git push --mirror origin", "git push origin --mirror"]) {
+    "git push origin +main", "git push --mirror origin", "git push origin --mirror",
+    // `--upload-pack` runs a shell command, so the `git fetch`/`git pull` allows must not approve it.
+    "git fetch --upload-pack=x .", "git fetch origin --upl=x", "git pull --upload-pack=x . main"]) {
     assert.ok(denied(cmd), `${cmd} should be denied`);
   }
   for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x",
@@ -224,6 +226,11 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
     assert.ok(!allows.some((r) => r.test(cmd)), `${cmd} must not be auto-approved`);
   }
   assert.ok(allows.some((r) => r.test("git push")), "a bare git push stays auto-approved");
+  // The page's stack-command chips must not offer `git push`: Phase 5 would render it as `git push:*`.
+  for (const page of ["index.html", "redesign/data.jsx"]) {
+    const catalog = readFileSync(join(repo, page), "utf8").match(/"Git · GitHub":\s*\[([^\]]*)\]/)[1];
+    assert.ok(!/"git push/.test(catalog), `${page} must not offer a git push chip`);
+  }
 });
 
 // `python` first: on Windows, `python3` is often an App Execution Alias, and starting
@@ -380,6 +387,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // `--output=` writes a file without a redirect, here git's own config.
     "git log -1 --format='[remote \"origin\"]%n\tpush = +main:main' --output=/home/u/.config/git/config && git push origin",
     "git diff --output=.git/config && git push origin", "git log --out=notes && git push origin",
+    // `--upload-pack` runs its value through a shell, with or without a push next to it.
+    "git fetch --upload-pack='git config remote.origin.pu\"\"sh +main:main; git-upload-pack' . && git push origin",
+    "git fetch --upload-pack='git pu\"\"sh -qf origin main; git-upload-pack' .",
+    "git pull --upl='git pu\"\"sh -qf origin main; git-upload-pack' . main",
   ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
