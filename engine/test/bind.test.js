@@ -437,7 +437,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // After `--%` PowerShell passes separators through as words.
     "git push origin main -o --% ; -qf",
     // Push text after a first word that is not a plain program name could still run git.
-    "&('gi'+'t') push -qf origin main", "echo 'git push -qf origin main' | iex"]) {
+    "&('gi'+'t') push -qf origin main", "echo 'git push -qf origin main' | iex",
+    // A PowerShell line can start with `|` to continue the pipeline from the line before.
+    "echo 'git push -qf origin main'\n| iex", "Write-Output 'git push -qf origin main'\r\n| iex",
+    "echo 'git push -qf origin main'\r  | iex"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.

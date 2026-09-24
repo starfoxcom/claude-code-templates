@@ -153,7 +153,13 @@ def scan(command, tool):
               or (ch == "&" and command[i - 1:i] not in "<>" and command[i + 1:i + 2] != ">"
                   and (tool != "PowerShell" or "".join(current).strip()))):
             if ch == "|":
-                piped.add(len(parts))
+                # PowerShell lets a line start with `|` to continue the pipeline
+                # from the line before, so a pipe after a blank segment belongs
+                # to the last segment that has words.
+                target = len(parts)
+                if not "".join(current).strip():
+                    target = next((k for k in range(len(parts) - 1, -1, -1) if parts[k].strip()), target)
+                piped.add(target)
             parts.append("".join(current))
             current = []
             i += 1
