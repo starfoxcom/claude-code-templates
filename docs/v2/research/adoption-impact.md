@@ -24,7 +24,7 @@ Each source project's session compared its live setup with `_core/project-templa
 
 ### Conflicts
 - **Admin bypass:** v2 tells the agent to use admin rights in `review-tiers.md`, the `token-efficiency.md` fast path and the `git.md` hotfix caveat. Stockra has no bypass actors by design; its rule is "release first". (Confirmed in templates 2026-09-24.)
-- **Force-push:** v2's deny `Bash(git push --force:*)` is a prefix match that also blocks `--force-with-lease`, which v2's own stacked-branch recipe needs. Stockra denies `git push --force` and `git push --force *` and allows `--force-with-lease`. (Confirmed 2026-09-24.)
+- **Force-push:** v2's deny `Bash(git push --force:*)` is a prefix match that also blocks `--force-with-lease`, which v2's own stacked-branch recipe needs. Stockra denies `git push --force` and `git push --force *` and allows `--force-with-lease`. (Confirmed 2026-09-24.) **Correction, 2026-09-24:** the permission docs say a trailing `:*` equals a trailing ` *`, which needs a space, so the old rule never blocked `--force-with-lease`. The real gap was the other way: it missed `--force` after other arguments and `-f` inside a flag bundle (`-fu`, `-qf`). #158 fixes that with position-independent deny rules and a global push guard.
 - Tracking (ROADMAP vs board), review check names (one vs two), per-package scope table and "feature complete" bar, commit title target (50 vs 72), same-named files with different content, context-file branch policy (own PR vs rides the active branch).
 
 ### Options v2 must add
@@ -91,4 +91,4 @@ Both projects reach the same verdict independently: v2 is a strong starting kit,
 - **Merge policy switch:** whether admin bypass exists; when it does not, every admin instruction becomes "release first" or "fix the gate".
 - **Hooks location switch:** repo or global, with duplicate detection.
 - **Per-project scopes:** shipped-text globs, clean-room patterns.
-- **Bugs to fix now:** the force-push deny also blocks `--force-with-lease`.
+- **Bugs to fix now:** the force-push deny misses `--force` after other arguments and `-f` inside a flag bundle (corrected 2026-09-24; it never blocked `--force-with-lease`).
