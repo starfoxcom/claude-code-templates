@@ -44,7 +44,7 @@ Fix on the same PR branch and push; the review re-runs. Then search the codebase
 
 ## PRs that edit the review workflow
 
-The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so those PRs get no verdict. Confirm the job log says `Workflow validation failed`, then merge with admin rights. For any other failure, fix the cause instead of bypassing.
+The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so those PRs get no verdict. Keep such an edit in a PR of its own. When the job log says `Workflow validation failed`, stop and report it to the maintainer; never merge past a missing verdict. For any other failure, fix the cause.
 
 ## Local session's job
 

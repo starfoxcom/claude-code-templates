@@ -26,17 +26,17 @@ Branch protection requires **two** status checks, both attached to the PR HEAD S
 
 `success`, `skipped`, and `neutral` all pass branch protection; `in_progress` blocks merge with a visible spinner; `failure` blocks merge with a red X.
 
-**Dismiss path for the maintainer:** if the deep tier is genuinely broken or its finding doesn't apply, admin-bypass leaves an audit trail. Removing the `needs-deep-review` label does NOT auto-reset the check in the two-check architecture (no event fires to PATCH on unlabeled).
+**When the deep tier is broken or its finding does not apply:** re-trigger it, or explain in a PR comment why the finding does not apply and re-trigger. If it keeps failing, report it to the maintainer. There is no bypass. Removing the `needs-deep-review` label does NOT auto-reset the check in the two-check architecture (no event fires to PATCH on unlabeled).
 
 Both `Evaluate review outcome` AND `Claude On-Demand` are configured as required status checks on `main` and `develop`. Omitting either from required checks would leave one tier advisory; this repo dogfoods the full strict model.
 
-## Workflow-touching PRs require admin-bypass
+## Workflow-touching PRs get no verdict
 
-The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token. Any PR that edits `.github/workflows/claude-code-review.yml` therefore fails the token exchange and the routine review action cannot post a verdict. `Evaluate review outcome` has no comment to read, exits 1, and the only path forward is `gh pr merge --admin`.
+The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token. Any PR that edits `.github/workflows/claude-code-review.yml` therefore fails the token exchange and the routine review action cannot post a verdict. `Evaluate review outcome` has no comment to read and exits 1. Keep such an edit in a PR of its own, stop, and report it to the maintainer. Never merge past the missing verdict.
 
 (Edits to `claude.yml` alone do not trip this: claude.yml runs from the default branch's version on `issue_comment` events, so the running workflow file always matches the default branch. The OIDC check passes.)
 
-Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (Sonnet posted 🔴, missing verdict line, etc.), fix the underlying issue — do not bypass.
+Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (Sonnet posted 🔴, missing verdict line, etc.), fix the underlying issue.
 
 ---
 
