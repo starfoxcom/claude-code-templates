@@ -385,6 +385,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Flags of a command inside a substitution belong to that command, not the push.
     "git push origin $(git rev-parse --abbrev-ref HEAD | cut -d/ -f2)", "git push -u origin \"$(git branch --show-current)\"",
     "git push origin `git config -f x.cfg branch.name`",
+    // An escaped quote inside `$'...'` keeps the push text inside the string.
+    "echo $'x\\' ; git push -f origin main ; \\'' ''",
     // Push text inside a heredoc body is not a command.
     "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
     "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
@@ -440,6 +442,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "# don't push yet\ncd repo && \\\ngit push -qf origin main",
     // `#` right after `(` starts a comment.
     "(#'\ngit push -qf origin main #'\n)",
+    // Inside `$'...'` a backslash escapes the quote.
+    "echo $'it\\'s done'\ngit push -qf origin main", "git commit -m $'don\\'t' && git push -qf origin main",
     // An escaped space before `#`, a `#` inside `${...}` and a quoted `>` start no comment or redirect.
     "A=\\ # git push -qf origin main", "X=main; git push origin ${X:-;#} -qf", "git push --repo=\">\" -qf origin main",
     // Forcing settings and one-off aliases on the push itself.
@@ -538,6 +542,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     assert.equal(verdict("Bash", long), "allow", `a ${long.length}-character command passes`);
     assert.ok(Date.now() - started < 3000, `a ${long.length}-character command answers quickly`);
   }
+  // A statement near the length cap, inside nested shell strings, answers well inside the timeout.
+  const wide = "sh -c \"sh -c 'git log " + "x ".repeat(9000) + "'\"; git push -qf origin main";
+  const wideStart = Date.now();
+  assert.equal(verdict("Bash", wide), "deny", `a ${wide.length}-character nested command blocks`);
+  assert.ok(Date.now() - wideStart < 3000, "a long nested command answers quickly");
   // Many `eval` words stay linear: one check covers the rest of the statement.
   const evals = "eval ".repeat(30) + "echo push; git push -qf origin main";
   const evalStart = Date.now();

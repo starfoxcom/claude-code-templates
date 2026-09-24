@@ -121,13 +121,14 @@ def scan(command, tool):
 
     while i < n:
         ch = command[i]
-        if ch == escape and quote not in ("'", "$'") and i + 1 < n:
+        if ch == escape and quote != "'" and i + 1 < n:
             # A line continuation joins the lines, as the shell does before it
             # reads the words. Bash joins only backslash + LF (backslash + CR
             # is an escaped CR); PowerShell joins a backtick before LF, CRLF or
             # a lone CR.
+            # Inside `$'...'` the pair is an escape, never a join.
             rest = command[i + 1:i + 3]
-            if rest.startswith("\n") or (tool == "PowerShell" and rest.startswith("\r")):
+            if quote != "$'" and (rest.startswith("\n") or (tool == "PowerShell" and rest.startswith("\r"))):
                 i += 3 if rest == "\r\n" else 2
                 continue
             if not stack:
@@ -163,10 +164,11 @@ def scan(command, tool):
         # A PowerShell `(...)` in argument position is one value. At the start
         # of a statement or after the call operator it names the program, so
         # it stays in the statement there.
-        so_far = "".join(current).rstrip()
         if (tool == "PowerShell" and not opener and quote is None and not stack and ch == "("
-                and so_far and so_far[-1] not in "\ue002." and command[i - 1] in " \t,="):
-            opener = "("
+                and command[i - 1] in " \t,="):
+            so_far = "".join(current).rstrip()
+            if so_far and so_far[-1] not in "\ue002.":
+                opener = "("
         if quote not in ("'", "$'") and (opener or (ch == "`" and tool != "PowerShell"
                                                   and not (stack and stack[-1][0] == "`"))):
             opener = opener or "`"
