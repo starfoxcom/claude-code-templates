@@ -50,7 +50,7 @@ One logical change per commit. No mixing features with refactors or fixes with c
 
 - Kebab-case branch names: `feature/user-auth-flow`
 - **Always** `gh pr create --base develop` — repo default may be `main`, override explicitly
-- **Always** merge commit — never squash or rebase
+- **Work PRs squash-merge** (`gh pr merge <pr> --squash`); the PR title becomes the commit, 64 characters max. **Release and cascade PRs always use `--merge`** so `main` and `develop` never diverge.
 - **Never** push directly to `main` or `develop`
 
 ### Scope discipline
@@ -138,7 +138,7 @@ Local-session Claude (this harness) does NOT auto-fire reviews. The workflow doe
 
 - Push the branch + open the PR per PR format below.
 - Run the CI polling loop (`token-efficiency.md` § "CI monitoring + auto-merge") and report PR state.
-- On approval (🟢), merge via `gh pr merge --merge` and clean up branches (standing authorization).
+- On approval (🟢), merge via `gh pr merge --squash` (`--merge` for release and cascade PRs) and clean up branches (standing authorization).
 - On 🔴, fetch failing logs, propose the fix in one sentence, apply it, push. Re-enter polling loop.
 
 ---

@@ -51,9 +51,9 @@ Keep PRs **scoped to one logical concern**. Cross-cutting changes (touching mult
 
 Every PR gets:
 
-1. **Automated routine review** (Claude Sonnet) — runs on every PR, posts a binary 🔴/🟢 verdict comment. The review is a merge gate — PRs with 🔴 cannot merge.
-2. **Human review** — at least one maintainer.
-3. **On-demand deep review** (Claude Opus) — auto-fires when the diff touches architecturally-sensitive areas (parsers, threading, public API, auth, migrations). Same 🔴/🟢 verdict.
+1. **Automated routine review**: runs on every PR and posts a 🔴/🟢 verdict comment. It is a merge gate; a PR with 🔴 cannot merge.
+2. **Human review** from at least one maintainer.
+3. **Deep review** for diffs that touch risky areas (parsers, threading, public API, auth, migrations). Same 🔴/🟢 verdict.
 
 Reviews follow the **binary verdict rule**: 🟢 only when fully clean; 🔴 when any real finding exists. We don't ship "non-blocking minor" verdicts because they rot.
 
