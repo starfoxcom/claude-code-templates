@@ -288,6 +288,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // Register it exactly as SETUP.md Phase 7c documents: its JSON entry, with this
   // machine's interpreter and a temporary home. Exec form, so no shell is involved.
   const setup = readFileSync(join(repo, "SETUP.md"), "utf8");
+  // A "git push" stack-command chip must not come back as a project-level `git push:*`.
+  const stackStep = setup.slice(setup.indexOf("5. **Render `{{STACK_COMMANDS_ALLOWLIST}}`**"), setup.indexOf("6.", setup.indexOf("5. **Render `{{STACK_COMMANDS_ALLOWLIST}}`**")));
+  assert.match(stackStep, /Never widen `git push` here\.\*\* Skip any entry that is `git push`/);
   const step = setup.slice(setup.indexOf("7c. **Install the push guard GLOBALLY**"));
   const exe = spawnSync(python, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
   const home = mkdtempSync(join(tmpdir(), "push-guard-")).split("\\").join("/");

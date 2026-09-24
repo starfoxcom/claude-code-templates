@@ -228,7 +228,8 @@ On `apply`:
            "Bash(npm test:*)",
            "Bash(cargo build:*)"
      ```
-   - Deduplicate against the canonical list already in the template (don't double-add `Bash(git push:*)` if it's already there).
+   - **Never widen `git push` here.** Skip any entry that is `git push` or starts with it: the template already allows a bare `git push`, and a `Bash(git push:*)` rule in the project would auto-approve `git push -qf` whenever the global push guard is missing (Phase 7c decides the wider push rule, with the user's consent). Skip a bare `git` entry too, and tell the user to pick the git subcommands they want instead: `Bash(git:*)` would approve every push.
+   - Deduplicate against the canonical list already in the template (don't double-add `Bash(git fetch:*)` if it's already there).
    - Result must be valid JSON. Verify by parsing.
 
 6. **Rename templates** (after placeholder substitution + toggle resolution):
