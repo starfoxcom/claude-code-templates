@@ -18,6 +18,7 @@
   ".claude/rules/testing.md",
   ".claude/rules/token-efficiency.md",
   ".claude/rules/visual.md",
+  ".claude/scripts/research-adherence.py",
   ".claude/settings.local.json.template",
   ".claude/skills/architecture-graph/SKILL.md",
   ".claude/skills/find/SKILL.md",
