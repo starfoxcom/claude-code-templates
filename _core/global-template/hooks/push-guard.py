@@ -380,7 +380,11 @@ def push_related(tokens):
 
 
 def mentions_push(text):
-    return bool(re.search(r"\bgit", text, re.I) and re.search(r"\bpush\b", text, re.I))
+    """Whether one word holds both git and push, as `relevant()` reads text: a
+    nested command string (`sh -c 'git pu""sh -qf'`) keeps its inner quotes
+    and escapes, which the inner shell removes."""
+    bare = re.sub(r"[\"'`\\]", "", text)
+    return bool(re.search(r"\bgit", bare, re.I) and re.search(r"\bpush\b", bare, re.I))
 
 
 def inert(segment, tokens):
