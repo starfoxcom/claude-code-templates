@@ -334,6 +334,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Line continuations are joined first, and quotes or escapes inside `push` are read as the shell reads them.
     "git push origin main \\\n-qf", "cd repo && \\\ngit push -qf origin main",
     "git pu''sh -qf origin main", "git \"pu\"sh -qf origin main", "git pu\\sh -qf origin main",
+    // A redirect glued to the program name, and git's own dashed push program.
+    "git>/dev/null push -qf origin main", "git</dev/null push -qf origin main", "git&>/dev/null push -qf origin main",
+    "/usr/lib/git-core/git-push -qf origin main",
     "case x in a) git push -qf origin main;; esac", "if git push -qf origin main; then echo ok; fi",
     "while git push -qf origin main; do break; done",
     // Backslash + CR is an escaped CR in bash, so the LF after it still ends the command.
@@ -347,6 +350,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // The call operator glued to git, around a parenthesized name, or a command lookup.
     "&git push -qf origin main", "&'git' push -qf origin main", "& (\"git\") push -qf origin main",
     "&git.exe push -qf origin main", "&(Get-Command git) push -qf origin main",
+    "& (gcm git) push -qf origin main", "git>out.txt push -qf origin main",
     // PowerShell runs a parenthesized argument as a command, so these push for certain.
     "Write-Output (git push -qf origin main)", "echo (git push -qf origin main)",
     "git commit -m (git push -qf origin main)",

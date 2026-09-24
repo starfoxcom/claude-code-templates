@@ -177,8 +177,10 @@ def words(segment, tool):
 
 def program(token):
     """The program a word names: `/usr/bin/git`, `(git`, `GIT.EXE` and, after
-    PowerShell's call operator, `&git` and `("git")` are all git."""
-    name = token.lstrip("(&").rstrip(")").replace("\\", "/").split("/")[-1].lower()
+    PowerShell's call operator, `&git` and `("git")` are all git. A redirect glued
+    to the name ends it, as in the shell: `git>/dev/null` is git."""
+    name = re.split(r"[<>&]", token.lstrip("(&"), 1)[0].rstrip(")")
+    name = name.replace("\\", "/").split("/")[-1].lower()
     return re.sub(r"\.exe$", "", name)
 
 
@@ -190,6 +192,9 @@ def push_args(tokens):
     words from its input (`echo -qf | xargs git push`), so a push after it is
     not certain here; it fails the allow-list and asks."""
     for k, token in enumerate(tokens):
+        # `git-push` (git's libexec program) is push itself.
+        if program(token) == "git-push":
+            return tokens[k + 1:]
         if program(token) != "git":
             continue
         i = k + 1
@@ -274,6 +279,8 @@ def push_related(tokens):
     that holds both git and push (`eval "git push -qf"`). `git stash push`,
     `docker push` and `Push-Location` are not."""
     for k, token in enumerate(tokens):
+        if program(token) == "git-push":
+            return True
         if program(token) == "git":
             name = subcommand(tokens, k)
             if name == "push" or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
