@@ -34,7 +34,7 @@ Update `README.md`, `CLAUDE.md` or a module `ROADMAP.md` when this session chang
 <!-- TOGGLE:code_research_first START -->
 ## 4. Code-research count
 
-Run `python3 .claude/scripts/research-adherence.py` from the repo root (`python` on Windows). It reads the transcript and compares calls to {{TOOLS_CODE_RESEARCH_NAME}} with unmarked Grep and Glob calls. Report its line. Below 70% means the next session starts by finding out why.
+Run `python3 .claude/scripts/research-adherence.py` from the repo root (`python` on Windows). It reads the transcript and compares calls to {{TOOLS_CODE_RESEARCH_NAME}} with plain code searches that carry no bypass marker: Grep and Glob calls, and shell commands that start with a recursive search. Searches of docs, logs and data, and filters on another command's output, do not count. Report its line. Below 70% means the next session starts by finding out why.
 
 <!-- TOGGLE:code_research_first END -->
 ## 5. Commit and PR
