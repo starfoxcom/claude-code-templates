@@ -356,6 +356,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
     "git push origin main `\n-qf", "git push origin main `\r-qf", "git push origin main `\r\n-qf",
     ". git push -qf origin main",
+    // An unquoted comma passes array elements as separate arguments, and a
+    // backtick inside double quotes before a plain character is dropped.
+    "git push origin main,-qf", "git push origin main,+main", "git push origin main ,-qf",
+    "git push origin main \"`-qf\"", "git push origin main \"`--force\"", "git push origin \"`+main\"",
     // The call operator glued to git, around a parenthesized name, or a command lookup.
     "&git push -qf origin main", "&'git' push -qf origin main", "& (\"git\") push -qf origin main",
     "&git.exe push -qf origin main", "&(Get-Command git) push -qf origin main",

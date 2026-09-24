@@ -180,15 +180,47 @@ def scan(command, tool):
 
 def words(segment, tool):
     """Shell words of one segment, or None when its quotes do not balance."""
+    if tool == "PowerShell":
+        segment = powershell_quotes(segment)
     lexer = shlex.shlex(segment, posix=True)
     lexer.whitespace_split = True
     lexer.commenters = ""
     if tool == "PowerShell":
         lexer.escape = "`"
+        # An unquoted comma builds an array, and PowerShell passes each element
+        # to a native program as its own argument: `main,-qf` is `main -qf`.
+        lexer.whitespace += ","
     try:
         return list(lexer)
     except ValueError:
         return None
+
+
+def powershell_quotes(text):
+    """Inside PowerShell double quotes a backtick before anything but an escape
+    code (`0 a b e f n r t v`, a quote, a backtick or `$`) is dropped, so
+    "`-qf" reaches git as -qf. shlex would keep that backtick; drop it first."""
+    out, quote, i = [], None, 0
+    while i < len(text):
+        ch = text[i]
+        if quote == '"' and ch == "`" and i + 1 < len(text) and text[i + 1] not in '0abefnrtv"`$':
+            i += 1
+            continue
+        if quote == '"' and ch == "`" and i + 1 < len(text):
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if quote is None and ch == "`" and i + 1 < len(text):
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if quote and ch == quote:
+            quote = None
+        elif not quote and ch in "'\"":
+            quote = ch
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def program(token):
