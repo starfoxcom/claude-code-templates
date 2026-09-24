@@ -364,13 +364,13 @@ On `apply`:
          {
            "type": "command",
            "command": "<python>",
-           "args": ["-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')", "<home>/.claude/hooks/push-guard.py"],
+           "args": ["-I", "-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')", "<home>/.claude/hooks/push-guard.py"],
            "timeout": 10
          }
        ]
      }
      ```
-     Exec form (`command` plus `args`) runs without a shell, so paths with spaces need no quoting. The `runpy` launcher keeps a missing or moved file from blocking every command: Python exits 2 when it cannot open a script, and exit 2 is what blocks.
+     Exec form (`command` plus `args`) runs without a shell, so paths with spaces need no quoting. The `runpy` launcher keeps a missing or moved file from blocking every command: Python exits 2 when it cannot open a script, and exit 2 is what blocks. `-I` (isolated mode) is required: hooks run in the project directory, and without it `-c` puts that directory first on the import path, so a repo's own `json.py` or `runpy.py` would run on every command or crash the guard. It also ignores `PYTHONPATH` and the user site directory.
    - **Auto-approve pushes only with the guard in place.** The project settings allow only a bare `git push`. With the hook registered, add `"Bash(git push:*)"` to `permissions.allow` in `~/.claude/settings.json` (skip it if already there), in the same atomic write. The project's deny rules still take precedence.
    - **Verify** by piping `{"tool_name": "Bash", "tool_input": {"command": "git push -qf origin main"}}` into the registered command and arguments: it must exit 2. The same input with `--force-with-lease` must exit 0.
 

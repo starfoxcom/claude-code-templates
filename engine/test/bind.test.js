@@ -343,6 +343,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "cat > notes.md <<'EOF'\nnotes\nEOF\ngit push -qf origin main", "cat <<EOF\n$(git push -qf origin main)\nEOF",
     "(( n = 1 << 2 ))\ngit push -qf origin main", "echo $((x << y))\ngit push -qf origin main",
     "wc -c <<< hello\ngit push -qf origin main", "cat <<EOF\nnever closed\ngit push -qf origin main",
+    // Settings that make a later plain `git push` force or mirror.
+    "git -c remote.origin.push=+main:main push origin", "git remote add --mirror=push b https://example.com/b.git",
+    "git config remote.b.mirror true",
   ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
@@ -355,6 +358,13 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   for (const cmd of ["$s = @'\ngit push -qf origin main\n'@", "git push @args", "git push $flags origin main"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
+  // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.
+  const shadowed = mkdtempSync(join(tmpdir(), "push-guard-cwd-"));
+  writeFileSync(join(shadowed, "json.py"), "raise SystemExit(1)\n");
+  const inShadow = spawnSync(entry.command, entry.args, { cwd: shadowed, encoding: "utf8",
+    input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push -qf origin main" } }) });
+  assert.equal(decide(inShadow), "deny", "a project json.py must not disable the guard");
+  assert.equal(verdict("Bash", "git remote add origin https://example.com/a.git"), "allow", "an ordinary remote passes");
   assert.equal(verdict("Read", "git push -f"), "allow", "other tools pass");
   assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
 });

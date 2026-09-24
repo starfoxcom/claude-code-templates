@@ -16,7 +16,9 @@ The hook only reads plain commands: words, quotes, escapes and the `&&`, `||`,
 anything else (variables, command or process substitution, here-documents,
 braces, globs, comments, PowerShell splatting and here-strings) gets an
 approval prompt instead of a guess, and so does a plain command whose push it
-cannot place. It blocks with exit 2 only when it is certain. Every doubt ends
+cannot place, or one that sets a remote's push or mirror behavior (a later
+plain `git push` would force without a force flag). It blocks with exit 2 only
+when it is certain. Every doubt ends
 in a prompt, never in a silent pass, which is what makes a global `git push`
 allow rule safe next to it. An internal error lets the call through, and the
 project's deny rules still apply.
@@ -30,7 +32,9 @@ exec form (`command` plus `args`), so no shell and no `python3`/`python`/`py`
 guess is involved. It runs through a `runpy` one-liner instead of
 `python <path>` because Python exits 2 when it cannot open a script, which
 would block every call; through `runpy` a missing file is an ordinary error
-and the call proceeds.
+and the call proceeds. The interpreter runs with `-I`, so the project
+directory (the hook's working directory) is not on the import path and a
+repo's own `json.py` cannot replace the modules this file imports.
 """
 import json
 import re
@@ -183,6 +187,16 @@ def mentions_push(text):
     return bool(re.search(r"\bgit", text, re.I) and re.search(r"\bpush\b", text, re.I))
 
 
+def configures_push(tokens):
+    """True when a command sets how pushes behave instead of pushing: a
+    `remote.<name>.push` or `.mirror` setting (through `git config` or `-c`) or
+    `git remote add --mirror`. A later plain `git push` would then force or
+    mirror without a force flag in sight."""
+    if any(re.match(r"(?i)^remote\..+\.(push|mirror)(=|$)", t) for t in tokens):
+        return True
+    return "remote" in tokens and any(t.startswith("--mirror") for t in tokens)
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -192,7 +206,7 @@ def main():
     if tool not in ("Bash", "PowerShell"):
         return 0
     command = join_lines((data.get("tool_input") or {}).get("command") or "", tool)
-    if not re.search(r"\bpush\b", command, re.I):
+    if not re.search(r"\b(push|mirror)\b", command, re.I):
         return 0
     parts, plain = scan(command, tool)
     unsure = not plain
@@ -200,6 +214,8 @@ def main():
         for segment in parts:
             tokens = words(segment, tool)
             args = push_args(tokens) if tokens is not None else None
+            if tokens is not None and configures_push(tokens):
+                unsure = True
             if args is not None:
                 reason = force_reason(args)
                 if reason:
