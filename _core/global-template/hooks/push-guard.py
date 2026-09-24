@@ -33,8 +33,9 @@ config from the environment:
 3. Ask for approval in every other case.
 
 Out of reach for any command guard: git config that already holds a forcing
-`remote.<name>.push` or `mirror` setting when a plain `git push` runs, however
-it got there (a file edit, an earlier command). A push word built at run time
+`remote.<name>.push` or `mirror` setting when a plain `git push` runs, or an
+alias that pushes with force (`git p` after `alias.p = push -f`), however it
+got there (a file edit, an earlier command). A push word built at run time
 (`git p$(echo u)sh`) is not matched by a `git push` allow rule either, so it
 reaches the prompt without this hook. Code inside an interpreter one-liner
 that an allow rule approves (`python -c`, `node -e`) can build a push the
@@ -352,7 +353,8 @@ def push_related(tokens):
                     t.startswith("-") and "=" not in t and t not in GIT_VALUE_OPTIONS | GIT_FLAG_OPTIONS
                     for t in options):
                 return True
-    if any(re.search(r"(?i)remote\.[^=\s]+\.(push|mirror)(=|$)|git_config", t) for t in tokens):
+    # `alias.<name>` can turn any later word into a push (`-c alias.p='push -f'`).
+    if any(re.search(r"(?i)remote\.[^=\s]+\.(push|mirror)(=|$)|git_config|(^|[\s.=])alias\.", t) for t in tokens):
         return True
     # A path into `.git/`, a gitconfig file or `~/.config/git/`, such as a
     # redirect into `.git/config` or `--output=.git/config`.

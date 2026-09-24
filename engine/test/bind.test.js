@@ -400,6 +400,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Settings that make a later plain `git push` force or mirror, from the command line or the environment.
     "git -c remote.origin.push=+main:main push origin", "git remote add --mirror=push b https://example.com/b.git",
     "git config remote.b.mirror true", "git remote add --mirror b https://example.com/b.git",
+    // An alias can turn any later word into a push.
+    "git -c alias.p='push -f' p origin main", "git config alias.p 'push -f'",
     "git remote add --mirr=push b https://example.com/b.git",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
     "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main:main'\" git push origin",
