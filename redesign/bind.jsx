@@ -2057,7 +2057,10 @@ Generate \`claude-code-setup-plan.html\` in the project root showing:
    resolve from \`manifest.tools\` + the profile JSON.
 5. After all resolution, collapse triple blank lines.
 6. Render tools section (\`{{STACK_COMMANDS_ALLOWLIST}}\` etc.) from
-   \`manifest.tools\` and \`manifest.project.stack_commands\`.
+   \`manifest.tools\` and \`manifest.project.stack_commands\`. Skip any
+   stack command that is \`git push\` or starts with it, and a bare \`git\`:
+   the template already allows a bare \`git push\`, and a wider rule would
+   auto-approve force pushes such as \`git push -qf\`.
 7. Merge global additions into \`~/.claude/CLAUDE.md\` if the memory or
    code-research toggles are ON. **Before appending,** strip per-value
    \`<!-- TOGGLE:code_research:<value> START/END -->\` blocks from
