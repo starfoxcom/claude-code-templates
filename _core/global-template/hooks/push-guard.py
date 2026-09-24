@@ -11,17 +11,34 @@ Permission rules match command text, so `-f` bundled with other short flags
 `--force-with-lease` and `--force-if-includes` stay allowed: they refuse to
 overwrite work the local repo has not seen.
 
-The hook only reads plain commands: words, quotes, escapes and the `&&`, `||`,
-`;`, `|`, `&` and newline separators. A command that mentions a push and uses
-anything else (variables, command or process substitution, here-documents,
-braces, globs, comments, PowerShell splatting and here-strings) gets an
-approval prompt instead of a guess, and so does a plain command whose push it
-cannot place, or one that sets a remote's push or mirror behavior (a later
-plain `git push` would force without a force flag). It blocks with exit 2 only
-when it is certain. Every doubt ends
-in a prompt, never in a silent pass, which is what makes a global `git push`
-allow rule safe next to it. An internal error lets the call through, and the
-project's deny rules still apply.
+Decisions, in order, for a command that mentions a push, a mirror or git
+config from the environment:
+
+1. Block (exit 2) when a plain command certainly force-pushes. Plain means
+   words, quotes, escapes and the `&&`, `||`, `;`, `|`, `&` and newline
+   separators, nothing else.
+2. Pass silently only when every segment that mentions a push is on an
+   allow-list: `git push` followed by known-safe flags and plain ref names,
+   written with letters, digits and `._/:=-` only (an optional trailing `2>&1`
+   is fine), and no other segment changes the environment (`export HOME=...`
+   would point git at another config file). Segments that only print or
+   commit (`echo`, `printf`, `git commit`, without a redirect) never push, so
+   their text does not count.
+3. Ask for approval in every other case.
+
+Out of reach for any command guard: git config that already holds a forcing
+`remote.<name>.push` or `mirror` setting when a plain `git push` runs, however
+it got there (a file edit, an earlier command). A push word built at run time
+(`git p$(echo u)sh`) is not matched by a `git push` allow rule either, so it
+reaches the prompt without this hook.
+
+Silence has to be earned by matching the list, so a spelling the hook does not
+know (a variable, a substitution, a redirect glued to a word, a quote inside
+`push`, a config setting that forces later) ends in a prompt, never in a
+silent pass. That is what makes a global `git push` allow rule safe next to
+it. In `bypassPermissions` mode Claude Code turns an ask into an allow, so
+there only the blocks in step 1 apply. An internal error lets the call
+through, and the project's deny rules still apply.
 
 Setup installs this file as `~/.claude/hooks/push-guard.py` and registers it
 in `~/.claude/settings.json`, never in a project's settings: some tools copy
@@ -50,6 +67,13 @@ PREFIXES = {"sudo", "env", "command", "builtin", "nice", "nohup", "time", "timeo
             "exec", "do", "then", "else", "elif", "!", "&"}
 # Not `xargs`: it appends words from its input, so `echo -qf | xargs git push`
 # forces a push its own arguments do not show.
+# Flags a push on the allow-list may carry: none of them forces, mirrors or
+# reads a value from the next word.
+SAFE_FLAGS = {"-u", "--set-upstream", "--tags", "--follow-tags", "--force-with-lease", "--force-if-includes",
+              "--delete", "-d", "-q", "--quiet", "-v", "--verbose", "-n", "--dry-run", "--no-verify",
+              "--atomic", "--porcelain", "--progress", "--no-progress"}
+DATA_COMMANDS = {"echo", "printf", "write-output", "write-host"}
+ENV_COMMANDS = {"export", "declare", "typeset", "set", "unset", "source", ".", "alias"}
 
 
 def join_lines(command, tool):
@@ -189,19 +213,55 @@ def force_reason(args):
     return None
 
 
-def mentions_push(text):
-    return bool(re.search(r"\bgit", text, re.I) and re.search(r"\bpush\b", text, re.I))
+def relevant(text):
+    """Whether text, with quote and escape characters removed, mentions a push,
+    a mirror, git config from the environment, or `git remote ... --mi[rror]`."""
+    bare = re.sub(r"[\"'`\\]", "", text)
+    return bool(re.search(r"push\b|mirror|git_config|\bremote\b.*--mi", bare, re.I))
 
 
-def configures_push(tokens):
-    """True when a command sets how pushes behave instead of pushing: a
-    `remote.<name>.push` or `.mirror` setting (through `git config` or `-c`) or
-    `git remote add --mirror`. A later plain `git push` would then force or
-    mirror without a force flag in sight."""
-    if any(re.match(r"(?i)^remote\..+\.(push|mirror)(=|$)", t) for t in tokens):
+def only_data(segment, tokens):
+    """Commands that print or commit without writing a file: their arguments
+    are text, never a push. A redirect makes them write, for example into
+    `.git/config`, so a redirected one does not count."""
+    if ">" in segment:
+        return False
+    return tokens[0].lower() in DATA_COMMANDS or tokens[:2] == ["git", "commit"]
+
+
+def changes_env(tokens):
+    """Commands that change the environment for the rest of the line, such as
+    `export HOME=...`, which points git at another config file."""
+    if tokens[0] in ENV_COMMANDS:
         return True
-    # `--mi` is the shortest unambiguous abbreviation (`--m` also matches `--master`).
-    return "remote" in tokens and any(t.startswith("--mi") for t in tokens)
+    return all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) for t in tokens)
+
+
+def safe_push(segment):
+    """Whether a segment is a `git push` on the allow-list: known-safe flags and
+    plain ref names, written with letters, digits and `._/:=-` only."""
+    text = re.sub(r"\s+2>&1$", "", segment.strip())
+    if not re.fullmatch(r"[A-Za-z0-9 ._/:=-]+", text):
+        return False
+    tokens = text.split()
+    if tokens[:2] != ["git", "push"]:
+        return False
+    for token in tokens[2:]:
+        if token.startswith("-"):
+            if token not in SAFE_FLAGS and not token.startswith("--force-with-lease="):
+                return False
+        elif not re.fullmatch(r"[A-Za-z0-9._/][A-Za-z0-9._/:-]*", token):
+            return False
+    return True
+
+
+def ask():
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": "This command mentions a git push that is not on the push guard's list of plain, safe forms, so it needs approval.",
+    }}))
+    return 0
 
 
 def main():
@@ -213,30 +273,29 @@ def main():
     if tool not in ("Bash", "PowerShell"):
         return 0
     command = join_lines((data.get("tool_input") or {}).get("command") or "", tool)
-    if not re.search(r"\bpush\b|\bmirror\b|--mi", command, re.I):
+    if not relevant(command):
         return 0
     parts, plain = scan(command, tool)
-    unsure = not plain
-    if plain:
-        for segment in parts:
-            tokens = words(segment, tool)
-            args = push_args(tokens) if tokens is not None else None
-            if tokens is not None and configures_push(tokens):
-                unsure = True
-            if args is not None:
-                reason = force_reason(args)
-                if reason:
-                    print(f"Blocked a force push: {reason}. Use `--force-with-lease` instead, "
-                          "which refuses to overwrite commits you have not fetched.", file=sys.stderr)
-                    return 2
-            elif tokens is None or any(t.lower() == "push" or mentions_push(t) for t in tokens):
-                unsure = True
-    if unsure:
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
-            "permissionDecisionReason": "This command mentions a git push the push guard could not read with certainty, so it needs approval.",
-        }}))
+    if not plain:
+        return ask()
+    segments = [(part, words(part, tool)) for part in parts]
+    if any(tokens is None for _, tokens in segments):
+        return ask()
+    for _, tokens in segments:
+        args = push_args(tokens)
+        reason = force_reason(args) if args is not None else None
+        if reason:
+            print(f"Blocked a force push: {reason}. Use `--force-with-lease` instead, "
+                  "which refuses to overwrite commits you have not fetched.", file=sys.stderr)
+            return 2
+    pushes = False
+    for part, tokens in segments:
+        if tokens and relevant(part) and not only_data(part, tokens):
+            if not safe_push(part):
+                return ask()
+            pushes = True
+    if pushes and any(tokens and changes_env(tokens) for _, tokens in segments):
+        return ask()
     return 0
 
 
