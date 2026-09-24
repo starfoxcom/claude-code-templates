@@ -323,7 +323,7 @@ const STACK_CMD_CATALOG = {
   "Ruby":                        ["bundle", "bundle exec", "rake", "rails", "rspec", "rubocop"],
   "PHP":                         ["composer", "php", "php artisan", "phpunit"],
   "Docker · containers":         ["docker", "docker build", "docker run", "docker compose", "docker compose up", "kubectl", "helm"],
-  "Git · GitHub":                ["git push", "git fetch", "git pull", "git merge", "git branch", "git tag", "gh pr", "gh issue", "gh run", "gh repo", "gh api"],
+  "Git · GitHub":                ["git fetch", "git pull", "git merge", "git branch", "git tag", "gh pr", "gh issue", "gh run", "gh repo", "gh api"],
   "Build · CMake · Make":        ["make", "cmake", "ninja", "msbuild", "bazel"],
   "Database · migrations":       ["psql", "sqlite3", "redis-cli", "mongo", "npx prisma", "npx drizzle-kit", "alembic", "rails db"],
   "Network · utility":           ["curl", "wget", "jq", "rg", "fd", "httpie"],
