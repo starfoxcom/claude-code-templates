@@ -327,19 +327,23 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "for r in a; do git push -qf origin main; done", "GIT.EXE push -f origin main",
     // Wrappers with their own options cannot hide the push.
     "sudo -u me git push -qf origin main", "timeout 5 git push -f origin main", "nice -n 5 git push -qf origin main",
-    "command -p git push -qf origin main",
+    "command -p git push -qf origin main", "env -i git push -qf origin main", "time -p git push -qf origin main",
   ];
   const bashOnly = [
     "git commit -m \"fix \\\"x\" && git push -qf origin main", "a & git push -qf origin main",
     // Line continuations are joined first, and quotes or escapes inside `push` are read as the shell reads them.
     "git push origin main \\\n-qf", "cd repo && \\\ngit push -qf origin main",
     "git pu''sh -qf origin main", "git \"pu\"sh -qf origin main", "git pu\\sh -qf origin main",
-    "case x in a) git push -qf origin main;; esac",
+    "case x in a) git push -qf origin main;; esac", "if git push -qf origin main; then echo ok; fi",
+    "while git push -qf origin main; do break; done",
+    // Backslash + CR is an escaped CR in bash, so the LF after it still ends the command.
+    "echo x \\\r\ngit push -qf origin main", "git commit -m wip \\\r\ngit push -qf origin main",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
-    "git push origin main `\n-qf", "git push origin main `\r-qf",
+    "git push origin main `\n-qf", "git push origin main `\r-qf", "git push origin main `\r\n-qf",
+    ". git push -qf origin main",
     // PowerShell runs a parenthesized argument as a command, so these push for certain.
     "Write-Output (git push -qf origin main)", "echo (git push -qf origin main)",
     "git commit -m (git push -qf origin main)",
@@ -414,7 +418,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // PowerShell reads curly quotes as quotes and Unicode spaces as whitespace.
     "git push origin main \u201c-qf\u201d", "git push origin \"x\u201c -qf \u201cy\"", "git push origin main\u00a0-qf",
     // PowerShell evaluates a parenthesized argument; Set-Item changes the environment next to a push.
-    "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin"]) {
+    "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin",
+    // After `--%` PowerShell passes separators through as words.
+    "git push origin main -o --% ; -qf"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.

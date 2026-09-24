@@ -92,8 +92,10 @@ def join_lines(command, tool):
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
             rest = command[i + 1:i + 3]
-            # PowerShell also ends a line at a lone carriage return.
-            if rest.startswith("\n") or rest == "\r\n" or (tool == "PowerShell" and rest.startswith("\r")):
+            # Bash joins only backslash + LF: backslash + CR is an escaped CR, so the
+            # LF after it still ends the command. PowerShell joins a backtick
+            # before LF, CRLF or a lone CR.
+            if rest.startswith("\n") or (tool == "PowerShell" and rest.startswith("\r")):
                 i += 3 if rest == "\r\n" else 2
                 continue
             out.append(command[i:i + 2])
@@ -152,6 +154,10 @@ def scan(command, tool):
     # PowerShell also reads curly quotes as quotes and Unicode spaces, vertical
     # tab and form feed as whitespace; shlex does not, so such a command is not plain.
     if tool == "PowerShell" and re.search(r"[^\x00-\x7f]|[\v\f]", command):
+        plain = False
+    # After `--%` PowerShell passes the rest of the line to the program as is,
+    # separators included, so its words cannot be read here.
+    if tool == "PowerShell" and "--%" in command:
         plain = False
     return parts, plain and quote is None
 
