@@ -105,6 +105,8 @@ def force_reason(args):
                         i += 1
                     break
         i += 1
+    # The first positional is the repository even after `--` (git push
+    # [<options>] [<repository> [<refspec>...]]), so refspecs start at [1].
     for ref in positional[1:]:
         if ref.startswith("+"):
             return f"`{ref}` (a leading + forces that ref)"
