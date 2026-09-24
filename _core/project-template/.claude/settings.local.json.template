@@ -69,7 +69,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/push-guard.py\"",
+            "command": "python3",
+            "args": ["-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')", "${CLAUDE_PROJECT_DIR}/.claude/hooks/push-guard.py"],
             "timeout": 10
           }
         ]

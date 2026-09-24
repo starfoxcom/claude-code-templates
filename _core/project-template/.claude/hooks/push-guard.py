@@ -13,6 +13,12 @@ overwrite work the local repo has not seen.
 Exit 2 blocks the call and shows the reason to Claude. Any other outcome,
 including a parse error, lets the call through, and the deny rules in
 `settings.local.json` still apply.
+
+The hook is registered in exec form (`command` plus `args`), so no shell is
+involved and Claude Code fills in `${CLAUDE_PROJECT_DIR}` on every platform.
+It runs through a `runpy` one-liner instead of `python3 <path>` because
+Python exits 2 when it cannot open a script, which would block every call;
+through `runpy` a missing file is an ordinary error and the call proceeds.
 """
 import json
 import re

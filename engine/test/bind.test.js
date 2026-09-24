@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -271,13 +271,21 @@ test("the adherence script counts only code searches", { skip: !python && "needs
 test("the push guard blocks force pushes in any flag bundle", { skip: !python && "needs Python 3.8+" }, async () => {
   const files = await run(defaults());
   const settings = JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
-  const registered = settings.hooks.PreToolUse.flatMap((h) => h.hooks.map((x) => x.command));
-  assert.ok(registered.some((c) => c.includes(".claude/hooks/push-guard.py")), "hook is registered");
-  const dir = mkdtempSync(join(tmpdir(), "push-guard-"));
-  const hook = join(dir, "push-guard.py");
-  writeFileSync(hook, files.get(".claude/hooks/push-guard.py"));
-  const verdict = (tool, command) =>
-    spawnSync(python, [hook], { input: JSON.stringify({ tool_name: tool, tool_input: { command } }), encoding: "utf8" }).status;
+  // Run the hook exactly as registered: exec form (no shell), with Claude Code's
+  // `${CLAUDE_PROJECT_DIR}` substitution. Only the interpreter name is swapped for
+  // the one found on this machine.
+  const entry = settings.hooks.PreToolUse.flatMap((h) => h.hooks).find((x) => (x.args || []).some((a) => a.includes("push-guard.py")));
+  assert.ok(entry, "hook is registered");
+  assert.equal(entry.command, "python3");
+  assert.ok(Array.isArray(entry.args), "exec form, so no shell expands the path");
+  const project = mkdtempSync(join(tmpdir(), "push-guard-"));
+  mkdirSync(join(project, ".claude", "hooks"), { recursive: true });
+  writeFileSync(join(project, ".claude", "hooks", "push-guard.py"), files.get(".claude/hooks/push-guard.py"));
+  const runHook = (root, input) => spawnSync(python, entry.args.map((a) => a.split("${CLAUDE_PROJECT_DIR}").join(root)),
+    { input, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: root } }).status;
+  const verdict = (tool, command) => runHook(project, JSON.stringify({ tool_name: tool, tool_input: { command } }));
+  const missing = runHook(mkdtempSync(join(tmpdir(), "no-hook-")), JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }));
+  assert.notEqual(missing, 2, "a missing hook file must not block every call");
   const blocked = [
     "git push --force", "git push origin main --force", "git push -f origin x", "git push origin x -f",
     "git push -fu origin x", "git push -uf origin x", "git push -qf origin main", "git push -vf origin main",
@@ -298,7 +306,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   }
   for (const cmd of allowed) assert.equal(verdict("Bash", cmd), 0, `should allow: ${cmd}`);
   assert.equal(verdict("Read", "git push -f"), 0, "other tools pass");
-  assert.equal(spawnSync(python, [hook], { input: "not json", encoding: "utf8" }).status, 0, "bad input fails open");
+  assert.equal(runHook(project, "not json"), 0, "bad input fails open");
 });
 
 test("bad answers are rejected", async () => {
