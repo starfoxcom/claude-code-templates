@@ -3,7 +3,8 @@
 // Block grammar (one marker per line, blocks may nest):
 //   <!-- TOGGLE:name START -->        kept when flag `name` is on
 //   <!-- TOGGLE:name:off START -->    kept when flag `name` is off
-//   <!-- TOGGLE:slot:value START -->  kept when choice `slot` equals `value`
+//   <!-- TOGGLE:slot:value START -->  kept when choice `slot` equals `value`;
+//                                     `value` must be listed in options[slot]
 //   <!-- TOGGLE:... END -->           closes the innermost open block
 // Marker lines never survive. Placeholders are {{UPPER_SNAKE}}.
 
@@ -12,20 +13,21 @@ const PLACEHOLDER = /\{\{([A-Z0-9_]+)\}\}/g;
 
 export class TemplateError extends Error {}
 
-function keepBlock(name, value, flags, choices, where) {
+function keepBlock(name, value, { flags = {}, choices = {}, options = {} }, where) {
   if (value === "off") {
     if (typeof flags[name] !== "boolean") throw new TemplateError(`${where}: unknown flag "${name}"`);
     return !flags[name];
   }
   if (value !== undefined) {
     if (!(name in choices)) throw new TemplateError(`${where}: unknown choice "${name}"`);
+    if (!(options[name] || []).includes(value)) throw new TemplateError(`${where}: "${value}" is not an option of "${name}"`);
     return choices[name] === value;
   }
   if (typeof flags[name] !== "boolean") throw new TemplateError(`${where}: unknown flag "${name}"`);
   return flags[name];
 }
 
-export function resolveBlocks(text, { flags = {}, choices = {} } = {}, file = "template") {
+export function resolveBlocks(text, ctx = {}, file = "template") {
   const out = [];
   const open = [];
   const lines = text.split("\n");
@@ -41,7 +43,7 @@ export function resolveBlocks(text, { flags = {}, choices = {} } = {}, file = "t
     const id = value === undefined ? name : `${name}:${value}`;
     if (edge === "START") {
       const parentKeep = open.every((b) => b.keep);
-      open.push({ id, keep: parentKeep && keepBlock(name, value, flags, choices, where) });
+      open.push({ id, keep: parentKeep && keepBlock(name, value, ctx, where) });
     } else {
       const top = open.pop();
       if (!top || top.id !== id) throw new TemplateError(`${where}: END for "${id}" does not close "${top ? top.id : "nothing"}"`);

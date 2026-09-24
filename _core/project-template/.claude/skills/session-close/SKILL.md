@@ -1,106 +1,60 @@
 ---
 name: session-close
-description: Run the session-close ritual end-to-end — DoD verification, commit, PR, polling loop, merge (where applicable), branch cleanup, context refresh.
+description: Close a work session. Verifies what is really finished, commits, opens or merges the PR, cleans up branches and hands off to the next session. Use at the end of every session or when the conversation is near its context limit.
 ---
 
 # /session-close
 
-Run this skill at the end of every work session, or when the conversation is near saturation. Executes end-to-end — no per-step approval gate unless the next move is genuinely dangerous (force-push, force-delete with unmerged work, destructive history rewrite).
-
-## Steps
+Run the steps in order without asking between them. Stop and ask only before a force-push, deleting a branch that holds unmerged work, or rewriting history someone else has pulled. If `.claude/rules/visual.md` exists and this session changed what people see, do not push until the maintainer has confirmed the visual check.
 
 <!-- TOGGLE:definition_of_done_verification START -->
-### Definition-of-done verification (if claiming a milestone / feature complete)
+## 1. Verify what is done
 
-Re-read the relevant DoD (from ROADMAP.md, the feature's design doc, or the PR description). For each DoD bullet:
+Only when this session claims a feature or milestone complete. Re-read its definition of done (ROADMAP, design doc or PR description) and mark each item:
 
-- ✅ **verified** — reproduced in running app + commit SHA + scene/route/page + (where applicable) screenshot or log evidence path
-- ⚠️ **partial** — works in some scenarios, not others — list the gaps
-- ❌ **unmet** — does not work — open a follow-up branch, set milestone status to 🔄 in ROADMAP.md, STOP
+- ✅ **verified**: seen working in the running app, with the commit, the screen or route, and a screenshot or log where it applies;
+- ⚠️ **partial**: works in some cases; list the gaps;
+- ❌ **unmet**: open a follow-up and stop claiming completion.
 
-If any bullet is ❌, **the milestone is not complete.** Do not generate a "milestone complete" context file or commit message.
+One ❌ means the feature is not complete. If an item stopped making sense mid-way, change the definition of done in its own commit first; never quietly call a gap "deferred".
 
-If a DoD bullet has become unrealistic or out-of-scope mid-milestone, revise the DoD on its own commit before the verification ritual — never silently rationalize a gap as deferred.
 <!-- TOGGLE:definition_of_done_verification END -->
-
-### Commit / PR decision tree
-
-Evaluate in order — apply the first row that matches:
-
-| Condition | Action |
-|---|---|
-| No code changes (context refresh only) | Generate context file (if `context_refresh_files` is ON) + commit + PR + paths-ignore fast-path auto-merge (if enabled) + branch cleanup. |
-| Changes exist, branch objective **incomplete** | Commit with work done. No PR. |
-| Changes exist, branch objective **complete** | Commit (if uncommitted) + PR to `{{DEV_BRANCH}}` + standard polling loop + merge + branch cleanup. |
-| Branch is `hotfix/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` (merge to `{{DEV_BRANCH}}` managed from GitHub). |
-| Branch is `release/*` and complete | Commit + PR to `{{MAIN_BRANCH}}` AND `{{DEV_BRANCH}}`. |
-
-Commit and PR format per `.claude/rules/git.md`. Use **atomic Bash calls** — never `&&`-chain post-merge cleanup; permission rules match the full command string and chained calls stall on partial deny.
-
 <!-- TOGGLE:context_refresh_files START -->
-### Update context
+## 2. Hand-off file
 
-Generate a new `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` (rename the existing one with current date and time).
+Write `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` at the repo root and `git rm` the previous one, so exactly one exists. It holds current state only: where the work stands, decisions made and why, what the next session should do first. Rules and conventions stay in `.claude/rules/`.
 
-**Local time:**
+For the timestamp, use the latest `[time]` line in the conversation if a hook provides one. Otherwise read the local clock: `date '+%Y-%m-%d %H:%M'`, or `Get-Date -Format 'yyyy-MM-dd HH:mm'` in PowerShell. Never hardcode a timezone.
 
-1. **Check the conversation context first.** If the optional `UserPromptSubmit` time-injection hook is installed (see `~/.claude/CLAUDE.md` → "Time-of-day awareness"), every prompt comes prefixed with a line of the form `[time] YYYY-MM-DD HH:MM:SS <zone>`. Reuse the most recent one — it's authoritative.
-2. **If no `[time]` line is available** (hook not installed, or you need to confirm against a fresh clock), fall back to terminal commands. Try in order, OS-clock only — **never hardcode a timezone**:
-
-   ```bash
-   node -e "console.log(new Date().toLocaleString('sv-SE').replace(',',' '))"
-   python -c "from datetime import datetime; print(datetime.now().strftime('%Y-%m-%d %H:%M'))"
-   date '+%Y-%m-%d %H:%M'
-   powershell -Command "Get-Date -Format 'yyyy-MM-dd HH:mm'"
-   ```
-
-   Hardcoded IANA strings (e.g. `'America/Mazatlan'`) inherit US-DST assumptions that are wrong for non-US-DST locales; the OS clock is always the right source.
-
-**Context file structure:** current state only — decisions and implementation details not derivable from the code. Conventions and rules already live in `.claude/rules/` — do not duplicate.
-
-**Uniqueness rule:** exactly **one** `*-CONTEXT_*.md` must exist in the root at all times. When creating a new one, delete the previous with `git rm`.
 <!-- TOGGLE:context_refresh_files END -->
+## 3. Derived docs
 
-### Update derived docs
-
-If applicable, update `CLAUDE.md`, `README.md`, and any touched module's `ROADMAP.md` with relevant changes. Clearly indicate which sections changed.
+Update `README.md`, `CLAUDE.md` or a module `ROADMAP.md` when this session changed what they describe, and say which sections changed.
 
 <!-- TOGGLE:code_research_first START -->
-### Code-research adherence metric
+## 4. Code-research count
 
-Before signaling session close, count how often code-research happened through {{TOOLS_CODE_RESEARCH_NAME}} vs through Grep/Glob/raw-grep this session:
+Run `python3 .claude/scripts/research-adherence.py` from the repo root (`python` on Windows). It reads the transcript and compares calls to {{TOOLS_CODE_RESEARCH_NAME}} with unmarked Grep and Glob calls. Report its line. Below 70% means the next session starts by finding out why.
 
-- **{{TOOLS_CODE_RESEARCH_NAME}} calls this session:** look at your tool-use history and count calls matching the tool's primitive shape:
-  <!-- TOGGLE:code_research:tokensave START -->
-  any call matching `tokensave_*` (search, context, callers, callees, impact, body, files, etc.).
-  <!-- TOGGLE:code_research:tokensave END -->
-  <!-- TOGGLE:code_research:ast-grep START -->
-  any Bash command starting with `ast-grep run`, `ast-grep scan`, or `ast-grep test`.
-  <!-- TOGGLE:code_research:ast-grep END -->
-  <!-- TOGGLE:code_research:sourcegraph START -->
-  any Bash command starting with `src search`, `src api`, or `src code-intel`.
-  <!-- TOGGLE:code_research:sourcegraph END -->
-  <!-- TOGGLE:code_research:ctags START -->
-  any Bash command using `readtags`, or `grep` against a `tags` file, or `ctags -R` regeneration.
-  <!-- TOGGLE:code_research:ctags END -->
-  <!-- TOGGLE:code_research:semgrep START -->
-  any Bash command starting with `semgrep`.
-  <!-- TOGGLE:code_research:semgrep END -->
-  <!-- TOGGLE:code_research:custom START -->
-  any Bash command invoking the `{{TOOLS_CODE_RESEARCH_NAME}}` CLI per its documentation at {{TOOLS_CODE_RESEARCH_URL}}.
-  <!-- TOGGLE:code_research:custom END -->
-- **Grep + Glob calls this session:** count `Grep` + `Glob` tool calls + any Bash command containing `grep `, `rg `, `ag `, `ack `, `ripgrep ` UNLESS the command had a `# {{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` marker.
-- **Adherence ratio** = `{{TOOLS_CODE_RESEARCH_NAME}}_calls / ({{TOOLS_CODE_RESEARCH_NAME}}_calls + grep_glob_calls)` — express as a percentage.
-
-Report it like:
-
-> **{{TOOLS_CODE_RESEARCH_NAME}} adherence this session: 7 {{TOOLS_CODE_RESEARCH_NAME}} calls / 1 grep fallback → 87%.** (Bypass reason: <if any>.)
-
-If the ratio is under 70% AND there were no documented bypass reasons, surface that as a regression to fix next session. The hook should have prevented unjustified Grep calls; if any got through, note why.
 <!-- TOGGLE:code_research_first END -->
+## 5. Commit and PR
 
-### Signal session close
+Take the first row that matches:
 
-After completing the above, explicitly tell the user:
+| Situation | Do |
+|---|---|
+| Branch goal not finished | Commit the work. No PR. |
+<!-- TOGGLE:context_refresh_files START -->
+| Only the hand-off file changed | Commit and open the PR; it takes the docs-only path in `token-efficiency.md`. |
+<!-- TOGGLE:context_refresh_files END -->
+<!-- TOGGLE:branching_model_gitflow START -->
+| `hotfix/*` finished | PR to `{{MAIN_BRANCH}}`. After it merges, open the cascade PR into `{{DEV_BRANCH}}` (`git.md` § Cascade). Done only when the cascade merges. |
+| `release/*` finished | Same as a hotfix: PR to `{{MAIN_BRANCH}}`, tag the release commit, then cascade. |
+<!-- TOGGLE:branching_model_gitflow END -->
+| Any other branch finished | Commit, open a PR to `{{DEV_BRANCH}}`, watch the checks, merge on 🟢. |
 
-> **Session closed.** The context file is updated, all changes are committed, [PR merged + branches cleaned up | branch pushed, awaiting CI]. You can close this conversation and start a fresh one for maximum free context.
+Commit and PR format, `--body-file`, merge style and branch cleanup are in `git.md`; watching checks is in `token-efficiency.md`. Run each post-merge command as its own call.
+
+## Last message
+
+> **Session closed.** Everything is committed; [PR #N merged and branches deleted | branch pushed, PR #N waiting on checks | work committed locally on `<branch>`]. Start a fresh conversation for the next session.

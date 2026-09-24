@@ -19,14 +19,21 @@ test(":off blocks invert the flag", () => {
 
 test("choice blocks keep only the matching value", () => {
   const text = [block("tool:a", "A"), block("tool:b", "B")].join("\n");
-  assert.equal(resolveBlocks(text, { choices: { tool: "b" } }), "B");
-  assert.equal(resolveBlocks(text, { choices: { tool: "zzz" } }), "");
+  const options = { tool: ["a", "b", "c"] };
+  assert.equal(resolveBlocks(text, { choices: { tool: "b" }, options }), "B");
+  assert.equal(resolveBlocks(text, { choices: { tool: "c" }, options }), "");
+});
+
+test("a choice block naming an unlisted value is an error", () => {
+  const ctx = { choices: { tool: "a" }, options: { tool: ["a"] } };
+  assert.throws(() => resolveBlocks(block("tool:retired", "R"), ctx), /not an option/);
 });
 
 test("nested blocks need every parent kept", () => {
   const text = block("outer", block("pc:husky", "H"));
-  assert.equal(resolveBlocks(text, { flags: { outer: true }, choices: { pc: "husky" } }), "H");
-  assert.equal(resolveBlocks(text, { flags: { outer: false }, choices: { pc: "husky" } }), "");
+  const options = { pc: ["husky"] };
+  assert.equal(resolveBlocks(text, { flags: { outer: true }, choices: { pc: "husky" }, options }), "H");
+  assert.equal(resolveBlocks(text, { flags: { outer: false }, choices: { pc: "husky" }, options }), "");
 });
 
 test("indented markers are recognised", () => {

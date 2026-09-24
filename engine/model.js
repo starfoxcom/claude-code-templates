@@ -7,15 +7,17 @@
 export const REVIEW_MODELS = { routine: "claude-sonnet-4-6", deep: "claude-opus-4-8" };
 
 export const CODE_RESEARCH_TOOLS = {
-  tokensave: { name: "tokensave", url: "https://github.com/aovestdipaperino/tokensave", bypass: "TOKENSAVE_BYPASS:" },
-  "lsp-plugins": { name: "Claude Code LSP plugins", url: "https://code.claude.com/docs/en/discover-plugins", bypass: null },
-  codegraph: { name: "CodeGraph", url: "https://github.com/colbymchenry/codegraph", bypass: null },
-  serena: { name: "Serena", url: "https://github.com/oraios/serena", bypass: null },
-  "codebase-memory": { name: "codebase-memory-mcp", url: "https://github.com/DeusData/codebase-memory-mcp", bypass: null },
-  none: { name: "none", url: "(no homepage)", bypass: null },
+  // match: regex over tool-call names, used by the session-close adherence count.
+  tokensave: { name: "tokensave", url: "https://github.com/aovestdipaperino/tokensave", bypass: "TOKENSAVE_BYPASS:", match: "tokensave" },
+  "lsp-plugins": { name: "Claude Code LSP plugins", url: "https://code.claude.com/docs/en/discover-plugins", bypass: null, match: "^LSP$" },
+  codegraph: { name: "CodeGraph", url: "https://github.com/colbymchenry/codegraph", bypass: null, match: "codegraph" },
+  serena: { name: "Serena", url: "https://github.com/oraios/serena", bypass: null, match: "serena" },
+  "codebase-memory": { name: "codebase-memory-mcp", url: "https://github.com/DeusData/codebase-memory-mcp", bypass: null, match: "codebase.memory" },
+  none: { name: "none", url: "(no homepage)", bypass: null, match: null },
 };
 
 export const PRECOMMIT_MANAGERS = ["lefthook", "husky", "pre-commit", "simple-git-hooks"];
+export const MERGE_STYLES = ["squash", "merge", "rebase"];
 export const ARCHITECTURES = ["none", "clean", "ddd", "ecs", "feature-based", "hexagonal", "layered", "mvc"];
 export const LICENSES = { MIT: "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "BSD-3-Clause": "BSD-3-Clause.txt", Proprietary: "Proprietary.txt" };
 
@@ -60,7 +62,7 @@ export function validate(a) {
   check(adv.precommit === "none" || PRECOMMIT_MANAGERS.includes(adv.precommit), `unknown pre-commit manager "${adv.precommit}"`);
   check(ARCHITECTURES.includes(adv.architecture), `unknown architecture "${adv.architecture}"`);
   check(["gitflow", "trunk"].includes(adv.branching), `unknown branching model "${adv.branching}"`);
-  check(["squash", "merge", "rebase"].includes(adv.mergeStyle), `unknown merge style "${adv.mergeStyle}"`);
+  check(MERGE_STYLES.includes(adv.mergeStyle), `unknown merge style "${adv.mergeStyle}"`);
   check(typeof adv.devIsDefault === "boolean", "devIsDefault must be true or false");
   return a;
 }
@@ -87,6 +89,14 @@ export function flagsFor(a) {
     memory_system: true,
   };
 }
+
+// Every value a template may name in a choice block. An unlisted value fails
+// the render, so retired options cannot linger as dead blocks.
+export const CHOICE_OPTIONS = {
+  code_research: Object.keys(CODE_RESEARCH_TOOLS),
+  precommit: ["none", ...PRECOMMIT_MANAGERS],
+  merge_style: MERGE_STYLES,
+};
 
 export function choicesFor(a) {
   return { code_research: a.advanced.codeResearch, precommit: a.advanced.precommit, merge_style: a.advanced.mergeStyle };
@@ -115,6 +125,7 @@ export function valuesFor(a, { year = new Date().getFullYear() } = {}) {
     TOOLS_CODE_RESEARCH_URL: tool.url,
     TOOLS_CODE_RESEARCH_NAME_KEBAB: a.advanced.codeResearch,
     TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE: upperSnake(a.advanced.codeResearch),
-    TOOLS_CODE_RESEARCH_BYPASS_MARKER: tool.bypass || "(no hook)",
+    TOOLS_CODE_RESEARCH_BYPASS_MARKER: tool.bypass || "RESEARCH_BYPASS:",
+    TOOLS_CODE_RESEARCH_MATCH: tool.match || "(?!)",
   };
 }
