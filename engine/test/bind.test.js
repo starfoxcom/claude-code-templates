@@ -413,6 +413,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // A redirect glued to a flag ends the word there, so the flag still reaches git.
     "git push origin main -qf>/dev/null", "git push origin main --force>/dev/null", "git push origin main -f&>/dev/null",
     "git push origin main -qf> /dev/null", "git push origin main --mirror>log",
+    // Bash's clobber redirect `>|` is no pipe.
+    "git push >| /dev/null -qf origin main", "git push origin main -qf 2>| err",
     // In Bash a carriage return does not end a word, so `\r#` starts no comment and `\r` is a word.
     "git push origin main >out\r# -qf", "git push -o\r -qf origin main",
     // A separator inside a substitution does not end the statement around it.
@@ -453,6 +455,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // Project deny rules cover some of these by text.
   const unguarded = [
     "git push origin --delete old-branch", "git push -d origin old-branch",
+    "git push origin --delete main && git push -u origin HEAD",
     "git push origin x 2>&1 | tail -1 | sh", "git push origin x | tee .git/config",
     "git commit -m \"unbalanced && git push -f", "git push -o ci.skip origin x", "git push origin main:+notes",
     "git push -- +main", "git push --repo=origin", "git push $FLAGS origin main",

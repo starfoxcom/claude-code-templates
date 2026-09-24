@@ -44,7 +44,8 @@ Out of reach, so these run without a block:
 - git config or aliases that force a later plain `git push` (`git config
   alias.p 'push -f'`, a `remote.<name>.push` or `mirror` setting, `GIT_CONFIG_*`
   variables, a shell alias for git);
-- a branch deleted in one command and pushed again in another;
+- a branch deleted and then pushed again in another command, or in the same
+  command by `HEAD`, a bare `git push` or another name for the same ref;
 - a push run by another program (`python -c`, `node -e`, `make`, `gh api`).
 
 Project deny rules cover some of these by text (`git remote *--mi*`, `gh repo
@@ -232,6 +233,9 @@ def scan(command, tool):
                 i += 1
             continue
         elif stack:
+            pass
+        # Bash's clobber redirect `>|` is no pipe: its `|` stays with the redirect.
+        elif ch == "|" and tool != "PowerShell" and command[i - 1:i] == ">" and escaped_end != i:
             pass
         elif command.startswith(("&&", "||"), i):
             parts.append("".join(current))
