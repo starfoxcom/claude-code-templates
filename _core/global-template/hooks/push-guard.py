@@ -26,7 +26,8 @@ config from the environment:
    push behavior alone (`cd`, printing, `git add`, `git commit`, `git fetch`
    and similar), since anything else, like `readonly HOME=...`, could point
    git at other config. Segments that only print or commit (`echo`, `printf`,
-   `git commit`, without a redirect) never push, so their text does not
+   `git commit`, without a redirect or a pipe into another command) never
+   push, so their text does not
    count, and neither does a `push` that is not git's (`git stash push`,
    `docker push`, `Push-Location`).
 3. Ask for approval in every other case.
@@ -35,7 +36,9 @@ Out of reach for any command guard: git config that already holds a forcing
 `remote.<name>.push` or `mirror` setting when a plain `git push` runs, however
 it got there (a file edit, an earlier command). A push word built at run time
 (`git p$(echo u)sh`) is not matched by a `git push` allow rule either, so it
-reaches the prompt without this hook.
+reaches the prompt without this hook. Code inside an interpreter one-liner
+that an allow rule approves (`python -c`, `node -e`) can build a push the
+command text never names; only removing those allow rules closes that.
 
 Silence has to be earned by matching the list, so a spelling the hook does not
 know (a variable, a substitution, a redirect glued to a word, a quote inside
@@ -114,11 +117,13 @@ def join_lines(command, tool):
 
 
 def scan(command, tool):
-    """Split a command at unquoted separators. Returns the segments and whether
+    """Split a command at unquoted separators. Returns the segments, whether
     the command is plain, meaning it uses no syntax that can run or produce
-    words this hook does not see."""
+    words this hook does not see, and the indexes of segments whose output is
+    piped into the next one."""
     escape = "`" if tool == "PowerShell" else "\\"
     parts, current, quote, plain, i, n = [], [], None, True, 0, len(command)
+    piped = set()
     while i < n:
         ch = command[i]
         if ch == escape and quote != "'" and i + 1 < n:
@@ -147,6 +152,8 @@ def scan(command, tool):
         elif (ch in ";|\n" or (ch == "\r" and tool == "PowerShell")
               or (ch == "&" and command[i - 1:i] not in "<>" and command[i + 1:i + 2] != ">"
                   and (tool != "PowerShell" or "".join(current).strip()))):
+            if ch == "|":
+                piped.add(len(parts))
             parts.append("".join(current))
             current = []
             i += 1
@@ -162,7 +169,7 @@ def scan(command, tool):
     # separators included, so its words cannot be read here.
     if tool == "PowerShell" and "--%" in command:
         plain = False
-    return parts, plain and quote is None
+    return parts, plain and quote is None, piped
 
 
 def words(segment, tool):
@@ -387,7 +394,7 @@ def decide(data):
     # well inside the timeout asks instead of being parsed.
     if len(command) > MAX_COMMAND:
         return ask()
-    parts, plain = scan(command, tool)
+    parts, plain, piped = scan(command, tool)
     if not plain:
         return ask()
     segments = [(part, words(part, tool)) for part in parts]
@@ -404,8 +411,10 @@ def decide(data):
                   "which refuses to overwrite commits you have not fetched.", file=sys.stderr)
             return 2
     pushes = False
-    for part, tokens in segments:
-        if not tokens or only_data(part, tokens):
+    for index, (part, tokens) in enumerate(segments):
+        # Printed text piped into the next command can become a command
+        # (`echo 'git push -qf' | sh`), so only unpiped prints are skipped.
+        if not tokens or (only_data(part, tokens) and index not in piped):
             continue
         if push_related(tokens):
             if not safe_push(part):

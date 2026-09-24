@@ -374,7 +374,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Pushes that are not git's, and a push next to segments known to leave git alone.
     "git stash push -m wip", "gh run list --event push", "docker push img:1",
     "git add . && git commit -m \"x\" && git push origin x", "git fetch origin && git push -u origin x",
-    "echo git push -f", "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
+    "echo git push -f", "printf 'fix push retries' | git commit -F -", "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
   ];
   // Everything else that mentions a push asks: never a guess, never a silent pass.
   const asked = [
@@ -413,6 +413,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // `--output=` writes a file without a redirect, here git's own config.
     "git log -1 --format='[remote \"origin\"]%n\tpush = +main:main' --output=/home/u/.config/git/config && git push origin",
     "git diff --output=.git/config && git push origin", "git log --out=notes && git push origin",
+    // Printed text piped into the next command can run as a command.
+    "echo 'git push -qf origin main' | python -c \"import os,sys; os.system(sys.stdin.read())\"",
+    "echo git push -qf origin main | sh",
     // `--upload-pack` runs its value through a shell, with or without a push next to it.
     "git fetch --upload-pack='git config remote.origin.pu\"\"sh +main:main; git-upload-pack' . && git push origin",
     "git fetch --upload-pack='git pu\"\"sh -qf origin main; git-upload-pack' .",
@@ -434,7 +437,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // After `--%` PowerShell passes separators through as words.
     "git push origin main -o --% ; -qf",
     // Push text after a first word that is not a plain program name could still run git.
-    "&('gi'+'t') push -qf origin main"]) {
+    "&('gi'+'t') push -qf origin main", "echo 'git push -qf origin main' | iex"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.
