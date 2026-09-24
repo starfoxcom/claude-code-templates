@@ -25,12 +25,14 @@
 #
 # Requires: CLAUDE_CODE_OAUTH_TOKEN in repo secrets.
 #
-# PERMANENT LIMITATION — claude-code-review.yml edits require admin-bypass:
+# PERMANENT LIMITATION — claude-code-review.yml edits get no AI review:
 #   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
 #   head ref is byte-identical to the version on the default branch before granting
-#   an OIDC-exchanged token. Any PR that edits .github/workflows/claude-code-review.yml
-#   therefore fails the token exchange and the routine review action cannot post a
-#   verdict. Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
+#   an OIDC-exchanged token, so the review action cannot run on a PR that edits this
+#   file. Triage therefore never reviews .github/workflows/: a workflow-only PR passes
+#   as non-reviewable. Keep workflow edits in PRs of their own (mixed with reviewable
+#   files, the review starts and fails `Workflow validation failed`), and the
+#   maintainer reads those diffs before merge.
 
 name: Claude Code Review
 
@@ -108,7 +110,13 @@ jobs:
           # ^_core/    = all of _core/ (rules, skills, templates) — lands verbatim in user repos
           # .additions = CLAUDE.md.additions → goes into users' ~/.claude/CLAUDE.md
           # bundle.toggles.md = bundle defaults for downstream binds
-          REVIEWABLE=$(grep -E '\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.additions$|/bundle\.toggles\.md$' /tmp/changed_files.txt || true)
+          # .github/workflows/ is never reviewable. The review action refuses to
+          # run when a PR's copy of this workflow differs from the default
+          # branch's, so a workflow-only PR must pass as non-reviewable. No AI
+          # reviews those diffs: keep workflow edits in PRs of their own and the
+          # maintainer reads them before merge. Excluded by path on purpose, never
+          # by file extension.
+          REVIEWABLE=$(grep -v '^\.github/workflows/' /tmp/changed_files.txt | grep -E '\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.additions$|/bundle\.toggles\.md$' || true)
           if [ -z "$REVIEWABLE" ]; then
             echo "Diff has no reviewable source / data / contract files — skipping review."
             echo "run_review=false" >> "$GITHUB_OUTPUT"
@@ -122,6 +130,149 @@ jobs:
     needs: [triage, init-deep-check]
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ubuntu-latest
+    env:
+      ROUTINE_REVIEW_PROMPT: |
+        Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }} for **claude-code-templates** — the open-source toolkit that ships opinionated Claude Code bundles. The configurator + canonical templates here become the binds every downstream user installs verbatim, so the review surface is load-bearing in a way ordinary OSS isn't.
+
+        ## Step 1 — Read the pre-screen report
+
+        Read `/tmp/review_context.md`. It contains:
+        - **Pre-screen violations** — mechanical rule-breakage already detected (toggle marker imbalance, unknown placeholders in canonical templates, AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
+        - **Pre-screen warnings** — likely issues you should judge (JSX/HTML parity drift, etc.).
+        - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
+        - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
+
+        Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+
+        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
+
+        ## Step 2 — Architectural review
+
+        Read ONLY the files most likely to contain risk. Then expand outward if the architecture review surfaces a concern.
+
+        **Project-specific invariants to verify (in priority order):**
+
+        1. **Canonical template integrity** — anything in `_core/project-template/**` lands verbatim in every downstream bind. Toggle markers (`<!-- TOGGLE:name START/END -->`) must be balanced; placeholders (`{{MAIN_BRANCH}}`, `{{DEV_BRANCH}}`, `{{PROJECT_NAME}}`, etc.) must be the canonical names that SETUP.md resolves. A missing END marker silently swallows downstream content.
+        2. **Workflow template parity** — `_core/project-template/.github/workflows/*.template` should behave like this repo's live workflows after substitution. Drift between live and canonical means downstream binds get a different gate than this repo dogfoods.
+        3. **Hook safety** — `_core/project-template/.claude/hooks/**` runs on every user's machine. Any Bash / shell / Python edit there must be cross-platform (Linux/macOS/Windows-Git-Bash), POSIX-portable, and never assume a specific PATH or interpreter.
+        4. **Configurator (`index.html` + `redesign/*.jsx`)** — JSX source and inlined production HTML are kept manually in sync. A change to `redesign/bind.jsx` that doesn't land in `index.html` ships a broken configurator. Toggle catalog edits must update both the data layer and the manifest emission.
+        5. **Bundle defaults (`bundles/<n>/bundle.toggles.md`)** — each bundle's per-toggle default must be defensible. A toggle that flips ON for OSS but OFF for client-team needs a documented reason somewhere (CLAUDE.md, TOGGLES.md, or bundle.toggles.md itself).
+        6. **Versioning policy** — major/minor/patch matches the rules in `CHANGELOG.md`. New bundle / new toggle / new tool slot = minor. Bug fix / copy edit = patch. Breaking schema change = major.
+        7. **No AI-attribution markers** — per `_core/project-template/.claude/rules/git.md`, never `Co-Authored-By: Claude`, never "Generated with Claude Code" footers, never claude.com links in PR bodies or commit messages.
+
+        ## Step 2.5 — Decide whether to escalate (do not post yet)
+
+        Escalation is *orthogonal* to the verdict — it's "deeper look requested," not a blocker. The verdict in Step 3 stays binary regardless.
+
+        **Mark for escalation when ALL hold:**
+        1. The concern is about correctness, not style.
+        2. You can articulate a *specific* reason an Opus reviewer would catch what you cannot.
+        3. You would not stake the merge on your own verdict for that concern.
+
+        **Auto-escalate (always mark) when the diff includes any of:**
+        - `_core/**` (canonical templates that every downstream bind copies)
+        - `index.html` (the deployed configurator)
+        - `_core/project-template/.claude/hooks/**` (hooks that run on user machines)
+        - `redesign/*.jsx` (configurator source)
+        - `bundles/<n>/bundle.toggles.md` defaults changes
+        - SETUP.md contract changes
+        - `_core/project-template/.github/workflows/*.template` (canonical CI)
+
+        **Do NOT mark for escalation:** docs, comments, formatting, naming nits, "consider extracting", pure refactors with no behavior change.
+
+        ## Step 3 — Post the verdict comment FIRST
+
+        Command: `gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "BODY"`
+
+        The verdict lands BEFORE the escalation comment so PR readers see the decision first.
+
+        **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
+
+        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The `Evaluate review outcome` job parses the comment body via `grep -E "🔴|🟢" | tail -n 1`. A verdict line without one of those two emoji characters is treated as a MISSING verdict and the gate FAILS CLOSED. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
+
+        Body MUST:
+        - Be titled `## Code Review — claude-code-templates`
+        - End with EXACTLY one of these as the FINAL line of the comment (no trailing prose after):
+          - `🟢 LGTM`
+          - `🔴 Blocking — must fix`
+
+        **WRONG formats — every one of these fails the gate:**
+        - `LGTM` (missing 🟢 prefix — the most common mistake; do not do this)
+        - `LGTM ✅` / `✅ LGTM` (wrong emoji — parser matches 🟢 only, not ✅)
+        - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
+        - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule below forces 🔴)
+        - Any verdict line followed by trailing prose (`🟢 LGTM, ship it!` — must be the FINAL line, nothing after)
+
+        **Self-check immediately before invoking `gh pr comment`:** Look at the literal last line of your draft body. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure on this repo is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
+
+        **BINARY VERDICT RULE:**
+        - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
+        - 🔴 Blocking when ANY real finding exists, regardless of framing. "Minor nit" that suggests a real correctness improvement is 🔴. "All clear with caveats" is a contradiction — caveats make it 🔴.
+        - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
+        - "All clear on X" is allowed AS A SECTION HEADING. NEVER as the verdict line when other sections have findings.
+
+        **MANDATORY when you marked the PR for escalation in Step 2.5 (auto-escalate OR uncertainty-based):** before the final verdict line, append a `### 🟡 Uncertainty surfaced — needs-deep-review requested` section. PR readers must see *what specifically* the deep pass is being asked to verify, not just *that* a deep pass was triggered. A `@claude review this PR` trigger comment without a 🟡 section in the verdict above it is unmotivated and degrades the deep tier's signal quality — readers see only the trigger, not the rationale.
+
+        Format (this block goes BEFORE the final verdict line; verdict stays binary 🟢/🔴):
+
+        ```
+        ### 🟡 Uncertainty surfaced — needs-deep-review requested
+
+        - `<file:line>` — <what specifically concerns you about this change in 1 sentence>.
+          **Why I am not confident:** <one sentence on the limit of your analysis — what you cannot fully verify from the diff/the files you read>.
+          **What I want Opus to verify:** <one sentence naming the concrete check — invariant, contract, edge case>.
+        - ...
+
+        A depth-pass request follows in the next comment.
+        ```
+
+        For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the trigger comment in Step 4 already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4.
+
+        🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for Opus). Binary verdict + optional 🟡 section are independent dimensions.
+
+        ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
+
+        Only run Step 4 if Step 2.5 marked the PR for escalation. Skip otherwise.
+
+        Do BOTH of the following on every escalating run — the label and the comment have different lifecycles:
+
+        **A. Apply the label (idempotent — safe to re-apply if already present):**
+        ```
+        gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review
+        ```
+
+        **B. Post a fresh `@claude` comment EVERY escalating run, no exceptions:**
+        ```
+        gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "@claude review this PR — depth pass on <focus>.
+
+        <One-paragraph context: what the PR ships and why the risk surface is bigger than the diff suggests.>
+
+        **Numbered invariants ranked by priority:**
+        1. **<file:line>** — <invariant + how it could break>
+        2. ...
+
+        **Out of scope:** <list of intentional deferrals>
+
+        **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
+        - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
+        - 🔴 Blocking when ANY real finding exists, regardless of framing.
+        - DROP style preferences and micro-optimisations entirely.
+
+        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment and takes the LAST line containing 🔴 or 🟢 as the verdict — the SAME strict contract as the routine gate. A final line with neither emoji is treated as a MISSING verdict and PATCHes the `Claude On-Demand` check to failure, blocking merge. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract.
+
+        **WRONG formats — every one of these fails the deep gate:**
+        - `LGTM` (missing 🟢 prefix — the most common mistake)
+        - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
+        - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
+        - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
+        - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+
+        **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
+
+        **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
+        ```
+
+        **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true. If the only `@claude` in your comment is inside backticks or a code block, the deep tier silently skips.
     permissions:
       contents: read
       pull-requests: write
@@ -248,6 +399,11 @@ jobs:
               'LINT_COMMAND',
               'TYPECHECK_COMMAND',
               'TEST_COMMAND',
+              # Bind engine placeholders (engine/model.js DEFERRED and valuesFor):
+              # CODEOWNERS owners, the rendered license text, and the adherence
+              # script's tool-name regex.
+              'LEAD_USER', 'TEAM_OR_USER', 'LICENSE_BODY',
+              'TOOLS_CODE_RESEARCH_MATCH',
           }
           placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
           for fname in changed:
@@ -374,158 +530,82 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        # Pinned to v1's resolved SHA (resolved 2026-05-04). The bare `@v1`
-        # or `@beta` floats — silent behavior changes from auto-updates burned
-        # other projects already. Update via
+        # Pinned to the v1 tag's resolved SHA (v1.0.213; its CLI 2.1.258 is the
+        # first the API accepts for Fable 5.1). The bare `@v1` floats. Update via
         #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
-        # confirm the diff, then bump here AND in `.github/workflows/claude.yml`.
-        uses: anthropics/claude-code-action@8c196b2f61a66bfdf93322bde3a3e668669089ed  # v1
+        # confirm the diff, then bump here AND in `.github/workflows/claude.yml`
+        # in the same hotfix: both tiers carry the same pin.
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        continue-on-error: true
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
-          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model claude-sonnet-4-6'
-          prompt: |
-            Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }} for **claude-code-templates** — the open-source toolkit that ships opinionated Claude Code bundles. The configurator + canonical templates here become the binds every downstream user installs verbatim, so the review surface is load-bearing in a way ordinary OSS isn't.
+          # Fable 5.1 at low effort, the model and effort the sibling projects'
+          # best-of-three head-to-heads chose for this seat.
+          # `--disallowedTools Agent,...`: a reviewer that hands a large diff to
+          # a subagent and "waits" for it ends its one-shot session with no
+          # verdict posted. The backup invocation carries the same ban.
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-fable-5-1 --effort low'
+          prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
-            ## Step 1 — Read the pre-screen report
+      # Backup: any primary failure (usage limit or otherwise) retries once on
+      # Opus 5.5 high with the same prompt, so a spent Fable allowance never
+      # blocks every PR. The pinned action's CLI is refused for Opus 5.5, so the
+      # backup gets a job-private newer copy, installed only when it is about to
+      # run. Drop the install step (and the executable input below) once the
+      # pinned action installs this version itself.
+      - name: Install Claude Code for the backup reviewer
+        id: claude-cli
+        if: steps.claude-review.outcome == 'failure'
+        continue-on-error: true
+        shell: bash
+        env:
+          CLI_VERSION: "2.1.280"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::Claude Code $CLI_VERSION install failed three times"
+              exit 1
+            fi
+            sleep 5
+          done
+          src="$HOME/.local/share/claude/versions/$CLI_VERSION"
+          if [ ! -x "$src" ]; then
+            src="$(readlink -f "$HOME/.local/bin/claude")"
+          fi
+          dest="$RUNNER_TEMP/claude-cli/claude"
+          mkdir -p "$(dirname "$dest")"
+          cp "$src" "$dest"
+          chmod +x "$dest"
+          installed="$("$dest" --version | awk '{print $1}')"
+          if [ "$installed" != "$CLI_VERSION" ]; then
+            echo "::error::expected Claude Code $CLI_VERSION, got '$installed'"
+            exit 1
+          fi
+          echo "Claude Code $installed at $dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
 
-            Read `/tmp/review_context.md`. It contains:
-            - **Pre-screen violations** — mechanical rule-breakage already detected (toggle marker imbalance, unknown placeholders in canonical templates, AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
-            - **Pre-screen warnings** — likely issues you should judge (JSX/HTML parity drift, etc.).
-            - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
-            - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
+      - name: Run Claude Code Review (backup, Opus 5.5 high)
+        id: claude-review-backup
+        if: steps.claude-review.outcome == 'failure' && steps.claude-cli.outcome == 'success'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: false
+          path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-opus-5-5 --effort high'
+          prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
-            Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
-
-            **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
-
-            ## Step 2 — Architectural review
-
-            Read ONLY the files most likely to contain risk. Then expand outward if the architecture review surfaces a concern.
-
-            **Project-specific invariants to verify (in priority order):**
-
-            1. **Canonical template integrity** — anything in `_core/project-template/**` lands verbatim in every downstream bind. Toggle markers (`<!-- TOGGLE:name START/END -->`) must be balanced; placeholders (`{{MAIN_BRANCH}}`, `{{DEV_BRANCH}}`, `{{PROJECT_NAME}}`, etc.) must be the canonical names that SETUP.md resolves. A missing END marker silently swallows downstream content.
-            2. **Workflow template parity** — `_core/project-template/.github/workflows/*.template` should behave like this repo's live workflows after substitution. Drift between live and canonical means downstream binds get a different gate than this repo dogfoods.
-            3. **Hook safety** — `_core/project-template/.claude/hooks/**` runs on every user's machine. Any Bash / shell / Python edit there must be cross-platform (Linux/macOS/Windows-Git-Bash), POSIX-portable, and never assume a specific PATH or interpreter.
-            4. **Configurator (`index.html` + `redesign/*.jsx`)** — JSX source and inlined production HTML are kept manually in sync. A change to `redesign/bind.jsx` that doesn't land in `index.html` ships a broken configurator. Toggle catalog edits must update both the data layer and the manifest emission.
-            5. **Bundle defaults (`bundles/<n>/bundle.toggles.md`)** — each bundle's per-toggle default must be defensible. A toggle that flips ON for OSS but OFF for client-team needs a documented reason somewhere (CLAUDE.md, TOGGLES.md, or bundle.toggles.md itself).
-            6. **Versioning policy** — major/minor/patch matches the rules in `CHANGELOG.md`. New bundle / new toggle / new tool slot = minor. Bug fix / copy edit = patch. Breaking schema change = major.
-            7. **No AI-attribution markers** — per `_core/project-template/.claude/rules/git.md`, never `Co-Authored-By: Claude`, never "Generated with Claude Code" footers, never claude.com links in PR bodies or commit messages.
-
-            ## Step 2.5 — Decide whether to escalate (do not post yet)
-
-            Escalation is *orthogonal* to the verdict — it's "deeper look requested," not a blocker. The verdict in Step 3 stays binary regardless.
-
-            **Mark for escalation when ALL hold:**
-            1. The concern is about correctness, not style.
-            2. You can articulate a *specific* reason an Opus reviewer would catch what you cannot.
-            3. You would not stake the merge on your own verdict for that concern.
-
-            **Auto-escalate (always mark) when the diff includes any of:**
-            - `_core/**` (canonical templates that every downstream bind copies)
-            - `index.html` (the deployed configurator)
-            - `_core/project-template/.claude/hooks/**` (hooks that run on user machines)
-            - `redesign/*.jsx` (configurator source)
-            - `bundles/<n>/bundle.toggles.md` defaults changes
-            - SETUP.md contract changes
-            - `_core/project-template/.github/workflows/*.template` (canonical CI)
-
-            **Do NOT mark for escalation:** docs, comments, formatting, naming nits, "consider extracting", pure refactors with no behavior change.
-
-            ## Step 3 — Post the verdict comment FIRST
-
-            Command: `gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "BODY"`
-
-            The verdict lands BEFORE the escalation comment so PR readers see the decision first.
-
-            **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
-
-            **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The `Evaluate review outcome` job parses the comment body via `grep -E "🔴|🟢" | tail -n 1`. A verdict line without one of those two emoji characters is treated as a MISSING verdict and the gate FAILS CLOSED. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
-
-            Body MUST:
-            - Be titled `## Code Review — claude-code-templates`
-            - End with EXACTLY one of these as the FINAL line of the comment (no trailing prose after):
-              - `🟢 LGTM`
-              - `🔴 Blocking — must fix`
-
-            **WRONG formats — every one of these fails the gate:**
-            - `LGTM` (missing 🟢 prefix — the most common mistake; do not do this)
-            - `LGTM ✅` / `✅ LGTM` (wrong emoji — parser matches 🟢 only, not ✅)
-            - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
-            - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule below forces 🔴)
-            - Any verdict line followed by trailing prose (`🟢 LGTM, ship it!` — must be the FINAL line, nothing after)
-
-            **Self-check immediately before invoking `gh pr comment`:** Look at the literal last line of your draft body. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure on this repo is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
-
-            **BINARY VERDICT RULE:**
-            - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
-            - 🔴 Blocking when ANY real finding exists, regardless of framing. "Minor nit" that suggests a real correctness improvement is 🔴. "All clear with caveats" is a contradiction — caveats make it 🔴.
-            - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
-            - "All clear on X" is allowed AS A SECTION HEADING. NEVER as the verdict line when other sections have findings.
-
-            **MANDATORY when you marked the PR for escalation in Step 2.5 (auto-escalate OR uncertainty-based):** before the final verdict line, append a `### 🟡 Uncertainty surfaced — needs-deep-review requested` section. PR readers must see *what specifically* the deep pass is being asked to verify, not just *that* a deep pass was triggered. A `@claude review this PR` trigger comment without a 🟡 section in the verdict above it is unmotivated and degrades the deep tier's signal quality — readers see only the trigger, not the rationale.
-
-            Format (this block goes BEFORE the final verdict line; verdict stays binary 🟢/🔴):
-
-            ```
-            ### 🟡 Uncertainty surfaced — needs-deep-review requested
-
-            - `<file:line>` — <what specifically concerns you about this change in 1 sentence>.
-              **Why I am not confident:** <one sentence on the limit of your analysis — what you cannot fully verify from the diff/the files you read>.
-              **What I want Opus to verify:** <one sentence naming the concrete check — invariant, contract, edge case>.
-            - ...
-
-            A depth-pass request follows in the next comment.
-            ```
-
-            For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the trigger comment in Step 4 already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4.
-
-            🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for Opus). Binary verdict + optional 🟡 section are independent dimensions.
-
-            ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
-
-            Only run Step 4 if Step 2.5 marked the PR for escalation. Skip otherwise.
-
-            Do BOTH of the following on every escalating run — the label and the comment have different lifecycles:
-
-            **A. Apply the label (idempotent — safe to re-apply if already present):**
-            ```
-            gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review
-            ```
-
-            **B. Post a fresh `@claude` comment EVERY escalating run, no exceptions:**
-            ```
-            gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "@claude review this PR — depth pass on <focus>.
-
-            <One-paragraph context: what the PR ships and why the risk surface is bigger than the diff suggests.>
-
-            **Numbered invariants ranked by priority:**
-            1. **<file:line>** — <invariant + how it could break>
-            2. ...
-
-            **Out of scope:** <list of intentional deferrals>
-
-            **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
-            - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
-            - 🔴 Blocking when ANY real finding exists, regardless of framing.
-            - DROP style preferences and micro-optimisations entirely.
-
-            **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment and takes the LAST line containing 🔴 or 🟢 as the verdict — the SAME strict contract as the routine gate. A final line with neither emoji is treated as a MISSING verdict and PATCHes the `Claude On-Demand` check to failure, blocking merge. There is no fallback parser, no fuzzy match, no synonym table. The emoji is the contract.
-
-            **WRONG formats — every one of these fails the deep gate:**
-            - `LGTM` (missing 🟢 prefix — the most common mistake)
-            - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
-            - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
-            - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
-            - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
-
-            **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
-
-            **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
-            ```
-
-            **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: contains(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true. If the only `@claude` in your comment is inside backticks or a code block, the deep tier silently skips.
+      - name: Fail when both review attempts failed
+        if: steps.claude-review.outcome == 'failure' && steps.claude-review-backup.outcome != 'success'
+        run: |
+          echo "::error::The routine review failed on Fable 5.1 low and on the Opus 5.5 high backup (CLI install: ${{ steps.claude-cli.outcome }})"
+          exit 1
 
       # ── Resolve Claude On-Demand check based on escalation state ──────────
       # Runs AFTER the action step above so we observe the label-applied state
