@@ -2,7 +2,8 @@
 // derived from them. This is the single source for what a bind produces.
 
 // Must be models the pinned claude-code-action in the workflow templates
-// accepts. Change these together with that pin, never on their own.
+// accepts; these are the pins this repo's own review workflows run on.
+// Change them together with the action pin, never on their own.
 export const REVIEW_MODELS = { routine: "claude-sonnet-4-6", deep: "claude-opus-4-8" };
 
 export const CODE_RESEARCH_TOOLS = {
