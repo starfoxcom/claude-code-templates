@@ -213,7 +213,9 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
     "git fetch --upload-pack=x .", "git fetch origin --upl=x", "git pull --upload-pack=x . main",
     // A mirror remote turns a later bare `git push`, which the allow list approves, into a mirror force push.
     "git remote add --mirror=push origin https://x/y", "git remote add --mi origin https://x/y",
-    "git remote -v add --mirror=push origin https://x/y"]) {
+    "git remote -v add --mirror=push origin https://x/y",
+    // `gh repo sync --force` hard-resets a branch on GitHub.
+    "gh repo sync --force", "gh repo sync owner/fork --branch main --force"]) {
     assert.ok(denied(cmd), `${cmd} should be denied`);
   }
   for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x",
@@ -414,6 +416,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "bash -c 'git \"$@\"' _ push -qf origin main", "sh -c 'exec git \"$0\" \"$@\"' push -qf origin main",
     "sh -c '/usr/bin/gi[t] push -qf origin main'", "sh -c 'G=gi; ${G}t push -qf origin main'",
     "uv run sh -c 'git pu\"\"sh -qf origin main'", "sh -c \"git pu''sh -qf origin main\"",
+    // `git commit` prints its subject, so a print piped through it can still reach a runner.
+    "echo '; git push -qf origin main' | git commit --allow-empty -F - | python -c \"import os,sys; os.system(sys.stdin.read())\"",
+    "echo '; git push -qf origin main' | git commit --allow-empty -F - | sh",
+    // `gh alias set --shell` and `gh extension` run commands.
+    "gh alias set --shell p 'git \"$@\"'; gh p push -qf origin main",
+    "gh alias set p '!git \"$@\"'; gh p push -qf origin main",
     "git remote add --mirr=push b https://example.com/b.git",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
     "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main:main'\" git push origin",

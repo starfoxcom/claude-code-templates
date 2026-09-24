@@ -42,7 +42,8 @@ reaches the prompt without this hook, unless an allow rule approves the
 command around it. Any allow rule for a program that runs other commands
 (`python -c`, `node -e`, and runners such as `bundle exec`, `uv`, `poetry`,
 `npx`, `docker run`, `make`) approves a push built inside it that the command
-text never names; only removing those allow rules closes that.
+text never names; only removing those allow rules closes that. The same goes
+for `gh api`, which can force-update a branch through GitHub's REST API.
 
 Silence has to be earned by matching the list, so a spelling the hook does not
 know (a variable, a substitution, a redirect glued to a word, a quote inside
@@ -347,7 +348,7 @@ def push_related(tokens):
     has_push = "push" in tokens
     # Commands that give a program another name (`alias g=git`, `hash -p
     # /usr/bin/git g`, PowerShell `sal -Value git g`) can hide a later push.
-    if program(tokens[0]) in ALIAS_COMMANDS:
+    if program(tokens[0]) in ALIAS_COMMANDS or gh_runs_code(tokens):
         return True
     for k, token in enumerate(tokens):
         if program(token) in PUSH_PROGRAMS:
@@ -383,13 +384,19 @@ def push_related(tokens):
     return any(mentions_push(t) for t in tokens)
 
 
+def gh_runs_code(tokens):
+    """`gh alias set --shell` (or a `!` alias) and `gh extension` run commands,
+    so a later `gh <alias> push ...` can be a git push."""
+    return program(tokens[0]) == "gh" and len(tokens) > 1 and tokens[1] in ("alias", "extension", "ext")
+
+
 def nested_command(tokens):
     """Whether an argument could be a command string for another shell
     (`sh -c 'git "$@"' _ push -qf`, `bundle exec sh -c '...'`): a word with
     whitespace that mentions git or push. The inner shell expands it, so the
-    hook cannot vouch for it. `gh` never runs its arguments, so its titles and
-    bodies ("fix push retries") stay text."""
-    if program(tokens[0]) in TEXT_PROGRAMS:
+    hook cannot vouch for it. `gh` never runs its arguments outside `gh alias`
+    and `gh extension`, so its titles and bodies ("fix push retries") stay text."""
+    if program(tokens[0]) in TEXT_PROGRAMS and not gh_runs_code(tokens):
         return False
     return any(re.search(r"\s", t) and re.search(r"(?i)git|push", re.sub(r"[\"'`\\]", "", t))
                for t in tokens[1:])
@@ -492,7 +499,10 @@ def decide(data):
             continue
         # A print piped into another print or commit (`printf ... | git commit -F -`)
         # is still only text.
-        feeds_data = index + 1 < len(segments) and segments[index + 1][1] and only_data(*segments[index + 1])
+        # Only when that sink ends the pipe: `git commit` prints its subject, so a
+        # sink piped onward (`| git commit -F - | sh`) passes the text along.
+        feeds_data = (index + 1 < len(segments) and segments[index + 1][1]
+                      and only_data(*segments[index + 1]) and index + 1 not in piped)
         if only_data(part, tokens) and (index not in piped or feeds_data):
             continue
         if push_related(tokens):

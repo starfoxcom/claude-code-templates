@@ -59,6 +59,7 @@
       "Bash(git fetch *--upl*)",
       "Bash(git pull *--upl*)",
       "Bash(git remote *--mi*)",
+      "Bash(gh repo sync *--force*)",
       "Bash(git reset --hard:*)",
       "Bash(git clean -f:*)",
       "Bash(git branch -D main)",
