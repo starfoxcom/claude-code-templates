@@ -64,6 +64,9 @@ import re
 import shlex
 import sys
 
+# Longer commands that mention a push ask without being parsed; no plain push
+# needs more, and parsing must never approach the hook timeout.
+MAX_COMMAND = 20000
 # git options that take their value as the next argument.
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--config-env", "--attr-source"}
@@ -245,7 +248,12 @@ def relevant(text):
     """Whether text, with quote and escape characters removed, mentions a push,
     a mirror, git config from the environment, or `git remote ... --mi[rror]`."""
     bare = re.sub(r"[\"'`\\]", "", text)
-    return bool(re.search(r"push\b|mirror|git_config|\bremote\b.*--mi", bare, re.I))
+    if re.search(r"push\b|mirror|git_config", bare, re.I):
+        return True
+    # Linear on purpose: a backtracking `remote.*--mi` pattern could run past
+    # the hook timeout on a long command, and a timed-out hook lets it through.
+    remote = re.search(r"\bremote\b", bare, re.I)
+    return bool(remote and "--mi" in bare[remote.end():].lower())
 
 
 def only_data(segment, tokens):
@@ -278,6 +286,9 @@ def push_related(tokens):
     file, `git remote ... --mi[rror]`, or a word
     that holds both git and push (`eval "git push -qf"`). `git stash push`,
     `docker push` and `Push-Location` are not."""
+    # Checked once per segment, not once per git word, so the time stays linear.
+    upload_pack = any(t.startswith("--upl") for t in tokens)
+    has_push = "push" in tokens
     for k, token in enumerate(tokens):
         if program(token) == "git-push":
             return True
@@ -287,12 +298,12 @@ def push_related(tokens):
                 return True
             # `fetch`/`pull --upload-pack=<cmd>` (any abbreviation) runs <cmd>
             # through a shell, which can write push config or push itself.
-            if any(t.startswith("--upl") for t in tokens[k + 1:]):
+            if upload_pack:
                 return True
             # An option the guard does not know could take the next word as its
             # value, so the real subcommand might be a later `push`.
             options = tokens[k + 1:tokens.index(name, k + 1)]
-            if "push" in tokens[k + 1:] and any(
+            if has_push and any(
                     t.startswith("-") and "=" not in t and t not in GIT_VALUE_OPTIONS | GIT_FLAG_OPTIONS
                     for t in options):
                 return True
@@ -372,6 +383,10 @@ def decide(data):
     command = join_lines((data.get("tool_input") or {}).get("command") or "", tool)
     if not relevant(command):
         return 0
+    # A timed-out hook lets the call through, so a command too long to read
+    # well inside the timeout asks instead of being parsed.
+    if len(command) > MAX_COMMAND:
+        return ask()
     parts, plain = scan(command, tool)
     if not plain:
         return ask()

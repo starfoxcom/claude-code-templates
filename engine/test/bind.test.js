@@ -231,6 +231,11 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
     const catalog = readFileSync(join(repo, page), "utf8").match(/"Git · GitHub":\s*\[([^\]]*)\]/)[1];
     assert.ok(!/"git push/.test(catalog), `${page} must not offer a git push chip`);
   }
+  // The page's built-in fallback copy of SETUP.md must carry the same skip rule.
+  for (const page of ["index.html", "redesign/bind.jsx"]) {
+    assert.match(readFileSync(join(repo, page), "utf8"), /stack command that is \\`git push\\` or starts with it/,
+      `${page} fallback setup must skip git push stack commands`);
+  }
 });
 
 // `python` first: on Windows, `python3` is often an App Execution Alias, and starting
@@ -440,6 +445,13 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   assert.equal(decide(inShadow), "deny", "a project json.py must not disable the guard");
   assert.equal(verdict("Read", "git push -f"), "allow", "other tools pass");
   assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
+  // A timed-out hook lets the call through, so long commands must answer well inside the timeout.
+  for (const repeat of [4900, 50000]) {
+    const long = "git log " + "git ".repeat(repeat) + "; echo -qf | xargs git push origin main";
+    const started = Date.now();
+    assert.equal(verdict("Bash", long), "ask", `a ${long.length}-character command asks`);
+    assert.ok(Date.now() - started < 3000, `a ${long.length}-character command answers quickly`);
+  }
 });
 
 test("bad answers are rejected", async () => {
