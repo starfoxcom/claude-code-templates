@@ -208,7 +208,7 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
   const denied = (cmd) => rules.some((r) => r.test(cmd));
   for (const cmd of ["git push --force", "git push --force origin x", "git push origin x --force", "git push -f origin x",
     "git push origin -f", "git push -fu origin x", "git push origin x -fu", "git push -uf origin x", "git push origin -uf x",
-    "git push origin +main"]) {
+    "git push origin +main", "git push --mirror origin", "git push origin --mirror"]) {
     assert.ok(denied(cmd), `${cmd} should be denied`);
   }
   for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x",
@@ -297,32 +297,54 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   assert.ok(Array.isArray(entry.args), "exec form, so no shell expands the path");
   mkdirSync(join(home, ".claude", "hooks"), { recursive: true });
   writeFileSync(join(home, ".claude", "hooks", "push-guard.py"), readFileSync(join(repo, "_core/global-template/hooks/push-guard.py")));
-  const runHook = (root, input) => spawnSync(entry.command, entry.args.map((s) => s.split(home).join(root)), { input, encoding: "utf8" }).status;
-  const verdict = (tool, command) => runHook(home, JSON.stringify({ tool_name: tool, tool_input: { command } }));
+  const runHook = (root, input) => spawnSync(entry.command, entry.args.map((s) => s.split(home).join(root)), { input, encoding: "utf8" });
+  // "deny" is exit 2; "ask" is exit 0 with an ask decision on stdout; "allow" is a silent exit 0.
+  const decide = (r) => r.status === 2 ? "deny"
+    : r.status === 0 && /"permissionDecision": "ask"/.test(r.stdout) ? "ask"
+    : r.status === 0 && r.stdout === "" ? "allow" : `exit ${r.status}: ${r.stdout}${r.stderr}`;
+  const verdict = (tool, command) => decide(runHook(home, JSON.stringify({ tool_name: tool, tool_input: { command } })));
   const missing = runHook(mkdtempSync(join(tmpdir(), "no-hook-")), JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }));
-  assert.notEqual(missing, 2, "a missing hook file must not block every call");
-  const blocked = [
+  assert.notEqual(missing.status, 2, "a missing hook file must not block every call");
+  const both = [
     "git push --force", "git push origin main --force", "git push -f origin x", "git push origin x -f",
     "git push -fu origin x", "git push -uf origin x", "git push -qf origin main", "git push -vf origin main",
     "git push origin main -qf", "git push -uqf origin main", "git push origin +main", "git push origin -- +main",
     "git -C repo push -f", "cd repo && git push --force origin x", "echo hi; git push -qf", "GIT_TRACE=1 git push -f",
-    "/usr/bin/git push -f", "git push --force=true origin x",
+    "/usr/bin/git push -f", "git push --force=true origin x", "git push --mirror origin", "git push --mirr origin",
+    "git push --m origin", "git --config-env core.x=HOME push -f origin main", "git --attr-source HEAD push -qf origin main",
+    "(git push -qf origin main)", "{ git push -qf origin main; }", "if x; then git push -qf origin main; fi",
+    "for r in a; do git push -qf origin main; done", "GIT.EXE push -f origin main",
   ];
+  const bashOnly = [
+    "git commit -m \"fix \\\"x\" && git push -qf origin main",
+    "cat > notes.md <<'EOF'\nnotes\nEOF\ngit push -qf origin main",
+  ];
+  const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f"];
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
     "git push origin x --force-with-lease=x:abc", "git push --force-if-includes --force-with-lease origin x",
     "git push --follow-tags origin x", "git push -o ci.skip origin x", "git push -uo f origin x",
     "git push --push-option f origin x", "git commit -m \"push -f later\"", "echo \"git push -f\"", "git log -f",
     // The first word after `--` is still the remote, so this pushes to a remote named "+main".
-    "git push origin main:+notes", "git push -- +main",
+    "git push origin main:+notes", "git push -- +main", "git push --no-mirror origin x",
+    "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
+    "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
+    "cat <<-EOF > notes.md\n\tgit push --force\n\tEOF",
+    "git push origin x # never -f here",
   ];
-  for (const cmd of blocked) {
-    assert.equal(verdict("Bash", cmd), 2, `Bash should block: ${cmd}`);
-    assert.equal(verdict("PowerShell", cmd), 2, `PowerShell should block: ${cmd}`);
+  // Pushes the guard cannot read with confidence go to the permission prompt.
+  const asked = ["a & git push -qf origin main", "sudo -u me git push -qf origin main", "echo $(git push -qf origin main)",
+    "git commit -m \"unbalanced && git push -f"];
+  for (const cmd of both) {
+    assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
+    assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   }
-  for (const cmd of allowed) assert.equal(verdict("Bash", cmd), 0, `should allow: ${cmd}`);
-  assert.equal(verdict("Read", "git push -f"), 0, "other tools pass");
-  assert.equal(runHook(home, "not json"), 0, "bad input fails open");
+  for (const cmd of bashOnly) assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
+  for (const cmd of powershellOnly) assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
+  for (const cmd of allowed) assert.equal(verdict("Bash", cmd), "allow", `should allow: ${cmd}`);
+  for (const cmd of asked) assert.equal(verdict("Bash", cmd), "ask", `should ask: ${cmd}`);
+  assert.equal(verdict("Read", "git push -f"), "allow", "other tools pass");
+  assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
 });
 
 test("bad answers are rejected", async () => {
