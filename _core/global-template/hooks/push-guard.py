@@ -64,6 +64,11 @@ import sys
 # git options that take their value as the next argument.
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--config-env", "--attr-source"}
+# git options that take no value. Any other option before the subcommand might
+# take one, which would make the next word its value rather than the subcommand.
+GIT_FLAG_OPTIONS = {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects",
+                    "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
+                    "--no-optional-locks", "--no-advice", "--no-lazy-fetch"}
 PUSH_VALUE_OPTIONS = {"--repo", "--push-option", "--receive-pack", "--exec"}
 # Words that can stand before a command without changing which program runs.
 PREFIXES = {"sudo", "env", "command", "builtin", "nice", "nohup", "time", "timeout", "stdbuf", "noglob",
@@ -229,8 +234,9 @@ def only_data(segment, tokens):
     are text, never a push. A redirect makes them write, for example into
     `.git/config`, so a redirected one does not count. So does one that stores
     its output in a variable (`printf -v`, PowerShell `-OutVariable` or
-    `-PipelineVariable`)."""
-    if ">" in segment:
+    `-PipelineVariable`), or one with a `(`, which PowerShell runs as a command
+    in argument position (`Write-Output (git push -qf)`)."""
+    if re.search(r"[>(]", segment):
         return False
     if tokens[0].lower() in DATA_COMMANDS:
         return not any(re.match(r"(?i)-(v|o|pv|pipelinev)", t) for t in tokens[1:])
@@ -256,6 +262,13 @@ def push_related(tokens):
         if program(token) == "git":
             name = subcommand(tokens, k)
             if name == "push" or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+                return True
+            # An option the guard does not know could take the next word as its
+            # value, so the real subcommand might be a later `push`.
+            options = tokens[k + 1:tokens.index(name, k + 1)]
+            if "push" in tokens[k + 1:] and any(
+                    t.startswith("-") and "=" not in t and t not in GIT_VALUE_OPTIONS | GIT_FLAG_OPTIONS
+                    for t in options):
                 return True
     if any(re.search(r"(?i)remote\.[^=\s]+\.(push|mirror)(=|$)|git_config", t) for t in tokens):
         return True
