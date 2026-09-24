@@ -34,12 +34,14 @@
 #      actually gate merge; omitting `Claude On-Demand` leaves the check
 #      visible but advisory.
 #
-# PERMANENT LIMITATION — claude-code-review.yml edits require admin-bypass:
+# PERMANENT LIMITATION — claude-code-review.yml edits get no verdict:
 #   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
 #   head ref is byte-identical to the version on the default branch before granting
 #   an OIDC-exchanged token. Any PR that edits .github/workflows/claude-code-review.yml
 #   therefore fails the token exchange and the routine review action cannot post a
-#   verdict. Confirm via `gh run view --job <id> --log-failed` and admin-bypass once.
+#   verdict. Triage below reviews only source files, so a PR that changes only
+#   workflow files (and docs) is non-reviewable and passes without a review. Keep
+#   workflow edits in PRs of their own; the maintainer reads those diffs before merge.
 
 name: Claude Code Review
 
@@ -530,8 +532,8 @@ jobs:
       issues: read
       # Needed for the non-reviewable-diff path to PATCH Claude On-Demand to
       # skipped — without this the deep check stays at in_progress on
-      # docs/rules-only PRs and the maintainer would have to admin-bypass to
-      # land them when `Claude On-Demand` is a required status check.
+      # docs/rules-only PRs, and they could never merge while `Claude On-Demand`
+      # is a required status check.
       checks: write
       # Needed for the current-run-started-at lookup used as the stale-verdict
       # floor. Without this the gh api call returns HTTP 403.
