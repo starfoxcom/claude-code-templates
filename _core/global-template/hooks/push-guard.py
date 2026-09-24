@@ -20,10 +20,13 @@ config from the environment:
 2. Pass silently only when every segment that mentions a push is on an
    allow-list: `git push` followed by known-safe flags and plain ref names,
    written with letters, digits and `._/:=-` only (an optional trailing `2>&1`
-   is fine), and no other segment changes the environment (`export HOME=...`
-   would point git at another config file). Segments that only print or
-   commit (`echo`, `printf`, `git commit`, without a redirect) never push, so
-   their text does not count.
+   is fine), and every other segment is on a short list known to leave git's
+   push behavior alone (`cd`, printing, `git add`, `git commit`, `git fetch`
+   and similar), since anything else, like `readonly HOME=...`, could point
+   git at other config. Segments that only print or commit (`echo`, `printf`,
+   `git commit`, without a redirect) never push, so their text does not
+   count, and neither does a `push` that is not git's (`git stash push`,
+   `docker push`, `Push-Location`).
 3. Ask for approval in every other case.
 
 Out of reach for any command guard: git config that already holds a forcing
@@ -73,7 +76,8 @@ SAFE_FLAGS = {"-u", "--set-upstream", "--tags", "--follow-tags", "--force-with-l
               "--delete", "-d", "-q", "--quiet", "-v", "--verbose", "-n", "--dry-run", "--no-verify",
               "--atomic", "--porcelain", "--progress", "--no-progress"}
 DATA_COMMANDS = {"echo", "printf", "write-output", "write-host"}
-ENV_COMMANDS = {"export", "declare", "typeset", "set", "unset", "source", ".", "alias"}
+INERT_GIT = {"add", "commit", "status", "log", "diff", "show", "fetch", "pull", "branch", "checkout", "switch",
+             "merge", "rev-parse", "stash", "tag"}
 
 
 def join_lines(command, tool):
@@ -223,18 +227,56 @@ def relevant(text):
 def only_data(segment, tokens):
     """Commands that print or commit without writing a file: their arguments
     are text, never a push. A redirect makes them write, for example into
-    `.git/config`, so a redirected one does not count."""
+    `.git/config`, so a redirected one does not count. So does one that stores
+    its output in a variable (`printf -v`, PowerShell `-OutVariable` or
+    `-PipelineVariable`)."""
     if ">" in segment:
         return False
-    return tokens[0].lower() in DATA_COMMANDS or tokens[:2] == ["git", "commit"]
+    if tokens[0].lower() in DATA_COMMANDS:
+        return not any(re.match(r"(?i)-(v|o|pv|pipelinev)", t) for t in tokens[1:])
+    return tokens[:2] == ["git", "commit"]
 
 
-def changes_env(tokens):
-    """Commands that change the environment for the rest of the line, such as
-    `export HOME=...`, which points git at another config file."""
-    if tokens[0] in ENV_COMMANDS:
+def subcommand(tokens, k):
+    """The git subcommand for the `git` word at index k, skipping git's own options."""
+    i = k + 1
+    while i < len(tokens) and tokens[i].startswith("-"):
+        i += 2 if tokens[i] in GIT_VALUE_OPTIONS else 1
+    return tokens[i] if i < len(tokens) else ""
+
+
+def push_related(tokens):
+    """Whether a plain segment pushes or changes how a push behaves: a git
+    whose subcommand is `push` or not a plain word, a `remote.<name>.push` or
+    `.mirror` setting, `GIT_CONFIG_*`, a path into `.git/` or a gitconfig
+    file, `git remote ... --mi[rror]`, or a word
+    that holds both git and push (`eval "git push -qf"`). `git stash push`,
+    `docker push` and `Push-Location` are not."""
+    for k, token in enumerate(tokens):
+        if program(token) == "git":
+            name = subcommand(tokens, k)
+            if name == "push" or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+                return True
+    if any(re.search(r"(?i)remote\.[^=\s]+\.(push|mirror)(=|$)|git_config", t) for t in tokens):
         return True
-    return all(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t) for t in tokens)
+    # A path into `.git/` or a gitconfig file, such as a redirect into `.git/config`.
+    if any(re.search(r"(?i)(^|[/\\])\.git([/\\]|$)|gitconfig", t) for t in tokens):
+        return True
+    if "remote" in tokens and any(t.startswith("--mi") for t in tokens):
+        return True
+    return any(mentions_push(t) for t in tokens)
+
+
+def mentions_push(text):
+    return bool(re.search(r"\bgit", text, re.I) and re.search(r"\bpush\b", text, re.I))
+
+
+def inert(segment, tokens):
+    """Segments known to leave git's push behavior alone: changing directory,
+    printing, and git subcommands that do not touch config or remotes."""
+    if only_data(segment, tokens) or tokens[0] in ("cd", "pwd", "true", "Set-Location", "sl"):
+        return True
+    return tokens[0] == "git" and len(tokens) > 1 and tokens[1] in INERT_GIT and ">" not in segment
 
 
 def safe_push(segment):
@@ -290,11 +332,14 @@ def main():
             return 2
     pushes = False
     for part, tokens in segments:
-        if tokens and relevant(part) and not only_data(part, tokens):
+        if tokens and not only_data(part, tokens) and push_related(tokens):
             if not safe_push(part):
                 return ask()
             pushes = True
-    if pushes and any(tokens and changes_env(tokens) for _, tokens in segments):
+    # Next to a push, every other segment must be known to leave git's behavior
+    # alone; anything else (`readonly HOME=...`, `Set-Item Env:...`) could point
+    # the push at other config.
+    if pushes and any(tokens and not safe_push(part) and not inert(part, tokens) for part, tokens in segments):
         return ask()
     return 0
 

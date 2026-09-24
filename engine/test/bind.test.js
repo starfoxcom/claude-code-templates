@@ -333,6 +333,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git log -f", "git commit -m \"push -f later\"", "echo \"git push -f\"",
     "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
     "cat <<-EOF > notes.md\n\tnotes\n\tEOF", "(( n = 1 << 2 ))\necho done", "git remote add origin https://example.com/a.git",
+    // Pushes that are not git's, and a push next to segments known to leave git alone.
+    "git stash push -m wip", "gh run list --event push", "docker push img:1",
+    "git add . && git commit -m \"x\" && git push origin x", "git fetch origin && git push -u origin x",
   ];
   // Everything else that mentions a push asks: never a guess, never a silent pass.
   const asked = [
@@ -361,7 +364,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git --config-env=remote.origin.mirror=HOME push origin",
     // A redirected print writes a file (here git's config), and an environment change points git elsewhere.
     "printf '[remote \"origin\"]\\n\\tpush = +main:main\\n' >> .git/config", "export HOME=/tmp/e; git push origin",
-    "HOME=/tmp/e; git push origin",
+    "HOME=/tmp/e; git push origin", "readonly HOME=/tmp/e; git push origin", "printf -v HOME /tmp/e; git push origin",
+    "read HOME < f; git push origin", "eval HOME=/tmp/e; git push origin",
   ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
@@ -374,8 +378,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   for (const cmd of ["$s = @'\ngit push -qf origin main\n'@", "git push @args", "git push $flags origin main",
     // PowerShell reads curly quotes as quotes and Unicode spaces as whitespace.
     "git push origin main \u201c-qf\u201d", "git push origin \"x\u201c -qf \u201cy\"", "git push origin main\u00a0-qf",
-    // PowerShell evaluates a parenthesized argument.
-    "git push origin main ('-q'+'f')"]) {
+    // PowerShell evaluates a parenthesized argument; Set-Item changes the environment next to a push.
+    "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin"]) {
     assert.equal(verdict("PowerShell", cmd), "ask", `PowerShell should ask: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.
