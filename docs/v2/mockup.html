@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bindwright</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hubot+Sans:wdth,wght@75..125,200..900&family=Fragment+Mono&display=swap" rel="stylesheet">
+<style>
+  @property --hue { syntax: "<number>"; inherits: true; initial-value: 200; }
+  :root {
+    --hue: 200;
+    --accent: oklch(0.8 0.13 var(--hue));
+    --accent-deep: oklch(0.62 0.13 var(--hue));
+    --on-accent: oklch(0.2 0.03 var(--hue));
+    transition: --hue 380ms cubic-bezier(.2, .8, .2, 1);
+    --canvas: oklch(0.2 0.006 240);
+    --panel: oklch(0.245 0.007 240);
+    --key: oklch(0.29 0.008 240);
+    --rule: oklch(0.34 0.008 240);
+    --text: oklch(0.97 0 0);
+    --text-2: oklch(0.8 0.01 240);
+    --add: oklch(0.8 0.14 150);
+    --del: oklch(0.72 0.15 25);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--canvas); color: var(--text); font: 400 16px/1.55 "Hubot Sans", system-ui, sans-serif; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 22px 40px; }
+  .mark { font-weight: 700; font-stretch: 112%; font-size: 20px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; }
+  .mark::before { content: ""; width: 12px; height: 18px; border-radius: 3px 3px 3px 7px; background: var(--accent); }
+  header nav { display: flex; gap: 28px; font-size: 15px; color: var(--text-2); }
+  main { max-width: 1360px; margin: 0 auto; padding: 36px 40px 64px; }
+  h1 { font-size: clamp(40px, 5.6vw, 84px); line-height: 1; font-weight: 700; font-stretch: 118%; letter-spacing: -0.03em; max-width: 14ch; }
+  .lede { margin-top: 20px; font-size: 19px; color: var(--text-2); max-width: 52ch; }
+  .rig { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 24px; margin-top: 44px; }
+  .panel { background: var(--panel); border-radius: 18px; padding: 22px; box-shadow: inset 0 1px 0 oklch(1 0 0 / .06); }
+  .panel h2 { font-size: 15px; font-weight: 600; color: var(--text-2); margin-bottom: 14px; }
+  .keys { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .k { font: inherit; text-align: left; color: var(--text); background: var(--key); border: 0; border-radius: 12px; padding: 14px 16px 16px; cursor: pointer;
+       box-shadow: inset 0 1px 0 oklch(1 0 0 / .08), 0 0 0 1px oklch(0 0 0 / .35), inset 0 -3px 0 oklch(0 0 0 / .3); transition: transform .08s, box-shadow .08s; }
+  .k:active { transform: translateY(2px); box-shadow: inset 0 1px 0 oklch(1 0 0 / .05), 0 0 0 1px oklch(0 0 0 / .35), inset 0 -1px 0 oklch(0 0 0 / .3); }
+  .k { position: relative; }
+  .k::after { content: ""; position: absolute; top: 16px; right: 16px; width: 8px; height: 8px; border-radius: 50%; background: oklch(0.8 0.13 var(--h)); box-shadow: 0 0 0 3px oklch(0.8 0.13 var(--h) / .16); }
+  .k b { display: block; font-weight: 650; font-size: 17px; }
+  .k span { font-size: 14px; color: var(--text-2); }
+  .k[aria-pressed="true"] { background: oklch(0.8 0.13 var(--h)); color: oklch(0.2 0.03 var(--h)); box-shadow: inset 0 -3px 0 oklch(0.62 0.13 var(--h)), 0 0 0 1px oklch(1 0 0 / .25); }
+  .k[aria-pressed="true"]::after { background: oklch(0.2 0.03 var(--h)); box-shadow: none; }
+  .k[aria-pressed="true"] span { color: oklch(0.3 0.05 var(--h)); }
+  .opts { margin-top: 22px; display: grid; gap: 2px; }
+  .opt { display: flex; justify-content: space-between; align-items: center; padding: 10px 2px; border-top: 1px solid var(--rule); font-size: 15px; }
+  .sw { width: 40px; height: 24px; border-radius: 7px; background: var(--key); box-shadow: inset 0 1px 2px oklch(0 0 0 / .5); position: relative; }
+  .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 5px; background: var(--text-2); transition: transform .16s cubic-bezier(.3, 1.4, .5, 1); }
+  .sw.on { background: var(--accent); } .sw.on::after { transform: translateX(16px); background: var(--on-accent); }
+  .go { margin-top: 20px; width: 100%; font: 650 16px/1 "Hubot Sans", sans-serif; padding: 16px; border: 0; border-radius: 12px; background: var(--accent); color: var(--on-accent); cursor: pointer; box-shadow: inset 0 -3px 0 var(--accent-deep); }
+  .go:active { transform: translateY(2px); box-shadow: inset 0 -1px 0 var(--accent-deep); }
+  .panel.out { box-shadow: inset 0 1px 0 oklch(1 0 0 / .06), inset 0 3px 0 var(--accent); }
+  .out-head { display: flex; justify-content: space-between; font-size: 14px; color: var(--text-2); margin-bottom: 12px; }
+  .out-head b { color: var(--text); font-weight: 600; }
+  .out-body { display: grid; grid-template-columns: 200px 1fr; gap: 0; background: var(--canvas); border-radius: 12px; min-height: 420px; overflow: hidden; }
+  .tree { font-size: 13.5px; padding: 10px 0; border-right: 1px solid var(--rule); }
+  .tree .dir { padding: 8px 14px 3px; font-weight: 600; }
+  .tree .file { padding: 2px 14px 2px 26px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tree .file.on { color: var(--text); background: var(--panel); box-shadow: inset 2px 0 var(--accent); }
+  pre { font: 12.5px/1.7 "Fragment Mono", monospace; padding: 12px 0; overflow: auto; }
+  pre div { padding: 0 16px; white-space: pre-wrap; }
+  pre .h { font-weight: 700; } pre .c { color: var(--text-2); }
+  pre .p { color: var(--add); background: oklch(0.8 0.14 150 / .08); }
+  pre .m { color: var(--del); background: oklch(0.72 0.15 25 / .08); text-decoration: line-through; }
+  @media (max-width: 900px) {
+    header { padding: 16px; } header nav { display: none; }
+    main { padding: 16px 16px 48px; }
+    .rig { grid-template-columns: 1fr; }
+    .out-body { grid-template-columns: 1fr; } .tree { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="mark">Bindwright</div>
+  <nav><span>Compare bundles</span><span>All settings</span><span>How it works</span><span>GitHub</span></nav>
+</header>
+<main>
+  <h1>House rules for your coding agent.</h1>
+  <p class="lede">Bindwright writes the files that tell Claude Code how your project works. Pick a starting point, change what you need, and download a zip for your repo root.</p>
+  <div class="rig">
+    <section class="panel">
+      <h2>Start from</h2>
+      <div class="keys" id="keys"></div>
+      <div class="opts">
+        <div class="opt">Deep review on risky PRs<i class="sw on"></i></div>
+        <div class="opt">Auto-merge when checks pass<i class="sw"></i></div>
+        <div class="opt">Session start and close rituals<i class="sw on"></i></div>
+      </div>
+      <button class="go">Download zip</button>
+    </section>
+    <section class="panel out">
+      <div class="out-head"><b>cubit/</b><span id="count"></span></div>
+      <div class="out-body"><nav class="tree" id="tree"></nav><pre id="code"></pre></div>
+    </section>
+  </div>
+</main>
+<script src="mockup-data.js"></script>
+<script>
+  function pick(id) {
+    const b = BW.bundles.find(x => x.id === id);
+    document.documentElement.style.setProperty("--hue", b.hue);
+    document.querySelectorAll(".k").forEach(el => el.setAttribute("aria-pressed", el.dataset.id === id));
+    document.getElementById("count").textContent = `${b.name} bundle, ${b.files} files, nothing overwritten`;
+  }
+  document.getElementById("keys").innerHTML = BW.bundles.map(b =>
+    `<button class="k" data-id="${b.id}" style="--h:${b.hue}"><b>${b.name}</b><span>${b.who}</span></button>`).join("");
+  document.querySelectorAll(".k").forEach(el => el.onclick = () => pick(el.dataset.id));
+  document.getElementById("tree").innerHTML = BW.tree.map(g => `<div class="dir">${g.d || "root"}</div>` +
+    g.f.map(f => `<div class="file ${f === "CLAUDE.md" ? "on" : ""}">${f}</div>`).join("")).join("");
+  const cls = { h: "h", c: "c", "+": "p", "-": "m", "": "" };
+  document.getElementById("code").innerHTML = BW.claudeMd.map(([k, t]) => `<div class="${cls[k]}">${t.replace(/</g, "&lt;") || " "}</div>`).join("");
+  pick(new URLSearchParams(location.search).get("b") || "oss");
+</script>
+</body>
+</html>
