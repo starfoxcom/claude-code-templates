@@ -184,8 +184,10 @@ def scan(command, tool, text=False):
             # A `case` statement's patterns end in `)`, which must not close
             # the group; count `case` and `esac` in command position.
             keyword = re.match(r"(case|esac)(?=[\s;)]|$)", command[i:i + 5]) if ch in "ce" else None
-            if keyword and re.search(r"(^|[;&|(\n]|\b(then|do|else|elif|in))[ \t]*$",
-                                     command[max(start, i - 40):i] if i - start > 40 else command[start:i]):
+            # `^` may only match at the group's own start, so a cut-off window
+            # gets a leading word character.
+            window = command[start:i] if i - start <= 40 else "x" + command[i - 40:i]
+            if keyword and re.search(r"(^|[;&|(\n]|(^|\s)(then|do|else|elif|in))[ \t]*$", window):
                 stack[-1][4] = cases + 1 if keyword.group(1) == "case" else max(cases - 1, 0)
                 i += 4
                 continue

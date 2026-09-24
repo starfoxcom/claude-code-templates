@@ -449,6 +449,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // A `case` pattern's `)` does not close the substitution; the word "case" in text changes nothing.
     "git push $(case x in x) echo;; esac) -qf origin main",
     "x=$(case $y in a) echo a;; b) echo b;; esac); git push -qf origin main",
+    "x=$(" + "echo a; ".repeat(10) + "case $y in a) echo a;; esac); git push -qf origin main",
+    "x=$(grep -in case f); git push -qf origin main",
     "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case where the lock is stale\nEOF\n)\" && git push -f origin main",
     // In an unquoted heredoc body, quotes and `#` are text and `$(...)` still runs.
     "cat <<EOF\ndon't\n$(git push -qf origin main)\nEOF", "cat <<EOF\n# $(git push -qf origin main)\nEOF",
@@ -480,7 +482,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const unguarded = [
     "git push origin --delete old-branch", "git push -d origin old-branch",
     "git push origin --delete main && git push -u origin HEAD",
-    // A `case` inside a substitution, and a push nested past the depth limit.
+    // A push nested past the depth limit.
     "echo " + "$(echo ".repeat(9) + "git push -qf origin main" + ")".repeat(9),
     "git push origin x 2>&1 | tail -1 | sh", "git push origin x | tee .git/config",
     "git commit -m \"unbalanced && git push -f", "git push -o ci.skip origin x", "git push origin main:+notes",
