@@ -181,14 +181,38 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
   const files = await run(defaults());
   // Deferred placeholders are filled by setup later; blank them to parse.
   const settings = JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
-  // Claude Code permission rules: `*` matches anything; a trailing `:*` is a prefix match.
-  const rules = settings.permissions.deny.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map((p) =>
-    new RegExp("^" + p.replace(/:\*$/, "*").split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$"));
+  // Bash rule matching as documented at code.claude.com/docs/en/permissions#wildcard-patterns:
+  // `*` matches any text including spaces, at any position; a trailing `:*` equals a trailing
+  // ` *`; and a trailing ` *` that is the rule's only wildcard also matches the bare command.
+  const toRegex = (rule) => {
+    const p = rule.replace(/:\*$/, " *");
+    const esc = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    if (p.endsWith(" *") && p.indexOf("*") === p.length - 1) return new RegExp(`^${esc(p.slice(0, -2))}( .*)?$`);
+    return new RegExp("^" + p.split("*").map(esc).join(".*") + "$");
+  };
+  // The matcher must reproduce the docs' own example table before it judges our rules.
+  for (const [rule, yes, no] of [
+    ["npm run *", ["npm run build", "npm run test --watch", "npm run"], ["npm install"]],
+    ["git log * main", ["git log --oneline main", "git log -5 main"], ["git log main", "git push origin main"]],
+    ["git * main", ["git merge main", "git push origin main"], ["git log"]],
+    ["* --version", ["node --version"], ["node -v"]],
+    ["ls *", ["ls -la", "ls"], ["lsof"]],
+    ["ls:*", ["ls -la", "ls"], ["lsof"]],
+    ["ls*", ["ls -la", "lsof"], []],
+    ["* --help *", ["npm --help x"], ["npm --help"]],
+  ]) {
+    for (const cmd of yes) assert.ok(toRegex(rule).test(cmd), `matcher: ${rule} should match ${cmd}`);
+    for (const cmd of no) assert.ok(!toRegex(rule).test(cmd), `matcher: ${rule} should not match ${cmd}`);
+  }
+  const rules = settings.permissions.deny.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map(toRegex);
   const denied = (cmd) => rules.some((r) => r.test(cmd));
-  for (const cmd of ["git push --force", "git push --force origin x", "git push origin x --force", "git push -f origin x", "git push origin -f"]) {
+  for (const cmd of ["git push --force", "git push --force origin x", "git push origin x --force", "git push -f origin x",
+    "git push origin -f", "git push -fu origin x", "git push origin x -fu", "git push -uf origin x", "git push origin -uf x",
+    "git push origin +main"]) {
     assert.ok(denied(cmd), `${cmd} should be denied`);
   }
-  for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x"]) {
+  for (const cmd of ["git push --force-with-lease origin x", "git push origin x --force-with-lease", "git push origin feature/x",
+    "git push -u origin feature/x", "git push --follow-tags origin x"]) {
     assert.ok(!denied(cmd), `${cmd} should be allowed`);
   }
 });
