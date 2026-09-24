@@ -400,10 +400,10 @@ jobs:
               'TYPECHECK_COMMAND',
               'TEST_COMMAND',
               # Bind engine placeholders (engine/model.js DEFERRED and valuesFor):
-              # CODEOWNERS owners, the rendered license text, the adherence
-              # script's tool-name regex, and the push-guard interpreter path.
+              # CODEOWNERS owners, the rendered license text, and the adherence
+              # script's tool-name regex.
               'LEAD_USER', 'TEAM_OR_USER', 'LICENSE_BODY',
-              'TOOLS_CODE_RESEARCH_MATCH', 'PYTHON_EXE',
+              'TOOLS_CODE_RESEARCH_MATCH',
           }
           placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
           for fname in changed:
