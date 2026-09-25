@@ -14,7 +14,8 @@ Turns a user's answers into the finished files for their repo. The page runs it 
 
 - Every toggle name in a template must be defined in `flagsFor` or `choicesFor`. An unknown name fails the bind instead of shipping a broken file.
 - Every placeholder must get a value in `valuesFor`, or be listed in `DEFERRED` for the tailoring step that reads the user's repo.
-- Files a repo usually already has (`CLAUDE.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`) land in `.bindwright/incoming/` so they are merged, never overwritten.
+- Files a repo usually already has (`CLAUDE.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `.gitattributes`, `.claude/settings.json`) land in `.bindwright/incoming/` so they are merged, never overwritten.
+- Guard hooks under `.claude/hooks/` are copied byte for byte, never rendered. `hookLocation` (`repo` or `home`) decides whether they ship; `attributionGuard` (on by default) adds the attribution guard, the `attribution` settings, the git rule and the review's attribution scan.
 
 ## Commands
 

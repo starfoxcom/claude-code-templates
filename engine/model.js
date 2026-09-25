@@ -19,6 +19,9 @@ export const CODE_RESEARCH_TOOLS = {
 export const PRECOMMIT_MANAGERS = ["lefthook", "husky", "pre-commit", "simple-git-hooks"];
 export const MERGE_STYLES = ["squash", "merge", "rebase"];
 export const ARCHITECTURES = ["none", "clean", "ddd", "ecs", "feature-based", "hexagonal", "layered", "mvc"];
+// Where the guard hooks live: shipped in the repo (teammates and cloud
+// sessions get them), or only in each person's ~/.claude (global-template).
+export const HOOK_LOCATIONS = ["repo", "home"];
 export const LICENSES = { MIT: "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "BSD-3-Clause": "BSD-3-Clause.txt", Proprietary: "Proprietary.txt" };
 
 // Filled later by the tailoring step, which reads the user's repo.
@@ -45,6 +48,8 @@ export function defaults({ team = false, client = false } = {}) {
       devIsDefault: false,
       mergeStyle: "squash",
       architecture: "none",
+      hookLocation: "repo",
+      attributionGuard: true,
     },
   };
 }
@@ -64,6 +69,8 @@ export function validate(a) {
   check(["gitflow", "trunk"].includes(adv.branching), `unknown branching model "${adv.branching}"`);
   check(MERGE_STYLES.includes(adv.mergeStyle), `unknown merge style "${adv.mergeStyle}"`);
   check(typeof adv.devIsDefault === "boolean", "devIsDefault must be true or false");
+  check(HOOK_LOCATIONS.includes(adv.hookLocation), `unknown hook location "${adv.hookLocation}"`);
+  check(typeof adv.attributionGuard === "boolean", "attributionGuard must be true or false");
   return a;
 }
 
@@ -81,6 +88,8 @@ export function flagsFor(a) {
     branching_model_gitflow: adv.branching === "gitflow",
     branching_model_trunk: adv.branching === "trunk",
     default_branch_is_dev: adv.branching === "gitflow" && adv.devIsDefault,
+    guard_hooks_repo: adv.hookLocation === "repo",
+    attribution_guard: adv.attributionGuard,
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
