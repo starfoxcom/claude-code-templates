@@ -370,6 +370,13 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // After a heredoc body pairs quotes wrongly, the plain reading still joins the push.
     "cat <<'EOF'\ndon't\nEOF\n# C:\\x\\\ngit push \\\n -f origin main",
     "echo \"a \\\nb\" ; git push \\\n -f origin main",
+    // A `)` closing a substitution ends no word, and no comment starts inside `${...}`.
+    "git push origin feature-$(date +%s)#1 \\\n -f", "git push origin $(echo main)#x \\\n  --force",
+    "git push origin ${B%% #*} \\\n  --force", "git push origin <(true)#x \\\n  --force",
+    // A quote in a heredoc body shifts no later line.
+    "git commit -F - <<'EOF'\nDon't retry the upload\nEOF\necho \"built\" # it's in C:\\temp\\\ngit push -f origin main",
+    "git commit -F - <<'EOF'\nFix the header on 13\" screens\nEOF\nnpm run build \\\n  # output in C:\\temp\\\ngit push -f origin main",
+    "git commit -F - <<'EOF'\nDon't retry the upload\nEOF\ncd \"$REPO\" # it's in C:\\work\\\ngit push origin main \\\n  --force",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
@@ -430,6 +437,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "echo 'a\\\n' ; git push origin main",
     // A comment certain from its own line ends there in both readings.
     "# don't let git touch C:\\temp\\\ngit push origin main && rm -rf build && echo 'done'",
+    "git push origin \"$BRANCH\"  # mirrors C:\\work\\repo\\\nrm -rf build", "git push origin main \\\n  # mirrors C:\\temp\\\nrm -rf build",
+    "x=$(cd a; (b))# C:\\x\\\ngit push -f origin main",
     "git commit -m \"$(cat <<'EOT'\nfix: don't split names on a stray ` char\nEOT\n)\" && git push origin feature/x && rm -rf build && echo \"built at `date`\"",
     // Bash has no `` `u{...} `` escape.
     "git push origin main \"-`u{66}\"",
