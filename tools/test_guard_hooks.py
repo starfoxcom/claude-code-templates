@@ -260,6 +260,13 @@ class GuardHookTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_denied(self.attr(command))
 
+    def test_backticks_in_a_message_do_not_hide_a_body_file(self):
+        # In bash a backtick is not an escape inside double quotes; in
+        # PowerShell it is, and a doubled backtick is a literal one.
+        path = self.body_file(f"## What\n- x\n\n{GENERATED_LINE}\n")
+        self.assert_denied(self.attr(f'git commit -m "docs: run `make`" -F "{path}"'))
+        self.assert_denied(self.attr(f'git commit -m "docs: run ``make``" -F "{path}"', tool="PowerShell"))
+
     def test_clean_body_file_passes(self):
         path = self.body_file("## What\n- Ships the guard\n\n## Why\nFewer surprises.\n")
         for command in (f'gh pr create --title t --body-file "{path}"',

@@ -127,9 +127,11 @@ def strip_paths(text):
     return PATH_TOKEN.sub("<path>", text)
 
 
-def text_spans(cmd):
+def text_spans(cmd, esc):
     """Spans of quoted strings, here-doc bodies and here-strings: text a
-    message carries, where a flag name is a mention, not an argument."""
+    message carries, where a flag name is a mention, not an argument. `esc`
+    is the shell's escape character inside double quotes: `\\` in bash, a
+    backtick in PowerShell."""
     spans = [m.span() for m in HEREDOC.finditer(cmd)] + [m.span() for m in HERESTRING.finditer(cmd)]
     i, n = 0, len(cmd)
     while i < n:
@@ -141,7 +143,7 @@ def text_spans(cmd):
         if q in "'\"":
             j = i + 1
             while j < n and cmd[j] != q:
-                j += 2 if q == '"' and cmd[j] in "\\`" else 1
+                j += 2 if q == '"' and cmd[j] == esc else 1
             spans.append((i, j + 1))
             i = j + 1
         else:
@@ -149,8 +151,8 @@ def text_spans(cmd):
     return spans
 
 
-def find_files(cmd, cwd):
-    spans = text_spans(cmd)
+def find_files(cmd, cwd, esc):
+    spans = text_spans(cmd, esc)
     for m in FILE_FLAGS.finditer(cmd):
         if any(s <= m.start() < e for s, e in spans):
             continue
@@ -190,12 +192,13 @@ def main():
         sys.exit(0)
     cmd = (data.get("tool_input") or {}).get("command") or ""
     cwd = data.get("cwd") or os.getcwd()
+    esc = "`" if data.get("tool_name") == "PowerShell" else "\\"
     if not cmd or not (GIT_WRITE.search(cmd) or GH_WRITE.search(cmd) or GH_API.search(cmd)
                        or HTTP_GH.search(cmd)):
         sys.exit(0)
 
     scan_text(cmd, "the command text")
-    for path in find_files(cmd, cwd):
+    for path in find_files(cmd, cwd, esc):
         try:
             text = open(path, encoding="utf-8-sig", errors="replace").read()
         except Exception as e:
