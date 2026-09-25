@@ -356,6 +356,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "VERSION=`cat VERSION`\ngit push -f origin main", "REV=`git rev-parse HEAD`\r\ngit push -f origin main",
     // Bash does not continue a comment, so a `\` ending one leaves the next line its own command.
     "echo start # logs land in C:\\temp\\\ngit push -f origin main", "# Build output lands in dist\\\ngit push origin main --force",
+    // A comment's `\` ends its line while a later continuation still joins.
+    "# Build output lands in C:\\out\\\ngit push \\\n  --force origin main", "echo x  # C:\\x\\\ngit push origin \\\n  +main",
+    "# C:\\x\\\ngit \\\n  push -f origin main", "cd /c/work/repo  # C:\\work\\repo\\\ngit push origin main \\\n  -f",
+    "git push \\\n#x\ngit push -f origin main",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
@@ -384,7 +388,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git commit -m wip & git push -qf origin main", "echo x & git push -qf origin main",
     "Write-Output x & git push -qf origin main", "git commit -m wip\rgit push -qf origin main",
     // The comment after a backtick continuation hides its quote, so the push is read.
-    "Write-Output x`\n# \"\ngit push -qf origin main"];
+    "Write-Output x`\n# \"\ngit push -qf origin main",
+    // A `` `u{...} `` escape decodes inside double quotes.
+    "git push origin main \"-`u{66}\""];
   // Silent passes: pushes on the allow-list, commands that never push, and text that only mentions one.
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
@@ -404,6 +410,14 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "grep -c '^$' CHANGELOG.md; git push -u origin feature/x && rm -rf .cache && echo 'ok'",
     "git tag | grep -E '^v[0-9]+$'\ngit push origin main\nrm -rf build\necho 'done'",
     "git push origin main \\\n  && rm -rf build",
+    // A `$'` string ends on its own line, so an apostrophe before it pairs no lines together.
+    "git commit -m \"$(cat <<'EOF'\nfix: don't treat 'v1.0$' tags as releases\n\nDetails.\nEOF\n)\" && git push origin feature/x && rm -rf build && echo 'done'",
+    "# Keep only lines that don't match '^$'\ngrep -v '^$' in.txt > out.txt\ngit push origin main\nrm -rf tmp\necho 'ok'",
+    // A continuation inside a double-quoted string joins; a joined `#` word starts a comment.
+    "git commit -m \"fix: handle the lock \\\nit's stale now\" && git push origin main && rm -rf .cache && echo 'ok'",
+    "git push origin main \\\n#--force", "echo a#b\\\ngit push -f origin main",
+    // Bash has no `` `u{...} `` escape.
+    "git push origin main \"-`u{66}\"",
     // A quote that opens or closes a word is its edge, so a quoted variable
     // before a suffix is a branch name, not a flag.
     "git push -u origin \"${TICKET}-fix\"", "git push -u origin \"${TICKET}\"-fix",
@@ -561,6 +575,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git -C \"${REPO}\" push --force origin main", "git -C \"$(git rev-parse --show-toplevel)\" push -f origin main",
     "git -C \"`pwd`\" push -f origin main", "git --git-dir \"${GIT_DIR}\" push -f origin main",
     "git push $(git config --get x --ignore-case | head -1) -f origin main",
+    // A variable standing for git, bare or with a default.
+    "$GIT push -f origin main", "${GIT:-git} push -f origin main",
   ];
   // Text that only mentions a force push is blocked too: the guard reads text, not
   // shell grammar. The block message says to pass such text in a file.

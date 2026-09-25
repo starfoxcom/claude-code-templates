@@ -21,7 +21,8 @@ program started by the command can push on its own.
 
 The hook reads text, not shell grammar. First it removes what the shell
 would remove: line continuations, quotes, backslashes and backticks,
-decoding Bash's `$'...'` escapes (the result stays one word) and
+decoding Bash's `$'...'` escapes when the string closes on its own line
+(the result stays one word) and
 PowerShell's `` `u{...} `` on the way. Each command substitution (`$(...)`,
 `$((...))`, `${...}`, `<(...)`, a Bash backtick pair, a PowerShell `(...)`)
 is read on its own. In the text around it, a substitution inside a word
@@ -35,9 +36,9 @@ except a target that names git (`bash <<< "git push -f"`). After a `git`
 word, a later push word in the same statement starts the push, and the
 words after it are its arguments. Text inside `eval`, `sh -c`,
 `pwsh -Command`, a heredoc or a comment is read the same way. Each shell's
-own line continuation is removed; a Bash `\` at a line end is also read as a
-plain line end, since Bash does not continue a comment, and either reading
-can block. Every step is linear in the command's length.
+own line continuation is removed. Bash does not continue a comment, so its
+command is also read with a comment's final `\` kept as a line end and every
+other continuation removed; either reading can block. Every step is linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
 script or a search pattern with `git push -f` in it is blocked too. The
@@ -112,10 +113,14 @@ OTHER_SUBCOMMANDS = {
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--super-prefix", "--config-env", "--attr-source"}
 
+# What a Bash line holds outside escapes and quoted strings closing on it,
+# and a `#` there that begins a word: the start of a comment.
+COMMENT_BARE = re.compile(r"\\.|\"(?:[^\"\\]|\\.)*\"|'[^']*'")
+COMMENT_START = re.compile(r"[\s;&|(]#")
 CONTINUATION = {"Bash": re.compile(r"\\\n"), "PowerShell": re.compile(r"`(?:\r\n|\n|\r)")}
 # A `$'...'` string, found after skipping escapes and quoted strings the way
 # `mask_quoted` pairs them, so the `$'` ending `grep 'main$'` starts nothing.
-ANSI_QUOTE = re.compile(r"\\.|\"(?:[^\"\\\n]|\\.)*\"|'[^'\n]*'|\$'((?:[^'\\]|\\.)*)'", re.S)
+ANSI_QUOTE = re.compile(r"\\.|\"(?:[^\"\\\n]|\\.)*\"|'[^'\n]*'|\$'((?:[^'\\\n]|\\[^\n])*)'", re.S)
 # Bash's `$'...'` escapes: hex, `\u` and `\U` with as few digits as Bash
 # takes, octal, control characters, and single letters.
 ANSI_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|([0-7]{1,3})|c(.)|(.))", re.S)
@@ -402,14 +407,41 @@ def check(command, tool):
         return None
     readings = [command]
     if tool == "Bash" and "\\\n" in command:
-        # Bash does not continue a comment (`# C:\work\repo\`), so a `\` + LF
-        # is also read as a plain line end; either reading can block.
-        readings.append(command.replace("\\\n", "\n"))
+        # Bash does not continue a comment (`# C:\work\repo\`), so the command
+        # is also read with each comment's `\` + LF kept as a line end and
+        # every other one joined; either reading can block.
+        readings.append(comment_line_ends(command))
     for reading in readings:
         reason = check_reading(reading, tool)
         if reason:
             return reason
     return None
+
+
+def comment_line_ends(command):
+    """The Bash command with every line continuation joined, except a `\\`
+    that ends a comment, which ends its line. A comment starts at a `#` that
+    begins a word outside a quoted string closing on its own line, and runs
+    on through the joined lines until a real line end."""
+    lines = command.split("\n")
+    out, edge = [], True
+    for number, line in enumerate(lines):
+        continued = (len(line) - len(line.rstrip("\\"))) % 2 == 1
+        body = line[:-1] if continued else line
+        # A `#` first on the line begins a word only when what came before
+        # it (a line end, or the joined line's last character) is an edge.
+        bare = COMMENT_BARE.sub("x", body)
+        commented = COMMENT_START.search(bare) is not None or (edge and bare.startswith("#"))
+        last = number == len(lines) - 1
+        joined = continued and not commented and not last
+        out.append(body if continued and not last else line)
+        if not last:
+            out.append("" if joined else "\n")
+        if joined:
+            edge = edge if not body else body[-1] in " \t;&|("
+        else:
+            edge = True
+    return "".join(out)
 
 
 def check_reading(command, tool):
