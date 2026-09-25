@@ -24,7 +24,8 @@ work. It blocks only what it can read for certain: a `git push` anywhere in a
 statement, also after wrappers such as `sudo -u me` or `timeout 5`, inside a
 `(...)`, `$(...)`, backtick or `{ ...; }` group, after an assignment, or
 inside a literal command string (`sh -c '...'`, `bash -l -c '...'`, `pwsh
--Command '...'`, `eval '...'`), with a force flag among its own words, also
+-Command '...'`, `eval '...'`) run as the statement's command, also after
+the wrappers in WRAPPERS and WRAPPER_PAIRS, with a force flag among its own words, also
 when written in Bash's `$'...'` quoting or with a redirect glued to it
 (`-qf>/dev/null`). A separator inside a substitution does not end the
 statement around it, and a heredoc body is text, not commands. Text that
@@ -60,7 +61,10 @@ Out of reach, so these run without a block:
   command by `HEAD`, a bare `git push` or another name for the same ref, or
   with the delete or the push inside a substitution, shell string, `eval` or
   `!` alias;
-- a push run by another program (`python -c`, `node -e`, `make`, `gh api`).
+- a push run by another program (`python -c`, `node -e`, `make`, `gh api`),
+  including a shell string or `eval` behind a program that is not in
+  WRAPPERS or WRAPPER_PAIRS (`find -exec sh -c '...'`); as an argument of
+  such a program, `sh` or `eval` is text (`git grep -e eval`).
 
 Project deny rules cover some of these by text (`git remote *--mi*`, `gh repo
 sync *--force*`). Input that is not JSON, a command over MAX_COMMAND
@@ -110,6 +114,27 @@ DELETED_AGAIN = "pushes again a branch this command deleted"
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 POWERSHELLS = {"pwsh", "powershell"}
 EVAL_COMMANDS = {"eval", "invoke-expression", "iex"}
+# Words that run the command after them, with the options that take a value
+# and the number of plain words (such as `timeout`'s duration) before that
+# command. The empty name is a lone `&`, `.` or `(`. Shell keywords that start
+# a command are included; any other program's arguments are its own.
+WRAPPERS = {
+    "": (set(), 0), ".": (set(), 0), "!": (set(), 0), "{": (set(), 0),
+    "if": (set(), 0), "then": (set(), 0), "elif": (set(), 0), "else": (set(), 0),
+    "do": (set(), 0), "while": (set(), 0), "until": (set(), 0), "time": (set(), 0),
+    "sudo": ({"-u", "-g", "-h", "-p", "-C", "-D", "-r", "-t", "-U", "-T", "--user", "--group"}, 0),
+    "doas": ({"-u", "-C"}, 0),
+    "env": ({"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}, 0),
+    "timeout": ({"-s", "-k", "--signal", "--kill-after"}, 1),
+    "nice": ({"-n", "--adjustment"}, 0),
+    "ionice": ({"-c", "-n", "-p", "--class", "--classdata"}, 0),
+    "stdbuf": ({"-i", "-o", "-e", "--input", "--output", "--error"}, 0),
+    "xargs": ({"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
+               "--max-lines", "--delimiter", "--eof", "--max-chars", "--arg-file", "--replace"}, 0),
+    "nohup": (set(), 0), "command": (set(), 0), "builtin": (set(), 0), "exec": ({"-a"}, 0),
+}
+# Two-word wrappers: `bundle exec sh -c '...'`.
+WRAPPER_PAIRS = {("bundle", "exec"), ("uv", "run"), ("poetry", "run"), ("pipenv", "run")}
 MAX_DEPTH = 8
 # `scan` writes unquoted `<`, `>` and `&` as these private-use characters, so a
 # redirect is told apart from the same character inside quotes.
@@ -124,6 +149,17 @@ def comment_start(prev, at, closed_at, tool):
     return (prev == "" or prev in " \t\n;|&"
             or (tool == "PowerShell" and prev == "\r")
             or (tool != "PowerShell" and prev in "()" and closed_at != at))
+
+
+def last_char(chunks):
+    """The last character of the joined chunks that is not whitespace, or "".
+    It looks back only past trailing blank chunks, so calling it once per
+    character keeps the reading linear."""
+    for chunk in reversed(chunks):
+        chunk = chunk.rstrip()
+        if chunk:
+            return chunk[-1]
+    return ""
 
 
 def scan(command, tool, text=False, keywords=True):
@@ -210,8 +246,8 @@ def scan(command, tool, text=False, keywords=True):
         # it stays in the statement there.
         if (tool == "PowerShell" and not opener and quote is None and not stack and ch == "("
                 and command[i - 1] in " \t,="):
-            so_far = "".join(current).rstrip()
-            if so_far and so_far[-1] not in "\ue002.":
+            before = last_char(current)
+            if before and before not in "\ue002.":
                 opener = "("
         if quote not in ("'", "$'") and (opener or (ch == "`" and tool != "PowerShell"
                                                   and not (stack and stack[-1][0] == "`"))):
@@ -337,7 +373,7 @@ def scan(command, tool, text=False, keywords=True):
         # carriage return also ends a PowerShell statement.
         elif (ch in ";|\n" or (ch == "\r" and tool == "PowerShell")
               or (ch == "&" and command[i - 1:i] not in "<>" and command[i + 1:i + 2] != ">"
-                  and (tool != "PowerShell" or "".join(current).strip()))):
+                  and (tool != "PowerShell" or last_char(current)))):
             parts.append("".join(current))
             current = []
             i += 1
@@ -630,29 +666,58 @@ def only_data(segment, tokens):
     return tokens[:2] == ["git", "commit"]
 
 
+def command_word(tokens):
+    """The position of the word that runs as the command: the first word after
+    any assignments, and the word after each wrapper, its options and its
+    plain words (`sudo -u me sh`, `timeout 5 bash`, `bundle exec sh`), or after
+    a `case` pattern (`a) eval`). An `eval` or `sh` anywhere else is an
+    argument of another program (`git grep -e eval`), not a command."""
+    k = 0
+    while k < len(tokens):
+        tick()
+        token = tokens[k]
+        name = program(token)
+        if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", token):
+            k += 1
+        elif name == "case":
+            k = tokens.index("in", k) + 1 if "in" in tokens[k:] else len(tokens)
+        elif re.fullmatch(r"[^$`(\ue000-\ue002]*\)", token):
+            k += 1
+        elif (name, program(tokens[k + 1]) if k + 1 < len(tokens) else "") in WRAPPER_PAIRS:
+            k += 2
+        elif name in WRAPPERS:
+            values, plain = WRAPPERS[name]
+            k += 1
+            while k < len(tokens) and tokens[k].startswith("-") and tokens[k] != "-":
+                if tokens[k] == "--":
+                    k += 1
+                    break
+                k += 2 if tokens[k] in values else 1
+            k += plain
+        else:
+            return k
+    return None
+
+
 def nested_reason(tokens, tool, depth):
     """A literal command string that another shell or `eval` runs:
     `sh -c '...'`, `bash -lc '...'`, `pwsh -Command '...'`, `eval '...'`,
     `Invoke-Expression '...'`, also after wrappers (`bundle exec sh -c`)."""
-    for k, token in enumerate(tokens):
-        name, rest = program(token), tokens[k + 1:]
-        inner = None
-        if name in EVAL_COMMANDS and rest:
-            # Its string already holds every later word of the statement, so one
-            # check covers them; checking each later `eval` too would multiply.
-            return check(" ".join(rest), tool, depth + 1)
-        elif name in SHELLS:
-            inner, inner_tool = shell_command_string(rest), "Bash"
-        elif name in POWERSHELLS:
-            flag = next((j for j, t in enumerate(rest) if re.fullmatch(r"(?i)-c(o(m(m(a(nd?)?)?)?)?)?", t)), None)
-            if flag is not None and flag + 1 < len(rest):
-                # Like `eval`, the string holds every later word, so one check
-                # covers them.
-                return check(" ".join(rest[flag + 1:]), "PowerShell", depth + 1)
-        if inner is not None:
-            reason = check(inner, inner_tool, depth + 1)
-            if reason:
-                return reason
+    k = command_word(tokens)
+    if k is None:
+        return None
+    name, rest = program(tokens[k]), tokens[k + 1:]
+    if name in EVAL_COMMANDS and rest:
+        # Its string is every later word of the statement.
+        return check(" ".join(rest), tool, depth + 1)
+    if name in SHELLS:
+        inner = shell_command_string(rest)
+        return check(inner, "Bash", depth + 1) if inner is not None else None
+    if name in POWERSHELLS:
+        flag = next((j for j, t in enumerate(rest) if re.fullmatch(r"(?i)-c(o(m(m(a(nd?)?)?)?)?)?", t)), None)
+        if flag is not None and flag + 1 < len(rest):
+            # Like `eval`, the string is every later word.
+            return check(" ".join(rest[flag + 1:]), "PowerShell", depth + 1)
     return None
 
 
@@ -706,7 +771,12 @@ def guard(command, tool):
     try:
         parts, groups, readable, certain = scan(command, tool)
         if not readable:
-            parts, groups, readable, certain = scan(command, tool, keywords=False)
+            # The second reading closes each group at its first `)`, which can
+            # be a `case` pattern's; only a fully readable result replaces the
+            # first reading's certain statements.
+            again = scan(command, tool, keywords=False)
+            if again[2]:
+                parts, groups, readable, certain = again
         if readable:
             for text in [command] + groups:
                 reason = check(text, tool, MAX_DEPTH)

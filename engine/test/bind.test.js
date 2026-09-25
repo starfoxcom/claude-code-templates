@@ -383,6 +383,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
     // A search pattern is text, even after a shell or `eval` word.
     "rg -t sh -c 'git push -f'", "grep -rn -e eval -e 'git push -f' scripts/",
+    "git grep -n -e eval -e 'git push -f'", "git log -S eval -S 'git push --force'",
+    "find . -exec grep -e eval -e 'git push -f' {} +", "git grep eval -- 'git push -f'",
     // Everyday chains: commit then push, trim the output, delete one branch and push another.
     "git add -A && git commit -q -m \"fix(x): y\" && git push -q origin feature/x 2>&1 | tail -1; git log --oneline -1",
     "git push origin --delete hotfix/x 2>&1 | tail -1; git checkout -q -b chore/c origin/develop; git push -q -u origin chore/c 2>&1 | tail -1",
@@ -430,6 +432,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git $'\\160ush' -qf origin main", "git send$'-'pack --force https://x/y main",
     // A `case` pattern named like a print or search command is still a pattern.
     "case grep in\ngrep ) git push -qf origin main;;\nesac", "case x in x) :;; echo ) git push -qf origin main;; esac",
+    // A shell string or `eval` in command position, also after a wrapper or keyword.
+    "sudo -E bash -c 'git push -qf origin main'", "env -i A=1 sh -c 'git push -qf origin main'",
+    "timeout -s KILL 5 sh -c 'git push -qf origin main'", "xargs -0 sh -c 'git push -qf origin main'",
+    "if sh -c 'git push -qf origin main'; then :; fi", "case x in x) eval 'git push -qf origin main';; esac",
     // Statements complete before an unreadable point still run.
     "git push -qf origin main\ncat <<EOF", "git push -qf origin main; echo \"x", "git push -qf origin main; x=$(echo",
     // A lease does not undo a delete: the branch's commits are already gone.
@@ -605,6 +611,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const chainStart = Date.now();
   assert.equal(verdict("Bash", chain), "deny", "a push after chained heredocs blocks");
   assert.ok(Date.now() - chainStart < 3000, "chained heredocs answer quickly");
+  // PowerShell argument groups and `&` look back only to the last word, so a long command stays linear.
+  const psLong = "Write-Output " + "x (y) ".repeat(3000) + "; git push -qf origin main";
+  const psStart = Date.now();
+  assert.equal(verdict("PowerShell", psLong), "deny", "a push after many PowerShell groups blocks");
+  assert.ok(Date.now() - psStart < 3000, "many PowerShell groups answer quickly");
   // A long git option run is read once, not again from each `git` value in it.
   const optionRun = "git -c ".repeat(2800) + "xpush; git push -qf origin main";
   const optionStart = Date.now();
