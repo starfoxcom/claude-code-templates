@@ -97,6 +97,56 @@ class GuardHookTest(unittest.TestCase):
         self.global_copy('{"command": "python ~/.claude/hooks/no-ai-attribution.py"}')
         self.assertEqual(self.run_hook("push-guard", "git push -f origin x").returncode, 2)
 
+    def project_with_remote(self, url, folder="proj"):
+        """A throwaway project: the attribution hook plus a git remote."""
+        root = os.path.join(tempfile.mkdtemp(), folder)
+        self.addCleanup(shutil.rmtree, os.path.dirname(root), ignore_errors=True)
+        os.makedirs(os.path.join(root, ".claude", "hooks"))
+        os.makedirs(os.path.join(root, ".git"))
+        shutil.copy(os.path.join(REPO, ".claude", "hooks", "no-ai-attribution.py"),
+                    os.path.join(root, ".claude", "hooks"))
+        with open(os.path.join(root, ".git", "config"), "w") as f:
+            f.write(f'[remote "origin"]\n\turl = {url}\n')
+        return root
+
+    def test_own_repo_slug_passes(self):
+        project = self.project_with_remote("https://github.com/someone/claude-widget.git")
+        self.assert_silent(self.run_hook(
+            "no-ai-attribution", "gh pr comment 1 --repo someone/claude-widget --body 'docs: x'",
+            project=project))
+
+    def test_own_repo_links_pass(self):
+        project = self.project_with_remote("git@github.com:someone/claude-widget.git")
+        self.assert_silent(self.run_hook(
+            "no-ai-attribution",
+            "gh pr create --title 'docs: x' --body 'See https://github.com/someone/claude-widget/issues/3 "
+            "and https://someone.github.io/claude-widget/'",
+            project=project))
+
+    def test_attribution_still_denied_next_to_own_repo_name(self):
+        project = self.project_with_remote("https://github.com/someone/claude-widget.git")
+        self.assert_denied(self.run_hook(
+            "no-ai-attribution", f"gh pr comment 1 --repo someone/claude-widget --body '{TRAILER}'",
+            project=project))
+
+    def test_repo_named_like_a_marker_is_not_masked(self):
+        project = self.project_with_remote("https://github.com/someone/claude.git", folder="claude")
+        self.assert_denied(self.run_hook(
+            "no-ai-attribution", "git commit -m 'docs: x' -m 'Generated with Claude'", project=project))
+
+    def test_review_workflow_branch_name_passes(self):
+        self.assert_silent(self.run_hook(
+            "no-ai-attribution",
+            "gh pr create --head hotfix/drop-admin-text-claude-yml --title 'fix(ci): x' --body 'y'"))
+
+    def test_cursor_as_ui_word_passes(self):
+        self.assert_silent(self.run_hook(
+            "no-ai-attribution", "git commit -m 'fix(ui): show pointer with cursor on toggle rows'"))
+
+    def test_cursor_tool_name_is_denied(self):
+        self.assert_denied(self.run_hook(
+            "no-ai-attribution", "git commit -m 'feat: x' -m 'Written with Cursor AI'"))
+
     def test_missing_hook_file_lets_the_call_through(self):
         empty = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, empty, ignore_errors=True)

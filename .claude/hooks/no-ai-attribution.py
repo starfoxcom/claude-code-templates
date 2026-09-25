@@ -58,8 +58,11 @@ ATTRIBUTION = re.compile(
         r"claude" + _Z + r"-?" + _Z + r"session",
         r"session_[0-9a-z]{20,}",
         r"\U0001F916",                       # robot emoji
-        r"ai" + _Z + r"-?" + _Z + r"(assisted|generated|written|authored)",
-        r"(with|by|via)" + _Z + r"(an?" + _Z + r")?(ai|llm|assistant|copilot|cursor|codex|gpt)\b",
+        r"\bai" + _Z + r"-?" + _Z + r"(assisted|generated|written|authored)",
+        # `cursor` alone is an ordinary UI word ("pointer with cursor"); only
+        # the tool's name counts here.
+        r"\b(with|by|via)" + _Z + r"(an?" + _Z + r")?(ai|llm|assistant|copilot|cursor" + _Z
+        + r"(ai|ide|agent)|codex|gpt)\b",
     ]),
     re.I,
 )
@@ -114,19 +117,44 @@ PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
 # the config directory, the two review workflow files, their check name and
 # the action they run. Exact tokens only; anything else stays denied.
 ALLOWED_NAMES = re.compile(
-    r"\bCLAUDE\.md\b|\.claude(?:[\\/][\w.\-]*)*|`?claude(?:-code-review)?\*?\.yml`?|"
+    r"\bCLAUDE\.md\b|\.claude(?:[\\/][\w.\-]*)*|`?claude(?:-code-review)?\*?[.-]yml`?|"
     r"`?Claude On-Demand`?|`?claude-code-action`?|`?Claude Code Review`?"
 )
+REMOTE_URL = re.compile(r"^\s*url\s*=\s*\S*?[/:]([\w.\-]+?)(?:\.git)?/?\s*$", re.M)
+# The project's own repo name, set by main(). A repo whose name carries a
+# banned word still has to be named in --repo flags, links and page URLs.
+OWN_NAMES = None
+
+
+def own_names(root):
+    """Pattern for the project's folder name and each git remote's repo name.
+
+    A name that is itself an attribution marker (a repo called `claude`) is
+    left out, so masking it can never switch the check off.
+    """
+    names = {os.path.basename(os.path.normpath(root))}
+    try:
+        with open(os.path.join(root, ".git", "config"), encoding="utf-8", errors="replace") as f:
+            names.update(REMOTE_URL.findall(f.read()))
+    except OSError:
+        pass
+    names = sorted((n for n in names if n and not ATTRIBUTION.fullmatch(n)), key=len, reverse=True)
+    if not names:
+        return None
+    return re.compile(r"(?<![\w.\-])(?:" + "|".join(map(re.escape, names)) + r")(?![\w\-])", re.I)
 
 
 def strip_paths(cmd):
-    """Mask file-system paths and the repo's own CLAUDE.md / .claude references.
+    """Mask file-system paths, the repo's own CLAUDE.md / .claude references
+    and the repo's own name.
 
     URLs survive (the lookbehind skips the `//` after a scheme), so session
     links are still caught; a scratch directory or hook path that happens to
     contain "claude" is not.
     """
     cmd = PATH_TOKEN.sub("<path>", cmd)
+    if OWN_NAMES:
+        cmd = OWN_NAMES.sub("<repo>", cmd)
     return ALLOWED_NAMES.sub("<repo-file>", cmd)
 
 
@@ -162,6 +190,8 @@ def main():
     cwd = data.get("cwd") or os.getcwd()
     if not cmd:
         sys.exit(0)
+    global OWN_NAMES
+    OWN_NAMES = own_names(os.environ.get("CLAUDE_PROJECT_DIR") or cwd)
 
     is_git = GIT_WRITE.search(cmd)
     is_gh = GH_WRITE.search(cmd) or GH_API_WRITE.search(cmd)
