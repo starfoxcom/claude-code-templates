@@ -93,7 +93,7 @@ Some sections should appear ONLY when a toggle is OFF — e.g., text explaining 
 <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
 
 <!-- TOGGLE:github_actions_deep_review_auto_fire:off START -->
-**Auto-escalation disabled** — fire manually with `@claude review this PR`.
+**Auto-escalation disabled** — fire manually with a comment starting with `@claude review this PR`.
 <!-- TOGGLE:github_actions_deep_review_auto_fire:off END -->
 ```
 
