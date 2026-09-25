@@ -213,6 +213,7 @@ class GuardHookTest(unittest.TestCase):
                         "gh api graphql -f query='query($owner: String!) { repository(owner: $owner) { id } }' "
                         "-F owner=o",
                         "gh gist create --filename notes.txt -",
+                        "gh api repos/o/r/issues/5/comments -F body=@-",
                         'gh issue create --template "Bug report"',
                         "gh pr create --template default.md --base develop",
                         "gh repo create x --template o/r",

@@ -168,6 +168,8 @@ def find_files(cmd, cwd):
             if "=@" not in path:
                 continue
             path = path.split("=@", 1)[1]
+            if path == "-":        # key=@- reads stdin
+                continue
         path = os.path.expanduser(path.strip("\"'"))
         if not os.path.isabs(path):
             cd = re.search(r"(?:^|&&|;)\s*cd\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))", cmd)
