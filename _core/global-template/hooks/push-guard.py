@@ -629,10 +629,13 @@ def shell_command_string(args):
 
 def check(command, tool, depth=0):
     """Why a command certainly force-pushes, or None."""
+    if len(command) > MAX_COMMAND:
+        return None
     # Quotes, escapes and line continuations inside a word (`pu''sh`) are
-    # removed by the shell.
-    bare = re.sub(r"[\"'`\\]", "", re.sub(r"[\\`]\r?\n|`\r", "", command))
-    if not re.search(r"push|send-pack", bare, re.I) or len(command) > MAX_COMMAND:
+    # removed by the shell, and Bash decodes `$'\x70'` to `p`.
+    bare = bash_quotes(command) if tool == "Bash" else command
+    bare = re.sub(r"[\"'`\\$]", "", re.sub(r"[\\`]\r?\n|`\r", "", bare))
+    if not re.search(r"push|send-pack", bare, re.I):
         return None
     parts, groups, readable = scan(command, tool)
     # A miscounted `case` keeps a group open; a second reading without `case`

@@ -419,6 +419,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin --delete main && git push origin main", "git push origin :main; git push origin main",
     "eval \"git push -qf origin main\"", "echo $(git push -qf origin main)", "out=$(git push -qf origin main 2>&1)",
     "x=`git push -qf origin main`", "diff <(git push -qf origin main) x", "{ git push -qf origin main; }",
+    // `$'...'` and `$"..."` inside the subcommand name, decoded as Bash does.
+    "git pu$'sh' -qf origin main", "git pu$\"sh\" -qf origin main", "git $'\\x70ush' -qf origin main",
+    "git $'\\160ush' -qf origin main", "git send$'-'pack --force https://x/y main",
     // A redirect glued to `push` ends the word, as in the shell.
     "git push>/dev/null -qf origin main", "git push<in -qf origin main", "git push&>/dev/null -qf origin main",
     // A redirect glued to a flag ends the word there, so the flag still reaches git.
