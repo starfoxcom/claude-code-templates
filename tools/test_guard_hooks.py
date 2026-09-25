@@ -239,6 +239,7 @@ class GuardHookTest(unittest.TestCase):
         for command in ('git commit -m "docs: $(cat /tmp/msg.txt)"', 'gh pr comment 5 --body "$BODY"',
                         "git commit -m $MSG", 'gh pr comment 5 --body @"\n$BODY\n"@',
                         "gh api -X POST repos/o/r/issues -f body=$(cat x)",
+                        'gh api -X POST repos/o/r/issues -f body="$BODY"',
                         "git commit -F - <<EOF\n$(cat /tmp/msg)\nEOF",
                         'git commit -m"$(cat /tmp/msg)"', "git commit -m$MSG", "git commit -am$MSG"):
             with self.subTest(command=command):
@@ -248,6 +249,9 @@ class GuardHookTest(unittest.TestCase):
         for command in ('git -C "$REPO" commit -m \'docs: x\'', "git tag -f v$VERSION -m 'release'",
                         'git commit -m "feat(hooks): add eval fixture"',
                         'gh pr comment 5 --body "the eval step in the review workflow"',
+                        "gh api graphql -f query='query($owner: String!, $name: String!) "
+                        "{ repository(owner: $owner, name: $name) { id } }' -F owner=o -F name=r",
+                        "gh api -X POST repos/o/r/issues -f body='costs $USD'",
                         "gh pr comment 5 --body @'\n$literal text\n'@"):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))

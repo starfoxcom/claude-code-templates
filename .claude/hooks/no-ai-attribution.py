@@ -151,7 +151,8 @@ OTHER_INPUT = re.compile(r"\||(?<![<\d])<(?![<(&])")
 _VALUE = r"(@\"[\s\S]*?\"@|@'[\s\S]*?'@|\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)"
 MSG_ARG = re.compile(
     r"(?<=\s)(?:-[a-zA-Z]*[mbt]\s*|(?:--message|--body|--title|--notes|(?i:-Body))(?:\s+|=))" + _VALUE)
-FIELD_ARG = re.compile(r"(?<=\s)(?:-[fF]\s*|(?:--field|--raw-field)(?:\s+|=))" + _VALUE)
+# A gh api field is `key=value`; the quote test applies to the value.
+FIELD_ARG = re.compile(r"(?<=\s)(?:-[fF]\s*|(?:--field|--raw-field)(?:\s+|=))(?:[\w.\[\]\-]+=)?" + _VALUE)
 
 
 def deny(reason):
