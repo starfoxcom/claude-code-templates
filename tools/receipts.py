@@ -138,9 +138,11 @@ def read_transcript(path, session, seen, replies):
             if not isinstance(message, dict) or not isinstance(message.get("content"), list):
                 continue
             if entry.get("type") == "assistant":
-                # Streamed replies repeat a message id with the same final usage; keep one.
+                # A streamed reply repeats its id on several lines, and its output
+                # count can grow from line to line; keep the largest.
                 if reply_id and message.get("usage"):
-                    session["usage"][reply_id] = message["usage"]
+                    tokens = message["usage"].get("output_tokens", 0)
+                    session["usage"][reply_id] = max(tokens, session["usage"].get(reply_id, 0))
                 for part in message["content"]:
                     if not isinstance(part, dict) or part.get("type") != "tool_use":
                         continue
@@ -169,8 +171,7 @@ def activity_minutes(times):
 
 def finish(session):
     """The published numbers for one session, or None when the model never replied in it."""
-    usage = session["usage"].values()
-    output = sum(u.get("output_tokens", 0) for u in usage)
+    output = sum(session["usage"].values())
     if not output or not session["times"]:
         return None
     tools = session["tools"]
@@ -206,36 +207,38 @@ def gh_json(args, cwd):
 
 
 GLYPH_VERDICT = re.compile(r"^[\s*_#>]*(🟢|🔴)[\s*_]*(LGTM|Blocking)", re.I)
-BOLD_VERDICT = re.compile(r"^\s*\*\*\s*(LGTM|Blocking)\b", re.I)
+PLAIN_VERDICT = re.compile(r"^[\s*_#>]*(LGTM|Blocking)\b", re.I)
 LIST_ITEM = re.compile(r"^\s*([-+]|\*\s|\d+[.)])")
 PREAMBLE = re.compile(r"^\s*($|#|\*\*Claude (finished|is working))", re.I)
 ESCALATION = re.compile(r"@claude review", re.I)
 
 
 def verdict_word(line):
-    match = GLYPH_VERDICT.match(line) or BOLD_VERDICT.match(line)
-    return match and ("green" if match.group(match.lastindex).lower() == "lgtm" else "red")
+    match = GLYPH_VERDICT.match(line)
+    return match and ("green" if match.group(2).lower() == "lgtm" else "red")
 
 
 def verdict(body):
     """'green', 'red' or None for one review-bot comment.
 
-    Emberholm and Stockra reviewers write the verdict first, this repo's last,
-    and each project's gate reads its own end. So: the first real line when it
-    is a verdict (after blank lines, headings and the job-status header),
-    otherwise the last verdict line. List items are never verdicts, because
-    finding bullets carry a glyph. A line without the glyph counts only as bold
-    `**LGTM` / `**Blocking`, and only when no line has the glyph.
+    Emberholm and Stockra reviewers write the verdict first, on a plain line;
+    this repo's write it last. Each project's gate reads its own end. So: the
+    first real line (after blank lines, headings and the job-status header)
+    when it carries the glyph, otherwise the last line that does. List items
+    are never verdicts, because finding bullets carry a glyph. When no line has
+    the glyph, a line starting with the bare word decides, as in Emberholm's
+    gate: any `Blocking` line is red, otherwise an `LGTM` line is green.
+    Escalation comments, which quote those words, are skipped in verdicts().
     """
     lines = [l for l in body.splitlines() if not LIST_ITEM.match(l)]
-    head = next((l for l in lines if verdict_word(l) or not PREAMBLE.match(l)), "")
-    if verdict_word(head):
+    head = next((l for l in lines if not PREAMBLE.match(l)), "")
+    if GLYPH_VERDICT.match(head):
         return verdict_word(head)
-    for pattern in (GLYPH_VERDICT, BOLD_VERDICT):
-        found = [l for l in lines if pattern.match(l)]
-        if found:
-            return verdict_word(found[-1])
-    return None
+    found = [l for l in lines if GLYPH_VERDICT.match(l)]
+    if found:
+        return verdict_word(found[-1])
+    words = {m.group(1).lower() for m in map(PLAIN_VERDICT.match, lines) if m}
+    return "red" if "blocking" in words else "green" if "lgtm" in words else None
 
 
 def verdicts(comments):

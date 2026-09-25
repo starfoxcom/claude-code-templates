@@ -41,7 +41,13 @@ class VerdictTests(unittest.TestCase):
             ("## Code Review — x\n\nReviewed the diff.\n\n### 🔴 Blocking findings\n- a real bug\n\n"
              "🔴 Blocking — must fix", "red"),
             ("## Code Review — x\n\nReviewed the diff.\n\n🟢 LGTM", "green"),
-            ("Blocking issues: none found.", None),
+            ("Code Review - Emberholm\n\nLGTM - No blocking issues found.", "green"),
+            ("Code Review - x\n\nBlocking - one gap.\n\nLGTM once fixed.", "red"),
+            ("Reviewed the diff; nothing to add.", None),
+            # A bold line without the glyph, or a heading, never wins as the first line.
+            ("## Code Review — x\n\n**Blocking issues:** none. Pre-screen clean.\n\nAll clear.\n\n🟢 LGTM", "green"),
+            ("## Code Review — x\n\n### 🟢 LGTM on the architecture\n\nThe parser misses a case.\n\n"
+             "🔴 Blocking — must fix", "red"),
         ]
         for body, want in cases:
             with self.subTest(body=body[:40]):
@@ -182,6 +188,13 @@ class SessionTests(unittest.TestCase):
                    assistant("b", "2026-09-01T00:00:01Z", "m1", 40))
         [s] = receipts.project_sessions(self.logs)
         self.assertEqual(s["output_tokens"], 40)
+
+    def test_streamed_reply_keeps_its_largest_count(self):
+        self.write("s.jsonl", assistant("a", "2026-09-01T00:00:00Z", "m1", 5),
+                   assistant("b", "2026-09-01T00:00:01Z", "m1", 335),
+                   assistant("c", "2026-09-01T00:00:02Z", "m1", 330))
+        [s] = receipts.project_sessions(self.logs)
+        self.assertEqual(s["output_tokens"], 335)
 
     def test_empty_session_is_left_out(self):
         self.write("s.jsonl", line("a", "2026-09-01T00:00:00Z", kind="system"),
