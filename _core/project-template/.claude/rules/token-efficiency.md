@@ -43,7 +43,7 @@ Diffs with no source files (docs, rules, `.claude/**`) pass both review checks i
 - `BLOCKED` on a required approval: a reviewer other than the author approves it; until then, wait.
 - Anything else: stop and report the state. Never merge past a rule.
 
-Approval to open the PR covers this merge. A PR that changes `.github/workflows/` gets no AI review in CI, so it merges only after two local reviews gave 🟢 before the push, or, when someone else opened it, after the maintainer has read the diff (`review-tiers.md`).
+Approval to open the PR covers this merge. A PR that changes `.github/workflows/` gets no AI review in CI; it merges only as `review-tiers.md` § PRs that edit the review workflow describes.
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
 
 ## Long sessions

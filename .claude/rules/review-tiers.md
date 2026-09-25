@@ -32,7 +32,12 @@ Both `Evaluate review outcome` AND `Claude On-Demand` are configured as required
 
 ## Workflow-only PRs skip the review
 
-The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token, so the review action cannot run on a PR that edits `.github/workflows/claude-code-review.yml`. Triage therefore never counts `.github/workflows/` files as reviewable: a PR that touches only workflow files passes both checks like a docs PR. Keep workflow edits in a PR of their own, with no reviewable files. No AI reviews such a PR in CI, so the review happens before the push: for a PR from our own sessions, two local subagent reviews (one on the exact routine prompt, one as the deep tier) must both give 🟢, and then it merges like any other. A workflow-only PR from an outside contributor merges only after the maintainer has read the whole diff. A reviewable file in the same PR starts the review, which then fails validation and leaves no verdict.
+The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token, so the review action cannot run on a PR that edits `.github/workflows/claude-code-review.yml`. Triage therefore never counts `.github/workflows/` files as reviewable: a PR that touches only workflow files passes both checks like a docs PR. Keep workflow edits in a PR of their own, with no reviewable files. A reviewable file in the same PR starts the review, which then fails validation and leaves no verdict.
+
+No AI reviews a workflow-only PR in CI, so it is reviewed before merge, one of two ways:
+
+- **Every commit in it was written in our own sessions:** two local subagent reviews run on the exact head commit that will merge. One follows the routine-review prompt taken from the base branch's copy of `claude-code-review.yml`, never the PR's own copy; the other reviews as the deep tier. The PR merges once both give 🟢. Any new commit re-runs both.
+- **Anything else,** including a PR we opened that carries someone else's commits: it merges only after the maintainer has read its whole diff.
 
 (Edits to `claude.yml` alone do not trip this: claude.yml runs from the default branch's version on `issue_comment` events, so the running workflow file always matches the default branch. The OIDC check passes.)
 
