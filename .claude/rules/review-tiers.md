@@ -90,7 +90,7 @@ The criterion is **risk surface**, not size. A 30-line bit-pack tweak triggers; 
 
 ## Local Claude's role (this harness)
 
-Local-session Claude does NOT auto-fire either review tier. The workflows do. Local responsibilities:
+Local-session Claude does NOT auto-fire either CI review tier. The workflows do. The one local review is the workflow-only PR path in § Workflow-only PRs skip the review. Local responsibilities:
 
 - Push the branch + open the PR.
 - Run the CI polling loop (`token-efficiency.md`) and report PR state — including label state at completion.

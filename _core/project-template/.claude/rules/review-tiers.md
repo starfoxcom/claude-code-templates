@@ -1,6 +1,6 @@
 # Review tiers
 
-Every PR gets an AI review with a pass or block verdict, run by `.github/workflows/`. Local sessions never start reviews themselves.
+Every PR gets an AI review with a pass or block verdict, run by `.github/workflows/`. Local sessions never start the CI reviews themselves; the one local review is the workflow-only PR path in § PRs that edit the review workflow.
 
 | Tier | Starts when | Model | Gate check |
 |---|---|---|---|
