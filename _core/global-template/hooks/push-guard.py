@@ -218,21 +218,23 @@ def stand_in(match, literal=False):
     of quoted literals as it is (`@('push','-qf')`), `git` when it names git
     (`& ("git") push`, `$(which git) push`), otherwise a plain word. A
     substitution inside a word joins the text on both sides (`-q$(true)f`
-    reads as `-qf`, `"+${BRANCH}"` as `+`); one at a word's edge leaves a word
-    there (`+$(git branch)` reads as `+x`)."""
+    reads as `-qf`); one at a word's edge leaves a word there (`+$(git
+    branch)` and `"+${BRANCH}"` read as `+x`)."""
     inner = next(g for g in match.groups() if g is not None)
     if literal:
         return f" {inner} "
     text, start, end = match.string, match.start(), match.end()
     # A quote that opens or closes the word is its edge: `-C "${REPO}"` leaves
     # a word, `"${USER}-feature"` reads as `x-feature`, `-q"$(true)"f` as `-qf`.
+    # So is the `(` or `,` before it and the `)` or `,` after it in a
+    # PowerShell group (`("${TICKET}-fix")` reads as `x-fix`).
     before, after = start - 1, end
     while before >= 0 and text[before] in QUOTE_CHARS:
         before -= 1
     while after < len(text) and text[after] in QUOTE_CHARS:
         after += 1
-    left = before >= 0 and not text[before].isspace()
-    right = after < len(text) and not text[after].isspace()
+    left = before >= 0 and not text[before].isspace() and text[before] not in "(,"
+    right = after < len(text) and not text[after].isspace() and text[after] not in "),"
     if re.search(r"(?i)\bgit(?:\.exe)?\s*$", unquote(inner, "path")):
         word = "git"
     else:

@@ -609,7 +609,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push -u origin feature/x 2>&1 | Select-String -NotMatch remote",
     // A brace ends a statement, and a capitalized parameter is not a git flag.
     "if ($LASTEXITCODE -eq 0) { git push -u origin feature } else { Write-Host 'push skipped' -f Yellow }",
-    "git push -u origin (Split-Path -Leaf (Get-Location))", "git push -u origin \"$($ticket)-fix\""]) {
+    "git push -u origin (Split-Path -Leaf (Get-Location))", "git push -u origin \"$($ticket)-fix\"",
+    "git push -u origin (\"${TICKET}-fix\")", "git push -u origin @(\"$($t)-feature\")",
+    "git push -u origin (\"$(git branch --show-current)-fix\")"]) {
     assert.equal(verdict("PowerShell", cmd), "allow", `PowerShell should allow: ${cmd}`);
   }
   // PowerShell text the guard reads although PowerShell would parse it differently:
