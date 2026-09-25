@@ -220,6 +220,15 @@ class GuardHookTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))
 
+    def test_file_flags_mentioned_in_message_text_pass(self):
+        for command in ("git commit -m 'fix(hooks): honor --file=path form'",
+                        'git commit -m "docs(hooks): add Get-Content example"',
+                        "gh pr comment 5 --body 'the -F flag is case-sensitive'",
+                        "gh pr create --title t --body-file - <<'EOF'\nUse --body-file notes.md here\nEOF",
+                        "gh pr create --title t --body @'\nthe -F flag reads a file\n'@"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
     def test_lowercase_f_is_not_a_message_file(self):
         for command in ("git tag -f v1.0.0", "gh pr create -f --base develop"):
             with self.subTest(command=command):

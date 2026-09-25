@@ -22,6 +22,8 @@ What is scanned, for any git write, gh write or GitHub API call:
     --body-file / --notes-file / --template / --input / --message-file,
     curl -d @file, PowerShell -InFile and Get-Content <file>. A file it
     cannot read is denied, so a typo cannot slip a body through unread.
+    A flag named inside quoted text, a here-doc or a here-string is a
+    mention in a message, not an argument, and names no file.
 
 It is a safety net for attribution written the ordinary way, not a sandbox
 against a command built to slip past it. No text check can be one. These
@@ -100,6 +102,9 @@ FILE_FLAGS = re.compile(
     r"\s*=?\s*(?:\"(?P<dq>[^\"]+)\"|'(?P<sq>[^']+)'|(?P<bare>\S+))"
 )
 SEGMENT_START = re.compile(r"[;&|\n][^;&|\n]*$")
+# Message text, not arguments: here-doc bodies and PowerShell here-strings.
+HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\1[^\n]*\n.*?\n[ \t]*\2[ \t]*(?=\n|$)", re.S)
+HERESTRING = re.compile(r"@(['\"])[ \t]*\n.*?\n\1@", re.S)
 PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
 
 
@@ -123,8 +128,33 @@ def strip_paths(text):
     return PATH_TOKEN.sub("<path>", text)
 
 
+def text_spans(cmd):
+    """Spans of quoted strings, here-doc bodies and here-strings: text a
+    message carries, where a flag name is a mention, not an argument."""
+    spans = [m.span() for m in HEREDOC.finditer(cmd)] + [m.span() for m in HERESTRING.finditer(cmd)]
+    i, n = 0, len(cmd)
+    while i < n:
+        inside = next((e for s, e in spans if s <= i < e), None)
+        if inside is not None:
+            i = inside
+            continue
+        q = cmd[i]
+        if q in "'\"":
+            j = i + 1
+            while j < n and cmd[j] != q:
+                j += 2 if q == '"' and cmd[j] in "\\`" else 1
+            spans.append((i, j + 1))
+            i = j + 1
+        else:
+            i += 1
+    return spans
+
+
 def find_files(cmd, cwd):
+    spans = text_spans(cmd)
     for m in FILE_FLAGS.finditer(cmd):
+        if any(s <= m.start() < e for s, e in spans):
+            continue
         path = m.group("dq") or m.group("sq") or m.group("bare")
         if not path or path == "-":
             continue
