@@ -29,9 +29,9 @@ What is scanned
 What is denied outright (bypass routes the hook cannot see through)
   * Skipping git's own hooks: --no-verify on git commit, merge, push, am,
     cherry-pick, revert or rebase; -n on git commit (the only command where
-    it means --no-verify); setting core.hooksPath; LEFTHOOK=0 or lefthook
-    uninstall. Quoted text and here-doc bodies are not read for these, so a
-    message that mentions a flag passes.
+    it means --no-verify); setting core.hooksPath, LEFTHOOK=0 or lefthook
+    uninstall in any command, git write or not. Quoted text and here-doc
+    bodies are not read for these, so a message that mentions a flag passes.
   * --trailer (the trailer text can come from anywhere).
   * Message reuse: -C / --reuse-message / --reedit-message / -c <commit>.
   * Message or body text built by command substitution `$(...)`, backticks,
@@ -101,7 +101,12 @@ SUBST = re.compile(r"\$\(|`[^`]+`|<\(|\beval\b|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$
 # Read against the command with quoted text and here-doc bodies removed.
 HOOK_BYPASS = re.compile(
     r"\bgit\b[^|;&\n]*?\b(?:commit|merge|push|am|cherry-pick|revert|rebase)\b[^|;&\n]*?--no-verify\b|"
-    r"\bgit\b[^|;&\n]*?\bcommit\b[^|;&\n]*?(?<=\s)-[a-zA-Z]*n[a-zA-Z]*(?=\s|$)|"
+    r"\bgit\b[^|;&\n]*?\bcommit\b[^|;&\n]*?(?<=\s)-[a-zA-Z]*n[a-zA-Z]*(?=\s|$)",
+    re.I,
+)
+# Switching git's hooks off for later commands, checked on every command: a
+# `git config core.hooksPath <dir>` in its own call disarms the next commit.
+HOOKS_OFF = re.compile(
     r"core\.hooksPath\s*=|"
     r"\bgit\b[^|;&\n]*?\bconfig\b(?![^|;&\n]*?--(?:get|get-all|get-regexp|list|unset)\b)"
     r"[^|;&\n]*?core\.hooksPath\s+\S|"
@@ -182,9 +187,14 @@ def expansion_in_message(cmd, api):
     message value outside single quotes (and outside a PowerShell @'...'@)
     holding $VAR, $(...), backticks or <(...), or an unquoted here-doc
     holding one. Text elsewhere in the command (a `git -C "$REPO"`) does not
-    count."""
+    count, and neither does flag-shaped text inside a quoted string or a
+    here-doc body ("run it with -t $TIMEOUT")."""
+    text = HEREDOC.sub("HEREDOC", cmd)
+    quoted = [m.span() for m in QUOTED.finditer(text)]
     for pattern in (MSG_ARG, FIELD_ARG) if api else (MSG_ARG,):
-        for m in pattern.finditer(cmd):
+        for m in pattern.finditer(text):
+            if any(start <= m.start() < end for start, end in quoted):
+                continue
             value = m.group(1)
             if not value.startswith(("'", "@'")) and SUBST.search(value):
                 return True
@@ -228,10 +238,10 @@ def main():
     is_gh = GH_WRITE.search(cmd) or GH_API_WRITE.search(cmd)
     is_http = CURL_GH.search(cmd) or PS_GH.search(cmd)
     flags = bare(cmd)
+    # Refuse to switch git's hooks off from any command, write or not.
+    if HOOKS_OFF.search(flags):
+        deny("switching git hooks off (core.hooksPath, LEFTHOOK=0, lefthook uninstall) is not allowed.")
     if not (is_git or is_gh or is_http):
-        # Still refuse to weaken the git-side guard from any command.
-        if re.search(r"lefthook\s+uninstall|LEFTHOOK\s*=\s*0", flags, re.I):
-            deny("disabling lefthook removes the commit-msg attribution check.")
         sys.exit(0)
 
     if FILTER_REPO.search(cmd):

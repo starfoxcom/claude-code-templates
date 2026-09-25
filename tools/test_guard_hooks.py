@@ -255,6 +255,23 @@ class GuardHookTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))
 
+    def test_hooks_off_in_its_own_call_is_denied(self):
+        for command in ("git config core.hooksPath /dev/null", "LEFTHOOK=0 npm run build"):
+            with self.subTest(command=command):
+                self.assert_denied(self.attr(command))
+
+    def test_reading_hooks_path_passes(self):
+        for command in ("git config --get core.hooksPath", "git config core.hooksPath",
+                        "git config --unset core.hooksPath"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_flag_shaped_text_in_a_quoted_body_passes(self):
+        for command in ("gh pr create --title t --body-file - <<'EOF'\nRun it with -t $TIMEOUT or -m $MSG\nEOF",
+                        "gh pr comment 5 --body 'Set it with -m $MSG before -b $BRANCH'"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
     def test_body_from_a_quoted_heredoc_passes(self):
         self.assert_passes(self.attr(
             "gh pr create --title t --body-file - <<'EOF'\n## What\n| a | b |\n|---|---|\nEOF"))
