@@ -11,18 +11,30 @@ Usage:
 
 Prints a summary per project; --json also writes the raw numbers.
 Standard library only. Needs `gh` logged in for the GitHub part.
+
+How the session numbers are counted:
+- A session is one main transcript plus the transcripts of the subagents it ran.
+- A resumed or forked session copies earlier log lines into a new file. Each log
+  line is counted once, in the first file read (oldest first), so shared history
+  is not counted twice.
+- A session with no model output (only mode or bridge entries) is left out.
+- Active minutes add up the gaps between log lines, each gap capped at
+  IDLE_CAP_MINUTES, so waiting on CI or an idle terminal does not count as work.
 """
 import argparse
 import glob
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+IDLE_CAP_MINUTES = 5
+SEARCH_LIMIT = 1000  # GitHub search returns at most this many results per query
 ADHERENCE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                                 "_core", "project-template", ".claude", "scripts", "research-adherence.py")
 
@@ -50,6 +62,8 @@ def log_dir(project_path):
     """The ~/.claude/projects folder for a repo path (matched case-insensitively)."""
     slug = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(project_path)).lower()
     root = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    if not os.path.isdir(root):
+        return None
     for name in os.listdir(root):
         if name.lower() == slug:
             return os.path.join(root, name)
@@ -60,58 +74,96 @@ def parse_time(stamp):
     return datetime.fromisoformat(stamp.replace("Z", "+00:00")) if stamp else None
 
 
-def session_stats(path):
-    """Numbers for one transcript. Streamed replies repeat a message id; count each once."""
-    usage = {}
-    tools = {}
-    errors = 0
-    research = fallback = 0
-    edited = set()
-    first = last = None
+def transcripts(logs):
+    """(session id, path) for every main and subagent transcript, main files oldest first."""
+    main = sorted(glob.glob(os.path.join(logs, "*.jsonl")), key=os.path.getmtime)
+    for path in main:
+        yield os.path.splitext(os.path.basename(path))[0], path
+    for path in sorted(glob.glob(os.path.join(logs, "*", "subagents", "**", "*.jsonl"), recursive=True)):
+        yield os.path.relpath(path, logs).split(os.sep)[0], path
+
+
+def new_session(session_id):
+    return {"id": session_id, "usage": {}, "tools": {}, "errors": 0, "research": 0, "fallback": 0,
+            "edited": set(), "times": []}
+
+
+def read_transcript(path, session, seen):
+    """Add one transcript's log lines to its session, skipping lines another file already counted."""
     with open(path, encoding="utf-8") as f:
         for line in f:
             try:
                 entry = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(entry, dict):
+                continue
+            uuid = entry.get("uuid")
+            if uuid:
+                if uuid in seen:
+                    continue
+                seen.add(uuid)
             stamp = parse_time(entry.get("timestamp"))
             if stamp:
-                first = first or stamp
-                last = stamp
+                session["times"].append(stamp)
             message = entry.get("message")
             if not isinstance(message, dict) or not isinstance(message.get("content"), list):
                 continue
             if entry.get("type") == "assistant":
+                # Streamed replies repeat a message id with the same final usage; keep one.
                 if message.get("id") and message.get("usage"):
-                    usage[message["id"]] = message["usage"]
+                    session["usage"][message["id"]] = message["usage"]
                 for part in message["content"]:
                     if not isinstance(part, dict) or part.get("type") != "tool_use":
                         continue
                     name, args = part.get("name", ""), part.get("input") or {}
-                    tools[name] = tools.get(name, 0) + 1
-                    if name in EDIT_TOOLS and args.get("file_path"):
-                        edited.add(args["file_path"])
+                    session["tools"][name] = session["tools"].get(name, 0) + 1
+                    target = args.get("file_path") or args.get("notebook_path")
+                    if name in EDIT_TOOLS and target:
+                        session["edited"].add(target)
                     kind = classify(name, args)
-                    research += kind == "research"
-                    fallback += kind == "fallback"
+                    session["research"] += kind == "research"
+                    session["fallback"] += kind == "fallback"
             elif entry.get("type") == "user":
                 for part in message["content"]:
                     if isinstance(part, dict) and part.get("type") == "tool_result" and part.get("is_error"):
-                        errors += 1
-    if not first:
+                        session["errors"] += 1
+
+
+def active_minutes(times):
+    times = sorted(times)
+    cap = IDLE_CAP_MINUTES * 60
+    return round(sum(min((b - a).total_seconds(), cap) for a, b in zip(times, times[1:])) / 60)
+
+
+def finish(session):
+    """The published numbers for one session, or None when the model never replied in it."""
+    usage = session["usage"].values()
+    output = sum(u.get("output_tokens", 0) for u in usage)
+    if not output or not session["times"]:
         return None
+    tools = session["tools"]
     return {
-        "file": os.path.basename(path),
-        "start": first.isoformat(),
-        "minutes": round((last - first).total_seconds() / 60),
-        "output_tokens": sum(u.get("output_tokens", 0) for u in usage.values()),
+        "session": session["id"],
+        "start": min(session["times"]).isoformat(),
+        "active_minutes": active_minutes(session["times"]),
+        "output_tokens": output,
         "tool_calls": sum(tools.values()),
-        "tool_errors": errors,
-        "research_calls": research,
-        "search_fallbacks": fallback,
+        "tool_errors": session["errors"],
+        "research_calls": session["research"],
+        "search_fallbacks": session["fallback"],
         "task_tool_calls": sum(tools.get(t, 0) for t in ("TaskCreate", "TaskUpdate", "TodoWrite")),
-        "files_edited": len(edited),
+        "files_edited": len(session["edited"]),
     }
+
+
+def project_sessions(logs):
+    if not logs:
+        return []
+    seen, sessions = set(), {}
+    for session_id, path in transcripts(logs):
+        read_transcript(path, sessions.setdefault(session_id, new_session(session_id)), seen)
+    return sorted(filter(None, map(finish, sessions.values())), key=lambda s: s["start"])
 
 
 def gh_json(args, cwd):
@@ -122,34 +174,67 @@ def gh_json(args, cwd):
     return json.loads(out.stdout or "null")
 
 
-VERDICT_LINE = re.compile(r"^\s*(🟢|🔴)\W*(LGTM|Blocking)", re.I)
+GLYPH_VERDICT = re.compile(r"^[\s*_#>]*(🟢|🔴)[\s*_]*(LGTM|Blocking)", re.I)
+BARE_VERDICT = re.compile(r"^[\s*_#>]*(LGTM|Blocking)\b", re.I)
+LIST_ITEM = re.compile(r"^\s*([-+]|\*\s|\d+[.)])")
+
+
+def verdict(body):
+    """'green', 'red' or None for one review-bot comment.
+
+    Reviewers put the verdict first (Emberholm) or last (this repo), so the last
+    verdict-shaped line wins, as in this repo's gate. List items are never
+    verdicts: finding bullets carry a glyph, and escalation comments quote the
+    verdict format in a bullet. A line without the glyph (`**LGTM!**`) counts
+    only when no line has one.
+    """
+    lines = [l for l in body.splitlines() if not LIST_ITEM.match(l)]
+    for pattern in (GLYPH_VERDICT, BARE_VERDICT):
+        found = [m for m in map(pattern.match, lines) if m]
+        if found:
+            word = found[-1].group(found[-1].lastindex).lower()
+            return "green" if word == "lgtm" else "red"
+    return None
 
 
 def verdicts(comments):
-    """Ordered verdicts from the review bot's comments, oldest first.
-
-    A verdict is the first line that opens with the glyph and LGTM or Blocking.
-    Finding bullets that carry a glyph, and escalation comments that quote the
-    verdict format, are not verdicts.
-    """
+    """Ordered verdicts from the review bot's comments, oldest first."""
     found = []
     for c in comments:
-        if (c.get("author") or {}).get("login") not in ("claude", "claude[bot]"):
-            continue
-        for line in (c.get("body") or "").splitlines():
-            match = VERDICT_LINE.match(line)
-            if match:
-                found.append("green" if match.group(1) == "🟢" else "red")
-                break
+        if (c.get("author") or {}).get("login") in ("claude", "claude[bot]"):
+            v = verdict(c.get("body") or "")
+            if v:
+                found.append(v)
     return found
 
 
+def merged_prs(project_path, since):
+    """Every PR merged since the date, queried in 30-day windows to stay under the search limit."""
+    prs, start, today = {}, date.fromisoformat(since), date.today()
+    while start <= today:
+        end = start + timedelta(days=29)
+        window = gh_json(["pr", "list", "--state", "merged", "--limit", str(SEARCH_LIMIT),
+                          "--search", f"merged:{start}..{end}",
+                          "--json", "number,title,createdAt,mergedAt,baseRefName,headRefName,labels,comments"],
+                         project_path)
+        if window is None:
+            return None
+        if len(window) >= SEARCH_LIMIT:
+            sys.exit(f"  {start}..{end} hit the {SEARCH_LIMIT}-result search limit; shorten the window.")
+        prs.update((pr["number"], pr) for pr in window)
+        start = end + timedelta(days=1)
+    return list(prs.values())
+
+
+def median(values):
+    return round(statistics.median(values), 1) if values else None
+
+
 def pr_stats(project_path, since):
-    prs = gh_json(["pr", "list", "--state", "merged", "--limit", "2000", "--search", f"merged:>={since}",
-                   "--json", "number,title,createdAt,mergedAt,baseRefName,labels,comments"], project_path)
+    prs = merged_prs(project_path, since)
     if prs is None:
         return None
-    hours, reviewed_hours, first_green, any_red, reds, deep = [], [], 0, 0, 0, 0
+    hours, reviewed_hours, first_green, any_red, reds, escalated = [], [], 0, 0, 0, 0
     for pr in prs:
         opened, merged = parse_time(pr["createdAt"]), parse_time(pr["mergedAt"])
         hours.append((merged - opened).total_seconds() / 3600)
@@ -160,24 +245,24 @@ def pr_stats(project_path, since):
             any_red += "red" in v
             reds += v.count("red")
         if any(l.get("name") == "needs-deep-review" for l in pr.get("labels") or []):
-            deep += 1
-    median = lambda values: round(sorted(values)[len(values) // 2], 1) if values else None
-    reviewed = len(reviewed_hours)
+            escalated += 1
     kinds = {}
     for pr in prs:
         head = pr["title"].split(":")[0].split("(")[0].strip().lower()
         kinds[head] = kinds.get(head, 0) + 1
+    reviewed = len(reviewed_hours)
     return {
         "merged_prs": len(prs),
         "by_type": dict(sorted(kinds.items(), key=lambda kv: -kv[1])[:8]),
-        "to_main_or_cascade": sum(1 for p in prs if p["baseRefName"] == "main" or "cascade" in p["title"].lower()),
+        "to_main": sum(1 for p in prs if p["baseRefName"] == "main"),
+        "cascades": sum(1 for p in prs if re.search(r"(^|/)cascade[-/_]", p.get("headRefName") or "")),
         "median_hours_to_merge": median(hours),
         "prs_with_verdict": reviewed,
         "median_hours_to_merge_reviewed": median(reviewed_hours),
         "first_verdict_green_pct": round(100 * first_green / reviewed) if reviewed else None,
         "prs_with_a_red_verdict": any_red,
         "red_verdicts": reds,
-        "deep_reviews": deep,
+        "prs_escalated_to_deep": escalated,
     }
 
 
@@ -197,21 +282,23 @@ def summarize(name, sessions, prs, config):
         n = len(sessions)
         tokens = sum(s["output_tokens"] for s in sessions)
         research = sum(s["research_calls"] for s in sessions)
-        fallback = sum(s["search_fallbacks"] for s in sessions)
+        searches = research + sum(s["search_fallbacks"] for s in sessions)
+        adherence = f"{100 * research // searches}%" if searches else "n/a"
         biggest = max(sessions, key=lambda s: s["output_tokens"])
         print(f"  sessions {n} ({sessions[0]['start'][:10]} to {sessions[-1]['start'][:10]}), "
-              f"output tokens {tokens / 1e6:.2f}M (avg {tokens // n // 1000}K)")
+              f"output tokens {tokens / 1e6:.2f}M (avg {tokens // n // 1000}K), subagents included")
         print(f"  tool errors per session {sum(s['tool_errors'] for s in sessions) / n:.1f}, "
-              f"code-research adherence {100 * research // max(research + fallback, 1)}%, "
+              f"code-research adherence {adherence}, "
               f"sessions using task lists {sum(1 for s in sessions if s['task_tool_calls'])}/{n}")
-        print(f"  largest session {biggest['output_tokens'] / 1e6:.2f}M tokens, {biggest['minutes']} min, "
+        print(f"  largest session {biggest['output_tokens'] / 1e6:.2f}M tokens, {biggest['active_minutes']} active min, "
               f"{biggest['files_edited']} files ({biggest['start'][:10]})")
     if prs:
-        print(f"  merged PRs {prs['merged_prs']} {prs['by_type']}, to main or cascade {prs['to_main_or_cascade']}, "
-              f"median {prs['median_hours_to_merge']} h to merge")
+        print(f"  merged PRs {prs['merged_prs']} {prs['by_type']}, to main {prs['to_main']}, "
+              f"cascades {prs['cascades']}, median {prs['median_hours_to_merge']} h to merge")
         print(f"  reviewed PRs {prs['prs_with_verdict']} (median {prs['median_hours_to_merge_reviewed']} h to merge): "
               f"first verdict green {prs['first_verdict_green_pct']}%, {prs['prs_with_a_red_verdict']} had a red verdict, "
-              f"red verdicts {prs['red_verdicts']} across both tiers, deep reviews {prs['deep_reviews']}")
+              f"red verdicts {prs['red_verdicts']} across both tiers, "
+              f"escalated to deep review {prs['prs_escalated_to_deep']}")
     print(f"  rules {config['rules']}, skills {config['skills']}, memory entries {config['memory_entries']}")
 
 
@@ -225,8 +312,7 @@ def main():
     for path in args.project:
         name = os.path.basename(os.path.abspath(path))
         logs = log_dir(path)
-        files = sorted(glob.glob(os.path.join(logs, "*.jsonl"))) if logs else []
-        sessions = sorted(filter(None, map(session_stats, files)), key=lambda s: s["start"])
+        sessions = project_sessions(logs)
         prs = pr_stats(path, args.since)
         config = config_stats(path, logs)
         summarize(name, sessions, prs, config)
