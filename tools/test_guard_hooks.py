@@ -98,6 +98,22 @@ class GuardHookTest(unittest.TestCase):
                            hook_files=["push-guard.py"])
         self.assert_blocked(self.run_hook("push-guard", FORCE_PUSH))
 
+    def test_runs_when_permission_rule_sits_in_a_compact_array(self):
+        self.home_settings('{"permissions": {"allow": ["Bash(python3 ~/.claude/hooks/push-guard.py:*)"]}}',
+                           hook_files=["push-guard.py"])
+        self.assert_blocked(self.run_hook("push-guard", FORCE_PUSH))
+
+    def test_runs_when_permission_rule_quotes_the_path(self):
+        self.home_settings('{"permissions":{"allow":["Bash(python \\"C:/u/.claude/hooks/push-guard.py\\":*)"]}}',
+                           hook_files=["push-guard.py"])
+        self.assert_blocked(self.run_hook("push-guard", FORCE_PUSH))
+
+    def test_skipped_when_minified_file_registers_a_working_copy(self):
+        self.home_settings('{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command",'
+                           '"command":"python \\"C:/u/.claude/hooks/push-guard.py\\""}]}]}}',
+                           hook_files=["push-guard.py"])
+        self.assert_passes(self.run_hook("push-guard", FORCE_PUSH))
+
     def test_home_copy_of_another_hook_does_not_skip(self):
         self.home_settings('{"command": "python ~/.claude/hooks/other-guard.py"}',
                            hook_files=["other-guard.py"])

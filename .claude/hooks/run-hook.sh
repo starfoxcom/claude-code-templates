@@ -19,9 +19,14 @@ name=$1
 hook="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/$name.py"
 
 settings="$HOME/.claude/settings.json"
-# Permission entries look like "Bash(...)": a mention there is no registration.
+# Permission entries look like "Bash(...)": a mention inside one is no
+# registration. A line is dropped when the name sits inside such a string
+# anywhere on it (compact arrays, minified files), so a line holding both a
+# registration and a permission counts as neither and the hook runs twice,
+# the safe side.
+path="hooks[/\\\\]+$name\\.py"
 if [ -f "$HOME/.claude/hooks/$name.py" ] && [ -f "$settings" ] &&
-  grep -E "hooks[/\\\\]+$name\.py" "$settings" | grep -Evq '^[[:space:]]*"[A-Za-z]+\('; then
+  grep -E "$path" "$settings" | grep -Evq "\"[A-Za-z]+\\(([^\"\\\\]|\\\\.)*$path"; then
   exit 0
 fi
 
