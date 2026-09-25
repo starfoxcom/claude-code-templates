@@ -384,6 +384,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // Silent passes: pushes on the allow-list, commands that never push, and text that only mentions one.
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
+    // A `)` in quoted text, a top-level `case` pattern and a heredoc list item keep statements apart.
+    "git push origin main && echo \"done :)\" && tail -f log.txt",
+    "case \"$b\" in main) git push origin main;; *) rm -f tmp.txt;; esac",
+    "git push -u origin feat && gh pr create --base develop --body \"$(cat <<'EOF'\n1) adds +2 tests\nEOF\n)\"",
     // Everyday chains: commit then push, trim the output, delete one branch and push another.
     "git add -A && git commit -q -m \"fix(x): y\" && git push -q origin feature/x 2>&1 | tail -1; git log --oneline -1",
     "git push origin --delete hotfix/x 2>&1 | tail -1; git checkout -q -b chore/c origin/develop; git push -q -u origin chore/c 2>&1 | tail -1",
@@ -429,6 +433,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "coproc eval 'git push -qf origin main'", "sudo -iu me sh -c 'git push -qf origin main'",
     // Statements complete before an unreadable point still run.
     "git push -qf origin main\ncat <<EOF", "git push -qf origin main; echo \"x", "git push -qf origin main; x=$(echo",
+    // An option value with a space, or a substitution, between `git` and `push`.
+    "git -C \"/c/My Repo\" push -f origin main", "git --git-dir \"/c/My Repo/.git\" push -f",
+    "git -c \"user.name=A B\" push -f origin main", "git -c core.sshCommand=\"ssh -i ~/.ssh/k\" push --force origin main",
+    "git -C \"$(pwd)/My Repo\" push -f", "git $(true) push -f", "bash -c 'git \"$@\"' _ push -qf origin main",
     // Text the guard cannot fully place is still read: an unclosed heredoc or
     // quote, deep nesting, a comment, text piped into a shell.
     "cat <<EOF\ngit push -qf origin main", "echo \"x; git push -qf origin main", "x=$(echo; git push -qf origin main",
@@ -529,7 +537,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git remote add --mirror=push b https://example.com/b.git", "git config remote.b.mirror true",
     "git config alias.p 'push -f'", "git config --global alias.p 'push -f'",
     "hash -p /usr/bin/git g; g push -qf origin main", "alias g=git\ng push -qf origin main",
-    "bash -c 'git \"$@\"' _ push -qf origin main", "sh -c '/usr/bin/gi[t] push -qf origin main'",
+    "sh -c '/usr/bin/gi[t] push -qf origin main'",
     "gh alias set --shell p 'git \"$@\"'; gh p push -qf origin main", "gh extension exec pusher push -qf origin main",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
     "echo -qf | xargs git push origin main",
@@ -615,6 +623,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const chainStart = Date.now();
   assert.equal(verdict("Bash", chain), "deny", "a push after chained heredocs blocks");
   assert.ok(Date.now() - chainStart < 3000, "chained heredocs answer quickly");
+  // A long digit run is tried once as a redirect, not again from each digit.
+  const digits = "git push -f " + "1".repeat(99000);
+  const digitStart = Date.now();
+  assert.equal(verdict("Bash", digits), "deny", "a push before a long digit run blocks");
+  assert.ok(Date.now() - digitStart < 3000, "a long digit run answers quickly");
   // PowerShell argument groups and `&` look back only to the last word, so a long command stays linear.
   const psLong = "Write-Output " + "x (y) ".repeat(3000) + "; git push -qf origin main";
   const psStart = Date.now();

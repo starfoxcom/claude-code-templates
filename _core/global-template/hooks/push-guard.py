@@ -21,7 +21,8 @@ quotes, backslashes and backticks, decoding Bash's `$'...'` escapes and
 PowerShell's `` `u{...} `` on the way. Each command substitution (`$(...)`,
 `${...}`, `<(...)`, a Bash backtick pair) is read on its own. The rest is cut
 into statements at every newline, `;`, `|` and `&`, quoted or not; the words
-of a git command up to the end of its statement are its arguments. Text
+after a `git` word and a later push word, up to the end of the statement,
+are the push's arguments. Text
 inside `eval`, `sh -c`, `pwsh -Command`, a heredoc or a comment is read the
 same way, so a force push anywhere in the command's text is found.
 
@@ -72,9 +73,13 @@ MAX_PASSES = 64
 
 PUSH_SUBCOMMANDS = {"push", "send-pack", "http-push"}
 PUSH_PROGRAMS = {"git-push", "git-send-pack", "git-http-push"}
-# git options before the subcommand that take their value as the next word.
-GIT_VALUE_OPTIONS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path",
-                     "--config-env", "--attr-source", "--super-prefix", "--list-cmds"}
+# git subcommands that never push; after one, a later push word is its text.
+OTHER_SUBCOMMANDS = {
+    "add", "am", "apply", "archive", "bisect", "blame", "branch", "bundle", "cat-file", "checkout",
+    "cherry-pick", "clean", "clone", "commit", "config", "describe", "diff", "fetch", "for-each-ref",
+    "format-patch", "gc", "grep", "help", "init", "log", "ls-files", "ls-remote", "merge", "mv",
+    "notes", "pull", "rebase", "reflog", "remote", "reset", "restore", "rev-list", "rev-parse",
+    "revert", "rm", "shortlog", "show", "stash", "status", "submodule", "switch", "tag", "worktree"}
 
 ANSI_QUOTE = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
 POWERSHELL_CHAR = re.compile(r"`u\{([0-9A-Fa-f]{1,6})\}")
@@ -86,7 +91,7 @@ BACKTICK_GROUP = re.compile(r"`([^`]*)`")
 STATEMENT_END = {"Bash": re.compile(r"[\n;|&]"), "PowerShell": re.compile(r"[\n\r;|&]")}
 WORD_SPLIT = re.compile(r"[\s<>,]+")
 # A redirect operator not right after a quote, and its target.
-REDIRECT = re.compile(r"""(?<!["'])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)\s*(?:"[^"]*"|'[^']*'|[^\s;|&<>"']+)?""")
+REDIRECT = re.compile(r"""(?<![0-9"'])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)\s*(?:"[^"]*"|'[^']*'|[^\s;|&<>"']+)?""")
 EDGE = "(){}[]$&!@"
 SHORT_FORCE = re.compile(r"-[A-Za-z]*f[A-Za-z]*")
 LONG_FORCE = re.compile(r"--force(?:=.*)?|--m(?:i(?:r(?:r(?:o(?:r)?)?)?)?)?")
@@ -146,40 +151,36 @@ def name(word):
 
 
 def force_in(words):
-    """Why the words of one statement force-push, or None."""
-    pushing, forcing, i = False, None, 0
-    while i < len(words):
-        word = words[i].strip(EDGE)
+    """Why the words of one statement force-push, or None. After a `git`
+    word, a later push word in the statement starts the push, whatever sits
+    between them: an option value split at its spaces (`-C "/c/My Repo"`) or
+    a substitution's stand-in word. So does a one-off alias for push (`-c
+    alias.p='push -f' p`), whose arguments follow its name. A git
+    subcommand in OTHER_SUBCOMMANDS ends the search."""
+    git, pushing, forcing = False, False, None
+    for raw in words:
+        word = raw.strip(EDGE)
         if pushing:
             if SHORT_FORCE.fullmatch(word) or LONG_FORCE.fullmatch(word):
                 return f"`{word}`"
             if word.startswith("+") and len(word) > 1:
                 return f"`{word}` (a leading + forces that ref)"
-            i += 1
             continue
         program = name(word)
         if program in PUSH_PROGRAMS:
             pushing = True
         elif program == "git":
-            # Walk git's own options to its subcommand.
-            i += 1
-            while i < len(words) and words[i].startswith("-"):
-                option = words[i]
-                value = words[i + 1] if i + 1 < len(words) else ""
-                i += 2 if option in GIT_VALUE_OPTIONS else 1
-                if option == "-c" and FORCING_CONFIG.fullmatch(value):
-                    forcing = f"`-c {value}`"
-                if option == "-c" and PUSH_ALIAS.fullmatch(value):
-                    # A one-off alias for push: every later word may be its
-                    # argument (`-c alias.p='push -f' p`).
-                    pushing = True
-                    break
-            if pushing or (i < len(words) and name(words[i]) in PUSH_SUBCOMMANDS):
-                pushing = True
-                if forcing:
-                    return forcing
-            continue
-        i += 1
+            git = True
+        elif git and FORCING_CONFIG.fullmatch(word):
+            forcing = f"`-c {word}`"
+        elif git and (program in PUSH_SUBCOMMANDS or PUSH_ALIAS.fullmatch(word)):
+            if forcing:
+                return forcing
+            pushing = True
+        elif git and program in OTHER_SUBCOMMANDS:
+            # Another git command: its arguments are its own (`git commit -m
+            # "push -f later"`).
+            git, forcing = False, None
     return None
 
 
@@ -187,15 +188,16 @@ def check(command, tool):
     """Why a command's text force-pushes, or None."""
     if len(command) > MAX_COMMAND:
         return None
+    case_inside = re.search(r"[$<>]\([^()]*\bcase\b", command) is not None
     for piece in texts(command, tool):
         # A redirect and its target go first, so `git>/dev/null push` and
         # `push&>/dev/null` read as `git push`; a quoted `>` is text.
         piece = REDIRECT.sub(" ", piece)
-        # A substitution the passes could not cut out (a `case` pattern's `)`
-        # inside it, or nesting past MAX_PASSES) may hide separators, so its
-        # piece is also read as one statement.
+        # A substitution the passes could not cut out (nesting past
+        # MAX_PASSES) or cut short (a `case` pattern's `)` inside it) may hide
+        # separators, so its piece is also read as one statement.
         opener = r"\(|\$\{" if tool == "PowerShell" else r"[$<>]\(|\$\{"
-        whole = re.search(opener, piece) is not None or piece.count(")") > piece.count("(")
+        whole = re.search(opener, piece) is not None or case_inside
         for backslash in ("escape", "path"):
             text = unquote(piece, backslash)
             for statement in STATEMENT_END[tool].split(text) + ([text] if whole else []):
