@@ -96,7 +96,7 @@ and no `python3`/`python`/`py` guess is involved. Shipped in a repo's
 which cannot know an absolute interpreter path: it takes the first of
 `python3`, `python` and `py` that is Python 3.8+ outside a virtual
 environment, and skips this file when `~/.claude/hooks/push-guard.py`
-exists and `~/.claude/settings.json` registers it. A project that ships it this way must keep tokensave's
+exists and `~/.claude/settings.json` names it outside a permission rule. A project that ships it this way must keep tokensave's
 hook global: tokensave copies the launcher of a project's existing hooks
 into its own project entries, and `sh run-hook.sh` is no launcher for it.
 Either way it runs through a `runpy` one-liner instead of

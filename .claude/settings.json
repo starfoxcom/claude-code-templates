@@ -12,7 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PROJECT_DIR}/.claude/hooks/run-hook.sh\" push-guard",
+            "command": "sh -c 'test -f \"$0\" && exec sh \"$0\" push-guard' \"${CLAUDE_PROJECT_DIR}/.claude/hooks/run-hook.sh\"",
             "timeout": 10
           }
         ]

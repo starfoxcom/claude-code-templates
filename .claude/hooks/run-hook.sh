@@ -2,6 +2,11 @@
 # Starts one of this repo's guard hooks: sh run-hook.sh <name>
 # Claude Code pipes the tool call to stdin as JSON; the hook reads it there.
 #
+# The settings entry tests that this file exists before running it: dash,
+# the sh on Debian and Ubuntu, exits 2 when it cannot open its script, and
+# exit 2 blocks the tool call. A branch without this file, checked out in a
+# session started with it, would otherwise block every command.
+#
 # The hook is skipped, and the tool call goes ahead, when:
 # - ~/.claude/hooks/<name>.py exists and ~/.claude/settings.json names it
 #   outside a permission rule, so the user's own copy runs and the check
