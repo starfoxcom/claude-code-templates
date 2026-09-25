@@ -350,8 +350,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "/usr/lib/git-core/git-push -qf origin main",
     "case x in a) git push -qf origin main;; esac", "if git push -qf origin main; then echo ok; fi",
     "while git push -qf origin main; do break; done",
-    // Backslash + CR is an escaped CR in bash, so the LF after it still ends the command.
+    // Bash on Linux reads backslash + CR as an escaped CR, so the LF still ends the
+    // command; Git Bash drops the CR and joins the lines. Both readings are checked.
     "echo x \\\r\ngit push -qf origin main", "git commit -m wip \\\r\ngit push -qf origin main",
+    "git push origin main \\\r\n  --force", "git push \\\r\n  -f origin main",
+    "# C:\\work\\repo\\\r\ngit push origin main \\\r\n  --force",
     // A backtick ending a line closes a substitution; it is no line continuation in Bash.
     "VERSION=`cat VERSION`\ngit push -f origin main", "REV=`git rev-parse HEAD`\r\ngit push -f origin main",
     // Bash does not continue a comment, so a `\` ending one leaves the next line its own command.
@@ -517,7 +520,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin main -qf> /dev/null", "git push origin main --mirror>log",
     // Bash's clobber redirect `>|` is no pipe.
     "git push >| /dev/null -qf origin main", "git push origin main -qf 2>| err",
-    // In Bash a carriage return does not end a word, so `\r#` starts no comment and `\r` is a word.
+    // Bash on Linux reads a carriage return as part of a word, so `\r#` starts no
+    // comment and `\r` is a word; the guard blocks on that reading too.
     "git push origin main >out\r# -qf", "git push -o\r -qf origin main",
     // A separator inside a substitution does not end the statement around it.
     "git push $(true;) -qf origin main", "git push `:;` -qf origin main", "git push origin main ${X//;/} -qf",

@@ -36,12 +36,13 @@ except a target that names git (`bash <<< "git push -f"`). After a `git`
 word, a later push word in the same statement starts the push, and the
 words after it are its arguments. Text inside `eval`, `sh -c`,
 `pwsh -Command`, a heredoc or a comment is read the same way. Each shell's
-own line continuation is removed. Bash keeps a `\` ending a comment, a
-single-quoted line or a quoted heredoc line as a line end instead, so a Bash
-command with a `\` ending a line is read whole: with each such `\` joined
-and with it kept as a line end, and each reading also as one statement, so
-a push anywhere in it with a force word anywhere after it blocks. Every step
-is linear in the command's length.
+own line continuation is removed. Git Bash drops every carriage return first,
+so a Bash command holding one is also read without them. Bash keeps a `\`
+ending a comment, a single-quoted line or a quoted heredoc line as a line
+end instead, so a Bash command with a `\` ending a line is read whole: with
+each such `\` joined and with it kept as a line end, and each reading also
+as one statement, so a push anywhere in it with a force word anywhere after
+it blocks. Every step is linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
 script or a search pattern with `git push -f` in it is blocked too. So is a
@@ -409,7 +410,17 @@ def check(command, tool):
     """Why a command's text force-pushes, or None."""
     if len(command) > MAX_COMMAND:
         return None
-    if tool == "Bash" and "\\\n" in command:
+    if tool == "Bash" and "\r" in command:
+        # Git Bash drops every CR before reading, so `\` + CR + LF continues a
+        # line there; Bash elsewhere keeps the CR. Either reading can block.
+        return check_bash(command) or check_bash(command.replace("\r", ""))
+    return check_bash(command) if tool == "Bash" else check_reading(command, tool)
+
+
+def check_bash(command):
+    """Why a Bash command's text force-pushes, or None."""
+    tool = "Bash"
+    if "\\\n" in command:
         # Bash does not continue a comment (`# C:\work\repo\`), a single-quoted
         # string or a quoted heredoc body, and telling those apart means
         # parsing Bash. Such a command is read whole instead, once with each
