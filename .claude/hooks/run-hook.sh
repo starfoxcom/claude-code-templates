@@ -3,8 +3,9 @@
 # Claude Code pipes the tool call to stdin as JSON; the hook reads it there.
 #
 # The hook is skipped, and the tool call goes ahead, when:
-# - ~/.claude/settings.json already registers hooks/<name>.py, so the user's
-#   own copy runs and the check never runs twice;
+# - ~/.claude/hooks/<name>.py exists and ~/.claude/settings.json names it
+#   outside a permission rule, so the user's own copy runs and the check
+#   never runs twice (a registration whose file is gone does not count);
 # - no Python 3.8+ outside a virtual environment is on PATH.
 #
 # A committed file cannot name the interpreter by absolute path, so this
@@ -18,7 +19,9 @@ name=$1
 hook="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/$name.py"
 
 settings="$HOME/.claude/settings.json"
-if [ -f "$settings" ] && grep -Eq "hooks[/\\\\]+$name\.py" "$settings"; then
+# Permission entries look like "Bash(...)": a mention there is no registration.
+if [ -f "$HOME/.claude/hooks/$name.py" ] && [ -f "$settings" ] &&
+  grep -E "hooks[/\\\\]+$name\.py" "$settings" | grep -Evq '^[[:space:]]*"[A-Za-z]+\('; then
   exit 0
 fi
 
