@@ -20,6 +20,11 @@ SETTINGS = os.path.join(REPO, ".claude", "settings.json")
 # Built from pieces so this file's text never reads as a force push to the
 # guard that watches the commands run in this repo.
 FORCE_PUSH = "git push -" + "f origin feature/x"
+# Same for attribution samples and the guard that scans this repo's commands.
+AI_TRAILER = "Co-" + "Authored-By: Cla" + "ude <noreply@anthro" + "pic.com>"
+HUMAN_TRAILER = "Co-" + "Authored-By: Jane Doe <12345+jane@users.noreply.github.com>"
+GENERATED_LINE = "Gener" + "ated with [Cla" + "ude Code](https://cla" + "ude.com/claude-code)"
+SESSION_LINK = "https://cla" + "ude.ai/code/session_" + "01V8SAUxUZBbVPekZUHDL9FZ"
 
 
 def find_sh():
@@ -150,6 +155,85 @@ class GuardHookTest(unittest.TestCase):
     def test_launcher_is_the_one_the_settings_start(self):
         self.assertIn("/.claude/hooks/run-hook.sh", settings_command("push-guard"))
         self.assertTrue(os.path.exists(LAUNCHER))
+
+    # --- no-ai-attribution: attribution is denied, mentions pass ---
+
+    def assert_denied(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip(), "expected a deny, got silence")
+        decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+        self.assertEqual(decision, "deny")
+
+    def attr(self, command, **kw):
+        return self.run_hook("no-ai-attribution", command, **kw)
+
+    def test_ai_co_author_is_denied(self):
+        self.assert_denied(self.attr(f"git commit -m 'docs: x' -m '{AI_TRAILER}'"))
+
+    def test_human_co_author_passes(self):
+        self.assert_passes(self.attr(f"git commit -m 'docs: x' -m '{HUMAN_TRAILER}'"))
+
+    def test_generated_with_line_is_denied(self):
+        for line in (GENERATED_LINE, "Written by an AI assistant", "docs: x via " + "Cla" + "ude Code"):
+            with self.subTest(line=line):
+                self.assert_denied(self.attr(f"git commit -m 'docs: x' -m '{line}'"))
+
+    def test_session_link_and_robot_are_denied(self):
+        for body in (SESSION_LINK, "Done \U0001F916", "Cla" + "ude-Session: abc"):
+            with self.subTest(body=body):
+                self.assert_denied(self.attr(f"gh pr comment 5 --body '{body}'"))
+
+    def test_plain_mentions_pass(self):
+        for command in (
+            "git commit -m 'fix(hooks): block force pushes in " + "Cla" + "ude Code sessions'",
+            "git commit -m 'docs: update CLAUDE.md and .claude/rules/git.md'",
+            "gh pr comment 1 --repo starfoxcom/claude-code-templates --body 'docs: x'",
+            "gh pr create --title 't' --body 'See https://github.com/starfoxcom/claude-code-templates/issues/3 "
+            "and https://starfoxcom.github.io/claude-code-templates/'",
+            "gh pr create --head hotfix/drop-admin-text-claude-yml --title 'fix(ci): x' --body 'y'",
+            "gh pr comment 5 --body '@claude review this PR - re-check on the parser'",
+            "git commit -m 'fix(ui): show pointer with cursor on toggle rows'",
+        ):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_cursor_tool_name_is_denied(self):
+        self.assert_denied(self.attr("git commit -m 'feat: x' -m 'Written with Cursor AI'"))
+
+    def test_attribution_next_to_repo_name_is_denied(self):
+        self.assert_denied(self.attr(
+            f"gh pr comment 1 --repo starfoxcom/claude-code-templates --body '{AI_TRAILER}'"))
+
+    def test_no_n_flags_that_are_not_no_verify_pass(self):
+        for command in ("git cherry-pick -n abc123", "git revert -n abc123", "git tag -n",
+                        "git merge -n feature/x", "git commit -m 'docs(hooks): explain core.hooksPath and -n'",
+                        "git commit -m x && git config --get core.hooksPath"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_hook_skips_are_denied(self):
+        for command in ("git commit -n -m x", "git commit -an -m x", "git commit --no-verify -m x",
+                        "git push --no-verify origin feature/x", "git -c core.hooksPath=/dev/null commit -m x",
+                        "git config core.hooksPath /tmp/none && git commit -m x"):
+            with self.subTest(command=command):
+                self.assert_denied(self.attr(command))
+
+    def test_body_from_stdin_is_denied(self):
+        for command in ("gh pr create --title t --body-file - < body.md",
+                        "gh release create v1 --notes-file - < notes.md",
+                        "cat x.json | gh api -X POST repos/o/r/issues --input -",
+                        "echo 'a<<b' | gh pr create --title t --body-file -",
+                        "cat evil.md | gh pr create --title t --body-file - # <<",
+                        "gh pr comment 5 --body-file - <<EOF\n$(cat /tmp/body.md)\nEOF"):
+            with self.subTest(command=command):
+                self.assert_denied(self.attr(command))
+
+    def test_body_from_a_quoted_heredoc_passes(self):
+        self.assert_passes(self.attr(
+            "gh pr create --title t --body-file - <<'EOF'\n## What\n| a | b |\n|---|---|\nEOF"))
+
+    def test_attribution_inside_a_heredoc_is_denied(self):
+        self.assert_denied(self.attr(f"gh pr create --title t --body-file - <<'EOF'\n{AI_TRAILER}\nEOF"))
 
 
 if __name__ == "__main__":
