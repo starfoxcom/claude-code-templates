@@ -445,7 +445,10 @@ def check_reading(command, tool, whole=False):
             text = REDIRECT.sub(redirect_gone, unquote(masked, backslash))
             # Substitutions nested past MAX_PASSES may hide separators, so such
             # a command is also read as one statement.
-            for statement in STATEMENT_END[tool].split(text) + ([text] if deep or whole else []):
+            # Read as one statement, the separators become spaces so a word
+            # glued to one (`-f;`, `-qf|tail`) stays a word.
+            whole_text = [STATEMENT_END[tool].sub(" ", text)] if deep or whole else []
+            for statement in STATEMENT_END[tool].split(text) + whole_text:
                 reason = force_in([w for w in WORD_SPLIT.split(statement) if w])
                 if reason:
                     return reason

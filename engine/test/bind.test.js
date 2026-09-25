@@ -355,6 +355,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "echo x \\\r\ngit push -qf origin main", "git commit -m wip \\\r\ngit push -qf origin main",
     "git push origin main \\\r\n  --force", "git push \\\r\n  -f origin main",
     "# C:\\work\\repo\\\r\ngit push origin main \\\r\n  --force",
+    // Read whole, a force word glued to a separator is still a word.
+    "cd /c/work/repo  # C:\\work\\repo\\\ngit push origin main \\\n  -f; git log --oneline -1",
+    "# deploy notes\\\ngit push origin main \\\n  -qf|tail -1",
+    "# output lands in C:\\work\\repo\\\r\ngit push origin main \\\r\n  --force; echo done",
     // A backtick ending a line closes a substitution; it is no line continuation in Bash.
     "VERSION=`cat VERSION`\ngit push -f origin main", "REV=`git rev-parse HEAD`\r\ngit push -f origin main",
     // Bash does not continue a comment, so a `\` ending one leaves the next line its own command.
