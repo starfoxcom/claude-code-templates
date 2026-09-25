@@ -342,7 +342,7 @@ def summarize(name, sessions, prs, config):
               f"code-research adherence {adherence}, "
               f"sessions using task lists {sum(1 for s in sessions if s['task_tool_calls'])}/{n}")
         print(f"  largest session {biggest['output_tokens'] / 1e6:.2f}M tokens, {biggest['activity_minutes']} min with activity,"
-              f"{biggest['files_edited']} files ({biggest['start'][:10]})")
+              f" {biggest['files_edited']} files ({biggest['start'][:10]})")
     if prs:
         print(f"  merged PRs {prs['merged_prs']} {prs['by_type']}, to main {prs['to_main']}, "
               f"cascades {prs['cascades']}, median {prs['median_hours_to_merge']} h to merge")
