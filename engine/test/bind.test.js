@@ -377,6 +377,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // Silent passes: pushes on the allow-list, commands that never push, and text that only mentions one.
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
+    // A search pattern is text, even after a shell or `eval` word.
+    "rg -t sh -c 'git push -f'", "grep -rn -e eval -e 'git push -f' scripts/",
     // Everyday chains: commit then push, trim the output, delete one branch and push another.
     "git add -A && git commit -q -m \"fix(x): y\" && git push -q origin feature/x 2>&1 | tail -1; git log --oneline -1",
     "git push origin --delete hotfix/x 2>&1 | tail -1; git checkout -q -b chore/c origin/develop; git push -q -u origin chore/c 2>&1 | tail -1",
@@ -422,6 +424,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // `$'...'` and `$"..."` inside the subcommand name, decoded as Bash does.
     "git pu$'sh' -qf origin main", "git pu$\"sh\" -qf origin main", "git $'\\x70ush' -qf origin main",
     "git $'\\160ush' -qf origin main", "git send$'-'pack --force https://x/y main",
+    // A lease does not undo a delete: the branch's commits are already gone.
+    "git push origin --delete main && git push --force-with-lease origin main",
     // A redirect glued to `push` ends the word, as in the shell.
     "git push>/dev/null -qf origin main", "git push<in -qf origin main", "git push&>/dev/null -qf origin main",
     // A redirect glued to a flag ends the word there, so the flag still reaches git.
@@ -584,6 +588,16 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   assert.ok(Date.now() - evalStart < 3000, "many eval words answer quickly");
   assert.equal(verdict("PowerShell", "# it's\ngit push origin main `\n-qf"), "deny", "PowerShell continuation after a comment");
   // Deeply nested substitutions stay linear: only the outermost groups are checked again.
+  // Chained heredocs inside substitutions stay linear, with the push in a later group.
+  let chain = "echo push";
+  for (let j = 29; j >= 0; j--) chain = `$(cat <<E${j}\n${chain}\nE${j}\n)`;
+  chain = `: ${chain} $(git push -qf origin main)`;
+  const chainStart = Date.now();
+  assert.equal(verdict("Bash", chain), "deny", "a push after chained heredocs blocks");
+  assert.ok(Date.now() - chainStart < 3000, "chained heredocs answer quickly");
+  // A deleted branch pushed again gets advice that works, not the lease advice.
+  const again = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin --delete main && git push --force-with-lease origin main" } }));
+  assert.match(again.stderr, /without deleting the branch first/, "a delete then push gets its own advice");
   const nested = "x=" + "$(echo ".repeat(2400) + ")".repeat(2400) + "; git push -qf origin main";
   const nestedStart = Date.now();
   assert.equal(verdict("Bash", nested), "deny", `a ${nested.length}-character nested command blocks`);

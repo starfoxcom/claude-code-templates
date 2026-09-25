@@ -86,6 +86,11 @@ GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--e
                      "--config-env", "--attr-source"}
 PUSH_VALUE_OPTIONS = {"--repo", "--push-option", "--receive-pack", "--exec"}
 DATA_COMMANDS = {"echo", "printf", "write-output", "write-host"}
+# Searches whose patterns are text, never run: `grep -e 'git push -f'`.
+# `rg --pre` runs a program, so it is left out.
+SEARCH_COMMANDS = {"grep", "egrep", "fgrep", "rg", "findstr", "select-string", "sls"}
+# The reason for a branch deleted and pushed again, which a lease does not fix.
+DELETED_AGAIN = "pushes again a branch this command deleted"
 # Programs that run a literal command string, read again as a nested command.
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 POWERSHELLS = {"pwsh", "powershell"}
@@ -162,7 +167,10 @@ def scan(command, tool, text=False, keywords=True):
                     end = command.find("\n", j)
                     line = command[j:n if end < 0 else end]
                     if (line.lstrip("\t") if strip_tabs else line) == delimiter:
-                        if not literal:
+                        # Inside a substitution the body is part of that
+                        # group's text and is read with it; adding its groups
+                        # here too would read nested levels many times over.
+                        if not literal and not stack:
                             groups.extend(scan(command[start:j], tool, text=True)[1])
                         j = n if end < 0 else end + 1
                         break
@@ -512,7 +520,7 @@ def check_push(args, deleted):
         elif target in deleted:
             # Deleting a branch and pushing it again drops the remote's commits
             # the same way a force push does.
-            return f"`{ref}` (pushes again a branch this command deleted)"
+            return f"`{ref}` ({DELETED_AGAIN})"
     return None
 
 
@@ -569,14 +577,17 @@ def force_reason(args):
 
 
 def only_data(segment, tokens):
-    """Commands that print or commit without writing a file: their arguments
-    are text, never a push. A redirect makes them write, and in PowerShell a
+    """Commands that print, search or commit without writing a file: their
+    arguments are text, never a push. A redirect makes them write, and in PowerShell a
     `(...)` argument runs as a command (`Write-Output (git push -qf)`), so
     neither counts."""
     if re.search(r"[>(\ue001]", segment):
         return False
-    if tokens[0].lower() in DATA_COMMANDS:
+    name = tokens[0].lower()
+    if name in DATA_COMMANDS:
         return True
+    if name in SEARCH_COMMANDS:
+        return name != "rg" or not any(re.match(r"--pre(=|$)", t) for t in tokens)
     return tokens[:2] == ["git", "commit"]
 
 
@@ -647,7 +658,7 @@ def check(command, tool, depth=0):
     deleted = set()
     for part in parts:
         tokens = words(part, tool)
-        # A print or commit only carries push text; it never runs it.
+        # A print, search or commit only carries push text; it never runs it.
         if not tokens or only_data(part, tokens):
             continue
         reason = push_reason(tokens, deleted, depth) or (depth < MAX_DEPTH and nested_reason(tokens, tool, depth))
@@ -678,8 +689,13 @@ def main():
         return 0
     if reason:
         reason = reason.translate(UNMARK)
-        print(f"Blocked a force push: {reason}. Use `--force-with-lease` instead, "
-              "which refuses to overwrite commits you have not fetched.", file=sys.stderr)
+        if DELETED_AGAIN in reason:
+            advice = ("Push without deleting the branch first; add `--force-with-lease` "
+                      "if the push must replace the remote's commits.")
+        else:
+            advice = ("Use `--force-with-lease` instead, which refuses to overwrite "
+                      "commits you have not fetched.")
+        print(f"Blocked a force push: {reason}. {advice}", file=sys.stderr)
         return 2
     return 0
 
