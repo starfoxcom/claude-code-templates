@@ -633,7 +633,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // PowerShell forms whose force flag is not in the text.
   for (const cmd of ["git push @args", "git push $flags origin main",
     // PowerShell evaluates a parenthesized argument; Set-Item changes the environment next to a push.
-    "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin",
+    "git push origin main ('-q'+'f')", "git push origin (\"+{0}\" -f $b)", "Set-Item Env:HOME C:/e; git push origin",
     // After `--%` PowerShell passes separators through as words.
     "git push origin main -o --% ; -qf",
     // A program name built at run time, and a PowerShell alias for git.
@@ -657,8 +657,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   assert.doesNotMatch(readFileSync(join(repo, "_core/global-template/hooks/push-guard.py"), "utf8"),
     /re\.split\([^)]*,\s*\d+\)/, "maxsplit is passed by keyword");
   assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
+  // Over MAX_COMMAND characters the guard passes without reading; at the cap it still reads.
+  const atCap = "git log " + "x ".repeat(49983) + "; git push -qf origin main";
+  assert.equal(atCap.length, 100000, "the cap probe is exactly MAX_COMMAND characters");
+  assert.equal(verdict("Bash", atCap), "deny", "a force push at the length cap blocks");
+  assert.equal(verdict("Bash", "git log x " + atCap.slice(8)), "allow", "a force push over the length cap passes unread");
   // A timed-out hook lets the call through, so long commands must answer well inside the timeout.
-  // Over MAX_COMMAND characters the guard passes without parsing.
   for (const repeat of [4900, 50000]) {
     const long = "git log " + "git ".repeat(repeat) + "; echo -qf | xargs git push origin main";
     const started = Date.now();

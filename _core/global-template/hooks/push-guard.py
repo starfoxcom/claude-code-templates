@@ -46,7 +46,8 @@ these run without a block:
 
 - a force flag the shell builds at run time (`git push $FLAGS`,
   `$(echo -qf)`, `xargs`, brace expansion, text piped into a shell or
-  `iex`, `('-q'+'f')`, PowerShell's `--%`);
+  `iex`, `('-q'+'f')`, PowerShell's `-f` format operator as in
+  `("+{0}" -f $b)`, PowerShell's `--%`);
 - git config or aliases that force a later plain `git push`, whether on
   disk (`git config alias.p 'push -f'`, a `remote.<name>.push` or `mirror`
   setting) or set in the same command (`GIT_CONFIG_*` variables,
