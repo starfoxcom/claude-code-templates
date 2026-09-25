@@ -793,6 +793,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // The block message says how to pass text that only mentions a force push.
   const mention = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "echo git push -f" } }));
   assert.match(mention.stderr, /put that text in a file/, "the block message covers text mentions");
+  // It also says how to pass a continued command whose force word is another command's.
+  const continued = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin main \\\n  && rm -rf build" } }));
+  assert.equal(continued.status, 2, "a continued push with a later force word blocks");
+  assert.match(continued.stderr, /put it on one line or run the push as its own command/, "the block message covers continued commands");
   const nested = "x=" + "$(echo ".repeat(2400) + ")".repeat(2400) + "; git push -qf origin main";
   const nestedStart = Date.now();
   assert.equal(verdict("Bash", nested), "deny", `a ${nested.length}-character nested command blocks`);

@@ -51,7 +51,9 @@ follows anywhere in it (`git push origin main \` then `&& rm -rf build`). A
 plain push chained after a quoted string that spans lines can block the same
 way: on the string's last line its closing quote pairs with the next quote,
 so the flag of a later statement there (`rm -rf`) reads as the push's. The
-block message says to put such text in a file and pass the file instead.
+block message says to put such text in a file and pass the file instead,
+and to put a command with a `\` ending a line on one line or run its push as
+a command of its own.
 
 The hook only ever blocks or stays silent; it never asks. Out of reach, so
 these run without a block:
@@ -473,7 +475,9 @@ def main():
     if reason:
         print(f"Blocked a force push: {reason}. Use `--force-with-lease` instead, which refuses "
               "to overwrite commits you have not fetched. If the command only mentions a force "
-              "push (a message, a script, a search), put that text in a file and pass the file.",
+              "push (a message, a script, a search), put that text in a file and pass the file. "
+              "If it has a `\\` ending a line, put it on one line or run the push as its own "
+              "command.",
               file=sys.stderr)
         return 2
     return 0
