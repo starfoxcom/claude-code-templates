@@ -358,6 +358,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
     "git push origin main `\n-qf", "git push origin main `\r-qf", "git push origin main `\r\n-qf",
     ". git push -qf origin main",
+    // A statement complete before a here-string still runs.
+    "git push -qf origin main; Write-Output @\"\nx\n\"@",
     // A script block bound to a pipeline parameter runs once per piped object.
     "Get-Item x | Select-String -LiteralPath { git push -qf origin main } -Pattern a",
     // An unquoted comma passes array elements as separate arguments, and a
@@ -428,6 +430,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git $'\\160ush' -qf origin main", "git send$'-'pack --force https://x/y main",
     // A `case` pattern named like a print or search command is still a pattern.
     "case grep in\ngrep ) git push -qf origin main;;\nesac", "case x in x) :;; echo ) git push -qf origin main;; esac",
+    // Statements complete before an unreadable point still run.
+    "git push -qf origin main\ncat <<EOF", "git push -qf origin main; echo \"x", "git push -qf origin main; x=$(echo",
     // A lease does not undo a delete: the branch's commits are already gone.
     "git push origin --delete main && git push --force-with-lease origin main",
     // A redirect glued to `push` ends the word, as in the shell.
@@ -503,6 +507,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const unguarded = [
     "git push origin --delete old-branch", "git push -d origin old-branch",
     "git push origin --delete main && git push -u origin HEAD",
+    // From the point the guard cannot read on, text may be a heredoc body or a string.
+    "cat <<EOF\ngit push -qf origin main", "echo \"x; git push -qf origin main", "x=$(echo; git push -qf origin main",
     // A push nested past the depth limit.
     "echo " + "$(echo ".repeat(9) + "git push -qf origin main" + ")".repeat(9),
     "git push origin x 2>&1 | tail -1 | sh", "git push origin x | tee .git/config",

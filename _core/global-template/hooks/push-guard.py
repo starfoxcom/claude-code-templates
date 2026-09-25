@@ -28,14 +28,19 @@ inside a literal command string (`sh -c '...'`, `bash -l -c '...'`, `pwsh
 when written in Bash's `$'...'` quoting or with a redirect glued to it
 (`-qf>/dev/null`). A separator inside a substitution does not end the
 statement around it, and a heredoc body is text, not commands. Text that
-only prints or commits (`echo`, `printf`, `git commit`, without a redirect)
-is never read as a push, and neither are
-comments.
+only prints, searches or commits (`echo`, `printf`, `Write-Output`,
+`Write-Host`, `grep`, `egrep`, `fgrep`, `rg` without `--pre`, `findstr`,
+`Select-String`, `sls`, `git commit`) is never read as a push, unless its
+statement has a redirect, a `(`, a `)` or a `{`; neither are comments. In a
+command it cannot read to the end, the statements complete before the
+uncertain point are still read.
 
 Out of reach, so these run without a block:
 
-- a command this hook cannot split into statements for certain: one with a
-  heredoc that never reaches its closing line, a `<<` it cannot place, a
+- a push from the uncertain point on (anywhere, for the PowerShell
+  character and `--%` cases), or in a substitution, shell string or alias
+  anywhere, of a command this hook cannot split into statements for
+  certain: one with a heredoc that never reaches its closing line, a `<<` it cannot place, a
   PowerShell here-string, block comment or `--%`,
   unbalanced quotes or groups, or, in PowerShell, characters outside ASCII,
   a vertical tab or a form feed;
@@ -52,7 +57,9 @@ Out of reach, so these run without a block:
   alias.p 'push -f'`, a `remote.<name>.push` or `mirror` setting, `GIT_CONFIG_*`
   variables, a shell alias for git);
 - a branch deleted and then pushed again in another command, or in the same
-  command by `HEAD`, a bare `git push` or another name for the same ref;
+  command by `HEAD`, a bare `git push` or another name for the same ref, or
+  with the delete or the push inside a substitution, shell string, `eval` or
+  `!` alias;
 - a push run by another program (`python -c`, `node -e`, `make`, `gh api`).
 
 Project deny rules cover some of these by text (`git remote *--mi*`, `gh repo
@@ -137,6 +144,9 @@ def scan(command, tool, text=False, keywords=True):
     openers = ("$(", "@(") if tool == "PowerShell" else ("$(", "<(", ">(", "${")
     parts, current, groups, stack, heredocs = [], [], [], [], []
     quote, readable, escaped_end, closed_at, i, n = None, True, -1, -1, 0, len(command)
+    # How many statements were complete when the reading first became uncertain,
+    # and when the outermost open quote, group and pending heredoc started.
+    lost, quote_at, stack_at, heredoc_at = n + 1, 0, 0, 0
     joined_to, joined_from, joined_before, joined_escaped = -1, -1, "", False
 
     def mark(text):
@@ -184,7 +194,7 @@ def scan(command, tool, text=False, keywords=True):
                         j = n if end < 0 else end + 1
                         break
                     if end < 0:
-                        return parts + ["".join(current)], groups, False
+                        return parts + ["".join(current)], groups, False, parts[:min(lost, len(parts))]
                     j = end + 1
             heredocs = []
             if not stack:
@@ -208,6 +218,7 @@ def scan(command, tool, text=False, keywords=True):
             opener = opener or "`"
             if not stack:
                 current.append(mark(opener))
+                stack_at = len(parts)
             stack.append([opener, i + len(opener), quote, 0, 0])
             quote = None
             i += len(opener)
@@ -260,15 +271,18 @@ def scan(command, tool, text=False, keywords=True):
         elif tool != "PowerShell" and command.startswith("$'", i):
             if not stack:
                 current.append("$'")
+                quote_at = len(parts)
             quote = "$'"
             i += 2
             continue
         elif ch in "'\"":
             if tool == "PowerShell" and command[i - 1:i] == "@":
-                readable = False
+                readable, lost = False, min(lost, len(parts))
+            if not stack:
+                quote_at = len(parts)
             quote = ch
         elif tool == "PowerShell" and command.startswith(("<<", "<#"), i):
-            readable = False
+            readable, lost = False, min(lost, len(parts))
         elif command.startswith("<<<", i):
             current.append(mark("<<<"))
             i += 3
@@ -284,10 +298,12 @@ def scan(command, tool, text=False, keywords=True):
         elif command.startswith("<<", i):
             here = re.match(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|(\\?)([A-Za-z0-9_.-]+))", command[i:])
             if not here:
-                readable = False
+                readable, lost = False, min(lost, len(parts))
             else:
                 delimiter = next(g for g in (here.group(2), here.group(3), here.group(5)) if g is not None)
                 literal = here.group(5) is None or bool(here.group(4))
+                if not heredocs:
+                    heredoc_at = len(parts)
                 heredocs.append((delimiter, bool(here.group(1)), literal))
                 if not stack:
                     current.append(mark(here.group(0)))
@@ -330,17 +346,21 @@ def scan(command, tool, text=False, keywords=True):
             current.append(mark(ch) if quote is None else ch)
         i += 1
     parts.append("".join(current))
-    if stack or heredocs:
-        readable = False
+    if stack:
+        readable, lost = False, min(lost, stack_at)
+    if heredocs:
+        readable, lost = False, min(lost, heredoc_at)
+    if quote is not None:
+        readable, lost = False, min(lost, quote_at)
     # PowerShell also reads curly quotes as quotes and Unicode spaces, vertical
     # tab and form feed as whitespace; shlex does not.
     if tool == "PowerShell" and re.search(r"[^\x00-\x7f]|[\v\f]", command):
-        readable = False
+        readable, lost = False, 0
     # After `--%` PowerShell passes the rest of the line to the program as is,
     # separators included.
     if tool == "PowerShell" and "--%" in command:
-        readable = False
-    return parts, groups, readable and quote is None
+        readable, lost = False, 0
+    return parts, groups, readable, parts if readable else parts[:lost]
 
 
 ANSI_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r",
@@ -684,14 +704,25 @@ def guard(command, tool):
     # time; it only runs out on a machine too slow to run the hook at all.
     deadline = time.monotonic() + QUICK_BUDGET
     try:
-        parts, groups, readable = scan(command, tool)
+        parts, groups, readable, certain = scan(command, tool)
         if not readable:
-            parts, groups, readable = scan(command, tool, keywords=False)
+            parts, groups, readable, certain = scan(command, tool, keywords=False)
         if readable:
             for text in [command] + groups:
                 reason = check(text, tool, MAX_DEPTH)
                 if reason:
                     return reason
+        else:
+            # The statements complete before the reading became uncertain are
+            # read for certain: `git push -qf origin main` before an unclosed
+            # `cat <<EOF` still runs.
+            deleted = set()
+            for part in certain:
+                tokens = words(part, tool)
+                if tokens and not only_data(part, tokens):
+                    reason = push_reason(tokens, deleted, MAX_DEPTH)
+                    if reason:
+                        return reason
         deadline = time.monotonic() + READ_BUDGET
         return check(command, tool)
     except OverBudget:
@@ -711,11 +742,11 @@ def check(command, tool, depth=0):
     bare = re.sub(r"[\"'`\\$]", "", re.sub(r"[\\`]\r?\n|`\r", "", bare))
     if not re.search(r"push|send-pack", bare, re.I):
         return None
-    parts, groups, readable = scan(command, tool)
+    parts, groups, readable, _ = scan(command, tool)
     # A miscounted `case` keeps a group open; a second reading without `case`
     # counting closes each group at its first `)`.
     if not readable:
-        parts, groups, readable = scan(command, tool, keywords=False)
+        parts, groups, readable, _ = scan(command, tool, keywords=False)
     if not readable:
         return None
     deleted = set()
