@@ -24,8 +24,9 @@ work. It blocks only what it can read for certain: a `git push` anywhere in a
 statement, also after wrappers such as `sudo -u me` or `timeout 5`, inside a
 `(...)`, `$(...)`, backtick or `{ ...; }` group, after an assignment, or
 inside a literal command string (`sh -c '...'`, `bash -l -c '...'`, `pwsh
--Command '...'`, `eval '...'`) run as the statement's command, also after
-the wrappers in WRAPPERS and WRAPPER_PAIRS, with a force flag among its own words, also
+-Command '...'`, `eval '...'`) run as a command (the statement's first word
+or the first word of a `{...}` or `(...)` block), also after the wrappers in
+WRAPPERS and WRAPPER_PAIRS, with a force flag among its own words, also
 when written in Bash's `$'...'` quoting or with a redirect glued to it
 (`-qf>/dev/null`). A separator inside a substitution does not end the
 statement around it, and a heredoc body is text, not commands. Text that
@@ -132,6 +133,7 @@ WRAPPERS = {
     "xargs": ({"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a", "--max-args", "--max-procs",
                "--max-lines", "--delimiter", "--eof", "--max-chars", "--arg-file", "--replace"}, 0),
     "nohup": (set(), 0), "command": (set(), 0), "builtin": (set(), 0), "exec": ({"-a"}, 0),
+    "coproc": (set(), 0),
 }
 # Two-word wrappers: `bundle exec sh -c '...'`.
 WRAPPER_PAIRS = {("bundle", "exec"), ("uv", "run"), ("poetry", "run"), ("pipenv", "run")}
@@ -666,24 +668,28 @@ def only_data(segment, tokens):
     return tokens[:2] == ["git", "commit"]
 
 
-def command_word(tokens):
-    """The position of the word that runs as the command: the first word after
-    any assignments, and the word after each wrapper, its options and its
-    plain words (`sudo -u me sh`, `timeout 5 bash`, `bundle exec sh`), or after
-    a `case` pattern (`a) eval`). An `eval` or `sh` anywhere else is an
-    argument of another program (`git grep -e eval`), not a command."""
-    k = 0
+def head(token):
+    """The program a word names, also when a `{` block starts right before
+    it (`{iex`)."""
+    return program(token.lstrip("{"))
+
+
+def command_word(tokens, k):
+    """The position of the word that runs as the command from position k on:
+    the first word after any assignments, and the word after each wrapper,
+    its options and its plain words (`sudo -u me sh`, `timeout 5 bash`,
+    `bundle exec sh`), or after a `case` pattern (`a) eval`)."""
     while k < len(tokens):
         tick()
         token = tokens[k]
-        name = program(token)
+        name = head(token)
         if re.match(r"[A-Za-z_][A-Za-z0-9_]*=", token):
             k += 1
         elif name == "case":
             k = tokens.index("in", k) + 1 if "in" in tokens[k:] else len(tokens)
         elif re.fullmatch(r"[^$`(\ue000-\ue002]*\)", token):
             k += 1
-        elif (name, program(tokens[k + 1]) if k + 1 < len(tokens) else "") in WRAPPER_PAIRS:
+        elif (name, head(tokens[k + 1]) if k + 1 < len(tokens) else "") in WRAPPER_PAIRS:
             k += 2
         elif name in WRAPPERS:
             values, plain = WRAPPERS[name]
@@ -692,7 +698,9 @@ def command_word(tokens):
                 if tokens[k] == "--":
                     k += 1
                     break
-                k += 2 if tokens[k] in values else 1
+                # A value option may end a bundle of short flags (`-iu me`).
+                option = tokens[k] if tokens[k].startswith("--") else "-" + tokens[k][-1]
+                k += 2 if option in values else 1
             k += plain
         else:
             return k
@@ -702,22 +710,40 @@ def command_word(tokens):
 def nested_reason(tokens, tool, depth):
     """A literal command string that another shell or `eval` runs:
     `sh -c '...'`, `bash -lc '...'`, `pwsh -Command '...'`, `eval '...'`,
-    `Invoke-Expression '...'`, also after wrappers (`bundle exec sh -c`)."""
-    k = command_word(tokens)
-    if k is None:
-        return None
-    name, rest = program(tokens[k]), tokens[k + 1:]
-    if name in EVAL_COMMANDS and rest:
-        # Its string is every later word of the statement.
-        return check(" ".join(rest), tool, depth + 1)
-    if name in SHELLS:
-        inner = shell_command_string(rest)
-        return check(inner, "Bash", depth + 1) if inner is not None else None
-    if name in POWERSHELLS:
-        flag = next((j for j, t in enumerate(rest) if re.fullmatch(r"(?i)-c(o(m(m(a(nd?)?)?)?)?)?", t)), None)
-        if flag is not None and flag + 1 < len(rest):
-            # Like `eval`, the string is every later word.
-            return check(" ".join(rest[flag + 1:]), "PowerShell", depth + 1)
+    `Invoke-Expression '...'`, also after wrappers (`bundle exec sh -c`).
+
+    Only a word where a command starts is read: the statement's first word,
+    the first word inside a `{...}` or `(...)` block (a function body, `try
+    {`, `ForEach-Object {`, a subshell), each after any wrappers. An `eval`
+    or `sh` anywhere else is an argument of another program (`git grep -e
+    eval`), not a command."""
+    starts = [0] + [j + 1 for j, t in enumerate(tokens)
+                    if t in ("{", "}", "(", ")") or t.endswith(("{", "()"))]
+    starts += [j for j, t in enumerate(tokens) if t.startswith("{") and t != "{"]
+    # A start inside the words an earlier start already walked past gives the
+    # same command, so each word is walked once.
+    commands, reached = [], -1
+    for start in sorted(set(starts)):
+        k = command_word(tokens, start) if start > reached else None
+        if k is not None:
+            commands.append(k)
+            reached = k
+    for k in commands:
+        name, rest = head(tokens[k]), tokens[k + 1:]
+        if name in EVAL_COMMANDS and rest:
+            # Its string is every later word of the statement, so one check
+            # covers every later start too.
+            return check(" ".join(rest), tool, depth + 1)
+        if name in SHELLS:
+            inner = shell_command_string(rest)
+            reason = check(inner, "Bash", depth + 1) if inner is not None else None
+            if reason:
+                return reason
+        if name in POWERSHELLS:
+            flag = next((j for j, t in enumerate(rest) if re.fullmatch(r"(?i)-c(o(m(m(a(nd?)?)?)?)?)?", t)), None)
+            if flag is not None and flag + 1 < len(rest):
+                # Like `eval`, the string is every later word.
+                return check(" ".join(rest[flag + 1:]), "PowerShell", depth + 1)
     return None
 
 

@@ -358,6 +358,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
     "git push origin main `\n-qf", "git push origin main `\r-qf", "git push origin main `\r\n-qf",
     ". git push -qf origin main",
+    // The first word of a block is a command.
+    "try { iex 'git push -qf origin main' } catch {}", "if ($a) { x } else { iex 'git push -qf origin main' }",
+    "$x | ForEach-Object { iex 'git push -qf origin main' }", "if ($a) {iex 'git push -qf origin main'}",
     // A statement complete before a here-string still runs.
     "git push -qf origin main; Write-Output @\"\nx\n\"@",
     // A script block bound to a pipeline parameter runs once per piped object.
@@ -385,6 +388,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "rg -t sh -c 'git push -f'", "grep -rn -e eval -e 'git push -f' scripts/",
     "git grep -n -e eval -e 'git push -f'", "git log -S eval -S 'git push --force'",
     "find . -exec grep -e eval -e 'git push -f' {} +", "git grep eval -- 'git push -f'",
+    "git grep -e '{' -e eval -e 'git push -f'", "awk '{ print }' eval 'git push -f'",
     // Everyday chains: commit then push, trim the output, delete one branch and push another.
     "git add -A && git commit -q -m \"fix(x): y\" && git push -q origin feature/x 2>&1 | tail -1; git log --oneline -1",
     "git push origin --delete hotfix/x 2>&1 | tail -1; git checkout -q -b chore/c origin/develop; git push -q -u origin chore/c 2>&1 | tail -1",
@@ -436,6 +440,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "sudo -E bash -c 'git push -qf origin main'", "env -i A=1 sh -c 'git push -qf origin main'",
     "timeout -s KILL 5 sh -c 'git push -qf origin main'", "xargs -0 sh -c 'git push -qf origin main'",
     "if sh -c 'git push -qf origin main'; then :; fi", "case x in x) eval 'git push -qf origin main';; esac",
+    "f() { eval 'git push -qf origin main'; }; f", "f() ( sh -c 'git push -qf origin main' )",
+    "coproc eval 'git push -qf origin main'", "sudo -iu me sh -c 'git push -qf origin main'",
     // Statements complete before an unreadable point still run.
     "git push -qf origin main\ncat <<EOF", "git push -qf origin main; echo \"x", "git push -qf origin main; x=$(echo",
     // A lease does not undo a delete: the branch's commits are already gone.
