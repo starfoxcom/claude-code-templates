@@ -20,9 +20,11 @@ sees. First it removes what the shell would remove: line continuations,
 quotes, backslashes and backticks, decoding Bash's `$'...'` escapes and
 PowerShell's `` `u{...} `` on the way. Each command substitution (`$(...)`,
 `${...}`, `<(...)`, a Bash backtick pair, a PowerShell `(...)`) is read on
-its own. The rest is cut into statements at every newline, and at every
-`;`, `|` and `&` outside a quoted string that closes on its own line;
-redirects and their targets are dropped. After a `git` word, a later push
+its own; a PowerShell group of quoted literals (`@('push','-qf')`) also stays
+in place as arguments. The rest is cut into statements at every newline, and
+at every `;`, `|` and `&` outside a quoted string that closes on its own
+line (in PowerShell also at `{` and `}`); redirects and their targets are
+dropped, except a target that names git (`bash <<< "git push -f"`). After a `git` word, a later push
 word in the same statement starts the push, and the words after it are its
 arguments. Text inside `eval`, `sh -c`, `pwsh -Command`, a heredoc or a
 comment is read the same way, so a force push anywhere in the command's
@@ -40,6 +42,8 @@ these run without a block:
 - git config or aliases that force a later plain `git push` (`git config
   alias.p 'push -f'`, a `remote.<name>.push` or `mirror` setting,
   `GIT_CONFIG_*` variables, `--config-env`, a shell alias for git);
+- git named through a variable (`G=git; $G push -f`); `$GIT` and
+  `${GIT:-git}` are read as git;
 - remote branch and tag deletions, and a branch deleted and then pushed
   again;
 - a push run by another program (`python -c`, `node -e`, `make`, `gh api`);
@@ -98,19 +102,29 @@ CASE_WORD = re.compile(r"\b(?:case|esac)\b")
 INNERMOST = {"Bash": re.compile(r"[$<>]\(([^()]*)\)|\$\{([^{}]*)\}"),
              "PowerShell": re.compile(r"[$@]?\(([^()]*)\)|\$\{([^{}]*)\}")}
 BACKTICK_GROUP = re.compile(r"`([^`]*)`")
-# A quoted string that closes on the line it opens on.
-QUOTED = {"Bash": re.compile(r"\"(?:[^\"\\\n]|\\.)*\"|'[^'\n]*'"),
-          "PowerShell": re.compile(r"\"(?:[^\"`\n]|`.)*\"|'[^'\n]*'")}
-# A lone carriage return ends a statement only in PowerShell.
-STATEMENT_END = {"Bash": re.compile(r"[\n;|&]"), "PowerShell": re.compile(r"[\n\r;|&]")}
+# A PowerShell group of quoted literals, `@('push', '--force')`: its words are
+# the command's own arguments.
+LITERAL_GROUP = re.compile(r"\s*(?:'[^'\n]*'|\"[^\"$`\n]*\")(?:\s*,\s*(?:'[^'\n]*'|\"[^\"$`\n]*\"))*\s*")
+QUOTE_OR_LINE = re.compile(r"[\"'\n]")
+# A quoted string from its opening quote to a close on the same line.
+QUOTED = {"Bash": {"\"": re.compile(r"\"(?:[^\"\\\n]|\\.)*\""), "'": re.compile(r"'[^'\n]*'")},
+          "PowerShell": {"\"": re.compile(r"\"(?:[^\"`\n]|`.)*\""), "'": re.compile(r"'[^'\n]*'")}}
+# A lone carriage return and a brace end a statement only in PowerShell
+# (`{ git push -u origin x } else { Write-Host 'skip' -f Yellow }`).
+STATEMENT_END = {"Bash": re.compile(r"[\n;|&]"), "PowerShell": re.compile(r"[\n\r;|&{}]")}
 WORD_SPLIT = re.compile(r"[\s<>,]+")
 # A redirect operator and its target, read once quotes are gone. A target
 # never starts with `-`, so `--repo=">" -qf` keeps its flag.
-REDIRECT = re.compile(r"(?<![0-9])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)[ \t]*(?:[^\s;|&<>\-][^\s;|&<>]*)?")
+REDIRECT = re.compile(r"(?<![0-9])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)[ \t]*((?:[^\s;|&<>\-][^\s;|&<>]*)?)")
 EDGE = "(){}[]$&!@"
-SHORT_OPTIONS = re.compile(r"-[A-Za-z0-9]+")
+# git push has no upper-case short option, and a bundle with one fails before
+# anything is pushed, so `-Leaf` and `-Filter` are not push flags.
+SHORT_OPTIONS = re.compile(r"-[a-z0-9]+")
 LONG_FORCE = re.compile(r"--force(?:=.*)?|--m(?:i(?:r(?:r(?:o(?:r)?)?)?)?)?")
-FORCING_CONFIG = re.compile(r"remote\..+\.push=\+.*|remote\..+\.mirror(?:=(?:true|yes|on|1))?", re.I)
+# git reads a mirror value as true unless it is false, no, off, empty or a
+# zero number (`mirror=2` and `mirror=1k` are true).
+FORCING_CONFIG = re.compile(
+    r"remote\..+\.push=\+.*|remote\..+\.mirror(?:=(?!(?:false|no|off|[-+]?(?:0x)?0*[kmg]?)$).*)?", re.I)
 PUSH_ALIAS = re.compile(r"alias\.[^=]+=!?(?:push|send-pack|http-push)", re.I)
 
 
@@ -145,11 +159,18 @@ def neutral_cases(text):
     return "".join(out)
 
 
-def stand_in(match):
-    """The word a substitution leaves in the text around it: `git` when it
-    names git (`& ("git") push`, `$(which git) push`), otherwise a plain word."""
-    inner = unquote(next(g for g in match.groups() if g is not None), "path")
-    return " git " if re.search(r"(?i)\bgit(?:\.exe)?\s*$", inner) else " x "
+def stand_in(match, tool):
+    """The words a substitution leaves in the text around it: a PowerShell
+    group of quoted literals as it is (`@('push','-qf')`), `git` when it names
+    git (`& ("git") push`, `$(which git) push`), otherwise a plain word. A `+`
+    right before it stays on that word (`+$(git branch --show-current)`)."""
+    inner = next(g for g in match.groups() if g is not None)
+    before = match.string[max(match.start() - 3, 0):match.start()]
+    lead = "" if re.search(r"\+[\"']*$", before) else " "
+    if tool == "PowerShell" and LITERAL_GROUP.fullmatch(inner):
+        return f"{lead}{inner} "
+    names_git = re.search(r"(?i)\bgit(?:\.exe)?\s*$", unquote(inner, "path"))
+    return f"{lead}git " if names_git else f"{lead}x "
 
 
 def texts(command, tool):
@@ -163,13 +184,13 @@ def texts(command, tool):
     pieces = []
     if tool != "PowerShell":
         pieces += BACKTICK_GROUP.findall(s)
-        s = BACKTICK_GROUP.sub(stand_in, s)
+        s = BACKTICK_GROUP.sub(lambda m: stand_in(m, tool), s)
     for _ in range(MAX_PASSES):
         found = INNERMOST[tool].findall(s)
         if not found:
             break
         pieces += [a or b for a, b in found]
-        s = INNERMOST[tool].sub(stand_in, s)
+        s = INNERMOST[tool].sub(lambda m: stand_in(m, tool), s)
     pieces.append(s)
     return pieces, INNERMOST[tool].search(s) is not None
 
@@ -179,8 +200,30 @@ def mask_quoted(text, tool):
     quoted value (`-C "C:/R&D"`) stays in its statement. Only a quote that
     closes on its own line counts, so neither an apostrophe in a heredoc
     body or comment nor the closing quote of a string that spans lines can
-    join statements."""
-    return QUOTED[tool].sub(lambda m: re.sub(r"[;|&]", " ", m.group(0)), text)
+    join statements.
+
+    Each character is read once: a quote with no close on its line means no
+    later quote of that kind on the line closes either, so those are passed
+    over instead of each searching to the end of the line again."""
+    out, pos, unclosed = [], 0, set()
+    while True:
+        found = QUOTE_OR_LINE.search(text, pos)
+        if not found:
+            break
+        mark, at = found.group(0), found.start()
+        if mark == "\n":
+            unclosed.clear()
+        elif mark not in unclosed:
+            quoted = QUOTED[tool][mark].match(text, at)
+            if quoted:
+                out += [text[pos:at], re.sub(r"[;|&]", " ", quoted.group(0))]
+                pos = quoted.end()
+                continue
+            unclosed.add(mark)
+        out.append(text[pos:at + 1])
+        pos = at + 1
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def unquote(text, backslash):
@@ -220,6 +263,8 @@ def force_in(words):
             if forces(word):
                 return f"`{word}`"
             if word.startswith("+") and len(word) > 1:
+                # A lone `+` is an operator (`$((n + 1))`); a `+` glued to a
+                # substitution keeps its stand-in word (`+x`).
                 return f"`{word}` (a leading + forces that ref)"
             continue
         if value:
@@ -251,6 +296,13 @@ def force_in(words):
     return None
 
 
+def redirect_gone(match):
+    """What a redirect leaves: nothing, or its target when that names git, as
+    in `bash <<< "git push -qf"`, which feeds the text to a shell."""
+    target = match.group(1)
+    return f" {target} " if name(target) == "git" or name(target) in PUSH_PROGRAMS else " "
+
+
 def check(command, tool):
     """Why a command's text force-pushes, or None."""
     if len(command) > MAX_COMMAND:
@@ -261,7 +313,7 @@ def check(command, tool):
         for backslash in ("escape", "path"):
             # Redirects go once quotes are gone, so `git>/dev/null push` and
             # `push&>/dev/null` read as `git push`.
-            text = REDIRECT.sub(" ", unquote(masked, backslash))
+            text = REDIRECT.sub(redirect_gone, unquote(masked, backslash))
             # Substitutions nested past MAX_PASSES may hide separators, so such
             # a command is also read as one statement.
             for statement in STATEMENT_END[tool].split(text) + ([text] if deep else []):

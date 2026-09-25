@@ -4,41 +4,22 @@ Single source of truth for what this session left undone. `/session-start` reads
 
 ---
 
-## Headline: PR #163 (push guard) is mid-rewrite and must not be pushed yet
+## Headline: PR #163 replaces the push guard's shell parser with a text guard
 
-**Branch:** `fix/push-guard-block-only`.
-- **Remote and PR #163:** head `b818f32`, which is the old hand-written shell-parser guard.
-- **Local branch:** 2 commits ahead of the remote:
-  - `fba6477` rewrites the guard as a text guard;
-  - this session-close commit adds the handoff file.
-- **Do not push** until the local review loop below reaches 🟢 on both tiers. That is the maintainer's standing order.
+**Branch:** `fix/push-guard-block-only`. Before this PR is pushed, it goes through the local review loop: two subagents run the exact routine and deep review prompts, until both give 🟢. That is the maintainer's standing order.
 
 ### Why the rewrite
-- The block-only parser guard went through about 20 review rounds, and each round found new shell-grammar corners. It could not converge, and every round cost Actions minutes.
-- For three of those rounds, only the routine comment was answered, so the deep-review findings were missed. **Always read both the routine and the deep comment.**
-- The maintainer approved replacing the parser with a text guard of about 230 lines, `_core/global-template/hooks/push-guard.py`. It works in four steps:
-  1. It strips quoting: Bash `$'...'` escapes, PowerShell `` `u{} ``, quotes, backslashes and backticks.
-  2. It cuts out substitutions to be read separately: `$(...)`, `${...}`, Bash backticks, and PowerShell `(...)`.
-  3. It splits into statements at `\n ; | &`, plus a lone CR in PowerShell.
-  4. It blocks a git push word followed by a force flag in the same statement: `-f` bundle, `--force`, a `--mirror` prefix, `+ref`, a forcing `-c remote.*` setting, or a `-c alias.x=push` alias.
-- **Accepted trade-off:** text that only mentions a force push is blocked too, and the block message says to pass that text in a file.
-  - The replay over 13,369 real session commands blocked 30, all from developing the guard itself, with 0 errors and nothing slow.
-  - The earlier "a branch deleted and then pushed again" block is dropped. It's now listed as out of reach.
-- `engine/test/bind.test.js` has been reworked around the new contract, with a new `mentions` table and rows moved between `hidden` and `unguarded`. It passes 34/34 locally.
+- The block-only parser guard went through about 20 CI review rounds. Each round found new shell-grammar corners, and every round cost Actions minutes.
+- For three of those rounds only the routine comment was answered, so the deep-review findings were missed. **Always read both the routine and the deep comment.**
+- The maintainer approved replacing the parser with a text guard, `_core/global-template/hooks/push-guard.py`. Its module docstring is the contract: what it reads, what it blocks, and what is out of reach.
+  - SETUP.md Phase 7c's `[y/N]` and `[Y/n]` consent texts must list the same out-of-reach set.
+  - `engine/test/bind.test.js` has a probe for each item.
+- **Accepted trade-off:** text that only mentions a force push is blocked too. The block message says to pass such text in a file.
+- **Linear-time invariant:** every step must stay linear up to MAX_COMMAND. When changing a pattern, run a brute-force timing sweep over short repeating units, not just hand-picked shapes. Round 3 of the local review found a 42-second pattern that the hand-picked shapes missed.
 
-### Next steps, in order
-1. **Update the docs that still describe the parser:**
-   - SETUP.md Phase 7c: the `[y/N]` and `[Y/n]` consent lists;
-   - the CHANGELOG `[Unreleased]` #158 guard entry;
-   - `_core/global-template/README.md` §4b.
-   They must match the text-guard docstring: what it blocks, the mention trade-off, and what is out of reach.
-2. **Run the local review loop (maintainer order):** 2 subagents.
-   - One follows the exact routine-review prompt in `.github/workflows/claude-code-review.yml`.
-   - One follows the exact deep-review prompt in `.github/workflows/claude.yml`.
-   - Fix what they find, and repeat until both give 🟢 locally.
-3. **Push once.** Watch CI with the Monitor tool, and read both review comments.
-4. **Merge** with `gh pr merge 163 --squash --delete-branch`, then `git branch -D fix/push-guard-block-only`.
-5. **Reinstall the global guard and replay.** The installed `~/.claude/hooks/push-guard.py` is still the parser version `b818f32`. Use the scratchpad `install_guard.py` / `replay_inproc.py` approach again (in process, calling `check()`).
+### After #163 merges
+1. Merge with `gh pr merge 163 --squash --delete-branch`, then `git branch -D fix/push-guard-block-only`.
+2. **Reinstall the global guard and replay.** The installed `~/.claude/hooks/push-guard.py` is still the old parser version. Copy the merged file into place, then replay recent session transcripts through `check()` in process. Expect blocks only on commands that were developing the guard itself.
 
 ---
 

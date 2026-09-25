@@ -388,6 +388,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin main && echo \"done :)\" && tail -f log.txt",
     "case \"$b\" in main) git push origin main;; *) rm -f tmp.txt;; esac",
     "git push -u origin feat && gh pr create --base develop --body \"$(cat <<'EOF'\n1) adds +2 tests\nEOF\n)\"",
+    // An arithmetic `+`, and mirror values git reads as false.
+    "git push origin v$((n + 1))", "git -c remote.origin.mirror=false push origin",
+    "git -c remote.origin.mirror=0 push origin",
     // The word "case" in a message, an apostrophe in a heredoc body or a comment.
     "git commit -m \"$(cat <<'EOF'\nfix: handle the upper case branch names\nEOF\n)\" && git push origin HEAD && rm -rf .cache",
     "cat <<'EOF' > x.md\ndon't\nEOF\ngit push origin x\nrm -f tmp", "# it's done\ngit push origin x && rm -rf .cache",
@@ -521,6 +524,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "bash -l -c 'git push -qf origin main'", "sh -e -c 'git push -qf origin main'",
     "bash --login -c 'git push -qf origin main'", "bash -cx 'git push -qf origin main'",
     "bash -c -- 'git push -qf origin main'", "bash -euo pipefail -c 'git push -qf origin main'",
+    // A `+` glued to a substitution, a mirror value git reads as true, a here-string.
+    "git push origin \"+${BRANCH}\"", "git push origin +$(git branch --show-current)",
+    "git push origin +`git branch --show-current`",
+    "git -c remote.origin.mirror=2 push origin", "git -c remote.origin.mirror=-1 push origin",
+    "git -c remote.origin.mirror=1k push origin",
+    "bash <<< \"git push -qf origin main\"", "sh <<< '/usr/bin/git push -qf origin main'",
   ];
   // Text that only mentions a force push is blocked too: the guard reads text, not
   // shell grammar. The block message says to pass such text in a file.
@@ -553,6 +562,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "echo -qf | xargs git push origin main",
     "git --config-env=remote.origin.mirror=HOME push origin", "export HOME=/tmp/e; git push origin",
     "git fetch --upload-pack='git pu\"\"sh -qf origin main; git-upload-pack' .",
+    "G=git; $G push -qf origin main",
   ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
@@ -569,7 +579,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin main\r# -qf",
     // A parenthesized argument is one value; its words are not the push's.
     "git push origin (\"release/{0}\" -f $version)", "git push origin $(git branch --show-current)",
-    "git push -u origin feature/x 2>&1 | Select-String -NotMatch remote"]) {
+    "git push -u origin feature/x 2>&1 | Select-String -NotMatch remote",
+    // A brace ends a statement, and a capitalized parameter is not a git flag.
+    "if ($LASTEXITCODE -eq 0) { git push -u origin feature } else { Write-Host 'push skipped' -f Yellow }",
+    "git push -u origin (Split-Path -Leaf (Get-Location))"]) {
     assert.equal(verdict("PowerShell", cmd), "allow", `PowerShell should allow: ${cmd}`);
   }
   // PowerShell text the guard reads although PowerShell would parse it differently:
@@ -578,7 +591,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin main \u201c-qf\u201d", "git push origin \"x\u201c -qf \u201cy\"", "git push origin main\u00a0-qf",
     "echo 'git push -qf origin main' | iex", "Write-Output '; git push -qf origin main' | git commit --allow-empty -F - | iex",
     "echo 'git push -qf origin main'\n| iex", "Write-Output 'git push -qf origin main'\r\n| iex",
-    "echo 'git push -qf origin main'\r  | iex", "Write-Output a`\n#; git push -qf origin main"]) {
+    "echo 'git push -qf origin main'\r  | iex", "Write-Output a`\n#; git push -qf origin main",
+    // Quoted literals in a group are the command's arguments; a `+` glued to a substitution.
+    "Start-Process git -ArgumentList @('push', '--force', 'origin', 'main') -NoNewWindow -Wait",
+    "& git @('push','-qf','origin','main')", "git push ('-qf') origin main",
+    "git push origin \"+$($b)\"", "git push origin \"+${b}\"", "& { git push -f origin main }"]) {
     assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   }
   // PowerShell forms whose force flag is not in the text.
@@ -635,16 +652,18 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   assert.ok(Date.now() - chainStart < 3000, "chained heredocs answer quickly");
   // Every step is linear: long runs that would make a backtracking pattern retry
   // from each character answer quickly, and a push next to them still blocks.
-  for (const [label, cmd, want] of [
+  for (const [label, cmd, want, tool] of [
     ["digit run", "git push -f " + "1".repeat(99000), "deny"],
     ["flag letters", "git push -" + "f".repeat(99000) + ". origin main", "allow"],
     ["remote setting", "git -c remote." + "a.".repeat(49000) + " push", "allow"],
     ["case words", "case ".repeat(19000) + "; git push -qf origin main", "deny"],
     ["openers", "$( ".repeat(30000) + "; git push -qf origin main", "deny"],
     ["quotes", "\"'".repeat(49000) + "\ngit push -qf origin main", "deny"],
-    ["redirects", "> ".repeat(49000) + "; git push -qf origin main", "deny"]]) {
+    ["redirects", "> ".repeat(49000) + "; git push -qf origin main", "deny"],
+    ["escaped quotes", "git push -qf origin main # " + "\"\\".repeat(49980), "deny"],
+    ["PowerShell escaped quotes", "git push -qf origin main # " + "\"`".repeat(49980), "deny", "PowerShell"]]) {
     const start = Date.now();
-    assert.equal(verdict("Bash", cmd), want, `${label}: ${want}`);
+    assert.equal(verdict(tool || "Bash", cmd), want, `${label}: ${want}`);
     assert.ok(Date.now() - start < 3000, `${label} answers quickly`);
   }
   // PowerShell argument groups and `&` look back only to the last word, so a long command stays linear.
