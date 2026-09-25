@@ -58,9 +58,9 @@ these run without a block:
   again;
 - a push run by another program (`python -c`, `node -e`, `make`, `gh api`,
   `git fetch --upload-pack`);
-- a push after a spaced git option value whose later word is exactly a git
-  subcommand in OTHER_SUBCOMMANDS (`git -C "My notes" push -f`): the search
-  for the push word stops there;
+- a push after a git option value with spaces in it, one of whose later
+  words is exactly a git subcommand in OTHER_SUBCOMMANDS (`git -C "My notes
+  dir" push -f`): the search for the push word stops there;
 - shell syntax this reading takes differently from the shell, where that
   cuts a push off from its `git` word or its force flag: quotes paired
   differently (a quoted string that spans lines, a `$(`, `${` or backtick
@@ -119,12 +119,20 @@ ANSI_LETTERS = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": 
 # separators and quotes never split or pair anything there.
 ANSI_SEPARATORS = re.compile(r"[;|&\n\r{}\"'`]")
 POWERSHELL_CHAR = re.compile(r"`u\{([0-9A-Fa-f]{1,6})\}")
-CASE_TOKEN = re.compile(r"[$<>]?\(|\)|\b(?:case|esac)\b")
+# A parenthesis, or `case`/`esac` where Bash reads it as a keyword: at a
+# command's start (`x=$(case ...`, `; case`, `then case`), never as an
+# argument (`echo in case`, `--ignore-case`).
+CASE_TOKEN = re.compile(r"[$<>]?\(|\)|(?:^|(?<=[;&|({\n])|(?<=\bthen)|(?<=\bdo)|(?<=\belse))[ \t]*case(?=\s)"
+                        r"|(?<![^\s;&|])esac(?![^\s;&|)])", re.M)
 # PowerShell runs any `(...)` as its own expression (`("v{0}" -f $n)`).
 # Bash arithmetic `$((...))` is cut out whole, so its `+` is no refspec; a
-# bare `(...)` (a subshell, an arithmetic group) is cut out on its own.
-INNERMOST = {"Bash": re.compile(r"\$\(\(([^()]*)\)\)|[$<>]?\(([^()]*)\)|\$\{([^{}]*)\}"),
-             "PowerShell": re.compile(r"[$@]?\(([^()]*)\)|\$\{([^{}]*)\}")}
+# bare `(...)` (a subshell, an arithmetic group) is cut out on its own. A
+# group that still holds a `$(` or `${` waits a pass, so the innermost
+# substitution is always cut first (`("${TICKET}-fix")`).
+_PARENS = r"([^()$]*(?:\$(?![({])[^()$]*)*)"
+_BRACES = r"([^{}$]*(?:\$(?![({])[^{}$]*)*)"
+INNERMOST = {"Bash": re.compile(r"\$\(\(" + _PARENS + r"\)\)|[$<>]?\(" + _PARENS + r"\)|\$\{" + _BRACES + r"\}"),
+             "PowerShell": re.compile(r"[$@]?\(" + _PARENS + r"\)|\$\{" + _BRACES + r"\}")}
 BACKTICK_GROUP = re.compile(r"`([^`]*)`")
 # A PowerShell group of quoted literals, `@('push', '--force')`: its words are
 # the command's own arguments.
@@ -137,12 +145,15 @@ QUOTED = {"Bash": {"\"": re.compile(r"\"(?:[^\"\\\n]|\\.)*\""), "'": re.compile(
 # A lone carriage return and a brace end a statement only in PowerShell
 # (`{ git push -u origin x } else { Write-Host 'skip' -f Yellow }`).
 STATEMENT_END = {"Bash": re.compile(r"[\n;|&]"), "PowerShell": re.compile(r"[\n\r;|&{}]")}
+# The statement ends that a quote or an escape turns into plain text.
+QUOTED_SEPARATORS = {"Bash": re.compile(r"[;|&]"), "PowerShell": re.compile(r"[;|&{}]")}
 WORD_SPLIT = re.compile(r"[\s<>,]+")
 # A redirect operator and its target, read once quotes are gone. A target
 # never starts with `-` or `+`, so `--repo=">" -qf` and `-o "x>" +main` keep
 # their force words.
 REDIRECT = re.compile(r"(?<![0-9])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)[ \t]*((?:[^\s;|&<>\-+][^\s;|&<>]*)?)")
 EDGE = "(){}[]$&!@"
+QUOTE_CHARS = "\"'‘’“”"
 # git push has no upper-case short option, and a bundle with one fails before
 # anything is pushed, so `-Leaf` and `-Filter` are not push flags.
 SHORT_OPTIONS = re.compile(r"-[a-z0-9]+")
@@ -182,7 +193,7 @@ def neutral_cases(text):
     inside a case arm are read like any other."""
     out, last, stack, cases = [], 0, [], 0
     for match in CASE_TOKEN.finditer(text):
-        token = match.group(0)
+        token = match.group(0).lstrip(" \t")
         if token == "case":
             stack.append(token)
             cases += 1
@@ -213,8 +224,15 @@ def stand_in(match, literal=False):
     if literal:
         return f" {inner} "
     text, start, end = match.string, match.start(), match.end()
-    left = start > 0 and not text[start - 1].isspace()
-    right = end < len(text) and not text[end].isspace()
+    # A quote that opens or closes the word is its edge: `-C "${REPO}"` leaves
+    # a word, `"${USER}-feature"` reads as `x-feature`, `-q"$(true)"f` as `-qf`.
+    before, after = start - 1, end
+    while before >= 0 and text[before] in QUOTE_CHARS:
+        before -= 1
+    while after < len(text) and text[after] in QUOTE_CHARS:
+        after += 1
+    left = before >= 0 and not text[before].isspace()
+    right = after < len(text) and not text[after].isspace()
     if re.search(r"(?i)\bgit(?:\.exe)?\s*$", unquote(inner, "path")):
         word = "git"
     else:
@@ -270,7 +288,7 @@ def mask_quoted(text, tool):
             break
         mark, at = found.group(0), found.start()
         if len(mark) == 2:
-            out += [text[pos:at], mark[0] + (" " if mark[1] in ";|&{}" else mark[1])]
+            out += [text[pos:at], mark[0] + QUOTED_SEPARATORS[tool].sub(" ", mark[1])]
             pos = found.end()
             continue
         if mark == "\n":
@@ -278,7 +296,7 @@ def mask_quoted(text, tool):
         elif mark not in unclosed:
             quoted = QUOTED[tool][mark].match(text, at)
             if quoted:
-                out += [text[pos:at], re.sub(r"[;|&{}]", " ", quoted.group(0))]
+                out += [text[pos:at], QUOTED_SEPARATORS[tool].sub(" ", quoted.group(0))]
                 pos = quoted.end()
                 continue
             unclosed.add(mark)

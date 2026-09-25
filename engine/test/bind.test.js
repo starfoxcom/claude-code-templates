@@ -395,6 +395,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "case \"$1\" in tag) git push origin \"v$(date +%Y.%m.%d)\";; esac",
     "case \"$1\" in go) git push origin \"$(git rev-parse --abbrev-ref HEAD | cut -d/ -f2)\";; esac",
     "printf $'\\e[1mdone\\e[0m\\n'; git push origin main",
+    // A quote that opens or closes a word is its edge, so a quoted variable
+    // before a suffix is a branch name, not a flag.
+    "git push -u origin \"${TICKET}-fix\"", "git push -u origin \"${TICKET}\"-fix",
+    "git push -u origin \"$(whoami)-hotfix\"", "git push origin \"${TAG}+build\"",
     // The word "case" in a message, an apostrophe in a heredoc body or a comment.
     "git commit -m \"$(cat <<'EOF'\nfix: handle the upper case branch names\nEOF\n)\" && git push origin HEAD && rm -rf .cache",
     "cat <<'EOF' > x.md\ndon't\nEOF\ngit push origin x\nrm -f tmp", "# it's done\ngit push origin x && rm -rf .cache",
@@ -544,6 +548,10 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "case $b in main) git push origin $(git branch --show-current | tr a b) --force;; esac",
     "git -c alias.p='!git-push -f' p origin main", "git -c alias.p='!/usr/lib/git-core/git-push' p -f origin main",
     "git -c \"remote.origin.mirror= 1\" push origin", "git push origin -o \"x>\" +main",
+    // A quoted substitution as a git option's value, and `case` as an argument.
+    "git -C \"${REPO}\" push --force origin main", "git -C \"$(git rev-parse --show-toplevel)\" push -f origin main",
+    "git -C \"`pwd`\" push -f origin main", "git --git-dir \"${GIT_DIR}\" push -f origin main",
+    "git push $(git config --get x --ignore-case | head -1) -f origin main",
   ];
   // Text that only mentions a force push is blocked too: the guard reads text, not
   // shell grammar. The block message says to pass such text in a file.
@@ -577,6 +585,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git --config-env=remote.origin.mirror=HOME push origin", "export HOME=/tmp/e; git push origin",
     "git fetch --upload-pack='git pu\"\"sh -qf origin main; git-upload-pack' .",
     "G=git; $G push -qf origin main",
+    // One probe per remaining out-of-reach item: a flag built at run time, another
+    // program, a spaced option value with a subcommand name in it, quotes paired
+    // differently from the shell.
+    "git push $(echo -qf) origin main", "git push -{q,f} origin main", "make force-push",
+    "git -C \"My notes dir\" push -f origin main", "echo '$('; git push origin main ')' -f",
   ];
   for (const cmd of both) {
     assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
@@ -596,7 +609,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push -u origin feature/x 2>&1 | Select-String -NotMatch remote",
     // A brace ends a statement, and a capitalized parameter is not a git flag.
     "if ($LASTEXITCODE -eq 0) { git push -u origin feature } else { Write-Host 'push skipped' -f Yellow }",
-    "git push -u origin (Split-Path -Leaf (Get-Location))"]) {
+    "git push -u origin (Split-Path -Leaf (Get-Location))", "git push -u origin \"$($ticket)-fix\""]) {
     assert.equal(verdict("PowerShell", cmd), "allow", `PowerShell should allow: ${cmd}`);
   }
   // PowerShell text the guard reads although PowerShell would parse it differently:
@@ -611,7 +624,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "& git @('push','-qf','origin','main')", "git push ('-qf') origin main",
     "git push origin \"+$($b)\"", "git push origin \"+${b}\"", "& { git push -f origin main }",
     // A brace inside quotes, and an escaped separator.
-    "git push origin 'main@{1}:main' --force", "git push origin \"@{u}\" -f", "git -c a.b=`; push -f origin main"]) {
+    "git push origin 'main@{1}:main' --force", "git push origin \"@{u}\" -f", "git -c a.b=`; push -f origin main",
+    "git -C \"$(Get-Location)\" push -f origin main", "git -C \"${env:REPO}\" push -f origin main"]) {
     assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   }
   // PowerShell forms whose force flag is not in the text.

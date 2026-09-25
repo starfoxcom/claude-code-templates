@@ -13,7 +13,7 @@ Single source of truth for what this session left undone. `/session-start` reads
 - For three of those rounds only the routine comment was answered, so the deep-review findings were missed. **Always read both the routine and the deep comment.**
 - The maintainer approved replacing the parser with a text guard, `_core/global-template/hooks/push-guard.py`. Its module docstring is the contract: what it reads, what it blocks, and what is out of reach.
   - SETUP.md Phase 7c's `[y/N]` and `[Y/n]` consent texts must list the same out-of-reach set.
-  - `engine/test/bind.test.js` has a probe for each item.
+  - `engine/test/bind.test.js` pins each out-of-reach item with at least one pass-by-design probe (`unguarded` and the PowerShell pass list).
 - **Accepted trade-off:** text that only mentions a force push is blocked too. The block message says to pass such text in a file.
 - **Linear-time invariant:** every step must stay linear up to MAX_COMMAND. When changing a pattern, run a brute-force timing sweep over short repeating units, not just hand-picked shapes. Round 3 of the local review found a 42-second pattern that the hand-picked shapes missed.
 
