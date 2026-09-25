@@ -360,6 +360,16 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "# Build output lands in C:\\out\\\ngit push \\\n  --force origin main", "echo x  # C:\\x\\\ngit push origin \\\n  +main",
     "# C:\\x\\\ngit \\\n  push -f origin main", "cd /c/work/repo  # C:\\work\\repo\\\ngit push origin main \\\n  -f",
     "git push \\\n#x\ngit push -f origin main",
+    // A `#` after `)` begins a word, so it starts a comment too.
+    "(cd build && make)# output lands in C:\\out\\\ngit push -f origin main", "((n++))# C:\\x\\\ngit push -f origin main",
+    "case $B in main)# C:\\x\\\ngit push -f origin main;; esac",
+    // A backtick pair closes on its own line, so a stray backtick in a comment
+    // or heredoc body does not swallow the push's substitution.
+    "# strip the ` from names\ngit push origin `git branch --show-current` --force",
+    "cat > notes.md <<'EOT'\nWrap commands in ``` fences.\nEOT\ngit push origin `git branch --show-current` --force",
+    // After a heredoc body pairs quotes wrongly, the plain reading still joins the push.
+    "cat <<'EOF'\ndon't\nEOF\n# C:\\x\\\ngit push \\\n -f origin main",
+    "echo \"a \\\nb\" ; git push \\\n -f origin main",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
@@ -416,6 +426,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // A continuation inside a double-quoted string joins; a joined `#` word starts a comment.
     "git commit -m \"fix: handle the lock \\\nit's stale now\" && git push origin main && rm -rf .cache && echo 'ok'",
     "git push origin main \\\n#--force", "echo a#b\\\ngit push -f origin main",
+    "git commit -m \"fix #12: handle the lock \\\nit's stale now\" && git push origin main && rm -rf .cache && echo 'ok'",
+    "echo 'a\\\n' ; git push origin main",
+    // A comment certain from its own line ends there in both readings.
+    "# don't let git touch C:\\temp\\\ngit push origin main && rm -rf build && echo 'done'",
+    "git commit -m \"$(cat <<'EOT'\nfix: don't split names on a stray ` char\nEOT\n)\" && git push origin feature/x && rm -rf build && echo \"built at `date`\"",
     // Bash has no `` `u{...} `` escape.
     "git push origin main \"-`u{66}\"",
     // A quote that opens or closes a word is its edge, so a quoted variable

@@ -22,12 +22,11 @@ program started by the command can push on its own.
 The hook reads text, not shell grammar. First it removes what the shell
 would remove: line continuations, quotes, backslashes and backticks,
 decoding Bash's `$'...'` escapes when the string closes on its own line
-(the result stays one word) and
-PowerShell's `` `u{...} `` on the way. Each command substitution (`$(...)`,
-`$((...))`, `${...}`, `<(...)`, a Bash backtick pair, a PowerShell `(...)`)
-is read on its own. In the text around it, a substitution inside a word
-joins the text on both sides (`-q$(true)f` reads as `-qf`) and one at a
-word's edge leaves a word; a PowerShell group of quoted literals
+(the result stays one word) and PowerShell's `` `u{...} `` on the way. Each
+command substitution (`$(...)`, `$((...))`, `${...}`, `<(...)`, a Bash
+backtick pair on one line, a PowerShell `(...)`) is read on its own. In the
+text around it, a substitution inside a word joins the text on both sides
+(`-q$(true)f` reads as `-qf`) and one at a word's edge leaves a word; a PowerShell group of quoted literals
 (`@('push','-qf')`) stays in place as arguments. The rest is cut into
 statements at every newline, and at every `;`, `|` and `&` that is neither
 escaped nor inside a quoted string that closes on its own line (in
@@ -36,9 +35,12 @@ except a target that names git (`bash <<< "git push -f"`). After a `git`
 word, a later push word in the same statement starts the push, and the
 words after it are its arguments. Text inside `eval`, `sh -c`,
 `pwsh -Command`, a heredoc or a comment is read the same way. Each shell's
-own line continuation is removed. Bash does not continue a comment, so its
-command is also read with a comment's final `\` kept as a line end and every
-other continuation removed; either reading can block. Every step is linear in the command's length.
+own line continuation is removed. Bash does not continue a comment or a
+single-quoted string, so a Bash command is read twice: once keeping only the
+line end of a comment certain from its line alone (a `#` beginning a word on
+a line that begins a command, no quote before it), and once following quotes
+and comments across lines as Bash does. Either reading can block. Every step
+is linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
 script or a search pattern with `git push -f` in it is blocked too. The
@@ -113,10 +115,11 @@ OTHER_SUBCOMMANDS = {
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--super-prefix", "--config-env", "--attr-source"}
 
-# What a Bash line holds outside escapes and quoted strings closing on it,
-# and a `#` there that begins a word: the start of a comment.
-COMMENT_BARE = re.compile(r"\\.|\"(?:[^\"\\]|\\.)*\"|'[^']*'")
-COMMENT_START = re.compile(r"[\s;&|(]#")
+# A `#` that begins a Bash word, which starts a comment outside quotes; a
+# character before it that could open a quote; the characters that end a word.
+WORD_HASH = re.compile(r"(?:^|(?<!\\)[ \t;&|()<>])#")
+CERTAIN_BLOCKER = re.compile(r"[\"'`]")
+BASH_METACHARACTERS = " \t\n;&|()<>"
 CONTINUATION = {"Bash": re.compile(r"\\\n"), "PowerShell": re.compile(r"`(?:\r\n|\n|\r)")}
 # A `$'...'` string, found after skipping escapes and quoted strings the way
 # `mask_quoted` pairs them, so the `$'` ending `grep 'main$'` starts nothing.
@@ -144,7 +147,7 @@ _PARENS = r"([^()$]*(?:\$(?![({])[^()$]*)*)"
 _BRACES = r"([^{}$]*(?:\$(?![({])[^{}$]*)*)"
 INNERMOST = {"Bash": re.compile(r"\$\(\(" + _PARENS + r"\)\)|[$<>]?\(" + _PARENS + r"\)|\$\{" + _BRACES + r"\}"),
              "PowerShell": re.compile(r"[$@]?\(" + _PARENS + r"\)|\$\{" + _BRACES + r"\}")}
-BACKTICK_GROUP = re.compile(r"`([^`]*)`")
+BACKTICK_GROUP = re.compile(r"`([^`\n]*)`")
 # A PowerShell group of quoted literals, `@('push', '--force')`: its words are
 # the command's own arguments.
 LITERAL_GROUP = re.compile(r"\s*(?:'[^'\n]*'|\"[^\"$`\n]*\")(?:\s*,\s*(?:'[^'\n]*'|\"[^\"$`\n]*\"))*\s*")
@@ -407,10 +410,9 @@ def check(command, tool):
         return None
     readings = [command]
     if tool == "Bash" and "\\\n" in command:
-        # Bash does not continue a comment (`# C:\work\repo\`), so the command
-        # is also read with each comment's `\` + LF kept as a line end and
-        # every other one joined; either reading can block.
-        readings.append(comment_line_ends(command))
+        # Bash does not continue a comment (`# C:\work\repo\`) or a
+        # single-quoted string; either reading of its line ends can block.
+        readings = bash_line_ends(command)
     for reading in readings:
         reason = check_reading(reading, tool)
         if reason:
@@ -418,30 +420,67 @@ def check(command, tool):
     return None
 
 
-def comment_line_ends(command):
-    """The Bash command with every line continuation joined, except a `\\`
-    that ends a comment, which ends its line. A comment starts at a `#` that
-    begins a word outside a quoted string closing on its own line, and runs
-    on through the joined lines until a real line end."""
+def bash_line_ends(command):
+    """Two readings of a Bash command, each line continuation (a backslash
+    ending a line) either joined or kept as a line end. The first joins all but the line
+    ends of certain comments: a `#` beginning a word on a line that begins a
+    command, with no quote or backtick before it. The second follows quotes
+    and comments across lines as Bash does: a continuation joins outside
+    quotes and inside double quotes, and ends its line in a comment or inside
+    single quotes. The second can pair quotes wrongly after a heredoc body,
+    which the first does not read."""
     lines = command.split("\n")
-    out, edge = [], True
+    plain, exact = [], []
+    begins, state, previous = True, "", "\n"
     for number, line in enumerate(lines):
-        continued = (len(line) - len(line.rstrip("\\"))) % 2 == 1
-        body = line[:-1] if continued else line
-        # A `#` first on the line begins a word only when what came before
-        # it (a line end, or the joined line's last character) is an edge.
-        bare = COMMENT_BARE.sub("x", body)
-        commented = COMMENT_START.search(bare) is not None or (edge and bare.startswith("#"))
         last = number == len(lines) - 1
-        joined = continued and not commented and not last
-        out.append(body if continued and not last else line)
-        if not last:
-            out.append("" if joined else "\n")
-        if joined:
-            edge = edge if not body else body[-1] in " \t;&|("
-        else:
-            edge = True
-    return "".join(out)
+        continued = not last and (len(line) - len(line.rstrip("\\"))) % 2 == 1
+        body = line[:-1] if continued else line
+        certain = False
+        if begins:
+            found = WORD_HASH.search(body)
+            certain = found is not None and not CERTAIN_BLOCKER.search(body, 0, found.start())
+        joined = continued and not certain
+        plain.append(body if joined else line if last else body + "\n")
+        begins = not joined
+        state, previous = bash_scan(body, state, previous)
+        joined = continued and state in ("", '"', "$'")
+        exact.append(body if joined else line if last else body + "\n")
+        if state == "#":
+            state = ""
+        if not joined:
+            previous = "\n"
+    return ["".join(plain), "".join(exact)]
+
+
+def bash_scan(text, state, previous):
+    """The open quote (`'`, `"`, `$'`), comment (`#`) or nothing ("") at the
+    end of a Bash line, and the last character read, from the state it began
+    in."""
+    at, end = 0, len(text)
+    while at < end:
+        char = text[at]
+        if state == "":
+            if char == "\\":
+                at, previous = at + 2, "x"
+                continue
+            if char == "#" and previous in BASH_METACHARACTERS:
+                return "#", char
+            if char == "$" and text.startswith("'", at + 1):
+                state, at = "$'", at + 1
+            elif char in "'\"":
+                state = char
+        elif state == "'":
+            if char == "'":
+                state = ""
+        elif char == "\\":
+            at, previous = at + 2, "x"
+            continue
+        elif char == state[-1]:
+            state = ""
+        previous = char
+        at += 1
+    return state, previous
 
 
 def check_reading(command, tool):
