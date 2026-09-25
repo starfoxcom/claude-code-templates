@@ -352,6 +352,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "while git push -qf origin main; do break; done",
     // Backslash + CR is an escaped CR in bash, so the LF after it still ends the command.
     "echo x \\\r\ngit push -qf origin main", "git commit -m wip \\\r\ngit push -qf origin main",
+    // A backtick ending a line closes a substitution; it is no line continuation in Bash.
+    "VERSION=`cat VERSION`\ngit push -f origin main", "REV=`git rev-parse HEAD`\r\ngit push -f origin main",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
@@ -627,7 +629,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git push origin \"+$($b)\"", "git push origin \"+${b}\"", "& { git push -f origin main }",
     // A brace inside quotes, and an escaped separator.
     "git push origin 'main@{1}:main' --force", "git push origin \"@{u}\" -f", "git -c a.b=`; push -f origin main",
-    "git -C \"$(Get-Location)\" push -f origin main", "git -C \"${env:REPO}\" push -f origin main"]) {
+    "git -C \"$(Get-Location)\" push -f origin main", "git -C \"${env:REPO}\" push -f origin main",
+    // A `\` ending a PowerShell path is no continuation; a backtick continuation is a space.
+    "Set-Location C:\\work\\repo\\\ngit push -f origin main", "git push`\n-f origin main", "git push`\r\n-f origin main"]) {
     assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   }
   // PowerShell forms whose force flag is not in the text.

@@ -110,6 +110,7 @@ OTHER_SUBCOMMANDS = {
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--super-prefix", "--config-env", "--attr-source"}
 
+CONTINUATION = {"Bash": re.compile(r"\\\n"), "PowerShell": re.compile(r"`(?:\r\n|\n|\r)")}
 ANSI_QUOTE = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
 # Bash's `$'...'` escapes: hex, `\u` and `\U` with as few digits as Bash
 # takes, octal, control characters, and single letters.
@@ -247,7 +248,10 @@ def texts(command, tool):
     """The command's pieces: each command substitution on its own, then the
     rest with each substitution replaced by a word; and whether substitutions
     are nested past MAX_PASSES."""
-    s = re.sub(r"\\\r?\n|`\r?\n|`\r", "", command)
+    # Each shell's own line continuation: Bash joins `\` + LF with nothing
+    # between, PowerShell reads a backtick before a line end as a space. A
+    # backtick ending a Bash line and a `\` ending a PowerShell path stay.
+    s = CONTINUATION[tool].sub(" " if tool == "PowerShell" else "", command)
     if tool != "PowerShell":
         s = neutral_cases(ANSI_QUOTE.sub(ansi_decode, s))
     s = POWERSHELL_CHAR.sub(lambda m: chr(min(int(m.group(1), 16), 0x10FFFF)), s)
