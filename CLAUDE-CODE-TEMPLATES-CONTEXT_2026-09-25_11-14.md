@@ -1,17 +1,16 @@
-# claude-code-templates — session handoff (2026-09-25 10:32)
+# claude-code-templates — session handoff (2026-09-25 11:14)
 
 Single source of truth for what this session left undone. `/session-start` reads this first. It records only current state that `git log`, open issues and the CHANGELOG don't already show.
 
 ---
 
-## Headline: next session runs in the cloud
+## Headline: work stays local, the cloud is retired
 
-The maintainer is moving this repo's work to a cloud session. What does and does not carry over:
+The cloud trial ended the same day. Do not move this repo's work to a Claude Code cloud session again.
 
-- **Carries over:** everything in the repo. That includes `.claude/settings.json` (attribution trailers off, from PR #148), the rules, the skills and the GitHub rulesets (no direct pushes to `main` or `develop`, no bypass actors).
-- **Does not carry over:** the maintainer's global hooks under `~/.claude/hooks/`. That covers the no-attribution scanner, the push guard and the tokensave-first router. A cloud session has no mechanical guard against attribution text in PR bodies or comments, so keep the rule by discipline until P1d ships repo-level hooks.
-- **Also missing:** there is no tokensave index in the cloud unless it is installed there. Code research falls back to Grep, Glob and Read.
-- **First cloud task (#4):** prove the setup with a throwaway commit and PR. Check that the commit and the PR carry no attribution lines, then close the PR and delete the branch.
+- **Why:** the cloud session's GitHub connector appends a Claude Code attribution footer, with a session link, to every PR body it creates and every comment it posts. An immediate body edit removes the footer, but GitHub keeps the first version in the PR's edit history. The cloud harness also forces `claude/<session>` branch names, which a `--merge` PR writes into its merge commit.
+- **What was clean:** commits. With the maintainer's git identity set and local attribution hooks installed, the test commit carried no trailers.
+- **Test PR #169:** closed unmerged. The maintainer deleted the footer revision from its edit history; the branch is deleted. Only GitHub Support can delete the PR itself.
 
 ---
 
@@ -26,7 +25,7 @@ The maintainer is moving this repo's work to a cloud session. What does and does
 
 ## Open work (task list)
 
-- #22: receipts. `tools/receipts.py` and its tests are merged (#164; run `python -m unittest tools/test_receipts.py`). Still open: the "session stories" part, which combines the metrics with receipts from the Emberholm and Stockra sessions. It feeds the Phase 3 page's evidence section, replacing the old `RECEIPTS_STATS`/`RECEIPTS_CARDS` data in `index.html` (2026-04-06..05-12). Session logs only exist on the maintainer's PC, so this part runs locally, not in the cloud.
+- #22: receipts. `tools/receipts.py` and its tests are merged (#164; run `python -m unittest tools/test_receipts.py`). Still open: the "session stories" part, which combines the metrics with receipts from the Emberholm and Stockra sessions. It feeds the Phase 3 page's evidence section, replacing the old `RECEIPTS_STATS`/`RECEIPTS_CARDS` data in `index.html` (2026-04-06..05-12). Session logs only exist on the maintainer's PC.
 - #10/#15: P1c: tool profiles, plugin skeleton, `/bindwright:setup`; drop the retired tool blocks from the global template.
 - #11: P1d: repo-level hooks plus the canonical `.claude/settings.json` deny list. Allow `push --force-with-lease`, deny plain `--force`, deny interactive rebase only, deny direct pushes to `develop` and `main`, no squash deny.
 - #20: Phase 2 notes. `setup-review-gate.sh` must set `squash_merge_commit_title=PR_TITLE` and `squash_merge_commit_message=PR_BODY`. The develop ruleset must allow `[squash, merge]` and main `[merge]`.
