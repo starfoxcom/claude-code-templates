@@ -11,7 +11,9 @@ One logical change per commit. Never mix a feature with a refactor, or a fix wit
 - 72 characters max. Imperative verb: `add`, `fix`, `remove`, `update`, `refactor`, `extract`.
 - `scope` is the system or layer touched.
 - Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore` (build, CI, tooling, deps), `data` (app data, configs, assets), `style` (formatting only).
-- No AI-attribution lines anywhere: no co-author trailers, "generated with" footers or session links in commits, PR titles, PR bodies or comments.
+<!-- TOGGLE:attribution_guard START -->
+- No AI-attribution lines anywhere: no co-author trailers, "generated with" footers or session links in commits, PR titles, PR bodies or comments. `.claude/settings.json` turns off the harness's own trailers, and the `no-ai-attribution` hook catches the ones written by hand.
+<!-- TOGGLE:attribution_guard END -->
 
 ---
 
