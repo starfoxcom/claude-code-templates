@@ -19,12 +19,14 @@ The hook reads text, not shell grammar, so no quoting trick changes what it
 sees. First it removes what the shell would remove: line continuations,
 quotes, backslashes and backticks, decoding Bash's `$'...'` escapes and
 PowerShell's `` `u{...} `` on the way. Each command substitution (`$(...)`,
-`${...}`, `<(...)`, a Bash backtick pair) is read on its own. The rest is cut
-into statements at every newline, `;`, `|` and `&`, quoted or not; the words
-after a `git` word and a later push word, up to the end of the statement,
-are the push's arguments. Text
-inside `eval`, `sh -c`, `pwsh -Command`, a heredoc or a comment is read the
-same way, so a force push anywhere in the command's text is found.
+`${...}`, `<(...)`, a Bash backtick pair, a PowerShell `(...)`) is read on
+its own. The rest is cut into statements at every newline, and at every
+`;`, `|` and `&` outside a quoted string that closes on its own line;
+redirects and their targets are dropped. After a `git` word, a later push
+word in the same statement starts the push, and the words after it are its
+arguments. Text inside `eval`, `sh -c`, `pwsh -Command`, a heredoc or a
+comment is read the same way, so a force push anywhere in the command's
+text is found. Every step is linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
 script or a search pattern with `git push -f` in it is blocked too. The
@@ -41,8 +43,12 @@ these run without a block:
 - remote branch and tag deletions, and a branch deleted and then pushed
   again;
 - a push run by another program (`python -c`, `node -e`, `make`, `gh api`);
-- a command over MAX_COMMAND characters, and substitutions nested more than
-  MAX_PASSES levels deep, whose separators then cut the text around them.
+- a push after a spaced git option value whose later word is exactly a git
+  subcommand in OTHER_SUBCOMMANDS (`git -C "My notes" push -f`): the search
+  for the push word stops there;
+- a push split from its `git` word by a `;`, `|` or `&` inside a quoted
+  string that spans lines;
+- a command over MAX_COMMAND characters.
 
 Project deny rules cover some of these by text (`git remote *--mi*`, `gh repo
 sync *--force*`). Input that is not JSON and any error while reading a
@@ -65,8 +71,8 @@ import json
 import re
 import sys
 
-# Longer commands pass unread. Reading is linear, so this only bounds the
-# work; no real push command comes near it.
+# Longer commands pass unread. Every step below is linear in the command's
+# length, so this only bounds the work; no real push command comes near it.
 MAX_COMMAND = 100000
 # Innermost substitutions are cut out one nesting level per pass.
 MAX_PASSES = 64
@@ -80,20 +86,29 @@ OTHER_SUBCOMMANDS = {
     "format-patch", "gc", "grep", "help", "init", "log", "ls-files", "ls-remote", "merge", "mv",
     "notes", "pull", "rebase", "reflog", "remote", "reset", "restore", "rev-list", "rev-parse",
     "revert", "rm", "shortlog", "show", "stash", "status", "submodule", "switch", "tag", "worktree"}
+# git's own options that take the next word as their value; that word is
+# never the subcommand (`git -C ../notes push -f`).
+GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
+                     "--super-prefix", "--config-env", "--attr-source"}
 
 ANSI_QUOTE = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
 POWERSHELL_CHAR = re.compile(r"`u\{([0-9A-Fa-f]{1,6})\}")
+CASE_WORD = re.compile(r"\b(?:case|esac)\b")
 # PowerShell runs any `(...)` as its own expression (`("v{0}" -f $n)`).
 INNERMOST = {"Bash": re.compile(r"[$<>]\(([^()]*)\)|\$\{([^{}]*)\}"),
              "PowerShell": re.compile(r"[$@]?\(([^()]*)\)|\$\{([^{}]*)\}")}
 BACKTICK_GROUP = re.compile(r"`([^`]*)`")
+# A quoted string that closes on the line it opens on.
+QUOTED = {"Bash": re.compile(r"\"(?:[^\"\\\n]|\\.)*\"|'[^'\n]*'"),
+          "PowerShell": re.compile(r"\"(?:[^\"`\n]|`.)*\"|'[^'\n]*'")}
 # A lone carriage return ends a statement only in PowerShell.
 STATEMENT_END = {"Bash": re.compile(r"[\n;|&]"), "PowerShell": re.compile(r"[\n\r;|&]")}
 WORD_SPLIT = re.compile(r"[\s<>,]+")
-# A redirect operator not right after a quote, and its target.
-REDIRECT = re.compile(r"""(?<![0-9"'])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)\s*(?:"[^"]*"|'[^']*'|[^\s;|&<>"']+)?""")
+# A redirect operator and its target, read once quotes are gone. A target
+# never starts with `-`, so `--repo=">" -qf` keeps its flag.
+REDIRECT = re.compile(r"(?<![0-9])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)[ \t]*(?:[^\s;|&<>\-][^\s;|&<>]*)?")
 EDGE = "(){}[]$&!@"
-SHORT_FORCE = re.compile(r"-[A-Za-z]*f[A-Za-z]*")
+SHORT_OPTIONS = re.compile(r"-[A-Za-z0-9]+")
 LONG_FORCE = re.compile(r"--force(?:=.*)?|--m(?:i(?:r(?:r(?:o(?:r)?)?)?)?)?")
 FORCING_CONFIG = re.compile(r"remote\..+\.push=\+.*|remote\..+\.mirror(?:=(?:true|yes|on|1))?", re.I)
 PUSH_ALIAS = re.compile(r"alias\.[^=]+=!?(?:push|send-pack|http-push)", re.I)
@@ -108,6 +123,28 @@ def ansi_decode(match):
         return body
 
 
+def neutral_cases(text):
+    """The text with the parentheses between each Bash `case` and the `esac`
+    that closes it turned into spaces, so a pattern's `)` never closes a
+    substitution around it. What sat inside stays in the text around it and
+    is read there. A `case` with no `esac` (the word in a message) changes
+    nothing."""
+    spans, opened = [], []
+    for match in CASE_WORD.finditer(text):
+        if match.group(0) == "case":
+            opened.append(match.start())
+        elif opened:
+            start = opened.pop()
+            if not opened:
+                spans.append((start, match.end()))
+    out, last = [], 0
+    for start, end in spans:
+        out += [text[last:start], text[start:end].replace("(", " ").replace(")", " ")]
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+
+
 def stand_in(match):
     """The word a substitution leaves in the text around it: `git` when it
     names git (`& ("git") push`, `$(which git) push`), otherwise a plain word."""
@@ -116,11 +153,12 @@ def stand_in(match):
 
 
 def texts(command, tool):
-    """The command's pieces with quoting removed: each command substitution
-    on its own, then the rest with each substitution replaced by a word."""
+    """The command's pieces: each command substitution on its own, then the
+    rest with each substitution replaced by a word; and whether substitutions
+    are nested past MAX_PASSES."""
     s = re.sub(r"\\\r?\n|`\r?\n|`\r", "", command)
     if tool != "PowerShell":
-        s = ANSI_QUOTE.sub(ansi_decode, s)
+        s = neutral_cases(ANSI_QUOTE.sub(ansi_decode, s))
     s = POWERSHELL_CHAR.sub(lambda m: chr(min(int(m.group(1), 16), 0x10FFFF)), s)
     pieces = []
     if tool != "PowerShell":
@@ -133,14 +171,23 @@ def texts(command, tool):
         pieces += [a or b for a, b in found]
         s = INNERMOST[tool].sub(stand_in, s)
     pieces.append(s)
-    return pieces
+    return pieces, INNERMOST[tool].search(s) is not None
+
+
+def mask_quoted(text, tool):
+    """The text with `;`, `|` and `&` inside quotes turned into spaces, so a
+    quoted value (`-C "C:/R&D"`) stays in its statement. Only a quote that
+    closes on its own line counts, so neither an apostrophe in a heredoc
+    body or comment nor the closing quote of a string that spans lines can
+    join statements."""
+    return QUOTED[tool].sub(lambda m: re.sub(r"[;|&]", " ", m.group(0)), text)
 
 
 def unquote(text, backslash):
     """The text without quote characters, backticks and `$` before a quote;
     a backslash is dropped (an escape) or read as a path separator."""
     text = re.sub(r"\$(?=[\"'])", "", text)
-    text = re.sub("[\"'`‘’“”]", "", text)
+    text = re.sub("[\"'`\u2018\u2019\u201c\u201d]", "", text)
     return text.replace("\\", "/" if backslash == "path" else "")
 
 
@@ -150,34 +197,54 @@ def name(word):
     return re.sub(r"\.exe$", "", word.strip(EDGE).split("/")[-1].lower())
 
 
+def forces(word):
+    """Whether one push argument forces: `--force`, a `--mirror` prefix, or a
+    short-option bundle with `f` in it (`-qf`, `-4f`)."""
+    if word.startswith("--"):
+        return LONG_FORCE.fullmatch(word) is not None
+    return "f" in word and SHORT_OPTIONS.fullmatch(word) is not None
+
+
 def force_in(words):
     """Why the words of one statement force-push, or None. After a `git`
-    word, a later push word in the statement starts the push, whatever sits
-    between them: an option value split at its spaces (`-C "/c/My Repo"`) or
-    a substitution's stand-in word. So does a one-off alias for push (`-c
-    alias.p='push -f' p`), whose arguments follow its name. A git
-    subcommand in OTHER_SUBCOMMANDS ends the search."""
-    git, pushing, forcing = False, False, None
+    word, a later push word starts the push, whatever sits between them: an
+    option value split at its spaces (`-C "/c/My Repo"`) or a substitution's
+    stand-in word. So does a one-off alias for push (`-c alias.p='push -f'
+    p`), whose arguments follow its name. A word that is exactly a git
+    subcommand in OTHER_SUBCOMMANDS, and is not the value of a git option,
+    ends the search."""
+    git, pushing, forcing, value = False, False, None, False
     for raw in words:
         word = raw.strip(EDGE)
         if pushing:
-            if SHORT_FORCE.fullmatch(word) or LONG_FORCE.fullmatch(word):
+            if forces(word):
                 return f"`{word}`"
             if word.startswith("+") and len(word) > 1:
                 return f"`{word}` (a leading + forces that ref)"
+            continue
+        if value:
+            value = False
+            if FORCING_CONFIG.fullmatch(word):
+                forcing = f"`-c {word}`"
+            elif PUSH_ALIAS.fullmatch(word):
+                pushing = True
             continue
         program = name(word)
         if program in PUSH_PROGRAMS:
             pushing = True
         elif program == "git":
             git = True
-        elif git and FORCING_CONFIG.fullmatch(word):
+        elif not git:
+            continue
+        elif word in GIT_VALUE_OPTIONS:
+            value = True
+        elif FORCING_CONFIG.fullmatch(word):
             forcing = f"`-c {word}`"
-        elif git and (program in PUSH_SUBCOMMANDS or PUSH_ALIAS.fullmatch(word)):
+        elif program in PUSH_SUBCOMMANDS or PUSH_ALIAS.fullmatch(word):
             if forcing:
                 return forcing
             pushing = True
-        elif git and program in OTHER_SUBCOMMANDS:
+        elif word in OTHER_SUBCOMMANDS:
             # Another git command: its arguments are its own (`git commit -m
             # "push -f later"`).
             git, forcing = False, None
@@ -188,19 +255,16 @@ def check(command, tool):
     """Why a command's text force-pushes, or None."""
     if len(command) > MAX_COMMAND:
         return None
-    case_inside = re.search(r"[$<>]\([^()]*\bcase\b", command) is not None
-    for piece in texts(command, tool):
-        # A redirect and its target go first, so `git>/dev/null push` and
-        # `push&>/dev/null` read as `git push`; a quoted `>` is text.
-        piece = REDIRECT.sub(" ", piece)
-        # A substitution the passes could not cut out (nesting past
-        # MAX_PASSES) or cut short (a `case` pattern's `)` inside it) may hide
-        # separators, so its piece is also read as one statement.
-        opener = r"\(|\$\{" if tool == "PowerShell" else r"[$<>]\(|\$\{"
-        whole = re.search(opener, piece) is not None or case_inside
+    pieces, deep = texts(command, tool)
+    for piece in pieces:
+        masked = mask_quoted(piece, tool)
         for backslash in ("escape", "path"):
-            text = unquote(piece, backslash)
-            for statement in STATEMENT_END[tool].split(text) + ([text] if whole else []):
+            # Redirects go once quotes are gone, so `git>/dev/null push` and
+            # `push&>/dev/null` read as `git push`.
+            text = REDIRECT.sub(" ", unquote(masked, backslash))
+            # Substitutions nested past MAX_PASSES may hide separators, so such
+            # a command is also read as one statement.
+            for statement in STATEMENT_END[tool].split(text) + ([text] if deep else []):
                 reason = force_in([w for w in WORD_SPLIT.split(statement) if w])
                 if reason:
                     return reason
