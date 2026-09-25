@@ -228,6 +228,31 @@ class GuardHookTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_denied(self.attr(command))
 
+    def test_single_quoted_text_is_literal(self):
+        for command in ("gh pr comment 5 --body 'Run `npm test` first'",
+                        "git commit -m 'fix(hooks): stop expanding $HOME'"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_double_quoted_expansion_is_denied(self):
+        for command in ('git commit -m "docs: $(cat /tmp/msg.txt)"', 'gh pr comment 5 --body "$BODY"',
+                        "git commit -m $MSG", 'gh pr comment 5 --body @"\n$BODY\n"@',
+                        "gh api -X POST repos/o/r/issues -f body=$(cat x)",
+                        "git commit -F - <<EOF\n$(cat /tmp/msg)\nEOF"):
+            with self.subTest(command=command):
+                self.assert_denied(self.attr(command))
+
+    def test_expansion_outside_the_message_passes(self):
+        for command in ('git -C "$REPO" commit -m \'docs: x\'', "git tag -f v$VERSION -m 'release'",
+                        "gh pr comment 5 --body @'\n$literal text\n'@"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_lowercase_f_is_not_a_message_file(self):
+        for command in ("git tag -f v1.0.0", "gh pr create -f --base develop"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
     def test_body_from_a_quoted_heredoc_passes(self):
         self.assert_passes(self.attr(
             "gh pr create --title t --body-file - <<'EOF'\n## What\n| a | b |\n|---|---|\nEOF"))

@@ -95,7 +95,6 @@ ATTRIBUTION = re.compile(
 # Here-doc bodies, quoted or not. A quoted one is literal text; an unquoted
 # one expands $VAR and $(...), which the SUBST check below reads.
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1.*?^\2\s*$", re.S | re.M)
-QUOTED_HEREDOC = re.compile(r"<<-?\s*(['\"])(\w+)\1.*?^\2\s*$", re.S | re.M)
 QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", re.S)
 SUBST = re.compile(r"\$\(|`[^`]+`|<\(|\beval\b|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$env:", re.I)
 
@@ -123,22 +122,25 @@ CURL_GH = re.compile(r"\bcurl\b[^|;&\n]*api\.github\.com", re.I)
 PS_GH = re.compile(r"Invoke-(RestMethod|WebRequest)\b[^|;&\n]*api\.github\.com", re.I)
 FILTER_REPO = re.compile(r"\bgit\s+filter-repo\b|\bgit\s+filter-branch\b", re.I)
 
-# Flags whose next token is a file the hook must read.
+# Flags whose next token is a file the hook must read. `-F` is case-sensitive:
+# a lowercase `-f` is `git tag -f` (force) or `gh pr create -f` (fill).
 FILE_FLAGS = re.compile(
-    r"(?:(?<=\s)-F|--file|--body-file|--notes-file|--template|--input|--message-file|-InFile|Get-Content|"
-    r"(?<=\s)-d\s*@|--data(?:-binary|-raw)?\s*@)\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))",
-    re.I,
+    r"(?:(?<=\s)-F|(?i:--file|--body-file|--notes-file|--template|--input|--message-file|-InFile|Get-Content)|"
+    r"(?<=\s)-d\s*@|(?i:--data(?:-binary|-raw)?)\s*@)\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
 )
 # A message or body file of `-` is stdin, for git and gh alike; curl's `@-` too.
 STDIN_FILE = re.compile(
-    r"(?:(?<=\s)-F|--file|--body-file|--notes-file|--input|--message-file|-InFile)(?:\s+|=)-(?=\s|$)|"
-    r"(?:(?<=\s)-d|--data(?:-binary|-raw)?)\s*@-(?=\s|$)",
-    re.I,
+    r"(?:(?<=\s)-F|(?i:--file|--body-file|--notes-file|--input|--message-file|-InFile))(?:\s+|=)-(?=\s|$)|"
+    r"(?:(?<=\s)-d|(?i:--data(?:-binary|-raw)?))\s*@-(?=\s|$)"
 )
 # Another stdin source next to a here-doc: a pipe, or a `<` redirect that is
 # not a here-doc, here-string or process substitution.
 OTHER_INPUT = re.compile(r"\||(?<![<\d])<(?![<(&])")
-MSG_FLAGS = re.compile(r"(?<=\s)(-m|--message|-b|--body|-t|--title|--notes|-Body|-f|-F|--field|--raw-field)(?=\s|=)", re.I)
+# A message flag and its value: a PowerShell here-string, a quoted string or a
+# bare word. gh api's -f / -F / --field / --raw-field count only on gh api.
+_VALUE = r"(?:\s+|=)(@\"[\s\S]*?\"@|@'[\s\S]*?'@|\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)"
+MSG_ARG = re.compile(r"(?<=\s)(?:-m|--message|-b|--body|-t|--title|--notes|(?i:-Body))" + _VALUE)
+FIELD_ARG = re.compile(r"(?<=\s)(?:-f|-F|--field|--raw-field)" + _VALUE)
 
 
 def deny(reason):
@@ -168,6 +170,20 @@ def bare(cmd):
     """The command with here-doc bodies and quoted strings removed: the text
     the shell reads as flags and operators."""
     return QUOTED.sub("''", HEREDOC.sub("HEREDOC", cmd))
+
+
+def expansion_in_message(cmd, api):
+    """True when message or body text is built by the shell at run time: a
+    message value outside single quotes (and outside a PowerShell @'...'@)
+    holding $VAR, $(...), backticks or <(...), or an unquoted here-doc
+    holding one. Text elsewhere in the command (a `git -C "$REPO"`) does not
+    count."""
+    for pattern in (MSG_ARG, FIELD_ARG) if api else (MSG_ARG,):
+        for m in pattern.finditer(cmd):
+            value = m.group(1)
+            if not value.startswith(("'", "@'")) and SUBST.search(value):
+                return True
+    return any(not m.group(1) and SUBST.search(m.group(0)) for m in HEREDOC.finditer(cmd))
 
 
 def find_files(cmd, cwd):
@@ -224,10 +240,9 @@ def main():
 
     scan_text(cmd, "the command text")
 
-    # Message text must be literal (or a quoted here-doc, which the scan above
-    # already covered). Any expansion hides content from the hook.
-    stdin_body = STDIN_FILE.search(cmd)
-    if (MSG_FLAGS.search(cmd) or stdin_body) and SUBST.search(QUOTED_HEREDOC.sub("<heredoc>", strip_paths(cmd))):
+    # Message text must be literal (the scan above already read it). Any
+    # expansion hides content from the hook.
+    if expansion_in_message(cmd, api=bool(GH_API_WRITE.search(cmd))):
         deny("message/body text uses shell expansion ($VAR, $(...), backticks, <(...)) that the hook "
              "cannot read. Use a literal string, a quoted here-doc, or --body-file <literal absolute path>.")
 
@@ -238,7 +253,7 @@ def main():
             deny(f"could not read message/body file {path}: {e}. Use a literal absolute path.")
         scan_text(text, f"file {path}")
 
-    if stdin_body and not (HEREDOC.search(cmd) and not OTHER_INPUT.search(flags)):
+    if STDIN_FILE.search(cmd) and not (HEREDOC.search(cmd) and not OTHER_INPUT.search(flags)):
         deny("a message/body file of `-` reads text the hook cannot see. Feed it only from a here-doc "
              "in the same command, or use --body-file <literal absolute path>.")
 
