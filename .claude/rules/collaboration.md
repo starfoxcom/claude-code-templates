@@ -50,4 +50,4 @@ If CI is red for **infrastructure reasons** (flaky test, runner outage), surface
 
 For PRs whose diff touches the deep-review trigger surface (parsers, threading, public API, auth, migrations, scheduler/DAG, save/load format), the on-demand deep review is **mandatory** before merge — not optional. The routine review auto-applies the `needs-deep-review` label AND posts the structured `@claude review this PR` follow-up. Merge is blocked until the deep review's 🟢 verdict lands.
 
-If the deep review is 🔴, fix on the PR branch, re-request the deep review with another `@claude review this PR — re-check on <focus>` comment.
+If the deep review is 🔴, fix on the PR branch, re-request the deep review with another comment that starts with `@claude review this PR — re-check on <focus>`.

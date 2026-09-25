@@ -984,7 +984,7 @@ Without auto-merge, follow this manual checklist.
 
   const TOGGLES = [
     { group: 'CI / Reviews', key: 'github_actions_routine_review', label: 'Routine PR review (Sonnet, binary verdict)', desc: 'Auto-fires on every PR. Posts a 🔴/🟢 comment. Merge gate is real.', controls: '.github/workflows/claude-code-review.yml', defaults: [true, true, null, true] },
-    { group: 'CI / Reviews', key: 'github_actions_deep_review', label: 'On-demand deep review (Opus)', desc: 'Fires when any @claude comment lands on a PR.', controls: '.github/workflows/claude.yml', defaults: [true, true, null, true] },
+    { group: 'CI / Reviews', key: 'github_actions_deep_review', label: 'On-demand deep review (Opus)', desc: 'Fires when a PR comment starts with @claude review this PR.', controls: '.github/workflows/claude.yml', defaults: [true, true, null, true] },
     { group: 'CI / Reviews', key: 'github_actions_deep_review_auto_fire', label: 'Auto-fire deep review on trigger surface', desc: 'Routine reviewer applies needs-deep-review label + posts @claude comment for risky diffs.', controls: 'review-tiers.md', defaults: [false, true, false, true] },
     { group: 'CI / Reviews', key: 'github_actions_paths_ignore_auto_merge', label: 'Auto-merge on paths-ignore PRs', desc: 'Docs / rules / CI-YAML-only PRs auto-merge after 90s grace.', controls: 'token-efficiency.md + git.md', defaults: [true, false, false, false] },
     { group: 'CI / Reviews', key: 'binary_verdict_rule', label: 'Binary 🔴/🟢 verdict rule', desc: '🟢 only when fully clean. 🔴 when any finding. Stops "minor non-blocking" rot.', controls: 'review-tiers.md + git.md', defaults: [true, true, true, true] },
