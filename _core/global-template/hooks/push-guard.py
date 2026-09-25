@@ -41,6 +41,10 @@ Out of reach, so these run without a block:
   a vertical tab or a form feed;
 - a push nested more than MAX_DEPTH levels deep in substitutions, shell
   strings or `eval`;
+- a push inside a nested string, alias or inner substitution of a command
+  that takes more than READ_BUDGET seconds to read in full (plain statements
+  and top-level substitutions are read first, so a plain force push is
+  still blocked);
 - remote branch and tag deletions (`--delete`, `:branch`, `--prune`);
 - a force flag the shell builds at run time (`git push $FLAGS`, `xargs`,
   brace expansion, text piped into a shell or `iex`);
@@ -73,10 +77,14 @@ import json
 import re
 import shlex
 import sys
+import time
 
-# Longer commands pass without being parsed, so parsing never approaches the
-# hook timeout; no plain push needs more.
+# Longer commands pass without being parsed; no plain push needs more.
 MAX_COMMAND = 20000
+# Seconds the quick and the full reading may each take; together they stay
+# inside the hook's 10 s timeout with Python's start-up on a busy machine.
+QUICK_BUDGET = 4
+READ_BUDGET = 3
 # git subcommands and programs that push. `send-pack` and `http-push` are the
 # plumbing under `git push`, with their own `--force`.
 PUSH_SUBCOMMANDS = {"push", "send-pack", "http-push"}
@@ -124,6 +132,8 @@ def scan(command, tool, text=False, keywords=True):
     whether the split is certain: a PowerShell here-string, block comment or
     `--%`, a heredoc without its closing line, or quotes or groups that never
     close make it uncertain."""
+    if deadline is not None and time.monotonic() > deadline:
+        raise OverBudget
     escape = "`" if tool == "PowerShell" else "\\"
     openers = ("$(", "@(") if tool == "PowerShell" else ("$(", "<(", ">(", "${")
     parts, current, groups, stack, heredocs = [], [], [], [], []
@@ -485,9 +495,9 @@ def push_reason(tokens, deleted, depth):
             value = aliases[name.lower()]
             if value.startswith("!"):
                 inner = value[1:] + "".join(" " + shlex.quote(a) for a in args)
-                reason = check(inner, "Bash", depth + 1) if depth < MAX_DEPTH else None
-                if reason:
-                    return reason
+                if depth < MAX_DEPTH:
+                    # The text holds every later word, so one check covers them.
+                    return check(inner, "Bash", depth + 1)
                 name = ""
                 break
             try:
@@ -607,7 +617,9 @@ def nested_reason(tokens, tool, depth):
         elif name in POWERSHELLS:
             flag = next((j for j, t in enumerate(rest) if re.fullmatch(r"(?i)-c(o(m(m(a(nd?)?)?)?)?)?", t)), None)
             if flag is not None and flag + 1 < len(rest):
-                inner, inner_tool = " ".join(rest[flag + 1:]), "PowerShell"
+                # Like `eval`, the string holds every later word, so one check
+                # covers them.
+                return check(" ".join(rest[flag + 1:]), "PowerShell", depth + 1)
         if inner is not None:
             reason = check(inner, inner_tool, depth + 1)
             if reason:
@@ -638,8 +650,45 @@ def shell_command_string(args):
     return args[j] if has_c and j < len(args) else None
 
 
+class OverBudget(Exception):
+    """The reading ran past READ_BUDGET."""
+
+
+deadline = None
+
+
+def guard(command, tool):
+    """Why a command certainly force-pushes, or None, always well inside the
+    hook timeout. A quick first reading checks every statement and top-level
+    substitution without reading nested strings, aliases or deeper
+    substitutions; it takes time in step with the command's length, so a later
+    plain force push is always found. The full reading then runs under a time
+    budget. Past the budget the call goes through, as it would on a timeout."""
+    global deadline
+    # The quick reading has its own clock, so a slow full reading never costs it
+    # time; it only runs out on a machine too slow to run the hook at all.
+    deadline = time.monotonic() + QUICK_BUDGET
+    try:
+        parts, groups, readable = scan(command, tool)
+        if not readable:
+            parts, groups, readable = scan(command, tool, keywords=False)
+        if readable:
+            for text in [command] + groups:
+                reason = check(text, tool, MAX_DEPTH)
+                if reason:
+                    return reason
+        deadline = time.monotonic() + READ_BUDGET
+        return check(command, tool)
+    except OverBudget:
+        return None
+    finally:
+        deadline = None
+
+
 def check(command, tool, depth=0):
     """Why a command certainly force-pushes, or None."""
+    if deadline is not None and time.monotonic() > deadline:
+        raise OverBudget
     if len(command) > MAX_COMMAND:
         return None
     # Quotes, escapes and line continuations inside a word (`pu''sh`) are
@@ -683,7 +732,7 @@ def main():
     if tool not in ("Bash", "PowerShell"):
         return 0
     try:
-        reason = check((data.get("tool_input") or {}).get("command") or "", tool)
+        reason = guard((data.get("tool_input") or {}).get("command") or "", tool)
     except Exception:
         # The guard only blocks what it reads for certain; an error is not certain.
         return 0

@@ -595,6 +595,24 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const chainStart = Date.now();
   assert.equal(verdict("Bash", chain), "deny", "a push after chained heredocs blocks");
   assert.ok(Date.now() - chainStart < 3000, "chained heredocs answer quickly");
+  // Strings and `!` aliases that hold every later word are checked once, not once per word.
+  for (const [label, unit] of [["pwsh -Command", "pwsh -c "], ["! alias", "git -c alias.a=!: a "]]) {
+    const repeated = ": " + unit.repeat(30) + "push; git push -qf origin main";
+    const start = Date.now();
+    assert.equal(verdict("Bash", repeated), "deny", `a push after repeated ${label} words blocks`);
+    assert.ok(Date.now() - start < 3000, `repeated ${label} words answer quickly`);
+  }
+  // With no time left for the full reading, the quick reading still blocks a
+  // plain force push, and a push only a full reading would find passes.
+  const budget = spawnSync(python, ["-c", [
+    "import importlib.util, sys",
+    "spec = importlib.util.spec_from_file_location('guard', sys.argv[1])",
+    "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)",
+    "g.READ_BUDGET = -1",
+    "print(bool(g.guard(': x; git push -qf origin main', 'Bash')), bool(g.guard('echo $(git push -qf origin main)', 'Bash')),",
+    "      bool(g.guard(\"sh -c 'git push -qf origin main'\", 'Bash')))",
+  ].join("\n"), join(repo, "_core/global-template/hooks/push-guard.py")], { encoding: "utf8" });
+  assert.equal(budget.stdout.trim(), "True True False", `quick reading without a full one: ${budget.stderr}`);
   // A deleted branch pushed again gets advice that works, not the lease advice.
   const again = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin --delete main && git push --force-with-lease origin main" } }));
   assert.match(again.stderr, /without deleting the branch first/, "a delete then push gets its own advice");
