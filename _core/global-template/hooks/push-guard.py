@@ -34,8 +34,10 @@ PowerShell also at `{` and `}`). Redirects and their targets are dropped,
 except a target that names git (`bash <<< "git push -f"`). After a `git`
 word, a later push word in the same statement starts the push, and the
 words after it are its arguments. Text inside `eval`, `sh -c`,
-`pwsh -Command`, a heredoc or a comment is read the same way. Every step is
-linear in the command's length.
+`pwsh -Command`, a heredoc or a comment is read the same way. Each shell's
+own line continuation is removed; a Bash `\` at a line end is also read as a
+plain line end, since Bash does not continue a comment, and either reading
+can block. Every step is linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
 script or a search pattern with `git push -f` in it is blocked too. The
@@ -111,7 +113,9 @@ GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--e
                      "--super-prefix", "--config-env", "--attr-source"}
 
 CONTINUATION = {"Bash": re.compile(r"\\\n"), "PowerShell": re.compile(r"`(?:\r\n|\n|\r)")}
-ANSI_QUOTE = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
+# A `$'...'` string, found after skipping escapes and quoted strings the way
+# `mask_quoted` pairs them, so the `$'` ending `grep 'main$'` starts nothing.
+ANSI_QUOTE = re.compile(r"\\.|\"(?:[^\"\\\n]|\\.)*\"|'[^'\n]*'|\$'((?:[^'\\]|\\.)*)'", re.S)
 # Bash's `$'...'` escapes: hex, `\u` and `\U` with as few digits as Bash
 # takes, octal, control characters, and single letters.
 ANSI_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|([0-7]{1,3})|c(.)|(.))", re.S)
@@ -184,7 +188,10 @@ def ansi_char(match):
 
 
 def ansi_decode(match):
-    """The text of Bash's `$'...'`, decoded, as one word."""
+    """The text of Bash's `$'...'`, decoded, as one word; anything else the
+    pattern skipped stays as it is."""
+    if match.group(1) is None:
+        return match.group(0)
     return ANSI_SEPARATORS.sub(" ", ANSI_ESCAPE.sub(ansi_char, match.group(1)))
 
 
@@ -254,7 +261,8 @@ def texts(command, tool):
     s = CONTINUATION[tool].sub(" " if tool == "PowerShell" else "", command)
     if tool != "PowerShell":
         s = neutral_cases(ANSI_QUOTE.sub(ansi_decode, s))
-    s = POWERSHELL_CHAR.sub(lambda m: chr(min(int(m.group(1), 16), 0x10FFFF)), s)
+    else:
+        s = POWERSHELL_CHAR.sub(lambda m: chr(min(int(m.group(1), 16), 0x10FFFF)), s)
     pieces = []
     if tool != "PowerShell":
         pieces += BACKTICK_GROUP.findall(s)
@@ -392,6 +400,20 @@ def check(command, tool):
     """Why a command's text force-pushes, or None."""
     if len(command) > MAX_COMMAND:
         return None
+    readings = [command]
+    if tool == "Bash" and "\\\n" in command:
+        # Bash does not continue a comment (`# C:\work\repo\`), so a `\` + LF
+        # is also read as a plain line end; either reading can block.
+        readings.append(command.replace("\\\n", "\n"))
+    for reading in readings:
+        reason = check_reading(reading, tool)
+        if reason:
+            return reason
+    return None
+
+
+def check_reading(command, tool):
+    """Why one reading of a command's text force-pushes, or None."""
     pieces, deep = texts(command, tool)
     for piece in pieces:
         masked = mask_quoted(piece, tool)

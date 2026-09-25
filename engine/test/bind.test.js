@@ -354,6 +354,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "echo x \\\r\ngit push -qf origin main", "git commit -m wip \\\r\ngit push -qf origin main",
     // A backtick ending a line closes a substitution; it is no line continuation in Bash.
     "VERSION=`cat VERSION`\ngit push -f origin main", "REV=`git rev-parse HEAD`\r\ngit push -f origin main",
+    // Bash does not continue a comment, so a `\` ending one leaves the next line its own command.
+    "echo start # logs land in C:\\temp\\\ngit push -f origin main", "# Build output lands in dist\\\ngit push origin main --force",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
@@ -397,6 +399,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "case \"$1\" in tag) git push origin \"v$(date +%Y.%m.%d)\";; esac",
     "case \"$1\" in go) git push origin \"$(git rev-parse --abbrev-ref HEAD | cut -d/ -f2)\";; esac",
     "printf $'\\e[1mdone\\e[0m\\n'; git push origin main",
+    // A `$'` ending a single-quoted pattern starts no ANSI-C string.
+    "git branch --merged | grep -v 'main$' | xargs -r git branch -d; git push origin main; rm -rf dist; echo 'cleaned up'",
+    "grep -c '^$' CHANGELOG.md; git push -u origin feature/x && rm -rf .cache && echo 'ok'",
+    "git tag | grep -E '^v[0-9]+$'\ngit push origin main\nrm -rf build\necho 'done'",
+    "git push origin main \\\n  && rm -rf build",
     // A quote that opens or closes a word is its edge, so a quoted variable
     // before a suffix is a branch name, not a flag.
     "git push -u origin \"${TICKET}-fix\"", "git push -u origin \"${TICKET}\"-fix",
