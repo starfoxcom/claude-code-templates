@@ -36,7 +36,7 @@ The Anthropic Claude Code GitHub App validates that the workflow file on a PR's 
 
 No AI reviews a workflow-only PR in CI, so it is reviewed before merge, one of two ways:
 
-- **Every commit in it was written in our own sessions:** two local subagent reviews run on the exact head commit that will merge. One follows the routine-review prompt taken from the base branch's copy of `claude-code-review.yml`, never the PR's own copy; the other reviews as the deep tier. The PR merges once both give 🟢. Any new commit re-runs both.
+- **Every commit in it was written in our own sessions:** two fresh subagents review the exact head commit that will merge. Neither is a fork of the session that wrote the change, and each gets only the PR's diff and its own prompt. One follows the routine-review prompt taken from the base branch's copy of `claude-code-review.yml`, never the PR's own copy; the other reviews as the deep tier. Once both give 🟢, a PR comment records the head SHA and both verdict lines, and the PR merges only while that SHA is still its head. Any new commit re-runs both.
 - **Anything else,** including a PR we opened that carries someone else's commits: it merges only after the maintainer has read its whole diff.
 
 (Edits to `claude.yml` alone do not trip this: claude.yml runs from the default branch's version on `issue_comment` events, so the running workflow file always matches the default branch. The OIDC check passes.)
