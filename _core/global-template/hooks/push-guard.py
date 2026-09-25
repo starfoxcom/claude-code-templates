@@ -132,8 +132,7 @@ def scan(command, tool, text=False, keywords=True):
     whether the split is certain: a PowerShell here-string, block comment or
     `--%`, a heredoc without its closing line, or quotes or groups that never
     close make it uncertain."""
-    if deadline is not None and time.monotonic() > deadline:
-        raise OverBudget
+    tick()
     escape = "`" if tool == "PowerShell" else "\\"
     openers = ("$(", "@(") if tool == "PowerShell" else ("$(", "<(", ">(", "${")
     parts, current, groups, stack, heredocs = [], [], [], [], []
@@ -465,7 +464,14 @@ def push_reason(tokens, deleted, depth):
     (`sudo -u me`, `timeout 5`, `nice -n 5`, `command -p`) and shell keywords
     (`case x in a)`) cannot hide a push. `deleted` collects the branches
     deleted so far in the command, by remote."""
+    skip = 0
     for k, token in enumerate(tokens):
+        tick()
+        # Words in an earlier git's option run are its option values, already
+        # read with it; reading them again from each one would take time in
+        # step with the square of the run's length.
+        if k < skip:
+            continue
         # `git-push` (git's libexec program) is push itself.
         if program(token) in PUSH_PROGRAMS:
             return check_push(tokens[k + 1:], deleted)
@@ -476,6 +482,7 @@ def push_reason(tokens, deleted, depth):
             if tokens[i] == "-c" and i + 1 < len(tokens):
                 config.append(tokens[i + 1])
             i += 2 if tokens[i] in GIT_VALUE_OPTIONS else 1
+        skip = i
         if i >= len(tokens):
             continue
         # A redirect glued to the subcommand ends it: `push>/dev/null` is push.
@@ -588,10 +595,12 @@ def force_reason(args):
 
 def only_data(segment, tokens):
     """Commands that print, search or commit without writing a file: their
-    arguments are text, never a push. A redirect makes them write, and in PowerShell a
-    `(...)` argument runs as a command (`Write-Output (git push -qf)`), so
-    neither counts."""
-    if re.search(r"[>(\ue001]", segment):
+    arguments are text, never a push. A redirect makes them write, in PowerShell a
+    `(...)` argument runs as a command (`Write-Output (git push -qf)`) and a
+    `{...}` argument can run as a script block (`Select-String -LiteralPath
+    { git push -qf }`), and a `)` can end a `case` pattern (`echo ) git push
+    -qf`), so none of those counts."""
+    if re.search(r"[>(){\ue001]", segment):
         return False
     name = tokens[0].lower()
     if name in DATA_COMMANDS:
@@ -657,6 +666,12 @@ class OverBudget(Exception):
 deadline = None
 
 
+def tick():
+    """Stop the reading once it is past the current deadline."""
+    if deadline is not None and time.monotonic() > deadline:
+        raise OverBudget
+
+
 def guard(command, tool):
     """Why a command certainly force-pushes, or None, always well inside the
     hook timeout. A quick first reading checks every statement and top-level
@@ -687,8 +702,7 @@ def guard(command, tool):
 
 def check(command, tool, depth=0):
     """Why a command certainly force-pushes, or None."""
-    if deadline is not None and time.monotonic() > deadline:
-        raise OverBudget
+    tick()
     if len(command) > MAX_COMMAND:
         return None
     # Quotes, escapes and line continuations inside a word (`pu''sh`) are

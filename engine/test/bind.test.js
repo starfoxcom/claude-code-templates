@@ -358,6 +358,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const powershellOnly = ["& \"C:\\Program Files\\Git\\cmd\\git.exe\" push -qf origin main", "git -C \"C:\\repo\\\" push -f",
     "git push origin main `\n-qf", "git push origin main `\r-qf", "git push origin main `\r\n-qf",
     ". git push -qf origin main",
+    // A script block bound to a pipeline parameter runs once per piped object.
+    "Get-Item x | Select-String -LiteralPath { git push -qf origin main } -Pattern a",
     // An unquoted comma passes array elements as separate arguments, and a
     // backtick inside double quotes before a plain character is dropped.
     "git push origin main,-qf", "git push origin main,+main", "git push origin main ,-qf",
@@ -424,6 +426,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // `$'...'` and `$"..."` inside the subcommand name, decoded as Bash does.
     "git pu$'sh' -qf origin main", "git pu$\"sh\" -qf origin main", "git $'\\x70ush' -qf origin main",
     "git $'\\160ush' -qf origin main", "git send$'-'pack --force https://x/y main",
+    // A `case` pattern named like a print or search command is still a pattern.
+    "case grep in\ngrep ) git push -qf origin main;;\nesac", "case x in x) :;; echo ) git push -qf origin main;; esac",
     // A lease does not undo a delete: the branch's commits are already gone.
     "git push origin --delete main && git push --force-with-lease origin main",
     // A redirect glued to `push` ends the word, as in the shell.
@@ -595,6 +599,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const chainStart = Date.now();
   assert.equal(verdict("Bash", chain), "deny", "a push after chained heredocs blocks");
   assert.ok(Date.now() - chainStart < 3000, "chained heredocs answer quickly");
+  // A long git option run is read once, not again from each `git` value in it.
+  const optionRun = "git -c ".repeat(2800) + "xpush; git push -qf origin main";
+  const optionStart = Date.now();
+  assert.equal(verdict("Bash", optionRun), "deny", "a push after a long git option run blocks");
+  assert.ok(Date.now() - optionStart < 3000, "a long git option run answers quickly");
   // Strings and `!` aliases that hold every later word are checked once, not once per word.
   for (const [label, unit] of [["pwsh -Command", "pwsh -c "], ["! alias", "git -c alias.a=!: a "]]) {
     const repeated = ": " + unit.repeat(30) + "push; git push -qf origin main";
