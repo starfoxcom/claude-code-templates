@@ -25,6 +25,9 @@ AI_TRAILER = "Co-" + "Authored-By: Cla" + "ude <noreply@anthro" + "pic.com>"
 HUMAN_TRAILER = "Co-" + "Authored-By: Jane Doe <12345+jane@users.noreply.github.com>"
 GENERATED_LINE = "Gener" + "ated with [Cla" + "ude Code](https://cla" + "ude.com/claude-code)"
 SESSION_LINK = "https://cla" + "ude.ai/code/session_" + "01V8SAUxUZBbVPekZUHDL9FZ"
+# The deep-review trigger, split so a review that quotes this file cannot
+# carry the whole phrase into a PR comment and start a deep review.
+DEEP_TRIGGER = "@cla" + "ude rev" + "iew this PR"
 
 
 def find_sh():
@@ -191,7 +194,7 @@ class GuardHookTest(unittest.TestCase):
             "gh pr create --title 't' --body 'See https://github.com/starfoxcom/claude-code-templates/issues/3 "
             "and https://starfoxcom.github.io/claude-code-templates/'",
             "gh pr create --head hotfix/drop-admin-text-claude-yml --title 'fix(ci): x' --body 'y'",
-            "gh pr comment 5 --body '@claude review this PR - re-check on the parser'",
+            f"gh pr comment 5 --body '{DEEP_TRIGGER} - re-check on the parser'",
             "git commit -m 'fix(ui): show pointer with cursor on toggle rows'",
         ):
             with self.subTest(command=command):
