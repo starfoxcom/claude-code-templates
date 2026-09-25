@@ -1,6 +1,6 @@
 # Review tiers
 
-Every PR gets an AI review with a pass or block verdict, run by `.github/workflows/`. Local sessions never start reviews themselves.
+Every PR gets an AI review with a pass or block verdict, run by `.github/workflows/`. Local sessions never start the CI reviews themselves; the one local review is the workflow-only PR path in § PRs that edit the review workflow.
 
 | Tier | Starts when | Model | Gate check |
 |---|---|---|---|
@@ -47,7 +47,9 @@ Fix on the same PR branch and push; the review re-runs. Then search the codebase
 The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so the review must never start on them. Triage reviews only source files, so a PR that changes only workflow files (and docs) is non-reviewable: both checks pass without a review. That makes two rules:
 
 - A workflow edit ships in a PR of its own, with no source files. Mixed with code, the review starts, fails `Workflow validation failed`, and the PR can never merge; split it.
-- No AI reviews a workflow-only PR, so the maintainer reads its whole diff before it merges.
+- No AI reviews a workflow-only PR in CI, so it is reviewed before merge, one of two ways:
+  - **Every commit in it was written in the maintainer's own sessions:** two fresh subagents review the exact head commit that will merge. Neither is a fork of the session that wrote the change, and each gets only the PR's diff and its own prompt. One follows the review steps and the binary verdict rule of the routine-review prompt taken from the base branch's copy of `claude-code-review.yml`, never the PR's own copy. It runs the pre-screen's mechanical checks itself, since the CI pre-screen report does not exist locally. The other reviews as the deep tier, briefed to review the whole diff at that SHA adversarially under the binary verdict rule; the author may add focus points but never narrows that scope. Neither reviewer posts to the PR, applies a label or writes the deep-review trigger phrase; each returns its verdict to the author. Once both give 🟢, a PR comment records the head SHA and both verdict lines, and the merge passes `--match-head-commit <sha>` so it goes through only while that SHA is still the head. Any new commit re-runs both.
+  - **Anything else,** including a PR the maintainer opened that carries someone else's commits: it merges only after the maintainer has read its whole diff.
 
 For any other failure, fix the cause.
 

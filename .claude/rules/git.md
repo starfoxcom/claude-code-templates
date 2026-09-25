@@ -134,7 +134,7 @@ A 🟢 with "minor non-blocking" findings tucked in the body becomes useless —
 
 ### Local Claude's role
 
-Local-session Claude (this harness) does NOT auto-fire reviews. The workflow does. Local responsibilities:
+Local-session Claude (this harness) does NOT auto-fire the CI reviews. The workflow does. The one local review is the workflow-only PR path in `review-tiers.md`. Local responsibilities:
 
 - Push the branch + open the PR per PR format below.
 - Run the CI polling loop (`token-efficiency.md` § "CI monitoring + auto-merge") and report PR state.

@@ -32,7 +32,12 @@ Both `Evaluate review outcome` AND `Claude On-Demand` are configured as required
 
 ## Workflow-only PRs skip the review
 
-The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token, so the review action cannot run on a PR that edits `.github/workflows/claude-code-review.yml`. Triage therefore never counts `.github/workflows/` files as reviewable: a PR that touches only workflow files passes both checks like a docs PR. Keep workflow edits in a PR of their own, with no reviewable files; the maintainer reads the diff before it merges. A reviewable file in the same PR starts the review, which then fails validation and leaves no verdict.
+The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token, so the review action cannot run on a PR that edits `.github/workflows/claude-code-review.yml`. Triage therefore never counts `.github/workflows/` files as reviewable: a PR that touches only workflow files passes both checks like a docs PR. Keep workflow edits in a PR of their own, with no reviewable files. A reviewable file in the same PR starts the review, which then fails validation and leaves no verdict.
+
+No AI reviews a workflow-only PR in CI, so it is reviewed before merge, one of two ways:
+
+- **Every commit in it was written in our own sessions:** two fresh subagents review the exact head commit that will merge. Neither is a fork of the session that wrote the change, and each gets only the PR's diff and its own prompt. One follows the review steps and the binary verdict rule of the routine-review prompt taken from the base branch's copy of `claude-code-review.yml`, never the PR's own copy. It runs the pre-screen's mechanical checks itself, since the CI pre-screen report does not exist locally. The other reviews as the deep tier, briefed to review the whole diff at that SHA adversarially under the binary verdict rule; the author may add focus points but never narrows that scope. Neither reviewer posts to the PR, applies a label or writes the deep-review trigger phrase; each returns its verdict to the author. Once both give 🟢, a PR comment records the head SHA and both verdict lines, and the merge passes `--match-head-commit <sha>` so it goes through only while that SHA is still the head. Any new commit re-runs both.
+- **Anything else,** including a PR we opened that carries someone else's commits: it merges only after the maintainer has read its whole diff.
 
 (Edits to `claude.yml` alone do not trip this: claude.yml runs from the default branch's version on `issue_comment` events, so the running workflow file always matches the default branch. The OIDC check passes.)
 
@@ -85,7 +90,7 @@ The criterion is **risk surface**, not size. A 30-line bit-pack tweak triggers; 
 
 ## Local Claude's role (this harness)
 
-Local-session Claude does NOT auto-fire either review tier. The workflows do. Local responsibilities:
+Local-session Claude does NOT auto-fire either CI review tier. The workflows do. The one local review is the workflow-only PR path in § Workflow-only PRs skip the review. Local responsibilities:
 
 - Push the branch + open the PR.
 - Run the CI polling loop (`token-efficiency.md`) and report PR state — including label state at completion.
