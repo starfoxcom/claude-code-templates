@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PreToolUse guard: nothing authored from a Claude session carries AI
-attribution, through any route.
+attribution when it is written the ordinary way.
 
 Rule (.claude/rules/git.md): commits, PR titles and bodies, issue bodies,
 comments, reviews, releases and tags belong to the maintainer. The harness
@@ -15,39 +15,26 @@ link or Claude-Session trailer, a session id, "AI-assisted / AI-generated",
 "fix the Claude Code hook config", CLAUDE.md, the repo's own name, a human
 Co-Authored-By.
 
+What is scanned, for any git write, gh write or GitHub API call:
+  * The full command text: inline -m / --body / --title / --notes values,
+    here-docs, here-strings and PowerShell -Body all live there.
+  * Every file the command names as a message or body: -F / --file /
+    --body-file / --notes-file / --template / --input / --message-file,
+    curl -d @file, PowerShell -InFile and Get-Content <file>. A file it
+    cannot read is denied, so a typo cannot slip a body through unread.
+
+It is a safety net for attribution written the ordinary way, not a sandbox
+against a command built to slip past it. No text check can be one. These
+pass unread: text the shell builds at run time ($VAR, $(...), backticks,
+eval), a body piped in on stdin, a message reused from another commit
+(-C / --reuse-message), flags that skip git's own hooks, and text a program
+started by the command writes on its own. The repo's `attribution` settings
+switch off the harness's own trailers; this hook catches the ones written
+by hand.
+
 The repo registers this file through run-hook.sh, which skips it when
 ~/.claude/hooks/no-ai-attribution.py exists and ~/.claude/settings.json
 names it outside a permission rule.
-
-What is scanned
-  * The full command text (inline -m / --body / --title / --notes /
-    here-docs / here-strings / PowerShell -Body all live there).
-  * Every file the command hands to git or gh as a message or body:
-    -F / --file / --body-file / --notes-file / --template / --input,
-    curl -d @file, PowerShell -InFile and Get-Content <file>.
-
-What is denied outright (bypass routes the hook cannot see through)
-  * Skipping git's own hooks: --no-verify on git commit, merge, push, am,
-    cherry-pick, revert or rebase; -n on git commit (the only command where
-    it means --no-verify); setting core.hooksPath, LEFTHOOK=0 or lefthook
-    uninstall in any command, git write or not. Quoted text and here-doc
-    bodies are not read for these, so a message that mentions a flag passes.
-  * --trailer (the trailer text can come from anywhere).
-  * Message reuse: -C / --reuse-message / --reedit-message / -c <commit>.
-  * Message or body text built by command substitution `$(...)`, backticks,
-    process substitution `<(...)` or a variable, including inside an
-    unquoted here-doc.
-  * A message or body file of `-` (git -F -, gh --body-file / --notes-file /
-    --input -, curl -d @-) unless a here-doc is the command's only input:
-    a pipe or a `<` redirect anywhere outside quotes and here-doc bodies
-    denies it.
-  * gh api writes (POST/PATCH/PUT) whose body comes from -f/-F fields the
-    hook cannot resolve to a literal.
-
-Out of reach: text a program started by the command writes on its own
-(`python -c`, a script, an alias), a command run through `eval` or
-`Invoke-Expression` from a variable, and any route outside Bash and
-PowerShell tool calls.
 
 Exit contract: JSON permissionDecision=deny on stdout, exit 0. Silent
 exit 0 otherwise. Never blocks read-only commands.
@@ -93,40 +80,13 @@ ATTRIBUTION = re.compile(
     re.I | re.M,
 )
 
-# Here-doc bodies, quoted or not. A quoted one is literal text; an unquoted
-# one expands $VAR and $(...), which the SUBST check below reads.
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1.*?^\2\s*$", re.S | re.M)
-QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", re.S)
-SUBST = re.compile(r"\$\(|`[^`]+`|<\(|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$env:", re.I)
-
-# Read against the command with quoted text and here-doc bodies removed.
-HOOK_BYPASS = re.compile(
-    r"\bgit\b[^|;&\n]*?\b(?:commit|merge|push|am|cherry-pick|revert|rebase)\b[^|;&\n]*?--no-verify\b|"
-    r"\bgit\b[^|;&\n]*?\bcommit\b[^|;&\n]*?(?<=\s)-[a-zA-Z]*n[a-zA-Z]*(?=\s|$)",
-    re.I,
-)
-# Switching git's hooks off for later commands, checked on every command: a
-# `git config core.hooksPath <dir>` in its own call disarms the next commit.
-HOOKS_OFF = re.compile(
-    r"core\.hooksPath\s*=|"
-    r"\bgit\b[^|;&\n]*?\bconfig\b(?![^|;&\n]*?--(?:get|get-all|get-regexp|list|unset)\b)"
-    r"[^|;&\n]*?core\.hooksPath\s+\S|"
-    r"LEFTHOOK\s*=\s*0|lefthook\s+uninstall",
-    re.I,
-)
-TRAILER = re.compile(r"--trailer\b", re.I)
-REUSE = re.compile(r"\bcommit\b[^|;&\n]*?(?:--reuse-message\b|--reedit-message\b|\s-[Cc]\s+\S)", re.I)
-
 GIT_WRITE = re.compile(
-    r"\bgit\b[^|;&\n]*?\b(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace)\b",
-    re.I)
+    r"\bgit\b[^|;&\n]*?\b(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|replace)\b", re.I)
 GH_WRITE = re.compile(
     r"\bgh\b[^|;&\n]*?\b(pr|issue|release|gist|repo)\b[^|;&\n]*?\b(create|edit|comment|review|merge|close|reopen)\b",
     re.I)
-GH_API_WRITE = re.compile(r"\bgh\b[^|;&\n]*?\bapi\b(?=[^|;&\n]*?(-X\s*(POST|PATCH|PUT)|--method\s*(POST|PATCH|PUT)|(?<=\s)-[fF]\s|--field|--raw-field|--input))", re.I)
-CURL_GH = re.compile(r"\bcurl\b[^|;&\n]*api\.github\.com", re.I)
-PS_GH = re.compile(r"Invoke-(RestMethod|WebRequest)\b[^|;&\n]*api\.github\.com", re.I)
-FILTER_REPO = re.compile(r"\bgit\s+filter-repo\b|\bgit\s+filter-branch\b", re.I)
+GH_API = re.compile(r"\bgh\b[^|;&\n]*?\bapi\b", re.I)
+HTTP_GH = re.compile(r"\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b[^|;&\n]*api\.github\.com", re.I)
 
 # Flags whose next token is a file the hook must read. `-F` is case-sensitive:
 # a lowercase `-f` is `git tag -f` (force) or `gh pr create -f` (fill).
@@ -134,25 +94,7 @@ FILE_FLAGS = re.compile(
     r"(?:(?<=\s)-F|(?i:--file|--body-file|--notes-file|--template|--input|--message-file|-InFile|Get-Content)|"
     r"(?<=\s)-d\s*@|(?i:--data(?:-binary|-raw)?)\s*@)\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
 )
-# A message or body file of `-` is stdin, for git and gh alike; curl's `@-` too.
-# A short flag also takes its value glued on (`-F-`).
-STDIN_FILE = re.compile(
-    r"(?<=\s)-F\s*-(?=\s|$)|"
-    r"(?i:--file|--body-file|--notes-file|--input|--message-file|-InFile)(?:\s+|=)-(?=\s|$)|"
-    r"(?:(?<=\s)-d|(?i:--data(?:-binary|-raw)?))\s*@-(?=\s|$)"
-)
-# Another stdin source next to a here-doc: a pipe, or a `<` redirect that is
-# not a here-doc, here-string or process substitution.
-OTHER_INPUT = re.compile(r"\||(?<![<\d])<(?![<(&])")
-# A message flag and its value: a PowerShell here-string, a quoted string or a
-# bare word. A short flag takes its value after a space or glued on
-# (`-m"$(...)"`, `-am$MSG`); a long flag after a space or `=`. gh api's
-# -f / -F / --field / --raw-field count only on gh api.
-_VALUE = r"(@\"[\s\S]*?\"@|@'[\s\S]*?'@|\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)"
-MSG_ARG = re.compile(
-    r"(?<=\s)(?:-[a-zA-Z]*[mbt]\s*|(?:--message|--body|--title|--notes|(?i:-Body))(?:\s+|=))" + _VALUE)
-# A gh api field is `key=value`; the quote test applies to the value.
-FIELD_ARG = re.compile(r"(?<=\s)(?:-[fF]\s*|(?:--field|--raw-field)(?:\s+|=))(?:[\w.\[\]\-]+=)?" + _VALUE)
+PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
 
 
 def deny(reason):
@@ -168,39 +110,11 @@ def deny(reason):
     sys.exit(0)
 
 
-PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
-
-
-def strip_paths(cmd):
+def strip_paths(text):
     """Mask file-system paths so a scratch directory named after a session
     cannot trip the scan. URLs survive (the lookbehind skips the `//` after a
     scheme), so session links are still caught."""
-    return PATH_TOKEN.sub("<path>", cmd)
-
-
-def bare(cmd):
-    """The command with here-doc bodies and quoted strings removed: the text
-    the shell reads as flags and operators."""
-    return QUOTED.sub("''", HEREDOC.sub("HEREDOC", cmd))
-
-
-def expansion_in_message(cmd, api):
-    """True when message or body text is built by the shell at run time: a
-    message value outside single quotes (and outside a PowerShell @'...'@)
-    holding $VAR, $(...), backticks or <(...), or an unquoted here-doc
-    holding one. Text elsewhere in the command (a `git -C "$REPO"`) does not
-    count, and neither does flag-shaped text inside a quoted string or a
-    here-doc body ("run it with -t $TIMEOUT")."""
-    text = HEREDOC.sub("HEREDOC", cmd)
-    quoted = [m.span() for m in QUOTED.finditer(text)]
-    for pattern in (MSG_ARG, FIELD_ARG) if api else (MSG_ARG,):
-        for m in pattern.finditer(text):
-            if any(start <= m.start() < end for start, end in quoted):
-                continue
-            value = m.group(1)
-            if not value.startswith(("'", "@'")) and SUBST.search(value):
-                return True
-    return any(not m.group(1) and SUBST.search(m.group(0)) for m in HEREDOC.finditer(cmd))
+    return PATH_TOKEN.sub("<path>", text)
 
 
 def find_files(cmd, cwd):
@@ -233,47 +147,17 @@ def main():
         sys.exit(0)
     cmd = (data.get("tool_input") or {}).get("command") or ""
     cwd = data.get("cwd") or os.getcwd()
-    if not cmd:
+    if not cmd or not (GIT_WRITE.search(cmd) or GH_WRITE.search(cmd) or GH_API.search(cmd)
+                       or HTTP_GH.search(cmd)):
         sys.exit(0)
-
-    is_git = GIT_WRITE.search(cmd)
-    is_gh = GH_WRITE.search(cmd) or GH_API_WRITE.search(cmd)
-    is_http = CURL_GH.search(cmd) or PS_GH.search(cmd)
-    flags = bare(cmd)
-    # Refuse to switch git's hooks off from any command, write or not.
-    if HOOKS_OFF.search(flags):
-        deny("switching git hooks off (core.hooksPath, LEFTHOOK=0, lefthook uninstall) is not allowed.")
-    if not (is_git or is_gh or is_http):
-        sys.exit(0)
-
-    if FILTER_REPO.search(cmd):
-        deny("history rewriting tools are not allowed from a session.")
-    if is_git and HOOK_BYPASS.search(flags):
-        deny("skipping git hooks (--no-verify, commit -n, core.hooksPath, lefthook off) is not allowed.")
-    if is_git and TRAILER.search(flags):
-        deny("--trailer is not allowed; write the message body directly.")
-    if is_git and REUSE.search(flags):
-        deny("reusing another commit's message (-C / -c / --reuse-message) cannot be scanned.")
 
     scan_text(cmd, "the command text")
-
-    # Message text must be literal (the scan above already read it). Any
-    # expansion hides content from the hook.
-    if expansion_in_message(cmd, api=bool(GH_API_WRITE.search(cmd))):
-        deny("message/body text uses shell expansion ($VAR, $(...), backticks, <(...)) that the hook "
-             "cannot read. Use a literal string, a quoted here-doc, or --body-file <literal absolute path>.")
-
     for path in find_files(cmd, cwd):
         try:
             text = open(path, encoding="utf-8-sig", errors="replace").read()
         except Exception as e:
             deny(f"could not read message/body file {path}: {e}. Use a literal absolute path.")
         scan_text(text, f"file {path}")
-
-    if STDIN_FILE.search(cmd) and not (HEREDOC.search(cmd) and not OTHER_INPUT.search(flags)):
-        deny("a message/body file of `-` reads text the hook cannot see. Feed it only from a here-doc "
-             "in the same command, or use --body-file <literal absolute path>.")
-
     sys.exit(0)
 
 

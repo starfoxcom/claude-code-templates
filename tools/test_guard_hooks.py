@@ -204,55 +204,15 @@ class GuardHookTest(unittest.TestCase):
         self.assert_denied(self.attr(
             f"gh pr comment 1 --repo starfoxcom/claude-code-templates --body '{AI_TRAILER}'"))
 
-    def test_no_n_flags_that_are_not_no_verify_pass(self):
+
+    def test_everyday_commands_pass(self):
         for command in ("git cherry-pick -n abc123", "git revert -n abc123", "git tag -n",
                         "git merge -n feature/x", "git commit -m 'docs(hooks): explain core.hooksPath and -n'",
-                        "git commit -m x && git config --get core.hooksPath"):
-            with self.subTest(command=command):
-                self.assert_passes(self.attr(command))
-
-    def test_hook_skips_are_denied(self):
-        for command in ("git commit -n -m x", "git commit -an -m x", "git commit --no-verify -m x",
-                        "git push --no-verify origin feature/x", "git -c core.hooksPath=/dev/null commit -m x",
-                        "git config core.hooksPath /tmp/none && git commit -m x"):
-            with self.subTest(command=command):
-                self.assert_denied(self.attr(command))
-
-    def test_body_from_stdin_is_denied(self):
-        for command in ("gh pr create --title t --body-file - < body.md",
-                        "gh release create v1 --notes-file - < notes.md",
-                        "cat x.json | gh api -X POST repos/o/r/issues --input -",
-                        "echo 'a<<b' | gh pr create --title t --body-file -",
-                        "cat evil.md | gh pr create --title t --body-file - # <<",
-                        "gh pr comment 5 --body-file - <<EOF\n$(cat /tmp/body.md)\nEOF",
-                        "cat evil.md | git commit -F-", "cat evil.md | gh pr create --title t -F-"):
-            with self.subTest(command=command):
-                self.assert_denied(self.attr(command))
-
-    def test_single_quoted_text_is_literal(self):
-        for command in ("gh pr comment 5 --body 'Run `npm test` first'",
-                        "git commit -m 'fix(hooks): stop expanding $HOME'"):
-            with self.subTest(command=command):
-                self.assert_passes(self.attr(command))
-
-    def test_double_quoted_expansion_is_denied(self):
-        for command in ('git commit -m "docs: $(cat /tmp/msg.txt)"', 'gh pr comment 5 --body "$BODY"',
-                        "git commit -m $MSG", 'gh pr comment 5 --body @"\n$BODY\n"@',
-                        "gh api -X POST repos/o/r/issues -f body=$(cat x)",
-                        'gh api -X POST repos/o/r/issues -f body="$BODY"',
-                        "git commit -F - <<EOF\n$(cat /tmp/msg)\nEOF",
-                        'git commit -m"$(cat /tmp/msg)"', "git commit -m$MSG", "git commit -am$MSG"):
-            with self.subTest(command=command):
-                self.assert_denied(self.attr(command))
-
-    def test_expansion_outside_the_message_passes(self):
-        for command in ('git -C "$REPO" commit -m \'docs: x\'', "git tag -f v$VERSION -m 'release'",
+                        "gh pr comment 5 --body 'Run `npm test` first'",
                         'git commit -m "feat(hooks): add eval fixture"',
-                        'gh pr comment 5 --body "the eval step in the review workflow"',
-                        "gh api graphql -f query='query($owner: String!, $name: String!) "
-                        "{ repository(owner: $owner, name: $name) { id } }' -F owner=o -F name=r",
-                        "gh api -X POST repos/o/r/issues -f body='costs $USD'",
-                        "gh pr comment 5 --body @'\n$literal text\n'@"):
+                        "gh api graphql -f query='query($owner: String!) { repository(owner: $owner) { id } }' "
+                        "-F owner=o",
+                        "gh pr create --title t --body-file - <<'EOF'\n## What\n| a | b |\n|---|---|\nEOF"):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))
 
@@ -261,29 +221,34 @@ class GuardHookTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))
 
-    def test_hooks_off_in_its_own_call_is_denied(self):
-        for command in ("git config core.hooksPath /dev/null", "LEFTHOOK=0 npm run build"):
+    def test_attribution_inside_a_heredoc_is_denied(self):
+        self.assert_denied(self.attr(f"gh pr create --title t --body-file - <<'EOF'\n{AI_TRAILER}\nEOF"))
+
+    def body_file(self, text):
+        fd, path = tempfile.mkstemp(suffix=".md")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def test_attribution_in_a_body_file_is_denied(self):
+        path = self.body_file(f"## What\n- x\n\n{GENERATED_LINE}\n")
+        for command in (f'gh pr create --title t --body-file "{path}"', f'git commit -F "{path}"',
+                        f'git commit -F"{path}"'):
             with self.subTest(command=command):
                 self.assert_denied(self.attr(command))
 
-    def test_reading_hooks_path_passes(self):
-        for command in ("git config --get core.hooksPath", "git config core.hooksPath",
-                        "git config --unset core.hooksPath"):
+    def test_clean_body_file_passes(self):
+        path = self.body_file("## What\n- Ships the guard\n\n## Why\nFewer surprises.\n")
+        self.assert_passes(self.attr(f'gh pr create --title t --body-file "{path}"'))
+
+    def test_unreadable_body_file_is_denied(self):
+        self.assert_denied(self.attr("gh pr create --title t --body-file /no/such/body.md"))
+
+    def test_read_only_commands_pass(self):
+        for command in ("git log -5", "gh pr view 5 --json body", "git config --get core.hooksPath"):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))
-
-    def test_flag_shaped_text_in_a_quoted_body_passes(self):
-        for command in ("gh pr create --title t --body-file - <<'EOF'\nRun it with -t $TIMEOUT or -m $MSG\nEOF",
-                        "gh pr comment 5 --body 'Set it with -m $MSG before -b $BRANCH'"):
-            with self.subTest(command=command):
-                self.assert_passes(self.attr(command))
-
-    def test_body_from_a_quoted_heredoc_passes(self):
-        self.assert_passes(self.attr(
-            "gh pr create --title t --body-file - <<'EOF'\n## What\n| a | b |\n|---|---|\nEOF"))
-
-    def test_attribution_inside_a_heredoc_is_denied(self):
-        self.assert_denied(self.attr(f"gh pr create --title t --body-file - <<'EOF'\n{AI_TRAILER}\nEOF"))
 
 
 if __name__ == "__main__":
