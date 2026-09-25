@@ -212,6 +212,10 @@ class GuardHookTest(unittest.TestCase):
                         'git commit -m "feat(hooks): add eval fixture"',
                         "gh api graphql -f query='query($owner: String!) { repository(owner: $owner) { id } }' "
                         "-F owner=o",
+                        "gh gist create --filename notes.txt -",
+                        'gh issue create --template "Bug report"',
+                        "gh pr create --template default.md --base develop",
+                        "gh repo create x --template o/r",
                         "gh pr create --title t --body-file - <<'EOF'\n## What\n| a | b |\n|---|---|\nEOF"):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))

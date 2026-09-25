@@ -89,12 +89,17 @@ GH_API = re.compile(r"\bgh\b[^|;&\n]*?\bapi\b", re.I)
 HTTP_GH = re.compile(r"\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b[^|;&\n]*api\.github\.com", re.I)
 
 # Flags whose next token is a file the hook must read. `-F` is case-sensitive:
-# a lowercase `-f` is `git tag -f` (force) or `gh pr create -f` (fill). The
-# value may follow a space or the long-option `=` (`--body-file=body.md`).
+# a lowercase `-f` is `git tag -f` (force) or `gh pr create -f` (fill). Long
+# flags match whole (`--filename` is not `--file`). The value may follow a
+# space or the long-option `=` (`--body-file=body.md`).
 FILE_FLAGS = re.compile(
-    r"(?:(?<=\s)-F|(?i:--file|--body-file|--notes-file|--template|--input|--message-file|-InFile|Get-Content)|"
-    r"(?<=\s)-d\s*@|(?i:--data(?:-binary|-raw)?)\s*@)\s*=?\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
+    r"(?:(?<=\s)-F"
+    r"|(?P<long>(?i:--file|--body-file|--notes-file|--template|--input|--message-file|-InFile))(?![\w-])"
+    r"|(?i:Get-Content)(?:\s+(?i:-Raw|-Path|-LiteralPath)(?![\w-]))*"
+    r"|(?<=\s)-d\s*@|(?i:--data(?:-binary|-raw)?)\s*@)"
+    r"\s*=?\s*(?:\"(?P<dq>[^\"]+)\"|'(?P<sq>[^']+)'|(?P<bare>\S+))"
 )
+SEGMENT_START = re.compile(r"[;&|\n][^;&|\n]*$")
 PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
 
 
@@ -120,9 +125,15 @@ def strip_paths(text):
 
 def find_files(cmd, cwd):
     for m in FILE_FLAGS.finditer(cmd):
-        path = next((g for g in m.groups() if g), None)
+        path = m.group("dq") or m.group("sq") or m.group("bare")
         if not path or path == "-":
             continue
+        if (m.group("long") or "").lower() == "--template":
+            # A file for `git commit`; a template name or repository for gh.
+            before = cmd[:m.start()]
+            seg = SEGMENT_START.search(before)
+            if not re.search(r"\bgit\b", before[seg.start():] if seg else before, re.I):
+                continue
         if "=" in path:            # gh -F key=value / key=@file
             if "=@" not in path:
                 continue
