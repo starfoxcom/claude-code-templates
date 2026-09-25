@@ -26,8 +26,9 @@ decoding Bash's `$'...'` escapes when the string closes on its own line
 command substitution (`$(...)`, `$((...))`, `${...}`, `<(...)`, a Bash
 backtick pair on one line, a PowerShell `(...)`) is read on its own. In the
 text around it, a substitution inside a word joins the text on both sides
-(`-q$(true)f` reads as `-qf`) and one at a word's edge leaves a word; a PowerShell group of quoted literals
-(`@('push','-qf')`) stays in place as arguments. The rest is cut into
+(`-q$(true)f` reads as `-qf`) and one at a word's edge leaves a word; a
+PowerShell group of quoted literals (`@('push','-qf')`) stays in place as
+arguments. The rest is cut into
 statements at every newline, and at every `;`, `|` and `&` that is neither
 escaped nor inside a quoted string that closes on its own line (in
 PowerShell also at `{` and `}`). Redirects and their targets are dropped,
@@ -35,17 +36,20 @@ except a target that names git (`bash <<< "git push -f"`). After a `git`
 word, a later push word in the same statement starts the push, and the
 words after it are its arguments. Text inside `eval`, `sh -c`,
 `pwsh -Command`, a heredoc or a comment is read the same way. Each shell's
-own line continuation is removed, except that Bash keeps a `\` ending a
-comment or a line inside single quotes as a line end. To tell those apart, a
-Bash command is read twice: once pairing quotes within each line, and once
-following quotes across lines and skipping heredoc bodies. Either reading
-can block. Every step is linear in the command's length.
+own line continuation is removed. Bash keeps a `\` ending a comment, a
+single-quoted line or a quoted heredoc line as a line end instead, so a Bash
+command with a `\` ending a line is read whole: with each such `\` joined
+and with it kept as a line end, and each reading also as one statement, so
+a push anywhere in it with a force word anywhere after it blocks. Every step
+is linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
-script or a search pattern with `git push -f` in it is blocked too. A plain
-push chained after a quoted string that spans lines can block the same way:
-on the string's last line its closing quote pairs with the next quote, so
-the flag of a later statement there (`rm -rf`) reads as the push's. The
+script or a search pattern with `git push -f` in it is blocked too. So is a
+plain push in a Bash command with a `\` ending a line when a force word
+follows anywhere in it (`git push origin main \` then `&& rm -rf build`). A
+plain push chained after a quoted string that spans lines can block the same
+way: on the string's last line its closing quote pairs with the next quote,
+so the flag of a later statement there (`rm -rf`) reads as the push's. The
 block message says to put such text in a file and pass the file instead.
 
 The hook only ever blocks or stays silent; it never asks. Out of reach, so
@@ -96,7 +100,6 @@ repo's own `json.py` cannot replace the modules this file imports.
 import json
 import re
 import sys
-from collections import deque
 
 # Longer commands pass unread. Every step below is linear in the command's
 # length, so this only bounds the work; no real push command comes near it.
@@ -118,10 +121,6 @@ OTHER_SUBCOMMANDS = {
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--super-prefix", "--config-env", "--attr-source"}
 
-# A Bash heredoc's start (`<<EOF`, `<<-'EOF'`), and the characters that end a
-# word, so a `#` after one starts a comment.
-HEREDOC = re.compile(r"(?<!<)<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([^\s;&|()<>'\"]+))")
-BASH_METACHARACTERS = " \t\n;&|()<>"
 CONTINUATION = {"Bash": re.compile(r"\\\n"), "PowerShell": re.compile(r"`(?:\r\n|\n|\r)")}
 # A `$'...'` string, found after skipping escapes and quoted strings the way
 # `mask_quoted` pairs them, so the `$'` ending `grep 'main$'` starts nothing.
@@ -410,156 +409,21 @@ def check(command, tool):
     """Why a command's text force-pushes, or None."""
     if len(command) > MAX_COMMAND:
         return None
-    readings = [command]
     if tool == "Bash" and "\\\n" in command:
-        # Bash does not continue a comment (`# C:\work\repo\`) or a
-        # single-quoted string; either reading of its line ends can block.
-        readings = bash_line_ends(command)
-    for reading in readings:
-        reason = check_reading(reading, tool)
-        if reason:
-            return reason
-    return None
+        # Bash does not continue a comment (`# C:\work\repo\`), a single-quoted
+        # string or a quoted heredoc body, and telling those apart means
+        # parsing Bash. Such a command is read whole instead, once with each
+        # `\` + LF joined and once with it kept as a line end, each also as one
+        # statement: a push anywhere in it with a force anywhere after blocks.
+        for reading in (command, command.replace("\\\n", " \n")):
+            reason = check_reading(reading, tool, whole=True)
+            if reason:
+                return reason
+        return None
+    return check_reading(command, tool)
 
 
-def bash_line_ends(command):
-    """Two readings of a Bash command, each line continuation (a backslash
-    ending a line) either joined or kept as a line end as Bash would: joined
-    outside quotes and inside double quotes, kept in a comment or inside
-    single quotes. The first reading pairs quotes within each line, as
-    `mask_quoted` does, so a quote in a heredoc body shifts nothing; the
-    second follows quotes across lines and skips heredoc bodies."""
-    return [line_ends(command, False), line_ends(command, True)]
-
-
-def line_ends(command, across):
-    """One reading of `bash_line_ends`; `across` carries quotes and groups
-    over a line end and skips heredoc bodies."""
-    lines = command.split("\n")
-    out, heredocs, ends = [], deque() if across else None, None
-    state, previous, groups, arithmetic = "", "\n", [], [0]
-    for number, line in enumerate(lines):
-        last = number == len(lines) - 1
-        if ends is not None:
-            # A heredoc body line: data until its terminator line.
-            out.append(line if last else line + "\n")
-            if (line.lstrip("\t") if ends[1] else line) == ends[0]:
-                ends = heredocs.popleft() if heredocs else None
-            continue
-        continued = not last and (len(line) - len(line.rstrip("\\"))) % 2 == 1
-        body = line[:-1] if continued else line
-        state, previous = bash_scan(body, state, previous, groups, arithmetic, heredocs)
-        joined = continued and state in ("", '"', "$'")
-        out.append(body if joined else line if last else body + "\n")
-        if not joined:
-            previous = "\n"
-            if state == "#" or not across:
-                state = ""
-            if not across:
-                groups.clear()
-                arithmetic[0] = 0
-            if heredocs and state == "":
-                ends = heredocs.popleft()
-            elif heredocs:
-                # A line ending inside a quote leaves no heredoc to trust.
-                heredocs.clear()
-    return "".join(out)
-
-
-def bash_scan(text, state, previous, groups, arithmetic, heredocs):
-    """The open quote (`'`, `"`, `$'`), comment (`#`) or nothing ("") at the
-    end of a Bash line, and the last character read, from the state it began
-    in. `groups` holds the open `(`, `((`, `$(`, `$((`, `${` and backtick
-    (a `"` before one opened inside double quotes, whose text is read as a
-    command until it closes), and `arithmetic` how many are arithmetic. A
-    `)` closing a substitution ends no word, no comment starts inside `${`,
-    and a comment inside backticks ends at the closing backtick. Each heredoc
-    started outside quotes, comments and arithmetic is added to `heredocs`
-    (its terminator, and whether tabs before it are dropped) unless that is
-    None."""
-    at, end = 0, len(text)
-    while at < end:
-        char = text[at]
-        if state == '"' and char == "$" and text.startswith("(", at + 1):
-            opened = '"$((' if text.startswith("(", at + 2) else '"$('
-            groups.append(opened)
-            arithmetic[0] += opened.endswith("((")
-            state, at, previous = "", at + len(opened) - 1, "("
-            continue
-        if state == "":
-            if char == "\\":
-                at, previous = at + 2, "x"
-                continue
-            top = groups[-1] if groups else ""
-            if char == "#" and previous in BASH_METACHARACTERS and top != "{":
-                if top != "`":
-                    return "#", char
-                closing = text.find("`", at)
-                if closing < 0:
-                    return "#", char
-                at = closing
-                continue
-            if char == "<" and heredocs is not None and not arithmetic[0]:
-                found = HEREDOC.match(text, at)
-                if found:
-                    heredocs.append((found.group(2) or found.group(3) or found.group(4), found.group(1) == "-"))
-                    at, previous = found.end(), "x"
-                    continue
-            if char in "$<>" and text.startswith("(", at + 1):
-                opened = "$((" if char == "$" and text.startswith("(", at + 2) else "$("
-                groups.append(opened)
-                arithmetic[0] += opened == "$(("
-                at, previous = at + len(opened), "("
-                continue
-            if char == "$" and text.startswith("{", at + 1):
-                groups.append("{")
-                at, previous = at + 2, "{"
-                continue
-            if char == "(" and text.startswith("(", at + 1):
-                groups.append("((")
-                arithmetic[0] += 1
-                at, previous = at + 2, "("
-                continue
-            if char == ")" and top.endswith("((") and text.startswith(")", at + 1):
-                groups.pop()
-                arithmetic[0] -= 1
-                state = '"' if top.startswith('"') else ""
-                at, previous = at + 2, ")" if top == "((" else "x"
-                continue
-            if char == ")" and top and top not in ("{", "`"):
-                groups.pop()
-                arithmetic[0] -= top.endswith("((")
-                if top != "(":
-                    state = '"' if top.startswith('"') else ""
-                    at, previous = at + 1, "x"
-                    continue
-            elif char == "`":
-                if top == "`":
-                    groups.pop()
-                else:
-                    groups.append("`")
-            elif char == "(":
-                groups.append("(")
-            elif char == "}" and top == "{":
-                groups.pop()
-            if char == "$" and text.startswith("'", at + 1):
-                state, at = "$'", at + 1
-            elif char in "'\"":
-                state = char
-        elif state == "'":
-            if char == "'":
-                state = ""
-        elif char == "\\":
-            at, previous = at + 2, "x"
-            continue
-        elif char == state[-1]:
-            state = ""
-        previous = char
-        at += 1
-    return state, previous
-
-
-def check_reading(command, tool):
+def check_reading(command, tool, whole=False):
     """Why one reading of a command's text force-pushes, or None."""
     pieces, deep = texts(command, tool)
     for piece in pieces:
@@ -570,7 +434,7 @@ def check_reading(command, tool):
             text = REDIRECT.sub(redirect_gone, unquote(masked, backslash))
             # Substitutions nested past MAX_PASSES may hide separators, so such
             # a command is also read as one statement.
-            for statement in STATEMENT_END[tool].split(text) + ([text] if deep else []):
+            for statement in STATEMENT_END[tool].split(text) + ([text] if deep or whole else []):
                 reason = force_in([w for w in WORD_SPLIT.split(statement) if w])
                 if reason:
                     return reason

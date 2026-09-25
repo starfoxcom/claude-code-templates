@@ -431,25 +431,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git branch --merged | grep -v 'main$' | xargs -r git branch -d; git push origin main; rm -rf dist; echo 'cleaned up'",
     "grep -c '^$' CHANGELOG.md; git push -u origin feature/x && rm -rf .cache && echo 'ok'",
     "git tag | grep -E '^v[0-9]+$'\ngit push origin main\nrm -rf build\necho 'done'",
-    "git push origin main \\\n  && rm -rf build",
     // A `$'` string ends on its own line, so an apostrophe before it pairs no lines together.
     "git commit -m \"$(cat <<'EOF'\nfix: don't treat 'v1.0$' tags as releases\n\nDetails.\nEOF\n)\" && git push origin feature/x && rm -rf build && echo 'done'",
     "# Keep only lines that don't match '^$'\ngrep -v '^$' in.txt > out.txt\ngit push origin main\nrm -rf tmp\necho 'ok'",
-    // A continuation inside a double-quoted string joins; a joined `#` word starts a comment.
-    "git commit -m \"fix: handle the lock \\\nit's stale now\" && git push origin main && rm -rf .cache && echo 'ok'",
-    "git push origin main \\\n#--force", "echo a#b\\\ngit push -f origin main",
-    "git commit -m \"fix #12: handle the lock \\\nit's stale now\" && git push origin main && rm -rf .cache && echo 'ok'",
-    "echo 'a\\\n' ; git push origin main",
-    // A comment certain from its own line ends there in both readings.
-    "# don't let git touch C:\\temp\\\ngit push origin main && rm -rf build && echo 'done'",
-    "git push origin \"$BRANCH\"  # mirrors C:\\work\\repo\\\nrm -rf build", "git push origin main \\\n  # mirrors C:\\temp\\\nrm -rf build",
-    "x=$(cd a; (b))# C:\\x\\\ngit push -f origin main",
-    // A `<<` inside quotes, a comment or arithmetic starts no heredoc, and a heredoc
-    // opened inside `"$(...)"` ends where Bash ends it.
-    "SIZE=$((1 << 20))\ngit push origin main \\\n  # mirrors C:\\temp\\\nrm -rf build",
-    "grep -rn \"cout << endl\" src/ | head -5\ngit push origin main  # mirrors C:\\work\\repo\\\nrm -rf build",
-    "# write notes with <<EOF\ngit push origin main  # mirrors C:\\work\\repo\\\nrm -rf build",
-    "git commit -m \"$(cat <<'EOF'\nfix: handle the lock\nEOF\n)\"\ngit push origin main  # mirrors C:\\work\\repo\\\nrm -rf build",
+    // A Bash command with a `\` ending a line and no force word after its push.
+    "git push origin main \\\n#--force", "echo 'a\\\n' ; git push origin main",
+    "git push -u origin feature/x \\\n  && echo pushed", "git commit -m \"fix: handle the lock \\\nit's stale now\" && git push origin main",
     "git commit -m \"$(cat <<'EOT'\nfix: don't split names on a stray ` char\nEOT\n)\" && git push origin feature/x && rm -rf build && echo \"built at `date`\"",
     // Bash has no `` `u{...} `` escape.
     "git push origin main \"-`u{66}\"",
@@ -623,6 +610,13 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // A quoted string spanning lines: its closing quote pairs with the next one on
     // its last line, so a later statement's flag reads as the push's.
     "git commit -m \"Fix the lock\n\nDetails here\" && git push origin main && rm -rf .cache && echo \"ok\"",
+    // A Bash command with a `\` ending a line is read whole, so a force word
+    // anywhere after its push blocks, even one of another command.
+    "git push origin main \\\n  && rm -rf build", "echo a#b\\\ngit push -f origin main",
+    "git commit -m \"fix #12: handle the lock \\\nit's stale now\" && git push origin main && rm -rf .cache && echo 'ok'",
+    "# don't let git touch C:\\temp\\\ngit push origin main && rm -rf build && echo 'done'",
+    "git push origin \"$BRANCH\"  # mirrors C:\\work\\repo\\\nrm -rf build",
+    "git commit -m \"$(cat <<'EOF'\nfix: handle the lock\nEOF\n)\"\ngit push origin main  # mirrors C:\\work\\repo\\\nrm -rf build",
     "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
     "echo \"git push -f\"", "echo git push -f", "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
     "echo a \\\n# git push -f\ngit push origin x", "git push origin x # never -f here",
