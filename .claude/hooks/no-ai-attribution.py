@@ -10,10 +10,10 @@ mechanical answer so the note can never win.
 The contract is "no attribution", not "no mention". Denied: a Co-Authored-By
 naming an AI, an Anthropic noreply address, "Generated with / written by
 <AI>", a line ending "via Claude Code" or "by Claude", a Claude Code session
-link or Claude-Session trailer, a session id, "AI-assisted / AI-generated",
-"with / by an AI or assistant", and the robot emoji. Plain mentions pass:
-"fix the Claude Code hook config", CLAUDE.md, the repo's own name, a human
-Co-Authored-By.
+link or Claude-Session trailer, a session id, "AI-assisted / AI-generated"
+and the robot emoji. Plain mentions pass: "fix the Claude Code hook config",
+"compatible with Claude Code", "integration with LLM providers", CLAUDE.md,
+the repo's own name, a human Co-Authored-By.
 
 What is scanned, for any git write, gh write or GitHub API call:
   * The full command text: inline -m / --body / --title / --notes values,
@@ -70,14 +70,13 @@ ATTRIBUTION = re.compile(
         r"\b(?:generated|written|created|made|authored|produced|assisted|co-?written)" + _Z
         + r"(?:with|by|using|via)" + _Z + AN + AI + r"\b",
         # A line or quoted message that ends "via Claude Code" / "by Claude".
-        r"\b(?:with|by|via|using)" + _Z + CLAUDE + r"(?:" + _Z + r"code)?(?=[\s.!)\]]*(?:$|['\"`]))",
+        # Not "with" / "using": "compatible with Claude Code" is a mention.
+        r"\b(?:by|via)" + _Z + CLAUDE + r"(?:" + _Z + r"code)?(?=[\s.!)\]]*(?:$|['\"`]))",
         r"claude\.(?:ai|com)/(?:code|claude-code)\b",
         r"\b" + CLAUDE + r"[-_]session\s*:",
         r"session_[0-9a-z]{20,}",
         r"\U0001F916",                       # robot emoji
         r"\bai" + _Z + r"-?" + _Z + r"(?:assisted|generated|written|authored)",
-        r"\b(?:with|by|via)" + _Z + AN + r"(?:ai|llm|assistant|copilot|codex|gpt|cursor" + _Z
-        + r"(?:ai|ide|agent))\b",
     ]),
     re.I | re.M,
 )

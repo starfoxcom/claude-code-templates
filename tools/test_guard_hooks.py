@@ -196,6 +196,10 @@ class GuardHookTest(unittest.TestCase):
             "gh pr create --head hotfix/drop-admin-text-claude-yml --title 'fix(ci): x' --body 'y'",
             f"gh pr comment 5 --body '{DEEP_TRIGGER} - re-check on the parser'",
             "git commit -m 'fix(ui): show pointer with cursor on toggle rows'",
+            "git commit -m 'docs: add guide for using " + "Cla" + "ude Code'",
+            "git commit -m 'feat(bind): generate settings compatible with " + "Cla" + "ude Code'",
+            "git commit -m 'docs(rules): clarify what counts as a commit with AI trailers'",
+            "git commit -m 'feat: add integration with LLM providers'",
         ):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))
