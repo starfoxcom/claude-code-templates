@@ -87,13 +87,19 @@ Project deny rules cover some of these by text (`git remote *--mi*`, `gh repo
 sync *--force*`). Input that is not JSON and any error while reading a
 command let the call through, the same as a hook that timed out.
 
-Setup installs this file as `~/.claude/hooks/push-guard.py` and registers it
-in `~/.claude/settings.json`, never in a project's settings: some tools copy
-the launcher of existing project hooks into their own hook entries. Setup
-registers it only after finding a Python 3.8+ interpreter outside any virtual
-environment, naming both the interpreter and this file by absolute path, in
-exec form (`command` plus `args`), so no shell and no `python3`/`python`/`py`
-guess is involved. It runs through a `runpy` one-liner instead of
+It runs from one of two places. Installed in `~/.claude/hooks/`, setup
+registers it in `~/.claude/settings.json` only after finding a Python 3.8+
+interpreter outside any virtual environment, naming both the interpreter and
+this file by absolute path, in exec form (`command` plus `args`), so no shell
+and no `python3`/`python`/`py` guess is involved. Shipped in a repo's
+`.claude/hooks/`, the committed settings start it through `run-hook.sh`,
+which cannot know an absolute interpreter path: it takes the first of
+`python3`, `python` and `py` that is Python 3.8+ outside a virtual
+environment, and skips this file when `~/.claude/settings.json` already
+registers a copy. A project that ships it this way must keep tokensave's
+hook global: tokensave copies the launcher of a project's existing hooks
+into its own project entries, and `sh run-hook.sh` is no launcher for it.
+Either way it runs through a `runpy` one-liner instead of
 `python <path>` because Python exits 2 when it cannot open a script, which
 would block every call; through `runpy` a missing file is an ordinary error
 and the call proceeds. The interpreter runs with `-I`, so the project

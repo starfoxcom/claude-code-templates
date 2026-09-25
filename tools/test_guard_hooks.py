@@ -147,6 +147,21 @@ class GuardHookTest(unittest.TestCase):
         self.assert_denied(self.run_hook(
             "no-ai-attribution", "git commit -m 'feat: x' -m 'Written with Cursor AI'"))
 
+    def test_gh_body_from_stdin_is_denied(self):
+        for command in ("gh pr create --title t --body-file - < body.md",
+                        "gh release create v1 --notes-file - < notes.md",
+                        "cat x.json | gh api -X POST repos/o/r/issues --input -"):
+            with self.subTest(command=command):
+                self.assert_denied(self.run_hook("no-ai-attribution", command))
+
+    def test_gh_body_from_heredoc_is_scanned_and_passes(self):
+        self.assert_silent(self.run_hook(
+            "no-ai-attribution", "gh pr create --title t --body-file - <<'EOF'\n## What\n- x\nEOF"))
+
+    def test_deep_review_trigger_phrase_passes(self):
+        self.assert_silent(self.run_hook(
+            "no-ai-attribution", "gh pr comment 5 --body '@claude review this PR - re-check on the parser'"))
+
     def test_missing_hook_file_lets_the_call_through(self):
         empty = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, empty, ignore_errors=True)

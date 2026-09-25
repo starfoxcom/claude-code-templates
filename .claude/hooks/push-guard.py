@@ -96,7 +96,10 @@ and no `python3`/`python`/`py` guess is involved. Shipped in a repo's
 which cannot know an absolute interpreter path: it takes the first of
 `python3`, `python` and `py` that is Python 3.8+ outside a virtual
 environment, and skips this file when `~/.claude/settings.json` already
-registers a copy. Either way it runs through a `runpy` one-liner instead of
+registers a copy. A project that ships it this way must keep tokensave's
+hook global: tokensave copies the launcher of a project's existing hooks
+into its own project entries, and `sh run-hook.sh` is no launcher for it.
+Either way it runs through a `runpy` one-liner instead of
 `python <path>` because Python exits 2 when it cannot open a script, which
 would block every call; through `runpy` a missing file is an ordinary error
 and the call proceeds. The interpreter runs with `-I`, so the project

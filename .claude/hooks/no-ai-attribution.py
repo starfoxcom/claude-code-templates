@@ -25,8 +25,9 @@ What is denied outright (bypass routes the hook cannot see through)
   * --trailer (the trailer text can come from anywhere).
   * Message reuse: -C / --reuse-message / --reedit-message / -c <commit>.
   * Message or body text built by command substitution `$(...)`, backticks,
-    process substitution `<(...)`, or read from stdin `-F -` fed by
-    anything other than a here-doc in the same command.
+    process substitution `<(...)`, or read from stdin (a message or body
+    file of `-`: git -F -, gh --body-file / --notes-file / --input -, curl
+    -d @-) fed by anything other than a here-doc in the same command.
   * gh api writes (POST/PATCH/PUT) whose body comes from -f/-F fields the
     hook cannot resolve to a literal.
 
@@ -96,6 +97,12 @@ FILE_FLAGS = re.compile(
     r"(?<=\s)-d\s*@|--data(?:-binary|-raw)?\s*@)\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))",
     re.I,
 )
+# A message or body file of `-` is stdin, for git and gh alike; curl's `@-` too.
+STDIN_FILE = re.compile(
+    r"(?:(?<=\s)-F|--file|--body-file|--notes-file|--input|--message-file|-InFile)(?:\s+|=)-(?=\s|$)|"
+    r"(?:(?<=\s)-d|--data(?:-binary|-raw)?)\s*@-(?=\s|$)",
+    re.I,
+)
 MSG_FLAGS = re.compile(r"(?<=\s)(-m|--message|-b|--body|-t|--title|--notes|-Body|-f|-F|--field|--raw-field)(?=\s|=)", re.I)
 
 
@@ -114,11 +121,13 @@ def deny(reason):
 
 PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
 # Repo identifiers that legitimately carry the word: the instructions file,
-# the config directory, the two review workflow files, their check name and
-# the action they run. Exact tokens only; anything else stays denied.
+# the config directory, the two review workflow files, their check name, the
+# action they run and the comment phrase that starts the deep review
+# (.claude/rules/collaboration.md). Exact tokens only; anything else stays
+# denied.
 ALLOWED_NAMES = re.compile(
     r"\bCLAUDE\.md\b|\.claude(?:[\\/][\w.\-]*)*|`?claude(?:-code-review)?\*?[.-]yml`?|"
-    r"`?Claude On-Demand`?|`?claude-code-action`?|`?Claude Code Review`?"
+    r"`?Claude On-Demand`?|`?claude-code-action`?|`?Claude Code Review`?|@claude review\b"
 )
 REMOTE_URL = re.compile(r"^\s*url\s*=\s*\S*?[/:]([\w.\-]+?)(?:\.git)?/?\s*$", re.M)
 # The project's own repo name, set by main(). A repo whose name carries a
@@ -227,8 +236,9 @@ def main():
             deny(f"could not read message/body file {path}: {e}. Use a literal absolute path.")
         scan_text(text, f"file {path}")
 
-    if is_git and re.search(r"(?<=\s)-F\s+-(?=\s|$)|--file[= ]-(?=\s|$)", cmd) and "<<" not in cmd:
-        deny("`-F -` reads the message from a pipe the hook cannot see. Use a here-doc in the same command.")
+    if STDIN_FILE.search(cmd) and "<<" not in cmd:
+        deny("a message/body file of `-` reads the text from a pipe the hook cannot see. Use a here-doc "
+             "in the same command or --body-file <literal absolute path>.")
 
     sys.exit(0)
 
