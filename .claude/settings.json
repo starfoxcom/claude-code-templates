@@ -4,5 +4,19 @@
     "commit": "",
     "pr": "",
     "sessionUrl": false
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'test -f \"$0\" && exec sh \"$0\" push-guard' \"${CLAUDE_PROJECT_DIR}/.claude/hooks/run-hook.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }

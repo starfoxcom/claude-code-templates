@@ -1,0 +1,4 @@
+# Shell scripts keep LF on every checkout. With core.autocrlf=true, Windows
+# would write CRLF and sh would fail on the stray \r, so a guard hook would
+# stop running without any error that blocks.
+*.sh text eol=lf
