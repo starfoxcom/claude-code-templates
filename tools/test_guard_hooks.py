@@ -246,6 +246,8 @@ class GuardHookTest(unittest.TestCase):
 
     def test_expansion_outside_the_message_passes(self):
         for command in ('git -C "$REPO" commit -m \'docs: x\'', "git tag -f v$VERSION -m 'release'",
+                        'git commit -m "feat(hooks): add eval fixture"',
+                        'gh pr comment 5 --body "the eval step in the review workflow"',
                         "gh pr comment 5 --body @'\n$literal text\n'@"):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))

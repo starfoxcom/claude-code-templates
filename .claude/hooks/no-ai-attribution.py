@@ -45,7 +45,8 @@ What is denied outright (bypass routes the hook cannot see through)
     hook cannot resolve to a literal.
 
 Out of reach: text a program started by the command writes on its own
-(`python -c`, a script, an alias), and any route outside Bash and
+(`python -c`, a script, an alias), a command run through `eval` or
+`Invoke-Expression` from a variable, and any route outside Bash and
 PowerShell tool calls.
 
 Exit contract: JSON permissionDecision=deny on stdout, exit 0. Silent
@@ -96,7 +97,7 @@ ATTRIBUTION = re.compile(
 # one expands $VAR and $(...), which the SUBST check below reads.
 HEREDOC = re.compile(r"<<-?\s*(['\"]?)(\w+)\1.*?^\2\s*$", re.S | re.M)
 QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", re.S)
-SUBST = re.compile(r"\$\(|`[^`]+`|<\(|\beval\b|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$env:", re.I)
+SUBST = re.compile(r"\$\(|`[^`]+`|<\(|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$env:", re.I)
 
 # Read against the command with quoted text and here-doc bodies removed.
 HOOK_BYPASS = re.compile(
