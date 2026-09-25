@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +31,17 @@ class VerdictTests(unittest.TestCase):
              "followed by Blocking or LGTM", None),
             ("@claude review this PR", None),
             ("1. 🔴 Blocking finding in a numbered list", None),
+            # Verdict first: a later line that looks like a verdict does not flip it.
+            ("🔴 **Blocking** - one seam-side gap.\n\n### Invariant 2 - carry clamp\n"
+             "🟢 LGTM on this invariant: the clamp holds.", "red"),
+            ("🟢 **LGTM** - all invariants hold.\n\n🔴 Blocking from round 1 is fixed.", "green"),
+            ("**Claude finished @alex's task in 3m** —— [View job](x)\n\n---\n🔴 **Blocking** - a gap\n\n"
+             "🟢 LGTM on the rest", "red"),
+            # Verdict last: prose first, so the last verdict line wins.
+            ("## Code Review — x\n\nReviewed the diff.\n\n### 🔴 Blocking findings\n- a real bug\n\n"
+             "🔴 Blocking — must fix", "red"),
+            ("## Code Review — x\n\nReviewed the diff.\n\n🟢 LGTM", "green"),
+            ("Blocking issues: none found.", None),
         ]
         for body, want in cases:
             with self.subTest(body=body[:40]):
@@ -38,6 +50,13 @@ class VerdictTests(unittest.TestCase):
     def test_only_bot_comments_count(self):
         comments = [{"author": {"login": "alex"}, "body": "🔴 Blocking"}, bot("🟢 LGTM"), bot("🔴 Blocking")]
         self.assertEqual(receipts.verdicts(comments), ["green", "red"])
+
+    def test_escalation_comments_are_not_verdicts(self):
+        comments = [bot("🟢 LGTM"),
+                    bot("@claude review this PR - depth pass on the water dial.\n\n"
+                        "🟢 LGTM only when the diff is fully clean.\n🔴 Blocking when ANY real finding exists."),
+                    bot("@claude review this PR\n\nLGTM only when clean.\n**Blocking** when any finding exists.")]
+        self.assertEqual(receipts.verdicts(comments), ["green"])
 
 
 def pr(number, hours, base="develop", head="feature/x", title="feat: x", comments=(), labels=()):
@@ -70,6 +89,19 @@ class PrStatsTests(unittest.TestCase):
         self.assertEqual((s["prs_with_verdict"], s["first_verdict_green_pct"], s["prs_with_a_red_verdict"],
                           s["red_verdicts"], s["prs_escalated_to_deep"], s["median_hours_to_merge_reviewed"]),
                          (2, 50, 1, 1, 1, 2.0))
+
+    def test_windows_cover_every_day_and_leave_the_last_open(self):
+        queries = []
+
+        def gh(args, cwd):
+            queries.append(args[args.index("--search") + 1])
+            return []
+
+        since = datetime.now(timezone.utc).date() - timedelta(days=45)
+        with mock.patch.object(receipts, "gh_json", gh):
+            receipts.pr_stats(".", since.isoformat())
+        self.assertEqual(queries, [f"merged:{since}..{since + timedelta(days=29)}",
+                                   f"merged:>={since + timedelta(days=30)}"])
 
     def test_search_limit_fails_loudly(self):
         full = [pr(n, 1) for n in range(receipts.SEARCH_LIMIT)]
@@ -119,6 +151,32 @@ class SessionTests(unittest.TestCase):
         self.assertEqual((sessions["old"]["output_tokens"], sessions["new"]["output_tokens"]), (200, 7))
         self.assertEqual(sum(s["tool_calls"] for s in sessions.values()), 1)
 
+    def test_original_keeps_its_history_when_reopened_later(self):
+        shared = [assistant("a", "2026-09-01T00:00:00Z", "m1", 100), assistant("b", "2026-09-01T00:01:00Z", "m2", 100)]
+        self.write("original.jsonl", *shared, mtime=2_000_000)
+        self.write("continued.jsonl", *shared, assistant("c", "2026-09-02T00:00:00Z", "m3", 7), mtime=1_000_000)
+        sessions = {s["session"]: s["output_tokens"] for s in receipts.project_sessions(self.logs)}
+        self.assertEqual(sessions, {"original": 200, "continued": 7})
+
+    def test_copies_under_new_line_ids_count_once(self):
+        self.write("a.jsonl", assistant("u1", "2026-09-01T00:00:00Z", "m1", 868, ("Bash", {"command": "ls"})))
+        copy = json.loads(assistant("u9", "2026-09-03T00:00:00Z", "m1", 868, ("Bash", {"command": "ls"})))
+        copy["message"]["content"][0]["id"] = "tu10"  # same tool call id as the original
+        self.write("b.jsonl", json.dumps(copy), assistant("u10", "2026-09-03T00:01:00Z", "m9", 5))
+        sessions = receipts.project_sessions(self.logs)
+        self.assertEqual(sum(s["output_tokens"] for s in sessions), 873)
+        self.assertEqual(sum(s["tool_calls"] for s in sessions), 1)
+
+    def test_fork_subagent_copy_of_the_agent_call_counts_once(self):
+        spawn = assistant("a", "2026-09-01T00:00:00Z", "m1", 10, ("Agent", {"subagent_type": "fork"}))
+        copied = json.loads(spawn)
+        copied["uuid"] = "z"
+        self.write("s.jsonl", spawn)
+        self.write("s/subagents/agent-1.jsonl", json.dumps(copied),
+                   assistant("b", "2026-09-01T00:00:30Z", "m2", 5, ("Read", {"file_path": "x"})))
+        [s] = receipts.project_sessions(self.logs)
+        self.assertEqual((s["tool_calls"], s["output_tokens"]), (2, 15))
+
     def test_streamed_reply_counts_once(self):
         self.write("s.jsonl", assistant("a", "2026-09-01T00:00:00Z", "m1", 40),
                    assistant("b", "2026-09-01T00:00:01Z", "m1", 40))
@@ -130,12 +188,12 @@ class SessionTests(unittest.TestCase):
                    line("b", "2026-09-01T12:00:00Z", kind="system"))
         self.assertEqual(receipts.project_sessions(self.logs), [])
 
-    def test_active_minutes_cap_idle_gaps(self):
+    def test_activity_minutes_cap_idle_gaps(self):
         self.write("s.jsonl", assistant("a", "2026-09-01T00:00:00Z", "m1", 1),
                    assistant("b", "2026-09-01T00:02:00Z", "m2", 1),
                    assistant("c", "2026-09-01T10:00:00Z", "m3", 1))
         [s] = receipts.project_sessions(self.logs)
-        self.assertEqual(s["active_minutes"], 2 + receipts.IDLE_CAP_MINUTES)
+        self.assertEqual(s["activity_minutes"], 2 + receipts.IDLE_CAP_MINUTES)
 
     def test_notebook_edits_count(self):
         self.write("s.jsonl", assistant("a", "2026-09-01T00:00:00Z", "m1", 1,
@@ -163,7 +221,7 @@ class MissingLogsTests(unittest.TestCase):
 class AdherenceTests(unittest.TestCase):
     def test_no_searches_prints_na(self):
         session = {"start": "2026-09-01", "output_tokens": 1, "research_calls": 0, "search_fallbacks": 0,
-                   "tool_errors": 0, "task_tool_calls": 0, "active_minutes": 1, "files_edited": 0}
+                   "tool_errors": 0, "task_tool_calls": 0, "activity_minutes": 1, "files_edited": 0}
         with mock.patch("builtins.print") as out:
             receipts.summarize("x", [session], None, {"rules": 0, "skills": 0, "memory_entries": 0})
         self.assertIn("adherence n/a", " ".join(str(c) for c in out.call_args_list))
