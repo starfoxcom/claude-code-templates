@@ -609,6 +609,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git grep -n -e eval -e 'git push -f'", "git log -S eval -S 'git push --force'",
     "python - <<'EOF'\nrows = ['git push -qf origin main']\nEOF",
     "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
+    // A quoted string spanning lines: its closing quote pairs with the next one on
+    // its last line, so a later statement's flag reads as the push's.
+    "git commit -m \"Fix the lock\n\nDetails here\" && git push origin main && rm -rf .cache && echo \"ok\"",
     "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
     "echo \"git push -f\"", "echo git push -f", "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
     "echo a \\\n# git push -f\ngit push origin x", "git push origin x # never -f here",

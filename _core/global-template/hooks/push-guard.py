@@ -42,7 +42,10 @@ following quotes across lines and skipping heredoc bodies. Either reading
 can block. Every step is linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
-script or a search pattern with `git push -f` in it is blocked too. The
+script or a search pattern with `git push -f` in it is blocked too. A plain
+push chained after a quoted string that spans lines can block the same way:
+on the string's last line its closing quote pairs with the next quote, so
+the flag of a later statement there (`rm -rf`) reads as the push's. The
 block message says to put such text in a file and pass the file instead.
 
 The hook only ever blocks or stays silent; it never asks. Out of reach, so
