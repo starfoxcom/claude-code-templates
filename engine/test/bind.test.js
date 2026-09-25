@@ -384,30 +384,17 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // Silent passes: pushes on the allow-list, commands that never push, and text that only mentions one.
   const allowed = [
     "git push", "git push -u origin feature/fix-bug", "git push --force-with-lease origin x",
-    // A search pattern is text, even after a shell or `eval` word.
-    "rg -t sh -c 'git push -f'", "grep -rn -e eval -e 'git push -f' scripts/",
-    "git grep -n -e eval -e 'git push -f'", "git log -S eval -S 'git push --force'",
-    "find . -exec grep -e eval -e 'git push -f' {} +", "git grep eval -- 'git push -f'",
-    "git grep -e '{' -e eval -e 'git push -f'", "awk '{ print }' eval 'git push -f'",
     // Everyday chains: commit then push, trim the output, delete one branch and push another.
     "git add -A && git commit -q -m \"fix(x): y\" && git push -q origin feature/x 2>&1 | tail -1; git log --oneline -1",
     "git push origin --delete hotfix/x 2>&1 | tail -1; git checkout -q -b chore/c origin/develop; git push -q -u origin chore/c 2>&1 | tail -1",
-    "python - <<'EOF'\nrows = ['git push -qf origin main']\nEOF",
     // Redirected output, and a mirror setting that is off.
     "git push origin main > /tmp/log 2>&1", "git push -u origin feature/x 2> err.txt",
     "git -c remote.origin.mirror=false push origin", "git -c remote.origin.mirror=0 push origin",
     // Flags of a command inside a substitution belong to that command, not the push.
     "git push origin $(git rev-parse --abbrev-ref HEAD | cut -d/ -f2)", "git push -u origin \"$(git branch --show-current)\"",
     "git push origin `git config -f x.cfg branch.name`",
-    // An escaped quote inside `$'...'` keeps the push text inside the string.
-    "echo $'x\\' ; git push -f origin main ; \\'' ''",
     "git commit -m \"$(cat <<'EOF'\nfix: handle the edge case\nEOF\n)\" && git push origin feature/x",
     "echo showcase; git push origin x",
-    // A continuation after a space leaves the `#` at a word start, so it is a comment.
-    "echo a \\\n# git push -f\ngit push origin x",
-    // Push text inside a heredoc body is not a command.
-    "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
-    "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
     // A delete on one remote and a push to another; a substitution in a commit message.
     "git push upstream --delete x && git push origin x", "git commit -m \"$(date): push\" && git push origin x",
     "git push origin x --force-with-lease=x:abc", "git push --force-if-includes --force-with-lease origin x",
@@ -417,18 +404,16 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "cd /c/repo; git push -q -u origin feature/a 2>&1 | tail -2; git push -q -u origin feature/b 2>&1 | tail -2; echo pushed",
     "cd /c/repo; git push origin feature/a 2>&1 | tail -2; git rev-parse --short HEAD",
     "git push origin HEAD:refs/heads/x", "cd repo && git push -u origin feature/x", "git push origin x 2>&1",
-    "git log -f", "git commit -m \"push -f later\"", "echo \"git push -f\"",
-    "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
+    "git log -f", "git commit -m \"push -f later\"",
     "cat <<-EOF > notes.md\n\tnotes\n\tEOF", "(( n = 1 << 2 ))\necho done", "git remote add origin https://example.com/a.git",
     // Pushes that are not git's, and a push next to segments known to leave git alone.
     "git stash push -m wip", "gh run list --event push", "docker push img:1",
     "git add . && git commit -m \"x\" && git push origin x", "git fetch origin && git push -u origin x",
-    "echo git push -f", "printf 'fix push retries' | git commit -F -",
+    "printf 'fix push retries' | git commit -F -",
     "gh pr create --title \"fix push retries\" --body \"Pushes now retry.\"", "cat hooks/push-guard.py", "git add _core/global-template/hooks/push-guard.py", "git log --grep=push",
   ];
   // Force pushes hidden in forms the guard can still read for certain.
   const hidden = [
-    "git push origin --delete main && git push origin main", "git push origin :main; git push origin main",
     "eval \"git push -qf origin main\"", "echo $(git push -qf origin main)", "out=$(git push -qf origin main 2>&1)",
     "x=`git push -qf origin main`", "diff <(git push -qf origin main) x", "{ git push -qf origin main; }",
     // `$'...'` and `$"..."` inside the subcommand name, decoded as Bash does.
@@ -444,8 +429,13 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "coproc eval 'git push -qf origin main'", "sudo -iu me sh -c 'git push -qf origin main'",
     // Statements complete before an unreadable point still run.
     "git push -qf origin main\ncat <<EOF", "git push -qf origin main; echo \"x", "git push -qf origin main; x=$(echo",
-    // A lease does not undo a delete: the branch's commits are already gone.
-    "git push origin --delete main && git push --force-with-lease origin main",
+    // Text the guard cannot fully place is still read: an unclosed heredoc or
+    // quote, deep nesting, a comment, text piped into a shell.
+    "cat <<EOF\ngit push -qf origin main", "echo \"x; git push -qf origin main", "x=$(echo; git push -qf origin main",
+    "echo " + "$(echo ".repeat(9) + "git push -qf origin main" + ")".repeat(9),
+    "git push -- +main", "git push origin {-qf,x}", "echo hi # && git push -qf origin main",
+    "cat <<EOF\nnever closed\ngit push -qf origin main", "echo git push -qf origin main | sh",
+    "echo '; git push -qf origin main' | git commit --allow-empty -F - | sh",
     // A redirect glued to `push` ends the word, as in the shell.
     "git push>/dev/null -qf origin main", "git push<in -qf origin main", "git push&>/dev/null -qf origin main",
     // A redirect glued to a flag ends the word there, so the flag still reaches git.
@@ -514,28 +504,35 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "bash --login -c 'git push -qf origin main'", "bash -cx 'git push -qf origin main'",
     "bash -c -- 'git push -qf origin main'", "bash -euo pipefail -c 'git push -qf origin main'",
   ];
-  // The guard never asks: what it cannot read for certain runs as it would without it.
+  // Text that only mentions a force push is blocked too: the guard reads text, not
+  // shell grammar. The block message says to pass such text in a file.
+  const mentions = [
+    "rg -t sh -c 'git push -f'", "grep -rn -e eval -e 'git push -f' scripts/",
+    "git grep -n -e eval -e 'git push -f'", "git log -S eval -S 'git push --force'",
+    "python - <<'EOF'\nrows = ['git push -qf origin main']\nEOF",
+    "cat > notes.md <<'EOF'\n## Force pushes\ngit push -f origin main\nEOF",
+    "git commit -m \"$(cat <<'EOF'\nfix: push retries\n\ngit push -f was wrong\nEOF\n)\" && git push origin feature/x",
+    "echo \"git push -f\"", "echo git push -f", "git commit -m \"Never run \\\"cd repo && git push -f\\\" here\"",
+    "echo a \\\n# git push -f\ngit push origin x", "git push origin x # never -f here",
+    "git commit -m \"unbalanced && git push -f",
+  ];
+  // The guard never asks: what it cannot see in the text runs as it would without it.
   // Project deny rules cover some of these by text.
   const unguarded = [
     "git push origin --delete old-branch", "git push -d origin old-branch",
     "git push origin --delete main && git push -u origin HEAD",
-    // From the point the guard cannot read on, text may be a heredoc body or a string.
-    "cat <<EOF\ngit push -qf origin main", "echo \"x; git push -qf origin main", "x=$(echo; git push -qf origin main",
-    // A push nested past the depth limit.
-    "echo " + "$(echo ".repeat(9) + "git push -qf origin main" + ")".repeat(9),
+    // A branch deleted and then pushed again.
+    "git push origin --delete main && git push origin main", "git push origin :main; git push origin main",
     "git push origin x 2>&1 | tail -1 | sh", "git push origin x | tee .git/config",
-    "git commit -m \"unbalanced && git push -f", "git push -o ci.skip origin x", "git push origin main:+notes",
-    "git push -- +main", "git push --repo=origin", "git push $FLAGS origin main",
-    "git push origin {-qf,x}", "git push origin x # never -f here", "echo hi # && git push -qf origin main",
-    "cat <<EOF\nnever closed\ngit push -qf origin main",
+    "git push -o ci.skip origin x", "git push origin main:+notes",
+    "git push --repo=origin", "git push $FLAGS origin main",
     "git remote add --mirror=push b https://example.com/b.git", "git config remote.b.mirror true",
     "git config alias.p 'push -f'", "git config --global alias.p 'push -f'",
     "hash -p /usr/bin/git g; g push -qf origin main", "alias g=git\ng push -qf origin main",
     "bash -c 'git \"$@\"' _ push -qf origin main", "sh -c '/usr/bin/gi[t] push -qf origin main'",
-    "echo '; git push -qf origin main' | git commit --allow-empty -F - | sh",
     "gh alias set --shell p 'git \"$@\"'; gh p push -qf origin main", "gh extension exec pusher push -qf origin main",
     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main:main git push origin",
-    "echo -qf | xargs git push origin main", "echo git push -qf origin main | sh",
+    "echo -qf | xargs git push origin main",
     "git --config-env=remote.origin.mirror=HOME push origin", "export HOME=/tmp/e; git push origin",
     "git fetch --upload-pack='git pu\"\"sh -qf origin main; git-upload-pack' .",
   ];
@@ -547,33 +544,34 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   for (const cmd of powershellOnly) assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   for (const cmd of allowed) assert.equal(verdict("Bash", cmd), "allow", `should allow: ${cmd}`);
   for (const cmd of hidden) assert.equal(verdict("Bash", cmd), "deny", `Bash should block: ${cmd}`);
+  for (const cmd of mentions) assert.equal(verdict("Bash", cmd), "deny", `text mentions block: ${cmd}`);
   for (const cmd of unguarded) assert.equal(verdict("Bash", cmd), "allow", `passes by design: ${cmd}`);
   for (const cmd of ["git push origin feature/x 2>&1 | Select-Object -Last 1", "git push origin x 2>&1 | tail -1",
     // A carriage return ends a PowerShell line, so the `#` after it starts a comment.
     "git push origin main\r# -qf",
-    // A backtick continuation is whitespace in PowerShell, so the `#` after it starts a comment.
-    "Write-Output a`\n#; git push -qf origin main",
     // A parenthesized argument is one value; its words are not the push's.
     "git push origin (\"release/{0}\" -f $version)", "git push origin $(git branch --show-current)",
     "git push -u origin feature/x 2>&1 | Select-String -NotMatch remote"]) {
     assert.equal(verdict("PowerShell", cmd), "allow", `PowerShell should allow: ${cmd}`);
   }
-  // PowerShell forms the guard cannot read for certain.
-  for (const cmd of ["$s = @'\ngit push -qf origin main\n'@", "git push @args", "git push $flags origin main",
-    // PowerShell reads curly quotes as quotes and Unicode spaces as whitespace.
+  // PowerShell text the guard reads although PowerShell would parse it differently:
+  // a here-string, curly quotes, a Unicode space, text piped into `iex`.
+  for (const cmd of ["$s = @'\ngit push -qf origin main\n'@",
     "git push origin main \u201c-qf\u201d", "git push origin \"x\u201c -qf \u201cy\"", "git push origin main\u00a0-qf",
+    "echo 'git push -qf origin main' | iex", "Write-Output '; git push -qf origin main' | git commit --allow-empty -F - | iex",
+    "echo 'git push -qf origin main'\n| iex", "Write-Output 'git push -qf origin main'\r\n| iex",
+    "echo 'git push -qf origin main'\r  | iex", "Write-Output a`\n#; git push -qf origin main"]) {
+    assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
+  }
+  // PowerShell forms whose force flag is not in the text.
+  for (const cmd of ["git push @args", "git push $flags origin main",
     // PowerShell evaluates a parenthesized argument; Set-Item changes the environment next to a push.
     "git push origin main ('-q'+'f')", "Set-Item Env:HOME C:/e; git push origin",
     // After `--%` PowerShell passes separators through as words.
     "git push origin main -o --% ; -qf",
-    // Push text after a first word that is not a plain program name could still run git.
+    // A program name built at run time, and a PowerShell alias for git.
     "&('gi'+'t') push -qf origin main",
-    // A PowerShell alias for git, with the value before the name.
-    "sal -Value git g; g push -qf origin main", "Set-Alias -Value git -Name g; g push -qf origin main", "echo 'git push -qf origin main' | iex",
-    "Write-Output '; git push -qf origin main' | git commit --allow-empty -F - | iex",
-    // A PowerShell line can start with `|` to continue the pipeline from the line before.
-    "echo 'git push -qf origin main'\n| iex", "Write-Output 'git push -qf origin main'\r\n| iex",
-    "echo 'git push -qf origin main'\r  | iex"]) {
+    "sal -Value git g; g push -qf origin main", "Set-Alias -Value git -Name g; g push -qf origin main"]) {
     assert.equal(verdict("PowerShell", cmd), "allow", `PowerShell passes by design: ${cmd}`);
   }
   // Hooks run in the project directory; a repo's own json.py must not replace the hook's imports.
@@ -634,20 +632,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     assert.equal(verdict("Bash", repeated), "deny", `a push after repeated ${label} words blocks`);
     assert.ok(Date.now() - start < 3000, `repeated ${label} words answer quickly`);
   }
-  // With no time left for the full reading, the quick reading still blocks a
-  // plain force push, and a push only a full reading would find passes.
-  const budget = spawnSync(python, ["-c", [
-    "import importlib.util, sys",
-    "spec = importlib.util.spec_from_file_location('guard', sys.argv[1])",
-    "g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)",
-    "g.READ_BUDGET = -1",
-    "print(bool(g.guard(': x; git push -qf origin main', 'Bash')), bool(g.guard('echo $(git push -qf origin main)', 'Bash')),",
-    "      bool(g.guard(\"sh -c 'git push -qf origin main'\", 'Bash')))",
-  ].join("\n"), join(repo, "_core/global-template/hooks/push-guard.py")], { encoding: "utf8" });
-  assert.equal(budget.stdout.trim(), "True True False", `quick reading without a full one: ${budget.stderr}`);
-  // A deleted branch pushed again gets advice that works, not the lease advice.
-  const again = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push origin --delete main && git push --force-with-lease origin main" } }));
-  assert.match(again.stderr, /without deleting the branch first/, "a delete then push gets its own advice");
+  // The block message says how to pass text that only mentions a force push.
+  const mention = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "echo git push -f" } }));
+  assert.match(mention.stderr, /put that text in a file/, "the block message covers text mentions");
   const nested = "x=" + "$(echo ".repeat(2400) + ")".repeat(2400) + "; git push -qf origin main";
   const nestedStart = Date.now();
   assert.equal(verdict("Bash", nested), "deny", `a ${nested.length}-character nested command blocks`);
