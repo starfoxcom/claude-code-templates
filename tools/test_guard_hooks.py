@@ -20,6 +20,14 @@ SETTINGS = os.path.join(REPO, ".claude", "settings.json")
 # Built from pieces so this file's text never reads as a force push to the
 # guard that watches the commands run in this repo.
 FORCE_PUSH = "git push -" + "f origin feature/x"
+# Same for attribution samples and the guard that scans this repo's commands.
+AI_TRAILER = "Co-" + "Authored-By: Cla" + "ude <noreply@anthro" + "pic.com>"
+HUMAN_TRAILER = "Co-" + "Authored-By: Jane Doe <12345+jane@users.noreply.github.com>"
+GENERATED_LINE = "Gener" + "ated with [Cla" + "ude Code](https://cla" + "ude.com/claude-code)"
+SESSION_LINK = "https://cla" + "ude.ai/code/session_" + "01V8SAUxUZBbVPekZUHDL9FZ"
+# The deep-review trigger, split so a review that quotes this file cannot
+# carry the whole phrase into a PR comment and start a deep review.
+DEEP_TRIGGER = "@cla" + "ude rev" + "iew this PR"
 
 
 def find_sh():
@@ -150,6 +158,125 @@ class GuardHookTest(unittest.TestCase):
     def test_launcher_is_the_one_the_settings_start(self):
         self.assertIn("/.claude/hooks/run-hook.sh", settings_command("push-guard"))
         self.assertTrue(os.path.exists(LAUNCHER))
+
+    # --- no-ai-attribution: attribution is denied, mentions pass ---
+
+    def assert_denied(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(result.stdout.strip(), "expected a deny, got silence")
+        decision = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecision"]
+        self.assertEqual(decision, "deny")
+
+    def attr(self, command, **kw):
+        return self.run_hook("no-ai-attribution", command, **kw)
+
+    def test_ai_co_author_is_denied(self):
+        self.assert_denied(self.attr(f"git commit -m 'docs: x' -m '{AI_TRAILER}'"))
+
+    def test_human_co_author_passes(self):
+        self.assert_passes(self.attr(f"git commit -m 'docs: x' -m '{HUMAN_TRAILER}'"))
+
+    def test_generated_with_line_is_denied(self):
+        for line in (GENERATED_LINE, "Written by an AI assistant", "docs: x via " + "Cla" + "ude Code"):
+            with self.subTest(line=line):
+                self.assert_denied(self.attr(f"git commit -m 'docs: x' -m '{line}'"))
+
+    def test_session_link_and_robot_are_denied(self):
+        for body in (SESSION_LINK, "Done \U0001F916", "Cla" + "ude-Session: abc"):
+            with self.subTest(body=body):
+                self.assert_denied(self.attr(f"gh pr comment 5 --body '{body}'"))
+
+    def test_plain_mentions_pass(self):
+        for command in (
+            "git commit -m 'fix(hooks): block force pushes in " + "Cla" + "ude Code sessions'",
+            "git commit -m 'docs: update CLAUDE.md and .claude/rules/git.md'",
+            "gh pr comment 1 --repo starfoxcom/claude-code-templates --body 'docs: x'",
+            "gh pr create --title 't' --body 'See https://github.com/starfoxcom/claude-code-templates/issues/3 "
+            "and https://starfoxcom.github.io/claude-code-templates/'",
+            "gh pr create --head hotfix/drop-admin-text-claude-yml --title 'fix(ci): x' --body 'y'",
+            f"gh pr comment 5 --body '{DEEP_TRIGGER} - re-check on the parser'",
+            "git commit -m 'fix(ui): show pointer with cursor on toggle rows'",
+            "git commit -m 'docs: add guide for using " + "Cla" + "ude Code'",
+            "git commit -m 'feat(bind): generate settings compatible with " + "Cla" + "ude Code'",
+            "git commit -m 'docs(rules): clarify what counts as a commit with AI trailers'",
+            "git commit -m 'feat: add integration with LLM providers'",
+        ):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_cursor_tool_name_is_denied(self):
+        self.assert_denied(self.attr("git commit -m 'feat: x' -m 'Written with Cursor AI'"))
+
+    def test_attribution_next_to_repo_name_is_denied(self):
+        self.assert_denied(self.attr(
+            f"gh pr comment 1 --repo starfoxcom/claude-code-templates --body '{AI_TRAILER}'"))
+
+
+    def test_everyday_commands_pass(self):
+        for command in ("git cherry-pick -n abc123", "git revert -n abc123", "git tag -n",
+                        "git merge -n feature/x", "git commit -m 'docs(hooks): explain core.hooksPath and -n'",
+                        "gh pr comment 5 --body 'Run `npm test` first'",
+                        'git commit -m "feat(hooks): add eval fixture"',
+                        "gh api graphql -f query='query($owner: String!) { repository(owner: $owner) { id } }' "
+                        "-F owner=o",
+                        "gh gist create --filename notes.txt -",
+                        "gh api repos/o/r/issues/5/comments -F body=@-",
+                        'gh issue create --template "Bug report"',
+                        "gh pr create --template default.md --base develop",
+                        "gh repo create x --template o/r",
+                        "gh pr create --title t --body-file - <<'EOF'\n## What\n| a | b |\n|---|---|\nEOF"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_file_flags_mentioned_in_message_text_pass(self):
+        for command in ("git commit -m 'fix(hooks): honor --file=path form'",
+                        'git commit -m "docs(hooks): add Get-Content example"',
+                        "gh pr comment 5 --body 'the -F flag is case-sensitive'",
+                        "gh pr create --title t --body-file - <<'EOF'\nUse --body-file notes.md here\nEOF",
+                        "gh pr create --title t --body @'\nthe -F flag reads a file\n'@"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_lowercase_f_is_not_a_message_file(self):
+        for command in ("git tag -f v1.0.0", "gh pr create -f --base develop"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_attribution_inside_a_heredoc_is_denied(self):
+        self.assert_denied(self.attr(f"gh pr create --title t --body-file - <<'EOF'\n{AI_TRAILER}\nEOF"))
+
+    def body_file(self, text):
+        fd, path = tempfile.mkstemp(suffix=".md")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        self.addCleanup(os.remove, path)
+        return path
+
+    def test_attribution_in_a_body_file_is_denied(self):
+        path = self.body_file(f"## What\n- x\n\n{GENERATED_LINE}\n")
+        for command in (f'gh pr create --title t --body-file "{path}"', f'git commit -F "{path}"',
+                        f'git commit -F"{path}"', f'gh pr create --title t --body-file="{path}"',
+                        f'git commit --file="{path}"', f"git commit --template='{path}'"):
+            with self.subTest(command=command):
+                self.assert_denied(self.attr(command))
+
+    def test_clean_body_file_passes(self):
+        path = self.body_file("## What\n- Ships the guard\n\n## Why\nFewer surprises.\n")
+        for command in (f'gh pr create --title t --body-file "{path}"',
+                        f'gh pr create --title t --body-file="{path}"'):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
+
+    def test_unreadable_body_file_is_denied(self):
+        for command in ("gh pr create --title t --body-file /no/such/body.md",
+                        "gh pr create --title t --body-file=/no/such/body.md"):
+            with self.subTest(command=command):
+                self.assert_denied(self.attr(command))
+
+    def test_read_only_commands_pass(self):
+        for command in ("git log -5", "gh pr view 5 --json body", "git config --get core.hooksPath"):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
 
 
 if __name__ == "__main__":
