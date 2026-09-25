@@ -350,7 +350,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review errored" \
-              -F "output[summary]=The reviewer never ran to completion (attempt 1 Fable 5.1: ${{ steps.claude_attempt_1.outcome }}, usage limit: ${{ steps.failure_class.outputs.usage_limit }}, retry Fable: ${{ steps.claude_retry.outcome || 'skipped' }}, fallback Opus 5.5: ${{ steps.claude_fallback.outcome || 'skipped' }}). This is not a blocking finding; nothing was judged. Re-trigger with \`@claude review this PR — depth pass on <focus>\` to retry. If the deep tier keeps failing, report it to the maintainer."
+              -F "output[summary]=The reviewer never ran to completion (attempt 1 Fable 5.1: ${{ steps.claude_attempt_1.outcome }}, usage limit: ${{ steps.failure_class.outputs.usage_limit }}, retry Fable: ${{ steps.claude_retry.outcome || 'skipped' }}, fallback Opus 5.5: ${{ steps.claude_fallback.outcome || 'skipped' }}). This is not a blocking finding; nothing was judged. Retry with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the deep tier keeps failing, report it to the maintainer."
             exit 1
           fi
 
@@ -362,7 +362,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review verdict missing ($REVIEWER)" \
-              -F "output[summary]=The deep reviewer ($REVIEWER) completed but did not include a 🔴/🟢 verdict line. Re-trigger and ensure the prompt mandates a binary verdict on the final line."
+              -F "output[summary]=The deep reviewer ($REVIEWER) completed but did not include a 🔴/🟢 verdict line. Re-trigger with a comment starting with \`@claude review this PR\` and ensure the prompt mandates a binary verdict on the final line."
             exit 1
           fi
 
@@ -372,7 +372,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review verdict: 🔴 Blocking ($REVIEWER)" \
-              -F "output[summary]=The deep reviewer ($REVIEWER) returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing. If the finding does not apply, explain why in a PR comment and re-trigger the deep review."
+              -F "output[summary]=The deep reviewer ($REVIEWER) returned a blocking verdict. Fix on the PR branch, then re-trigger with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the finding does not apply, explain why after the phrase in that comment, or in a separate comment first."
             exit 1
           fi
 
