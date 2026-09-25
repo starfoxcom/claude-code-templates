@@ -389,8 +389,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "case \"$b\" in main) git push origin main;; *) rm -f tmp.txt;; esac",
     "git push -u origin feat && gh pr create --base develop --body \"$(cat <<'EOF'\n1) adds +2 tests\nEOF\n)\"",
     // An arithmetic `+`, and mirror values git reads as false.
-    "git push origin v$((n + 1))", "git -c remote.origin.mirror=false push origin",
+    "git push origin v$((n + 1))", "git push origin v$(( (n + 1) ))", "git -c remote.origin.mirror=false push origin",
     "git -c remote.origin.mirror=0 push origin",
+    // A substitution inside a case arm reads like any other.
+    "case \"$1\" in tag) git push origin \"v$(date +%Y.%m.%d)\";; esac",
+    "case \"$1\" in go) git push origin \"$(git rev-parse --abbrev-ref HEAD | cut -d/ -f2)\";; esac",
+    "printf $'\\e[1mdone\\e[0m\\n'; git push origin main",
     // The word "case" in a message, an apostrophe in a heredoc body or a comment.
     "git commit -m \"$(cat <<'EOF'\nfix: handle the upper case branch names\nEOF\n)\" && git push origin HEAD && rm -rf .cache",
     "cat <<'EOF' > x.md\ndon't\nEOF\ngit push origin x\nrm -f tmp", "# it's done\ngit push origin x && rm -rf .cache",
@@ -530,6 +534,16 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git -c remote.origin.mirror=2 push origin", "git -c remote.origin.mirror=-1 push origin",
     "git -c remote.origin.mirror=1k push origin",
     "bash <<< \"git push -qf origin main\"", "sh <<< '/usr/bin/git push -qf origin main'",
+    // A substitution inside a force word, escaped or decoded separators, a `!` alias
+    // running the dashed program, a quoted mirror value, a `+` ref after a quoted `>`.
+    "git push -q$(true)f origin main", "git push --for$(:)ce origin main", "git push -`true`f origin main",
+    "git push origin +\"\"\"$(git branch --show-current)\"",
+    "git -c a.b=\\; push -f origin main", "git -c a.b=$';' push -f origin main", "git -c a.b=$'\\n' push -f origin main",
+    "git -c c.d=\\\" -c a.b=\"x;y\" push -f origin main", "git push origin main $'-\\u66'",
+    "echo case; git -c a.b=$(:;) push -f origin main; echo esac",
+    "case $b in main) git push origin $(git branch --show-current | tr a b) --force;; esac",
+    "git -c alias.p='!git-push -f' p origin main", "git -c alias.p='!/usr/lib/git-core/git-push' p -f origin main",
+    "git -c \"remote.origin.mirror= 1\" push origin", "git push origin -o \"x>\" +main",
   ];
   // Text that only mentions a force push is blocked too: the guard reads text, not
   // shell grammar. The block message says to pass such text in a file.
@@ -595,7 +609,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     // Quoted literals in a group are the command's arguments; a `+` glued to a substitution.
     "Start-Process git -ArgumentList @('push', '--force', 'origin', 'main') -NoNewWindow -Wait",
     "& git @('push','-qf','origin','main')", "git push ('-qf') origin main",
-    "git push origin \"+$($b)\"", "git push origin \"+${b}\"", "& { git push -f origin main }"]) {
+    "git push origin \"+$($b)\"", "git push origin \"+${b}\"", "& { git push -f origin main }",
+    // A brace inside quotes, and an escaped separator.
+    "git push origin 'main@{1}:main' --force", "git push origin \"@{u}\" -f", "git -c a.b=`; push -f origin main"]) {
     assert.equal(verdict("PowerShell", cmd), "deny", `PowerShell should block: ${cmd}`);
   }
   // PowerShell forms whose force flag is not in the text.
@@ -620,6 +636,8 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   // `maxsplit`, which Python 3.13 warns about on stderr.
   const lease = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "git push --force-with-lease origin x" } }));
   assert.equal(`${lease.stdout}${lease.stderr}`, "", "an allowed push prints nothing");
+  const escapes = runHook(home, JSON.stringify({ tool_name: "Bash", tool_input: { command: "printf $'\\e[1mdone\\q\\n'; git push origin x" } }));
+  assert.equal(`${escapes.stdout}${escapes.stderr}`, "", "escapes Python does not know print nothing");
   assert.doesNotMatch(readFileSync(join(repo, "_core/global-template/hooks/push-guard.py"), "utf8"),
     /re\.split\([^)]*,\s*\d+\)/, "maxsplit is passed by keyword");
   assert.equal(decide(runHook(home, "not json")), "allow", "bad input fails open");
@@ -661,7 +679,9 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     ["quotes", "\"'".repeat(49000) + "\ngit push -qf origin main", "deny"],
     ["redirects", "> ".repeat(49000) + "; git push -qf origin main", "deny"],
     ["escaped quotes", "git push -qf origin main # " + "\"\\".repeat(49980), "deny"],
-    ["PowerShell escaped quotes", "git push -qf origin main # " + "\"`".repeat(49980), "deny", "PowerShell"]]) {
+    ["PowerShell escaped quotes", "git push -qf origin main # " + "\"`".repeat(49980), "deny", "PowerShell"],
+    ["nested literal groups", ("(".repeat(64) + "'>>>>',".repeat(14100) + "'a'" + ")".repeat(64) +
+      "; git push -qf origin main").slice(-99999), "deny", "PowerShell"]]) {
     const start = Date.now();
     assert.equal(verdict(tool || "Bash", cmd), want, `${label}: ${want}`);
     assert.ok(Date.now() - start < 3000, `${label} answers quickly`);

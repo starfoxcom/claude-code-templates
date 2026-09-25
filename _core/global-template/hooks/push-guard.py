@@ -15,20 +15,27 @@ and PowerShell command and blocks a git push that carries:
 overwrite work the local repo has not seen. The same checks cover git's push
 plumbing, `send-pack` and `http-push`, and the dashed `git-push` programs.
 
-The hook reads text, not shell grammar, so no quoting trick changes what it
-sees. First it removes what the shell would remove: line continuations,
-quotes, backslashes and backticks, decoding Bash's `$'...'` escapes and
+It is a safety net for force pushes written the ordinary way, not a sandbox
+against a command built to slip past it: no text check can be one, since a
+program started by the command can push on its own.
+
+The hook reads text, not shell grammar. First it removes what the shell
+would remove: line continuations, quotes, backslashes and backticks,
+decoding Bash's `$'...'` escapes (the result stays one word) and
 PowerShell's `` `u{...} `` on the way. Each command substitution (`$(...)`,
-`${...}`, `<(...)`, a Bash backtick pair, a PowerShell `(...)`) is read on
-its own; a PowerShell group of quoted literals (`@('push','-qf')`) also stays
-in place as arguments. The rest is cut into statements at every newline, and
-at every `;`, `|` and `&` outside a quoted string that closes on its own
-line (in PowerShell also at `{` and `}`); redirects and their targets are
-dropped, except a target that names git (`bash <<< "git push -f"`). After a `git` word, a later push
-word in the same statement starts the push, and the words after it are its
-arguments. Text inside `eval`, `sh -c`, `pwsh -Command`, a heredoc or a
-comment is read the same way, so a force push anywhere in the command's
-text is found. Every step is linear in the command's length.
+`$((...))`, `${...}`, `<(...)`, a Bash backtick pair, a PowerShell `(...)`)
+is read on its own. In the text around it, a substitution inside a word
+joins the text on both sides (`-q$(true)f` reads as `-qf`) and one at a
+word's edge leaves a word; a PowerShell group of quoted literals
+(`@('push','-qf')`) stays in place as arguments. The rest is cut into
+statements at every newline, and at every `;`, `|` and `&` that is neither
+escaped nor inside a quoted string that closes on its own line (in
+PowerShell also at `{` and `}`). Redirects and their targets are dropped,
+except a target that names git (`bash <<< "git push -f"`). After a `git`
+word, a later push word in the same statement starts the push, and the
+words after it are its arguments. Text inside `eval`, `sh -c`,
+`pwsh -Command`, a heredoc or a comment is read the same way. Every step is
+linear in the command's length.
 
 That includes text that only mentions a force push: a commit message, a
 script or a search pattern with `git push -f` in it is blocked too. The
@@ -37,21 +44,28 @@ block message says to put such text in a file and pass the file instead.
 The hook only ever blocks or stays silent; it never asks. Out of reach, so
 these run without a block:
 
-- a force flag the shell builds at run time (`git push $FLAGS`, `xargs`,
-  brace expansion, text piped into a shell or `iex`, `('-q'+'f')`);
-- git config or aliases that force a later plain `git push` (`git config
-  alias.p 'push -f'`, a `remote.<name>.push` or `mirror` setting,
-  `GIT_CONFIG_*` variables, `--config-env`, a shell alias for git);
-- git named through a variable (`G=git; $G push -f`); `$GIT` and
-  `${GIT:-git}` are read as git;
+- a force flag the shell builds at run time (`git push $FLAGS`,
+  `$(echo -qf)`, `xargs`, brace expansion, text piped into a shell or
+  `iex`, `('-q'+'f')`, PowerShell's `--%`);
+- git config or aliases that force a later plain `git push`, whether on
+  disk (`git config alias.p 'push -f'`, a `remote.<name>.push` or `mirror`
+  setting) or set in the same command (`GIT_CONFIG_*` variables,
+  `--config-env`);
+- git reached by another name: a variable (`G=git; $G push -f`; `$GIT` and
+  `${GIT:-git}` are read as git), a shell alias or `Set-Alias`, `hash -p`,
+  or a glob (`gi[t]`);
 - remote branch and tag deletions, and a branch deleted and then pushed
   again;
-- a push run by another program (`python -c`, `node -e`, `make`, `gh api`);
+- a push run by another program (`python -c`, `node -e`, `make`, `gh api`,
+  `git fetch --upload-pack`);
 - a push after a spaced git option value whose later word is exactly a git
   subcommand in OTHER_SUBCOMMANDS (`git -C "My notes" push -f`): the search
   for the push word stops there;
-- a push split from its `git` word by a `;`, `|` or `&` inside a quoted
-  string that spans lines;
+- shell syntax this reading takes differently from the shell, where that
+  cuts a push off from its `git` word or its force flag: quotes paired
+  differently (a quoted string that spans lines, a `$(`, `${` or backtick
+  inside single quotes, as in `echo '$('; git push origin main ')' -f`), or
+  parentheses left unbalanced inside a substitution;
 - a command over MAX_COMMAND characters.
 
 Project deny rules cover some of these by text (`git remote *--mi*`, `gh repo
@@ -96,16 +110,27 @@ GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--e
                      "--super-prefix", "--config-env", "--attr-source"}
 
 ANSI_QUOTE = re.compile(r"\$'((?:[^'\\]|\\.)*)'", re.S)
+# Bash's `$'...'` escapes: hex, `\u` and `\U` with as few digits as Bash
+# takes, octal, control characters, and single letters.
+ANSI_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|([0-7]{1,3})|c(.)|(.))", re.S)
+ANSI_LETTERS = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r",
+                "t": "\t", "v": "\v", "\\": "\\", "'": "'", "\"": "\"", "?": "?"}
+# What a decoded `$'...'` holds is one word to the shell around it, so its
+# separators and quotes never split or pair anything there.
+ANSI_SEPARATORS = re.compile(r"[;|&\n\r{}\"'`]")
 POWERSHELL_CHAR = re.compile(r"`u\{([0-9A-Fa-f]{1,6})\}")
-CASE_WORD = re.compile(r"\b(?:case|esac)\b")
+CASE_TOKEN = re.compile(r"[$<>]?\(|\)|\b(?:case|esac)\b")
 # PowerShell runs any `(...)` as its own expression (`("v{0}" -f $n)`).
-INNERMOST = {"Bash": re.compile(r"[$<>]\(([^()]*)\)|\$\{([^{}]*)\}"),
+# Bash arithmetic `$((...))` is cut out whole, so its `+` is no refspec; a
+# bare `(...)` (a subshell, an arithmetic group) is cut out on its own.
+INNERMOST = {"Bash": re.compile(r"\$\(\(([^()]*)\)\)|[$<>]?\(([^()]*)\)|\$\{([^{}]*)\}"),
              "PowerShell": re.compile(r"[$@]?\(([^()]*)\)|\$\{([^{}]*)\}")}
 BACKTICK_GROUP = re.compile(r"`([^`]*)`")
 # A PowerShell group of quoted literals, `@('push', '--force')`: its words are
 # the command's own arguments.
 LITERAL_GROUP = re.compile(r"\s*(?:'[^'\n]*'|\"[^\"$`\n]*\")(?:\s*,\s*(?:'[^'\n]*'|\"[^\"$`\n]*\"))*\s*")
-QUOTE_OR_LINE = re.compile(r"[\"'\n]")
+# An escaped character outside quotes, a quote, or a line end.
+QUOTE_OR_LINE = {"Bash": re.compile(r"\\.|[\"'\n]", re.S), "PowerShell": re.compile(r"`.|[\"'\n]", re.S)}
 # A quoted string from its opening quote to a close on the same line.
 QUOTED = {"Bash": {"\"": re.compile(r"\"(?:[^\"\\\n]|\\.)*\""), "'": re.compile(r"'[^'\n]*'")},
           "PowerShell": {"\"": re.compile(r"\"(?:[^\"`\n]|`.)*\""), "'": re.compile(r"'[^'\n]*'")}}
@@ -114,63 +139,87 @@ QUOTED = {"Bash": {"\"": re.compile(r"\"(?:[^\"\\\n]|\\.)*\""), "'": re.compile(
 STATEMENT_END = {"Bash": re.compile(r"[\n;|&]"), "PowerShell": re.compile(r"[\n\r;|&{}]")}
 WORD_SPLIT = re.compile(r"[\s<>,]+")
 # A redirect operator and its target, read once quotes are gone. A target
-# never starts with `-`, so `--repo=">" -qf` keeps its flag.
-REDIRECT = re.compile(r"(?<![0-9])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)[ \t]*((?:[^\s;|&<>\-][^\s;|&<>]*)?)")
+# never starts with `-` or `+`, so `--repo=">" -qf` and `-o "x>" +main` keep
+# their force words.
+REDIRECT = re.compile(r"(?<![0-9])[0-9]*(?:&>>?|>&|<&|>>?\|?|<)[ \t]*((?:[^\s;|&<>\-+][^\s;|&<>]*)?)")
 EDGE = "(){}[]$&!@"
 # git push has no upper-case short option, and a bundle with one fails before
 # anything is pushed, so `-Leaf` and `-Filter` are not push flags.
 SHORT_OPTIONS = re.compile(r"-[a-z0-9]+")
 LONG_FORCE = re.compile(r"--force(?:=.*)?|--m(?:i(?:r(?:r(?:o(?:r)?)?)?)?)?")
-# git reads a mirror value as true unless it is false, no, off, empty or a
-# zero number (`mirror=2` and `mirror=1k` are true).
+# git reads a mirror value as true unless it is false, no, off or a zero
+# number (`mirror=2` and `mirror=1k` are true). An empty value counts as
+# true here: it is what is left of a quoted value with a leading space
+# (`"remote.origin.mirror= 1"`).
 FORCING_CONFIG = re.compile(
-    r"remote\..+\.push=\+.*|remote\..+\.mirror(?:=(?!(?:false|no|off|[-+]?(?:0x)?0*[kmg]?)$).*)?", re.I)
-PUSH_ALIAS = re.compile(r"alias\.[^=]+=!?(?:push|send-pack|http-push)", re.I)
+    r"remote\..+\.push=\+.*|remote\..+\.mirror(?:=(?!(?:false|no|off|[-+]?(?:0x)?0+[kmg]?)$).*)?", re.I)
+# A `!` alias may run the dashed program, by name or path (`!git-push -f`).
+PUSH_ALIAS = re.compile(r"alias\.[^=]+=(?:push|send-pack|http-push|!(?:\S*/)?(?:git-)?(?:push|send-pack|http-push))", re.I)
+
+
+def ansi_char(match):
+    """One `$'...'` escape as Bash decodes it; an unknown one stays as it is."""
+    hex_code, short, long, octal, control, letter = match.groups()
+    code = hex_code or short or long
+    if code:
+        return chr(min(int(code, 16), 0x10FFFF))
+    if octal:
+        return chr(int(octal, 8) & 0xFF)
+    if control is not None:
+        return chr(ord(control) & 0x1F)
+    return ANSI_LETTERS.get(letter, "\\" + letter)
 
 
 def ansi_decode(match):
-    """The text of Bash's `$'...'`, with its backslash escapes decoded."""
-    body = match.group(1)
-    try:
-        return body.encode("latin-1", "backslashreplace").decode("unicode_escape")
-    except UnicodeDecodeError:
-        return body
+    """The text of Bash's `$'...'`, decoded, as one word."""
+    return ANSI_SEPARATORS.sub(" ", ANSI_ESCAPE.sub(ansi_char, match.group(1)))
 
 
 def neutral_cases(text):
-    """The text with the parentheses between each Bash `case` and the `esac`
-    that closes it turned into spaces, so a pattern's `)` never closes a
-    substitution around it. What sat inside stays in the text around it and
-    is read there. A `case` with no `esac` (the word in a message) changes
-    nothing."""
-    spans, opened = [], []
-    for match in CASE_WORD.finditer(text):
-        if match.group(0) == "case":
-            opened.append(match.start())
-        elif opened:
-            start = opened.pop()
-            if not opened:
-                spans.append((start, match.end()))
-    out, last = [], 0
-    for start, end in spans:
-        out += [text[last:start], text[start:end].replace("(", " ").replace(")", " ")]
-        last = end
+    """The text with each `)` that ends a Bash `case` pattern turned into a
+    space, so it never closes a substitution around it. A `)` that closes a
+    `(`, `$(`, `<(` or `>(` opened after the `case` stays, so substitutions
+    inside a case arm are read like any other."""
+    out, last, stack, cases = [], 0, [], 0
+    for match in CASE_TOKEN.finditer(text):
+        token = match.group(0)
+        if token == "case":
+            stack.append(token)
+            cases += 1
+        elif token == "esac":
+            if cases:
+                while stack.pop() != "case":
+                    pass
+                cases -= 1
+        elif token != ")":
+            stack.append("(")
+        elif stack and stack[-1] == "(":
+            stack.pop()
+        elif stack:
+            out += [text[last:match.start()], " "]
+            last = match.end()
     out.append(text[last:])
     return "".join(out)
 
 
-def stand_in(match, tool):
-    """The words a substitution leaves in the text around it: a PowerShell
-    group of quoted literals as it is (`@('push','-qf')`), `git` when it names
-    git (`& ("git") push`, `$(which git) push`), otherwise a plain word. A `+`
-    right before it stays on that word (`+$(git branch --show-current)`)."""
+def stand_in(match, literal=False):
+    """What a substitution leaves in the text around it: a PowerShell group
+    of quoted literals as it is (`@('push','-qf')`), `git` when it names git
+    (`& ("git") push`, `$(which git) push`), otherwise a plain word. A
+    substitution inside a word joins the text on both sides (`-q$(true)f`
+    reads as `-qf`, `"+${BRANCH}"` as `+`); one at a word's edge leaves a word
+    there (`+$(git branch)` reads as `+x`)."""
     inner = next(g for g in match.groups() if g is not None)
-    before = match.string[max(match.start() - 3, 0):match.start()]
-    lead = "" if re.search(r"\+[\"']*$", before) else " "
-    if tool == "PowerShell" and LITERAL_GROUP.fullmatch(inner):
-        return f"{lead}{inner} "
-    names_git = re.search(r"(?i)\bgit(?:\.exe)?\s*$", unquote(inner, "path"))
-    return f"{lead}git " if names_git else f"{lead}x "
+    if literal:
+        return f" {inner} "
+    text, start, end = match.string, match.start(), match.end()
+    left = start > 0 and not text[start - 1].isspace()
+    right = end < len(text) and not text[end].isspace()
+    if re.search(r"(?i)\bgit(?:\.exe)?\s*$", unquote(inner, "path")):
+        word = "git"
+    else:
+        word = "" if left and right else "x"
+    return ("" if left else " ") + word + ("" if right else " ")
 
 
 def texts(command, tool):
@@ -184,13 +233,21 @@ def texts(command, tool):
     pieces = []
     if tool != "PowerShell":
         pieces += BACKTICK_GROUP.findall(s)
-        s = BACKTICK_GROUP.sub(lambda m: stand_in(m, tool), s)
+        s = BACKTICK_GROUP.sub(stand_in, s)
     for _ in range(MAX_PASSES):
-        found = INNERMOST[tool].findall(s)
-        if not found:
+        out, last = [], 0
+        for match in INNERMOST[tool].finditer(s):
+            inner = next(g for g in match.groups() if g is not None)
+            literal = tool == "PowerShell" and LITERAL_GROUP.fullmatch(inner) is not None
+            # A literal group stays in the text, so it is not read again here.
+            if not literal:
+                pieces.append(inner)
+            out += [s[last:match.start()], stand_in(match, literal)]
+            last = match.end()
+        if not out:
             break
-        pieces += [a or b for a, b in found]
-        s = INNERMOST[tool].sub(lambda m: stand_in(m, tool), s)
+        out.append(s[last:])
+        s = "".join(out)
     pieces.append(s)
     return pieces, INNERMOST[tool].search(s) is not None
 
@@ -200,23 +257,28 @@ def mask_quoted(text, tool):
     quoted value (`-C "C:/R&D"`) stays in its statement. Only a quote that
     closes on its own line counts, so neither an apostrophe in a heredoc
     body or comment nor the closing quote of a string that spans lines can
-    join statements.
+    join statements. An escaped character outside quotes (`\\;`, `` `; ``,
+    `\\"`) is text: it neither splits a statement nor opens a quote.
 
     Each character is read once: a quote with no close on its line means no
     later quote of that kind on the line closes either, so those are passed
     over instead of each searching to the end of the line again."""
     out, pos, unclosed = [], 0, set()
     while True:
-        found = QUOTE_OR_LINE.search(text, pos)
+        found = QUOTE_OR_LINE[tool].search(text, pos)
         if not found:
             break
         mark, at = found.group(0), found.start()
+        if len(mark) == 2:
+            out += [text[pos:at], mark[0] + (" " if mark[1] in ";|&{}" else mark[1])]
+            pos = found.end()
+            continue
         if mark == "\n":
             unclosed.clear()
         elif mark not in unclosed:
             quoted = QUOTED[tool][mark].match(text, at)
             if quoted:
-                out += [text[pos:at], re.sub(r"[;|&]", " ", quoted.group(0))]
+                out += [text[pos:at], re.sub(r"[;|&{}]", " ", quoted.group(0))]
                 pos = quoted.end()
                 continue
             unclosed.add(mark)
@@ -262,9 +324,7 @@ def force_in(words):
         if pushing:
             if forces(word):
                 return f"`{word}`"
-            if word.startswith("+") and len(word) > 1:
-                # A lone `+` is an operator (`$((n + 1))`); a `+` glued to a
-                # substitution keeps its stand-in word (`+x`).
+            if word.startswith("+"):
                 return f"`{word}` (a leading + forces that ref)"
             continue
         if value:
