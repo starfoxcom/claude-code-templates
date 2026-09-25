@@ -14,7 +14,7 @@ global-template/
 └── hooks/
     ├── code-research-first.py.template    # Generic PreToolUse hook (rendered at bind time)
     ├── code-research-profiles.json        # Per-tool profiles consumed by the renderer
-    ├── push-guard.py                      # PreToolUse hook that blocks force pushes in any spelling
+    ├── push-guard.py                      # PreToolUse hook that blocks ordinary force pushes
     └── time-injection.snippet.md          # Optional UserPromptSubmit hook — injects [time] ... per prompt
 ```
 
@@ -150,9 +150,9 @@ The AI-side counterpart — instructions that tell the model to attend to the `[
 
 ## 4b. Install the push guard (recommended)
 
-The project's deny rules match command text, so a force push written as a bundle of short flags (`git push -qf`) gets past them. `hooks/push-guard.py` reads the actual `git push` arguments and blocks `--force`, `-f` inside any flag bundle, and `+` refspecs. `--force-with-lease` and `--force-if-includes` stay allowed.
+The project's deny rules match command text, so a force push written as a bundle of short flags (`git push -qf`) gets past them. `hooks/push-guard.py` reads the command's text with quoting removed and blocks a `git push` carrying `--force`, `-f` inside any flag bundle, `--mirror` or a `+` refspec, wherever it appears in the command. `--force-with-lease` and `--force-if-includes` stay allowed. It only ever blocks or stays silent, never asks. Text that only mentions a force push (a commit message, a script) is blocked too, as, rarely, is a plain push chained after a quoted string that spans lines or in a Bash command with a `\` ending a line when a force word follows it anywhere, and the message says to pass such text in a file, or to put such a command on one line or run the push as its own command. It is a safety net for force pushes written the ordinary way, not a sandbox; its docstring lists what stays out of reach.
 
-SETUP.md § Phase 7c installs it to `~/.claude/hooks/push-guard.py`, registers it in `~/.claude/settings.json` by the absolute path of a Python 3.8+ interpreter found on the machine, and then asks whether safe pushes should run without a prompt in every project. Without Python, or if you say no, pushes other than a bare `git push` ask for approval. Phase 7c has the exact entry, including the `runpy` launcher that keeps a missing file from blocking every command.
+SETUP.md § Phase 7c installs it to `~/.claude/hooks/push-guard.py`, registers it in `~/.claude/settings.json` by the absolute path of a Python 3.8+ interpreter found on the machine, and then asks whether pushes should run without a prompt in every project. Without Python, or if you say no, pushes other than a bare `git push` ask for approval. Phase 7c has the exact entry, including the `runpy` launcher that keeps a missing file from blocking every command.
 
 ---
 
