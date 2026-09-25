@@ -41,11 +41,15 @@ on:
 jobs:
   claude:
     name: On-demand (@claude → deep review)
-    # Filter: accept comments whose body contains `@claude review this PR`
-    # AND does NOT contain `Claude Code is working`. Both conditions are
-    # cheap string contains checks that catch the relevant edge cases.
+    # Filter: accept comments whose body STARTS with `@claude review this PR`
+    # AND does NOT start with `Claude Code is working`. The trigger is a
+    # command, so it leads the comment: the routine review's Step 4.B trigger
+    # starts with it. A comment that only quotes the phrase mid-text (a
+    # routine verdict listing it among what it checked) must not fire a deep
+    # run: such a run finds no trigger, fails the check closed, and can cancel
+    # a real deep run through the concurrency group below.
     #
-    # Note for humans triggering manually: the body must contain the exact
+    # Note for humans triggering manually: start the comment with the exact
     # phrase `@claude review this PR` (not just `@claude review`). Matches
     # the canonical structured trigger format documented in
     # `.claude/rules/review-tiers.md`.
@@ -55,9 +59,9 @@ jobs:
     # listing invariants for Opus to verify). Using `!contains` here would
     # reject any such quote and silently block the deep tier from firing.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude review this PR') && !startsWith(github.event.review.body, 'Claude Code is working'))
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
+      (github.event_name == 'pull_request_review_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
+      (github.event_name == 'pull_request_review' && startsWith(github.event.review.body, '@claude review this PR') && !startsWith(github.event.review.body, 'Claude Code is working'))
     # CRITICAL: this MUST live at the job level (not workflow level). The
     # action's own progress comment ("Claude Code is working…") contains the
     # `@claude` substring, so workflow-level concurrency would accept it and
@@ -222,7 +226,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review errored" \
-              -F "output[summary]=The Opus action did not post a completion comment (errored or skipped). Re-trigger with \`@claude review this PR — depth pass on <focus>\` to retry. If the deep tier keeps failing, report it to the maintainer."
+              -F "output[summary]=The Opus action did not post a completion comment (errored or skipped). Retry with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the deep tier keeps failing, report it to the maintainer."
             exit 1
           fi
 
@@ -234,7 +238,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review verdict missing" \
-              -F "output[summary]=Opus completed but did not include a 🔴/🟢 verdict line. Re-trigger and ensure the prompt mandates a binary verdict on the final line."
+              -F "output[summary]=Opus completed but did not include a 🔴/🟢 verdict line. Re-trigger with a comment starting with \`@claude review this PR\` and ensure the prompt mandates a binary verdict on the final line."
             exit 1
           fi
 
@@ -244,7 +248,7 @@ jobs:
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review verdict: 🔴 Blocking" \
-              -F "output[summary]=Opus returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing. If the finding does not apply, explain why in a PR comment and re-trigger the deep review."
+              -F "output[summary]=Opus returned a blocking verdict. Fix on the PR branch, then re-trigger with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the finding does not apply, explain why after the phrase in that comment, or in a separate comment first."
             exit 1
           fi
 

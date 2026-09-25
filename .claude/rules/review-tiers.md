@@ -26,7 +26,7 @@ Branch protection requires **two** status checks, both attached to the PR HEAD S
 
 `success`, `skipped`, and `neutral` all pass branch protection; `in_progress` blocks merge with a visible spinner; `failure` blocks merge with a red X.
 
-**When the deep tier is broken or its finding does not apply:** re-trigger it, or explain in a PR comment why the finding does not apply and re-trigger. If it keeps failing, report it to the maintainer. There is no bypass. Removing the `needs-deep-review` label does NOT auto-reset the check in the two-check architecture (no event fires to PATCH on unlabeled).
+**When the deep tier is broken or its finding does not apply:** re-trigger it with a comment that starts with `@claude review this PR`; to explain why a finding does not apply, put the explanation after the phrase or in a separate comment first. A comment that only mentions the phrase mid-text starts nothing. If it keeps failing, report it to the maintainer. There is no bypass. Removing the `needs-deep-review` label does NOT auto-reset the check in the two-check architecture (no event fires to PATCH on unlabeled).
 
 Both `Evaluate review outcome` AND `Claude On-Demand` are configured as required status checks on `main` and `develop`. Omitting either from required checks would leave one tier advisory; this repo dogfoods the full strict model.
 
