@@ -89,10 +89,11 @@ GH_API = re.compile(r"\bgh\b[^|;&\n]*?\bapi\b", re.I)
 HTTP_GH = re.compile(r"\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b[^|;&\n]*api\.github\.com", re.I)
 
 # Flags whose next token is a file the hook must read. `-F` is case-sensitive:
-# a lowercase `-f` is `git tag -f` (force) or `gh pr create -f` (fill).
+# a lowercase `-f` is `git tag -f` (force) or `gh pr create -f` (fill). The
+# value may follow a space or the long-option `=` (`--body-file=body.md`).
 FILE_FLAGS = re.compile(
     r"(?:(?<=\s)-F|(?i:--file|--body-file|--notes-file|--template|--input|--message-file|-InFile|Get-Content)|"
-    r"(?<=\s)-d\s*@|(?i:--data(?:-binary|-raw)?)\s*@)\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
+    r"(?<=\s)-d\s*@|(?i:--data(?:-binary|-raw)?)\s*@)\s*=?\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
 )
 PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
 

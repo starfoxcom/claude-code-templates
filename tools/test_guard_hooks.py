@@ -234,16 +234,23 @@ class GuardHookTest(unittest.TestCase):
     def test_attribution_in_a_body_file_is_denied(self):
         path = self.body_file(f"## What\n- x\n\n{GENERATED_LINE}\n")
         for command in (f'gh pr create --title t --body-file "{path}"', f'git commit -F "{path}"',
-                        f'git commit -F"{path}"'):
+                        f'git commit -F"{path}"', f'gh pr create --title t --body-file="{path}"',
+                        f'git commit --file="{path}"', f"git commit --template='{path}'"):
             with self.subTest(command=command):
                 self.assert_denied(self.attr(command))
 
     def test_clean_body_file_passes(self):
         path = self.body_file("## What\n- Ships the guard\n\n## Why\nFewer surprises.\n")
-        self.assert_passes(self.attr(f'gh pr create --title t --body-file "{path}"'))
+        for command in (f'gh pr create --title t --body-file "{path}"',
+                        f'gh pr create --title t --body-file="{path}"'):
+            with self.subTest(command=command):
+                self.assert_passes(self.attr(command))
 
     def test_unreadable_body_file_is_denied(self):
-        self.assert_denied(self.attr("gh pr create --title t --body-file /no/such/body.md"))
+        for command in ("gh pr create --title t --body-file /no/such/body.md",
+                        "gh pr create --title t --body-file=/no/such/body.md"):
+            with self.subTest(command=command):
+                self.assert_denied(self.attr(command))
 
     def test_read_only_commands_pass(self):
         for command in ("git log -5", "gh pr view 5 --json body", "git config --get core.hooksPath"):
