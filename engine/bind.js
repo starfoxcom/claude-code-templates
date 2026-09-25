@@ -9,8 +9,14 @@ const CORE = "_core/project-template/";
 
 // Files a repo often already has. They land in STAGING and the tailoring
 // step merges them instead of the zip overwriting the user's copy.
-const MERGE_TARGETS = new Set(["CLAUDE.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE"]);
+const MERGE_TARGETS = new Set([
+  "CLAUDE.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", ".gitattributes", ".claude/settings.json",
+]);
 export const STAGING = ".bindwright/incoming/";
+
+// Guard hooks ship byte for byte: they are code, not templates, and the
+// render step's blank-line folding would still change them.
+const VERBATIM = ".claude/hooks/";
 
 function included(path, a, flags) {
   const adv = a.advanced;
@@ -30,6 +36,10 @@ function included(path, a, flags) {
     ".claude/scripts/research-adherence.py": flags.code_research_first,
     ".github/workflows/claude-code-review.yml.template": flags.github_actions_routine_review,
     ".github/workflows/claude.yml.template": flags.github_actions_deep_review,
+    ".claude/hooks/run-hook.sh": flags.guard_hooks_repo,
+    ".claude/hooks/push-guard.py": flags.guard_hooks_repo,
+    ".claude/hooks/no-ai-attribution.py": flags.guard_hooks_repo && flags.attribution_guard,
+    ".gitattributes": flags.guard_hooks_repo,
   };
   return path in byFile ? byFile[path] : true;
 }
@@ -72,7 +82,8 @@ export async function bind(answers, { readFile, coreFiles, year }) {
 
   const out = new Map();
   for (const { src, dest } of planFiles(a, coreFiles, precommitProfiles)) {
-    out.set(dest, renderTemplate(await readFile(src), ctx, src));
+    const text = await readFile(src);
+    out.set(dest, dest.startsWith(VERBATIM) ? text.replace(/\r\n/g, "\n") : renderTemplate(text, ctx, src));
   }
   return out;
 }

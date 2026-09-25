@@ -298,10 +298,17 @@ test("the adherence script counts only code searches", { skip: !python && "needs
 });
 
 test("the push guard blocks force pushes in any flag bundle", { skip: !python && "needs Python 3.8+" }, async () => {
-  // The guard is installed globally by setup, never shipped into the project.
-  assert.ok(!coreFiles.some((f) => f.includes("push-guard")), "no project copy of the push guard");
+  // Hook location "repo" (the default) ships the guard in the project, registered in the
+  // committed settings.json; "home" ships nothing and leaves SETUP.md Phase 7c's global install.
+  const lf = (p) => readFileSync(join(repo, p), "utf8").replace(/\r\n/g, "\n");
+  assert.equal((await run(defaults())).get(".claude/hooks/push-guard.py"), lf("_core/global-template/hooks/push-guard.py"));
+  const atHome = defaults();
+  atHome.advanced.hookLocation = "home";
+  const homeFiles = await run(atHome);
+  assert.ok(![...homeFiles.keys()].some((p) => p.startsWith(".claude/hooks/")), "home location ships no project hooks");
+  assert.equal(JSON.parse(homeFiles.get(`${STAGING}.claude/settings.json`)).hooks, undefined, "home location registers no project hooks");
   assert.equal(JSON.parse((await run(defaults())).get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, "")).hooks,
-    undefined, "no project-level hooks");
+    undefined, "the local settings never register hooks");
 
   // Register it exactly as SETUP.md Phase 7c documents: its JSON entry, with this
   // machine's interpreter and a temporary home. Exec form, so no shell is involved.
@@ -807,4 +814,67 @@ test("bad answers are rejected", async () => {
   const a = defaults();
   a.project.name = "../escape";
   await assert.rejects(run(a), /project name/);
+});
+
+test("the guard-hook options reject unknown values", async () => {
+  const where = defaults();
+  where.advanced.hookLocation = "project";
+  await assert.rejects(run(where), /hook location/);
+  const guard = defaults();
+  guard.advanced.attributionGuard = "yes";
+  await assert.rejects(run(guard), /attributionGuard/);
+});
+
+test("guard hooks and settings follow the hook location and the attribution guard", async () => {
+  const settingsPath = `${STAGING}.claude/settings.json`;
+  for (const hookLocation of ["repo", "home"]) {
+    for (const attributionGuard of [true, false]) {
+      const a = defaults({ team: true });
+      Object.assign(a.advanced, { hookLocation, attributionGuard });
+      const files = await run(a);
+      const label = `${hookLocation}/${attributionGuard ? "guard" : "no guard"}`;
+      assertClean(files);
+      const repoHooks = hookLocation === "repo";
+      const settings = JSON.parse(files.get(settingsPath));
+      assert.equal(settings.$schema, "https://json.schemastore.org/claude-code-settings.json", label);
+      assert.equal("attribution" in settings, attributionGuard, `${label}: attribution settings`);
+      if (attributionGuard) assert.deepEqual(settings.attribution, { commit: "", pr: "", sessionUrl: false }, label);
+      assert.equal("hooks" in settings, repoHooks, `${label}: hooks block`);
+      if (repoHooks) {
+        const commands = settings.hooks.PreToolUse.flatMap((e) => e.hooks.map((h) => h.command));
+        assert.deepEqual(commands.map((c) => c.match(/exec sh "\$0" ([\w-]+)'/)[1]),
+          attributionGuard ? ["no-ai-attribution", "push-guard"] : ["push-guard"], label);
+        for (const c of commands) assert.ok(c.includes("${CLAUDE_PROJECT_DIR}/.claude/hooks/run-hook.sh"), label);
+      }
+      assert.equal(files.has(".claude/hooks/run-hook.sh"), repoHooks, `${label}: launcher`);
+      assert.equal(files.has(".claude/hooks/push-guard.py"), repoHooks, `${label}: push guard`);
+      assert.equal(files.has(".claude/hooks/no-ai-attribution.py"), repoHooks && attributionGuard, `${label}: attribution guard`);
+      assert.equal(files.has(`${STAGING}.gitattributes`), repoHooks, `${label}: .gitattributes`);
+      if (repoHooks) assert.match(files.get(`${STAGING}.gitattributes`), /^\*\.sh text eol=lf$/m, label);
+      assert.equal(files.get(".claude/rules/git.md").includes("No AI-attribution lines"), attributionGuard, `${label}: git.md rule`);
+      const review = files.get(".github/workflows/claude-code-review.yml");
+      assert.equal(review.includes("AI_ATTRIBUTION"), attributionGuard, `${label}: review pre-screen scan`);
+      assert.equal(review.includes("AI-attribution markers in added code"), attributionGuard, `${label}: review prompt`);
+    }
+  }
+});
+
+test("shipped guard hooks match this repo's live copies byte for byte", () => {
+  const read = (p) => readFileSync(join(repo, p));
+  for (const name of ["run-hook.sh", "push-guard.py", "no-ai-attribution.py"]) {
+    assert.ok(read(`_core/project-template/.claude/hooks/${name}`).equals(read(`.claude/hooks/${name}`)),
+      `_core/project-template/.claude/hooks/${name} differs from .claude/hooks/${name}`);
+  }
+  for (const name of ["push-guard.py", "no-ai-attribution.py"]) {
+    assert.ok(read(`_core/global-template/hooks/${name}`).equals(read(`.claude/hooks/${name}`)),
+      `_core/global-template/hooks/${name} differs from .claude/hooks/${name}`);
+  }
+});
+
+test("bound guard hooks are the canonical files, unrendered", async () => {
+  const files = await run(defaults());
+  for (const name of ["run-hook.sh", "push-guard.py", "no-ai-attribution.py"]) {
+    const src = readFileSync(join(repo, `_core/project-template/.claude/hooks/${name}`), "utf8").replace(/\r\n/g, "\n");
+    assert.equal(files.get(`.claude/hooks/${name}`), src, name);
+  }
 });

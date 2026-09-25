@@ -195,6 +195,7 @@ jobs:
           warnings   = []
           deep_paths = []  # populated below when auto-fire is enabled
 
+<!-- TOGGLE:attribution_guard START -->
           # ── Check 1: AI-attribution scan ─────────────────────────────────────
           # Scans ADDED lines for the AI-attribution patterns defined in
           # .claude/rules/git.md. The regexes are encoded in ai_pats below
@@ -213,6 +214,7 @@ jobs:
                       if pat.search(line):
                           violations.append(f'AI_ATTRIBUTION: {fname}: {line.strip()[:120]}')
                           break
+<!-- TOGGLE:attribution_guard END -->
 
           # ── Check 2: Categorize files ────────────────────────────────────────
           # Customize ARCH_PREFIXES / ARCH_FILES to flag your project's highest-
@@ -318,7 +320,9 @@ jobs:
             ## Step 1 — Read the pre-screen report
 
             Read `/tmp/review_context.md`. It contains:
+            <!-- TOGGLE:attribution_guard START -->
             - **Pre-screen violations** — mechanical rule-breakage already detected (AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
+            <!-- TOGGLE:attribution_guard END -->
             - **Pre-screen warnings** — issues you should judge.
             <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
             - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
@@ -327,7 +331,10 @@ jobs:
 
             Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
 
-            **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (AI-attribution scan). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
+            <!-- TOGGLE:attribution_guard START -->
+            **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (AI-attribution scan).
+            <!-- TOGGLE:attribution_guard END -->
+            Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
 
             ## Step 2 — Architectural review
 
@@ -337,7 +344,9 @@ jobs:
 
             1. Add your project's highest-risk invariants here — e.g., API contract stability, migration safety, auth boundary correctness, schema evolution.
             2. Cross-cutting concerns: are changes to shared utilities backward-compatible?
+            <!-- TOGGLE:attribution_guard START -->
             3. No AI-attribution markers in added code or commit messages (per `.claude/rules/git.md`).
+            <!-- TOGGLE:attribution_guard END -->
 
             ## Step 2.5 — Decide whether to escalate (do not post yet)
 
