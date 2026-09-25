@@ -305,6 +305,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr-head.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
+          # The model whose attempt completed, for the check title: the job name
+          # and a green first step cannot tell (every attempt continues on
+          # error). Keep these labels in step with the `--model` arguments above.
+          REVIEWER: ${{ steps.claude_attempt_1.outcome == 'success' && 'Fable 5.1 low' || steps.claude_retry.outcome == 'success' && 'Fable 5.1 low (retry)' || steps.claude_fallback.outcome == 'success' && 'Opus 5.5 high (fallback)' || 'none' }}
         run: |
           REPO="${{ github.repository }}"
 
@@ -354,25 +358,25 @@ jobs:
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
               -F conclusion="failure" \
-              -F "output[title]=Deep review verdict missing" \
-              -F "output[summary]=The deep reviewer completed but did not include a 🔴/🟢 verdict line. Re-trigger and ensure the prompt mandates a binary verdict on the final line."
+              -F "output[title]=Deep review verdict missing ($REVIEWER)" \
+              -F "output[summary]=The deep reviewer ($REVIEWER) completed but did not include a 🔴/🟢 verdict line. Re-trigger and ensure the prompt mandates a binary verdict on the final line."
             exit 1
           fi
 
           if echo "$VERDICT_LINE" | grep -qF "🔴"; then
-            echo "::error::Deep-tier verdict: 🔴 Blocking — merge blocked"
+            echo "::error::Deep-tier verdict: 🔴 Blocking — merge blocked (reviewer: $REVIEWER)"
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
               -F conclusion="failure" \
-              -F "output[title]=Deep review verdict: 🔴 Blocking" \
-              -F "output[summary]=The deep reviewer returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing. If the finding does not apply, explain why in a PR comment and re-trigger the deep review."
+              -F "output[title]=Deep review verdict: 🔴 Blocking ($REVIEWER)" \
+              -F "output[summary]=The deep reviewer ($REVIEWER) returned a blocking verdict. Fix on the PR branch and re-trigger with \`@claude review this PR — depth pass on <focus>\` after addressing. If the finding does not apply, explain why in a PR comment and re-trigger the deep review."
             exit 1
           fi
 
-          echo "✅ Deep-tier verdict clean — PATCHing Claude On-Demand to success"
+          echo "✅ Deep-tier verdict clean — PATCHing Claude On-Demand to success (reviewer: $REVIEWER)"
           gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
             -F status="completed" \
             -F conclusion="success" \
-            -F "output[title]=Deep review verdict: 🟢 LGTM" \
-            -F "output[summary]=The deep reviewer signed off. Merge gate's deep-tier requirement satisfied."
+            -F "output[title]=Deep review verdict: 🟢 LGTM ($REVIEWER)" \
+            -F "output[summary]=The deep reviewer ($REVIEWER) signed off. Merge gate's deep-tier requirement satisfied."
           exit 0
