@@ -436,8 +436,8 @@ def line_ends(command, across):
     """One reading of `bash_line_ends`; `across` carries quotes and groups
     over a line end and skips heredoc bodies."""
     lines = command.split("\n")
-    out, heredocs, ends = [], deque(), None
-    state, previous, groups = "", "\n", []
+    out, heredocs, ends = [], deque() if across else None, None
+    state, previous, groups, arithmetic = "", "\n", [], [0]
     for number, line in enumerate(lines):
         last = number == len(lines) - 1
         if ends is not None:
@@ -448,53 +448,99 @@ def line_ends(command, across):
             continue
         continued = not last and (len(line) - len(line.rstrip("\\"))) % 2 == 1
         body = line[:-1] if continued else line
-        start = state
-        state, previous = bash_scan(body, state, previous, groups)
+        state, previous = bash_scan(body, state, previous, groups, arithmetic, heredocs)
         joined = continued and state in ("", '"', "$'")
         out.append(body if joined else line if last else body + "\n")
-        if across and start == "":
-            for found in HEREDOC.finditer(body):
-                heredocs.append((found.group(2) or found.group(3) or found.group(4), found.group(1) == "-"))
         if not joined:
             previous = "\n"
             if state == "#" or not across:
                 state = ""
             if not across:
                 groups.clear()
+                arithmetic[0] = 0
             if heredocs and state == "":
                 ends = heredocs.popleft()
+            elif heredocs:
+                # A line ending inside a quote leaves no heredoc to trust.
+                heredocs.clear()
     return "".join(out)
 
 
-def bash_scan(text, state, previous, groups):
+def bash_scan(text, state, previous, groups, arithmetic, heredocs):
     """The open quote (`'`, `"`, `$'`), comment (`#`) or nothing ("") at the
     end of a Bash line, and the last character read, from the state it began
-    in. `groups` holds the open `(`, `$(` and `${` outside quotes; a `)`
-    closing a substitution ends no word, and no comment starts inside `${`."""
+    in. `groups` holds the open `(`, `((`, `$(`, `$((`, `${` and backtick
+    (a `"` before one opened inside double quotes, whose text is read as a
+    command until it closes), and `arithmetic` how many are arithmetic. A
+    `)` closing a substitution ends no word, no comment starts inside `${`,
+    and a comment inside backticks ends at the closing backtick. Each heredoc
+    started outside quotes, comments and arithmetic is added to `heredocs`
+    (its terminator, and whether tabs before it are dropped) unless that is
+    None."""
     at, end = 0, len(text)
     while at < end:
         char = text[at]
+        if state == '"' and char == "$" and text.startswith("(", at + 1):
+            opened = '"$((' if text.startswith("(", at + 2) else '"$('
+            groups.append(opened)
+            arithmetic[0] += opened.endswith("((")
+            state, at, previous = "", at + len(opened) - 1, "("
+            continue
         if state == "":
             if char == "\\":
                 at, previous = at + 2, "x"
                 continue
-            if char == "#" and previous in BASH_METACHARACTERS and not (groups and groups[-1] == "{"):
-                return "#", char
+            top = groups[-1] if groups else ""
+            if char == "#" and previous in BASH_METACHARACTERS and top != "{":
+                if top != "`":
+                    return "#", char
+                closing = text.find("`", at)
+                if closing < 0:
+                    return "#", char
+                at = closing
+                continue
+            if char == "<" and heredocs is not None and not arithmetic[0]:
+                found = HEREDOC.match(text, at)
+                if found:
+                    heredocs.append((found.group(2) or found.group(3) or found.group(4), found.group(1) == "-"))
+                    at, previous = found.end(), "x"
+                    continue
             if char in "$<>" and text.startswith("(", at + 1):
-                groups.append("$(")
-                at, previous = at + 2, "("
+                opened = "$((" if char == "$" and text.startswith("(", at + 2) else "$("
+                groups.append(opened)
+                arithmetic[0] += opened == "$(("
+                at, previous = at + len(opened), "("
                 continue
             if char == "$" and text.startswith("{", at + 1):
                 groups.append("{")
                 at, previous = at + 2, "{"
                 continue
-            if char == "(":
-                groups.append("(")
-            elif char == ")" and groups and groups[-1] != "{":
-                if groups.pop() == "$(":
+            if char == "(" and text.startswith("(", at + 1):
+                groups.append("((")
+                arithmetic[0] += 1
+                at, previous = at + 2, "("
+                continue
+            if char == ")" and top.endswith("((") and text.startswith(")", at + 1):
+                groups.pop()
+                arithmetic[0] -= 1
+                state = '"' if top.startswith('"') else ""
+                at, previous = at + 2, ")" if top == "((" else "x"
+                continue
+            if char == ")" and top and top not in ("{", "`"):
+                groups.pop()
+                arithmetic[0] -= top.endswith("((")
+                if top != "(":
+                    state = '"' if top.startswith('"') else ""
                     at, previous = at + 1, "x"
                     continue
-            elif char == "}" and groups and groups[-1] == "{":
+            elif char == "`":
+                if top == "`":
+                    groups.pop()
+                else:
+                    groups.append("`")
+            elif char == "(":
+                groups.append("(")
+            elif char == "}" and top == "{":
                 groups.pop()
             if char == "$" and text.startswith("'", at + 1):
                 state, at = "$'", at + 1

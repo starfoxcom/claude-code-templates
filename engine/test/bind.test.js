@@ -377,6 +377,11 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "git commit -F - <<'EOF'\nDon't retry the upload\nEOF\necho \"built\" # it's in C:\\temp\\\ngit push -f origin main",
     "git commit -F - <<'EOF'\nFix the header on 13\" screens\nEOF\nnpm run build \\\n  # output in C:\\temp\\\ngit push -f origin main",
     "git commit -F - <<'EOF'\nDon't retry the upload\nEOF\ncd \"$REPO\" # it's in C:\\work\\\ngit push origin main \\\n  --force",
+    // A comment inside backticks ends at the closing backtick; a `"$(...)"` is read as a command.
+    "B=`git branch --show-current # current`; git push origin \"$B\" \\\n  --force", "git push origin `echo main #x` \\\n  --force",
+    "git tag -a v1.2 -m \"$(printf \"Release #%s\" 12)\" && git push origin main \\\n  --force",
+    "git commit -m \"$(echo \"it's done\")\" && git push origin main \\\n  -f",
+    "git commit -m \"$(cat <<'EOF'\nfix: the 13\" screens, don't\nEOF\n)\"\ngit push origin main \\\n  --force",
     // Input is UTF-8 on every platform; a Windows code-page decode would fail on the curly quote.
     "git commit -m \"fix “x”\" && git push -qf origin main",
   ];
@@ -439,6 +444,12 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
     "# don't let git touch C:\\temp\\\ngit push origin main && rm -rf build && echo 'done'",
     "git push origin \"$BRANCH\"  # mirrors C:\\work\\repo\\\nrm -rf build", "git push origin main \\\n  # mirrors C:\\temp\\\nrm -rf build",
     "x=$(cd a; (b))# C:\\x\\\ngit push -f origin main",
+    // A `<<` inside quotes, a comment or arithmetic starts no heredoc, and a heredoc
+    // opened inside `"$(...)"` ends where Bash ends it.
+    "SIZE=$((1 << 20))\ngit push origin main \\\n  # mirrors C:\\temp\\\nrm -rf build",
+    "grep -rn \"cout << endl\" src/ | head -5\ngit push origin main  # mirrors C:\\work\\repo\\\nrm -rf build",
+    "# write notes with <<EOF\ngit push origin main  # mirrors C:\\work\\repo\\\nrm -rf build",
+    "git commit -m \"$(cat <<'EOF'\nfix: handle the lock\nEOF\n)\"\ngit push origin main  # mirrors C:\\work\\repo\\\nrm -rf build",
     "git commit -m \"$(cat <<'EOT'\nfix: don't split names on a stray ` char\nEOT\n)\" && git push origin feature/x && rm -rf build && echo \"built at `date`\"",
     // Bash has no `` `u{...} `` escape.
     "git push origin main \"-`u{66}\"",
