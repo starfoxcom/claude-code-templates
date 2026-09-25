@@ -129,18 +129,23 @@ FILE_FLAGS = re.compile(
     r"(?<=\s)-d\s*@|(?i:--data(?:-binary|-raw)?)\s*@)\s*(?:\"([^\"]+)\"|'([^']+)'|(\S+))"
 )
 # A message or body file of `-` is stdin, for git and gh alike; curl's `@-` too.
+# A short flag also takes its value glued on (`-F-`).
 STDIN_FILE = re.compile(
-    r"(?:(?<=\s)-F|(?i:--file|--body-file|--notes-file|--input|--message-file|-InFile))(?:\s+|=)-(?=\s|$)|"
+    r"(?<=\s)-F\s*-(?=\s|$)|"
+    r"(?i:--file|--body-file|--notes-file|--input|--message-file|-InFile)(?:\s+|=)-(?=\s|$)|"
     r"(?:(?<=\s)-d|(?i:--data(?:-binary|-raw)?))\s*@-(?=\s|$)"
 )
 # Another stdin source next to a here-doc: a pipe, or a `<` redirect that is
 # not a here-doc, here-string or process substitution.
 OTHER_INPUT = re.compile(r"\||(?<![<\d])<(?![<(&])")
 # A message flag and its value: a PowerShell here-string, a quoted string or a
-# bare word. gh api's -f / -F / --field / --raw-field count only on gh api.
-_VALUE = r"(?:\s+|=)(@\"[\s\S]*?\"@|@'[\s\S]*?'@|\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)"
-MSG_ARG = re.compile(r"(?<=\s)(?:-m|--message|-b|--body|-t|--title|--notes|(?i:-Body))" + _VALUE)
-FIELD_ARG = re.compile(r"(?<=\s)(?:-f|-F|--field|--raw-field)" + _VALUE)
+# bare word. A short flag takes its value after a space or glued on
+# (`-m"$(...)"`, `-am$MSG`); a long flag after a space or `=`. gh api's
+# -f / -F / --field / --raw-field count only on gh api.
+_VALUE = r"(@\"[\s\S]*?\"@|@'[\s\S]*?'@|\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)"
+MSG_ARG = re.compile(
+    r"(?<=\s)(?:-[a-zA-Z]*[mbt]\s*|(?:--message|--body|--title|--notes|(?i:-Body))(?:\s+|=))" + _VALUE)
+FIELD_ARG = re.compile(r"(?<=\s)(?:-[fF]\s*|(?:--field|--raw-field)(?:\s+|=))" + _VALUE)
 
 
 def deny(reason):

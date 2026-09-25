@@ -224,7 +224,8 @@ class GuardHookTest(unittest.TestCase):
                         "cat x.json | gh api -X POST repos/o/r/issues --input -",
                         "echo 'a<<b' | gh pr create --title t --body-file -",
                         "cat evil.md | gh pr create --title t --body-file - # <<",
-                        "gh pr comment 5 --body-file - <<EOF\n$(cat /tmp/body.md)\nEOF"):
+                        "gh pr comment 5 --body-file - <<EOF\n$(cat /tmp/body.md)\nEOF",
+                        "cat evil.md | git commit -F-", "cat evil.md | gh pr create --title t -F-"):
             with self.subTest(command=command):
                 self.assert_denied(self.attr(command))
 
@@ -238,7 +239,8 @@ class GuardHookTest(unittest.TestCase):
         for command in ('git commit -m "docs: $(cat /tmp/msg.txt)"', 'gh pr comment 5 --body "$BODY"',
                         "git commit -m $MSG", 'gh pr comment 5 --body @"\n$BODY\n"@',
                         "gh api -X POST repos/o/r/issues -f body=$(cat x)",
-                        "git commit -F - <<EOF\n$(cat /tmp/msg)\nEOF"):
+                        "git commit -F - <<EOF\n$(cat /tmp/msg)\nEOF",
+                        'git commit -m"$(cat /tmp/msg)"', "git commit -m$MSG", "git commit -am$MSG"):
             with self.subTest(command=command):
                 self.assert_denied(self.attr(command))
 
