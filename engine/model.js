@@ -22,6 +22,10 @@ export const ARCHITECTURES = ["none", "clean", "ddd", "ecs", "feature-based", "h
 // Where the guard hooks live: shipped in the repo (teammates and cloud
 // sessions get them), or only in each person's ~/.claude (global-template).
 export const HOOK_LOCATIONS = ["repo", "home"];
+// How much the committed deny list blocks. "standard" stops force pushes,
+// direct pushes to the protected branches, interactive rebase and admin
+// merges; "strict" also stops local history wipes and destructive gh calls.
+export const DENY_PROFILES = ["standard", "strict"];
 export const LICENSES = { MIT: "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "BSD-3-Clause": "BSD-3-Clause.txt", Proprietary: "Proprietary.txt" };
 
 // Filled later by the tailoring step, which reads the user's repo.
@@ -50,6 +54,7 @@ export function defaults({ team = false, client = false } = {}) {
       architecture: "none",
       hookLocation: "repo",
       attributionGuard: true,
+      denyProfile: "standard",
     },
   };
 }
@@ -71,6 +76,7 @@ export function validate(a) {
   check(typeof adv.devIsDefault === "boolean", "devIsDefault must be true or false");
   check(HOOK_LOCATIONS.includes(adv.hookLocation), `unknown hook location "${adv.hookLocation}"`);
   check(typeof adv.attributionGuard === "boolean", "attributionGuard must be true or false");
+  check(DENY_PROFILES.includes(adv.denyProfile), `unknown deny profile "${adv.denyProfile}"`);
   return a;
 }
 
@@ -90,6 +96,7 @@ export function flagsFor(a) {
     default_branch_is_dev: adv.branching === "gitflow" && adv.devIsDefault,
     guard_hooks_repo: adv.hookLocation === "repo",
     attribution_guard: adv.attributionGuard,
+    deny_list_strict: adv.denyProfile === "strict",
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
