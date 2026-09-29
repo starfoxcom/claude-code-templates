@@ -255,16 +255,19 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
 test("the deny profiles protect the long-lived branches and grow with strict", async () => {
   const always = ["git push origin main", "git push -u origin main", "git push origin main --follow-tags",
     "git push origin HEAD:main", "git push origin feature/x:main", "git push origin HEAD:refs/heads/main",
+    "git push origin refs/heads/main", "git push origin refs/heads/main --follow-tags", "git push origin --delete refs/heads/main",
+    "git push origin :refs/heads/main", "git push origin main:main", "git push -d origin main", "git push --set-upstream origin main",
     "git push origin --delete main", "git push origin :main",
     "git rebase -i HEAD~3", "git rebase --interactive origin/develop", "git rebase origin/develop -i",
     "gh pr merge 12 --squash --admin", "gh pr merge --admin 12"];
   const develop = ["git push origin develop", "git push origin HEAD:develop", "git push origin develop --tags",
-    "git push origin :develop", "git push origin HEAD:refs/heads/develop"];
+    "git push origin :develop", "git push origin HEAD:refs/heads/develop", "git push origin refs/heads/develop"];
   const strictOnly = ["git reset --hard", "git reset --hard origin/develop", "git reset -q --hard HEAD~1",
     "git clean -f", "git clean -fd", "git clean -df", "git clean -xdf", "git clean -d -f", "git clean --force",
     "git branch -D main", "gh repo delete owner/repo --yes", "gh api -X DELETE repos/o/r/git/refs/heads/x",
     "gh api repos/o/r/git/refs/heads/x --method DELETE", "gh api repos/o/r/git/refs/heads/x -X delete"];
   const never = ["git push origin feature/main", "git push origin main-fix", "git push origin feature/x",
+    "git push origin refs/heads/main-fix", "git push origin HEAD:refs/heads/main-fix", "git push origin HEAD:mainline",
     "git push --force-with-lease origin feature/x", "git push origin v1.4.0", "git push -u origin chore/cascade-x",
     "git rebase origin/develop", "git rebase origin/develop --ignore-date", "git reset HEAD~1", "git reset --soft HEAD~1",
     "git clean -n", "git branch -D feature/x", "gh api repos/o/r/pulls", "gh pr merge 12 --squash", "gh pr merge 12 --merge"];
