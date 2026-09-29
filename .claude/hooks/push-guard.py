@@ -1,4 +1,4 @@
-"""PreToolUse hook: block force pushes that permission rules cannot see.
+r"""PreToolUse hook: block force pushes that permission rules cannot see.
 
 Permission rules match command text, so `-f` bundled with other short flags
 (`-qf`, `-vf`, `-uqf`) escapes them. This hook reads the text of every Bash
