@@ -147,6 +147,29 @@ test("always-on rules ship to every setup, the writing rule only on request", as
   assert.ok(files.has(".claude/rules/shipped-text.md"));
 });
 
+test("a project list of globs replaces the writing rule's paths, and only them", async () => {
+  const rule = ".claude/rules/shipped-text.md";
+  const a = defaults();
+  a.advanced.plainWriting = true;
+  const stock = (await run(a)).get(rule);
+  assert.match(stock, /^---\npaths:\n {2}- "README\*"\n(?: {2}- .*\n)*---\n/, "the default list stays in the rule");
+  const body = stock.slice(stock.indexOf("\n---\n") + 5);
+
+  a.advanced.shippedTextPaths = ["**/*.gd", "addons/*/plugin.cfg", "**/*.{arb,po}", "docs/#public/**", "i18n/$&-$1.json"];
+  const custom = (await run(a)).get(rule);
+  assert.equal(custom, `---\npaths:\n  - "**/*.gd"\n  - "addons/*/plugin.cfg"\n  - "**/*.{arb,po}"\n  - "docs/#public/**"\n  - "i18n/$&-$1.json"\n---\n${body}`);
+
+  const off = defaults();
+  off.advanced.shippedTextPaths = ["src/**"];
+  assert.ok(!(await run(off)).has(rule), "the list alone does not turn the rule on");
+
+  for (const bad of [[], "docs/**", [42], [""], ['say "hi"'], ["a\\b"], ["a\nb"], [" docs/**"], ["x".repeat(201)]]) {
+    const b = defaults();
+    b.advanced.shippedTextPaths = bad;
+    await assert.rejects(run(b), /shippedTextPaths/, JSON.stringify(bad));
+  }
+});
+
 test("path-scoped rules keep their frontmatter at the top", async () => {
   const files = await run(defaults());
   for (const rule of ["testing.md", "code-size.md"]) {
