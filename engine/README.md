@@ -16,6 +16,7 @@ Turns a user's answers into the finished files for their repo. The page runs it 
 - Every placeholder must get a value in `valuesFor`, or be listed in `DEFERRED` for the tailoring step that reads the user's repo.
 - Files a repo usually already has (`CLAUDE.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `.gitattributes`, `.claude/settings.json`) land in `.bindwright/incoming/` so they are merged, never overwritten.
 - Guard hooks under `.claude/hooks/` are copied byte for byte, never rendered. `hookLocation` (`repo` or `home`) decides whether they ship; `attributionGuard` (on by default) adds the attribution guard, the `attribution` settings, the git rule and the review's attribution scan.
+- The deny list ships in the committed `.claude/settings.json`, never in `settings.local.json`. `denyProfile` picks it: `standard` (the default) blocks force pushes (`--force-with-lease` stays allowed), direct pushes to the main and development branches, interactive rebase and admin merges; `strict` also blocks `git reset --hard`, `git clean -f`, deleting the main or development branch, `gh repo delete` and `gh api` DELETE calls.
 
 ## Commands
 
