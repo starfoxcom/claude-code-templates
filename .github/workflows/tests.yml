@@ -1,0 +1,67 @@
+name: Tests
+
+# Runs the bind engine tests (JS engine, and the golden test against its Python
+# twin) and the Python tests for the guard hooks and receipts. Not a review
+# gate: it reports a check on the PR and on develop after each merge.
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "engine/**"
+      - "_core/**"
+      - "tools/**"
+      - ".claude/hooks/**"
+      - ".claude/settings.json"
+      - "SETUP.md"
+      - ".github/workflows/tests.yml"
+  push:
+    branches: [develop]
+    paths:
+      - "engine/**"
+      - "_core/**"
+      - "tools/**"
+      - ".claude/hooks/**"
+      - ".claude/settings.json"
+      - "SETUP.md"
+      - ".github/workflows/tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Engine and hook tests
+    # Pull requests into main run only from release branches. Hotfixes into
+    # main carry workflow edits alone, and main has no engine until v2.0.0.
+    if: github.event_name != 'pull_request' || github.base_ref == 'develop' || startsWith(github.head_ref, 'release/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # The runner's own Node and Python: no setup actions to pin or trust.
+      - name: Show tool versions
+        run: |
+          node --version
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 8), sys.version"
+
+      # A skipped test counts as a failure here: the golden test and the hook
+      # tests skip themselves when Python is missing, and CI must not pass that way.
+      - name: Engine tests
+        run: |
+          node --test --test-reporter=tap engine/test/ | tee node-tests.txt
+          grep -qx "# skipped 0" node-tests.txt || { echo "::error::Engine tests were skipped"; exit 1; }
+
+      - name: Guard hook and receipts tests
+        run: |
+          python3 -m unittest -v tools/test_guard_hooks.py tools/test_receipts.py 2>&1 | tee python-tests.txt
+          if grep -q "skipped=" python-tests.txt; then echo "::error::Python tests were skipped"; exit 1; fi
