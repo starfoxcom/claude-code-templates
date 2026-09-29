@@ -1,0 +1,103 @@
+name: Tests
+
+# Runs the bind engine tests (JS engine, and the golden test against its Python
+# twin) and the Python tests for the guard hooks and receipts. Not a review
+# gate: it reports a check on the PR and on develop after each merge. No
+# manual trigger: the push to develop after each merge already covers it.
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - "engine/**"
+      - "_core/**"
+      - "tools/**"
+      - ".claude/hooks/**"
+      - ".claude/settings.json"
+      - "SETUP.md"
+      - "index.html"
+      - "redesign/**"
+      - ".github/workflows/tests.yml"
+  push:
+    branches: [develop]
+    paths:
+      - "engine/**"
+      - "_core/**"
+      - "tools/**"
+      - ".claude/hooks/**"
+      - ".claude/settings.json"
+      - "SETUP.md"
+      - "index.html"
+      - "redesign/**"
+      - ".github/workflows/tests.yml"
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels its older run. After a merge to develop each
+# commit gets its own group, since a group keeps only one waiting run, so
+# every merge commit gets a result.
+concurrency:
+  group: tests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+# A named bash shell runs with -eo pipefail, so a failing test fails its
+# step even when piped through tee. The unnamed default does not set pipefail.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Engine and hook tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Runs wherever the engine exists, so hotfixes into main are tested once
+      # it ships there. main has none until v2.0.0: the job notes that and
+      # passes. develop must always have it.
+      - name: Check for the engine
+        id: engine
+        env:
+          BRANCH: ${{ github.base_ref || github.ref_name }}
+        run: |
+          if [ -f engine/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "$BRANCH" = "develop" ]; then
+            echo "::error::develop has no engine/package.json"; exit 1
+          else
+            echo "::notice::No engine on $BRANCH yet, so there is nothing to test."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The runner's own Node and Python: no setup actions to pin or trust.
+      - name: Show tool versions
+        if: steps.engine.outputs.present == 'true'
+        run: |
+          node --version
+          python3 --version
+          python3 -c "import sys; assert sys.version_info >= (3, 8), sys.version"
+
+      # A skipped test counts as a failure here: the golden test and the hook
+      # tests skip themselves when Python is missing, and CI must not pass that way.
+      # So does a run with no tests in it.
+      - name: Engine tests
+        if: steps.engine.outputs.present == 'true'
+        run: |
+          # Files, not the folder: Node 22 and later read a folder argument as
+          # a module path and run nothing. failglob stops the step if no file matches.
+          shopt -s failglob
+          node --test --test-reporter=tap engine/test/*.test.js | tee node-tests.txt
+          grep -qx "# skipped 0" node-tests.txt || { echo "::error::Engine tests were skipped"; exit 1; }
+          grep -qE "^# pass [1-9]" node-tests.txt || { echo "::error::No engine tests ran"; exit 1; }
+
+      - name: Guard hook and receipts tests
+        if: steps.engine.outputs.present == 'true'
+        run: |
+          python3 -m unittest -v tools/test_guard_hooks.py tools/test_receipts.py 2>&1 | tee python-tests.txt
+          if grep -q "skipped=" python-tests.txt; then echo "::error::Python tests were skipped"; exit 1; fi
+          grep -qE "^Ran [1-9][0-9]* tests? in" python-tests.txt || { echo "::error::No Python tests ran"; exit 1; }
