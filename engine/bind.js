@@ -76,7 +76,9 @@ export function planFiles(answers, coreFiles, precommitProfiles) {
     const profile = precommitProfiles[a.advanced.precommit];
     plan.push({ src: CORE + profile.template_ref, dest: profile.config_filename });
   }
-  return plan.sort((x, y) => x.dest.localeCompare(y.dest));
+  // Plain code-unit order: localeCompare depends on the browser's locale,
+  // and the Python twin sorts the same way.
+  return plan.sort((x, y) => (x.dest < y.dest ? -1 : x.dest > y.dest ? 1 : 0));
 }
 
 // Returns a Map of dest path -> rendered text.

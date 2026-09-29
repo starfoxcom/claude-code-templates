@@ -66,12 +66,20 @@ function check(cond, msg) {
   if (!cond) throw new Error(`Invalid answers: ${msg}`);
 }
 
+// Own keys only, so "toString" is not a license. The Python twin
+// (model.py) has no prototype chain; this keeps the two in step.
+const own = (obj, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(obj, key);
+
 export function validate(a) {
   const adv = a.advanced;
   check(typeof a.team === "boolean" && typeof a.client === "boolean", "team and client must be true or false");
-  check(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(a.project.name), "project name must be 1-64 letters, digits, dot, dash or underscore");
-  check(a.project.license in LICENSES, `unknown license "${a.project.license}"`);
-  check(adv.codeResearch in CODE_RESEARCH_TOOLS, `unknown code-research tool "${adv.codeResearch}"`);
+  for (const key of ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting"]) {
+    check(typeof adv[key] === "boolean", `${key} must be true or false`);
+  }
+  check(typeof a.project.name === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(a.project.name), "project name must be 1-64 letters, digits, dot, dash or underscore");
+  check(typeof a.project.repoUrl === "string" && typeof a.project.licenseHolder === "string", "repoUrl and licenseHolder must be text");
+  check(own(LICENSES, a.project.license), `unknown license "${a.project.license}"`);
+  check(own(CODE_RESEARCH_TOOLS, adv.codeResearch), `unknown code-research tool "${adv.codeResearch}"`);
   check(adv.precommit === "none" || PRECOMMIT_MANAGERS.includes(adv.precommit), `unknown pre-commit manager "${adv.precommit}"`);
   check(ARCHITECTURES.includes(adv.architecture), `unknown architecture "${adv.architecture}"`);
   check(["gitflow", "trunk"].includes(adv.branching), `unknown branching model "${adv.branching}"`);
