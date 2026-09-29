@@ -45,7 +45,7 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 ### Phase 1: engine
 - [x] New answer model: two questions, advanced switches, presets kept internal. Delete dead toggles and dead tool slots; bake in the always-same toggles.
 - [x] Deterministic renderer (browser JS) that resolves toggle blocks and placeholders against `_core/`.
-- [ ] Python twin of the engine with a golden test that fails when the two renders differ.
+- [x] Python twin of the engine with a golden test that fails when the two renders differ. `engine/*.py` mirror the JS files one to one; `engine/test/golden.test.js` compares about 200 binds and the error messages for bad answers. No CI job runs the engine tests yet, so the test runs locally.
 - [ ] Code-research tool profiles (data file) replacing the SETUP.md hook-install prose.
 - [ ] Plugin skeleton (`plugin/`: `plugin.json`, skills, engine, templates) and `/bindwright:setup` (replaces `SETUP.md` and the planned `TAILOR.md`; installs `~/.claude` extras only with consent). Setup-code format shared with the page.
 - [x] Rules trimmed to one owner per concept (about 200 always-loaded lines), `paths:` scoping, new rules: task-tracking, testing, code-size (language profiles), shipped-text (toggle). Fix the squash and self-merge contradictions. Monitor-based CI watching replaces polling loops.
