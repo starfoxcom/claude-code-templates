@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import warnings
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAUNCHER = os.path.join(REPO, ".claude", "hooks", "run-hook.sh")
@@ -284,6 +285,29 @@ class GuardHookTest(unittest.TestCase):
         for command in ("git log -5", "gh pr view 5 --json body", "git config --get core.hooksPath"):
             with self.subTest(command=command):
                 self.assert_passes(self.attr(command))
+
+
+class HookSourceTest(unittest.TestCase):
+    """Every shipped hook and script compiles without a warning.
+
+    Python compiles a hook on each call, so a warning such as an invalid
+    escape (a DeprecationWarning before 3.12, a SyntaxWarning from 3.12)
+    reaches stderr on every tool call."""
+
+    DIRS = (".claude/hooks", "_core/global-template/hooks",
+            "_core/project-template/.claude/hooks", "_core/project-template/.claude/scripts")
+
+    def test_compiles_without_warnings(self):
+        files = [os.path.join(d, name) for d in self.DIRS
+                 for name in sorted(os.listdir(os.path.join(REPO, d))) if name.endswith(".py")]
+        self.assertGreaterEqual(len(files), 7)
+        for rel in files:
+            with self.subTest(file=rel):
+                with open(os.path.join(REPO, rel), encoding="utf-8") as f:
+                    source = f.read()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error")
+                    compile(source, rel, "exec")
 
 
 if __name__ == "__main__":
