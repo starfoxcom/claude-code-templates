@@ -1,4 +1,4 @@
-# claude-code-templates — session handoff (2026-09-29 01:28)
+# claude-code-templates — session handoff (2026-09-29 02:04)
 
 Single source of truth for what this session left undone. `/session-start` reads this first. It records only current state that `git log`, open issues, the CHANGELOG and `docs/v2/PLAN.md` don't already show.
 
@@ -15,6 +15,7 @@ Single source of truth for what this session left undone. `/session-start` reads
 
 ## Decisions still in force
 
+- **Every PR merges with a merge commit** (`gh pr merge <pr> --merge`; maintainer decision 2026-09-29, PR #181). Squash flattened the history graph, and the graph matters to the maintainer. The engine's default `mergeStyle` is `merge`; squash and rebase stay options. The `develop` ruleset now allows only merge commits (`main` already did). GameProject and Stockra switched back the same night. PRs #179 and #180 stay squashed; un-squashing would rewrite `develop`.
 - **Work stays local; the cloud is retired.** The cloud connector appends an attribution footer to PR bodies that survives in GitHub's edit history.
 - **Attribution guard is opt-out, and its rule is "no attribution", not "no mention".** The maintainer's own home-folder guard stays stricter by choice. It reads any `--body-file` before the command runs, so write the body file in its own step first.
 - **The current page gets no visual gate** until the Bindwright UI/UX overhaul lands.
@@ -36,6 +37,6 @@ Other items:
 
 - **Local test crash (small fix, own PR).** `the push guard blocks force pushes in any flag bundle` in `engine/test/bind.test.js` crashes Node 20 on the maintainer's Windows PC (`AssignProcessToJobObject: (87)`), on `develop` too. It spawns `sys.executable`, the WindowsApps alias path, which the test file's own comment warns about. CI on Linux passes. Until fixed, run the rest locally with `node --test --test-name-pattern=...`.
 - Receipts "session stories" for the Phase 3 evidence section (session logs exist only on the maintainer's PC).
-- Phase 2 notes: `setup-review-gate.sh` squash title/body settings; develop ruleset `[squash, merge]`, main `[merge]`.
+- Phase 2 notes: `setup-review-gate.sh` merge-commit title/body settings; develop and main rulesets `[merge]`.
 - The maintainer retires the GameProject-only workflow-off-main hook (maintainer-owned).
 - A deep-tier run noted it cannot execute `node --test` (Bash approval denied in the action). Adding `Bash(node --test:*)` to the review workflows' allowed tools would let reviewers run the suite; that is a workflow-only change (hotfix to `main`, then cascade).
