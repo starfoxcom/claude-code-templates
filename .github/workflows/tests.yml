@@ -14,6 +14,8 @@ on:
       - ".claude/hooks/**"
       - ".claude/settings.json"
       - "SETUP.md"
+      - "index.html"
+      - "redesign/**"
       - ".github/workflows/tests.yml"
   push:
     branches: [develop]
@@ -24,6 +26,8 @@ on:
       - ".claude/hooks/**"
       - ".claude/settings.json"
       - "SETUP.md"
+      - "index.html"
+      - "redesign/**"
       - ".github/workflows/tests.yml"
   workflow_dispatch:
 
@@ -33,6 +37,12 @@ permissions:
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
+
+# A named bash shell runs with -eo pipefail, so a failing test fails its
+# step even when piped through tee. The unnamed default does not set pipefail.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   test:
@@ -58,7 +68,9 @@ jobs:
       # tests skip themselves when Python is missing, and CI must not pass that way.
       - name: Engine tests
         run: |
-          node --test --test-reporter=tap engine/test/ | tee node-tests.txt
+          # Files, not the folder: Node 22 and later read a folder argument as
+          # a module path and run nothing.
+          node --test --test-reporter=tap engine/test/*.test.js | tee node-tests.txt
           grep -qx "# skipped 0" node-tests.txt || { echo "::error::Engine tests were skipped"; exit 1; }
 
       - name: Guard hook and receipts tests
