@@ -29,5 +29,62 @@
     ]
   },
 <!-- TOGGLE:guard_hooks_repo END -->
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force)",
+      "Bash(git push --force *)",
+      "Bash(git push * --force)",
+      "Bash(git push * --force *)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(git push -uf*)",
+      "Bash(git push * -uf*)",
+      "Bash(git push * +*)",
+      "Bash(git push *--mirror*)",
+      "Bash(git fetch *--upl*)",
+      "Bash(git pull *--upl*)",
+      "Bash(git remote *--mi*)",
+      "Bash(gh repo sync *--force*)",
+      "Bash(git push * {{MAIN_BRANCH}})",
+      "Bash(git push * {{MAIN_BRANCH}} *)",
+      "Bash(git push *:{{MAIN_BRANCH}})",
+      "Bash(git push *:{{MAIN_BRANCH}} *)",
+      "Bash(git push *:refs/heads/{{MAIN_BRANCH}}*)",
+<!-- TOGGLE:branching_model_gitflow START -->
+      "Bash(git push * {{DEV_BRANCH}})",
+      "Bash(git push * {{DEV_BRANCH}} *)",
+      "Bash(git push *:{{DEV_BRANCH}})",
+      "Bash(git push *:{{DEV_BRANCH}} *)",
+      "Bash(git push *:refs/heads/{{DEV_BRANCH}}*)",
+<!-- TOGGLE:branching_model_gitflow END -->
+      "Bash(git rebase -i*)",
+      "Bash(git rebase * -i*)",
+      "Bash(git rebase --interactive*)",
+      "Bash(git rebase * --interactive*)",
+<!-- TOGGLE:deny_list_strict START -->
+      "Bash(git reset --hard:*)",
+      "Bash(git reset * --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(git clean * -f*)",
+      "Bash(git clean -df*)",
+      "Bash(git clean * -df*)",
+      "Bash(git clean -xf*)",
+      "Bash(git clean -dxf*)",
+      "Bash(git clean -xdf*)",
+      "Bash(git clean *--force*)",
+      "Bash(git branch -D {{MAIN_BRANCH}})",
+<!-- TOGGLE:branching_model_gitflow START -->
+      "Bash(git branch -D {{DEV_BRANCH}})",
+<!-- TOGGLE:branching_model_gitflow END -->
+      "Bash(gh repo delete*)",
+      "Bash(gh api *DELETE*)",
+      "Bash(gh api *-X delete*)",
+      "Bash(gh api *--method delete*)",
+      "Bash(gh api *--method=delete*)",
+<!-- TOGGLE:deny_list_strict END -->
+      "Bash(gh pr merge *--admin*)"
+    ]
+  },
   "$schema": "https://json.schemastore.org/claude-code-settings.json"
 }
