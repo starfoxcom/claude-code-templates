@@ -44,6 +44,19 @@ function included(path, a, flags) {
   return path in byFile ? byFile[path] : true;
 }
 
+// The writing rule keeps its default globs in its own frontmatter, so setups
+// that never set `shippedTextPaths` render it untouched. A project list
+// replaces that `paths:` block; a template whose header lost that shape
+// fails the bind instead of shipping the defaults silently.
+const SHIPPED_TEXT_RULE = ".claude/rules/shipped-text.md";
+const PATHS_BLOCK = /^---\npaths:\n(?: {2}- .*\n)+---\n/;
+
+function withPaths(text, globs, file) {
+  if (!PATHS_BLOCK.test(text)) throw new Error(`${file}: no paths frontmatter to replace`);
+  // A function replacement, so a `$` in a glob is never read as `$&` or `$1`.
+  return text.replace(PATHS_BLOCK, () => `---\npaths:\n${globs.map((g) => `  - "${g}"\n`).join("")}---\n`);
+}
+
 function destination(path) {
   const dest = path.replace(/\.template$/, "");
   return MERGE_TARGETS.has(dest) ? STAGING + dest : dest;
@@ -84,6 +97,9 @@ export async function bind(answers, { readFile, coreFiles, year }) {
   for (const { src, dest } of planFiles(a, coreFiles, precommitProfiles)) {
     const text = await readFile(src);
     out.set(dest, dest.startsWith(VERBATIM) ? text.replace(/\r\n/g, "\n") : renderTemplate(text, ctx, src));
+  }
+  if (out.has(SHIPPED_TEXT_RULE) && a.advanced.shippedTextPaths) {
+    out.set(SHIPPED_TEXT_RULE, withPaths(out.get(SHIPPED_TEXT_RULE), a.advanced.shippedTextPaths, SHIPPED_TEXT_RULE));
   }
   return out;
 }
