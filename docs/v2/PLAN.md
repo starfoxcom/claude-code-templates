@@ -51,9 +51,9 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 - [x] Rules trimmed to one owner per concept (about 200 always-loaded lines), `paths:` scoping, new rules: task-tracking, testing, code-size (language profiles), shipped-text (toggle). Fix the squash and self-merge contradictions. Monitor-based CI watching replaces polling loops.
 - [x] Skills updated from Emberholm and Stockra (stop conditions, cascade step, `--body-file`, measured adherence). `architecture-graph` is held out of setups until it returns as an add-on.
 - [x] Repo-level hooks and `attribution` settings (this repo first, then canonical). Hook location is a setting (repo or `~/.claude`) with duplicate detection, because Emberholm keeps hooks global only. Shipped as the `hookLocation` and `attributionGuard` switches; the attribution guard is opt-out (on by default) because attribution is a personal preference, and its rule is "no attribution", not "no mention". Duplicate detection lives in `run-hook.sh`, which steps aside for a guard registered in `~/.claude/settings.json`.
-- [ ] Deny-list profiles (standard and strict) in a committed `.claude/settings.json`. The force-push deny must not block `--force-with-lease`.
+- [x] Deny-list profiles (standard and strict) in a committed `.claude/settings.json`. The force-push deny must not block `--force-with-lease`. Shipped as the `denyProfile` switch: `standard` blocks force pushes, direct pushes to the main and development branches, interactive rebase and admin merges; `strict` adds `git reset --hard`, `git clean -f`, deleting those branches, `gh repo delete` and `gh api` DELETE calls. `settings.local.json` keeps only the allow list.
 - [ ] Shipped-text scope as a per-project list of globs.
-- [ ] Remove every admin-merge instruction from rules and workflow templates (#155, #156).
+- [x] Remove every admin-merge instruction from rules and workflow templates (#155, #156).
 
 ### Phase 2: review gate v2
 - [ ] Prototype the single-check workflow and `review_gate.py` on this repo (hotfix to `main`, then cascade).
