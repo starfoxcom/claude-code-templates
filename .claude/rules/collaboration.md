@@ -23,7 +23,7 @@ This rule applies when multiple humans push to the repo — open-source, team pr
 - **Open as Draft** when the work is incomplete but you want CI feedback. Mark Ready for Review only when you actually want eyes.
 - **Self-review first** — read your own diff in the GitHub UI before requesting review. You'll catch half your own findings.
 - **Respond to every comment** before re-requesting review. Either fix it, push back with a reason, or "tracked in #N" if deferring.
-- **Don't force-push after review starts** unless you note the rewrite explicitly. Reviewers lose their place. Use additive fixup commits; squash on merge is configured at the repo level.
+- **Don't force-push after review starts** unless you note the rewrite explicitly. Reviewers lose their place. Use additive fixup commits; PRs land as merge commits, so give each commit a meaningful message.
 - **Be specific in review comments.** "This won't scale" is not actionable; "this O(n²) loop runs on every keystroke" is.
 
 ---

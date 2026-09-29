@@ -52,7 +52,7 @@ Per `.claude/rules/git.md` (resolved from canonical `_core/project-template/.cla
   - `feature/<n>` — branches from `develop`, merges back to `develop`
   - `release/<v>` — branches from `develop`, merges to `main` AND `develop`
   - `hotfix/<n>` — branches from `main`, merges to `main` AND `develop`
-- **Work PRs squash-merge** (`gh pr merge <pr> --squash`); the PR title becomes the commit, 64 characters max. **Release and cascade PRs always use `--merge`** so `main` and `develop` never diverge.
+- **Every PR merges with a merge commit** (`gh pr merge <pr> --merge`), so each branch stays visible in the history graph. Keep every commit on the branch meaningful; the PR title (64 characters max) goes into the merge commit. Squash and rebase merges are not used here.
 
 ---
 
@@ -65,8 +65,8 @@ Per `.claude/rules/token-efficiency.md` (resolved from canonical `_core/project-
 - **Command timeout scaling.** Default starting timeout for builds: 420 000 ms. Each retry escalates by 120 000 ms.
 - **Never use `gh run watch`.** Always poll `gh run list` with a background loop — see the canonical pattern in the rule file.
 - **CI polling cadence is fixed by PR class, and ALL cadences run in the background.** Use the Bash tool with `run_in_background: true` and an until-loop — never foreground-sleep. The harness notifies on exit; pick up other work while CI runs.
-  - **Fast-path / auto-pass PRs** (docs-only, rules-only, anything `triage` classifies non-reviewable) — background until-loop with `sleep 90` per check, then `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (auto-passes via `if: always()`), `Claude On-Demand: SKIPPED` (`evaluate-review-outcome` PATCHes the deep check for non-reviewable diffs). Merge with `gh pr merge <pr> --squash` once the PR reports `CLEAN`.
-  - **Normal-review PRs** — background until-loop with `sleep 420` (7 minutes) between checks. Read the routine reviewer's verdict comment via `gh pr view <pr> --json comments` and act on the last non-empty 🟢/🔴 line. On 🟢, merge with `--squash` (`--merge` for release and cascade PRs); on 🔴, fix on the PR branch and push.
+  - **Fast-path / auto-pass PRs** (docs-only, rules-only, anything `triage` classifies non-reviewable) — background until-loop with `sleep 90` per check, then `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (auto-passes via `if: always()`), `Claude On-Demand: SKIPPED` (`evaluate-review-outcome` PATCHes the deep check for non-reviewable diffs). Merge with `gh pr merge <pr> --merge` once the PR reports `CLEAN`.
+  - **Normal-review PRs** — background until-loop with `sleep 420` (7 minutes) between checks. Read the routine reviewer's verdict comment via `gh pr view <pr> --json comments` and act on the last non-empty 🟢/🔴 line. On 🟢, merge with `--merge`; on 🔴, fix on the PR branch and push.
   - **Workflow-only PRs** (only `.github/workflows/` files) — triage never reviews workflow files, so these pass both checks like a docs PR. The review action would refuse to run anyway: it requires the PR's workflow file to match the default branch's. Keep workflow edits in a PR of their own with no reviewable files. It merges only as `.claude/rules/review-tiers.md` § "Workflow-only PRs skip the review" describes: two local 🟢 reviews on the head commit when every commit came from our own sessions, otherwise the maintainer's read.
 - **No admin bypass, ever.** Never `gh pr merge --admin`. The rulesets have no bypass actors; `BLOCKED` means find and fix the cause.
 - **Branch cleanup after every merge.** Delete the branch BOTH locally and on remote. Chain `git branch -D <name> && git push origin --delete <name>` into the post-merge sequence — `gh pr merge --delete-branch` only handles remote.
