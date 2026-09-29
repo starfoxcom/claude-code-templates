@@ -27,5 +27,5 @@ A Python twin (`model.py`, `render.py`, `bind.py`, standard library only, Python
 ```bash
 cd engine
 node list-core.js   # after adding, moving or deleting a template
-node --test test/   # must pass before any template or engine change merges; the golden test needs Python 3.8+
+node --test         # must pass before any template or engine change merges; the golden test needs Python 3.8+
 ```
