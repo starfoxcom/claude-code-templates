@@ -56,6 +56,8 @@ export function defaults({ team = false, client = false } = {}) {
       hookLocation: "repo",
       attributionGuard: true,
       denyProfile: "standard",
+      // Files the writing rule checks. null keeps the rule's own list.
+      shippedTextPaths: null,
     },
   };
 }
@@ -78,6 +80,11 @@ export function validate(a) {
   check(HOOK_LOCATIONS.includes(adv.hookLocation), `unknown hook location "${adv.hookLocation}"`);
   check(typeof adv.attributionGuard === "boolean", "attributionGuard must be true or false");
   check(DENY_PROFILES.includes(adv.denyProfile), `unknown deny profile "${adv.denyProfile}"`);
+  // Each glob lands in a double-quoted YAML string, so quotes, backslashes
+  // and control characters are refused rather than escaped.
+  check(adv.shippedTextPaths === null || (Array.isArray(adv.shippedTextPaths) && adv.shippedTextPaths.length > 0 &&
+    adv.shippedTextPaths.every((g) => typeof g === "string" && /^[^"\\\x00-\x1f\x7f]{1,200}$/.test(g) && g.trim() === g)),
+  "shippedTextPaths must be null or a non-empty list of globs without quotes, backslashes, line breaks or outer spaces");
   return a;
 }
 
