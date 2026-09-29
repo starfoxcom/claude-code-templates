@@ -19,8 +19,10 @@ function keepBlock(name, value, { flags = {}, choices = {}, options = {} }, wher
     return !flags[name];
   }
   if (value !== undefined) {
-    if (!(name in choices)) throw new TemplateError(`${where}: unknown choice "${name}"`);
-    if (!(options[name] || []).includes(value)) throw new TemplateError(`${where}: "${value}" is not an option of "${name}"`);
+    // Own keys only: a marker named "constructor" is not a choice.
+    const own = (obj) => Object.prototype.hasOwnProperty.call(obj, name);
+    if (!own(choices)) throw new TemplateError(`${where}: unknown choice "${name}"`);
+    if (!(own(options) ? options[name] : []).includes(value)) throw new TemplateError(`${where}: "${value}" is not an option of "${name}"`);
     return choices[name] === value;
   }
   if (typeof flags[name] !== "boolean") throw new TemplateError(`${where}: unknown flag "${name}"`);
