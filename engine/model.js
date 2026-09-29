@@ -17,7 +17,8 @@ export const CODE_RESEARCH_TOOLS = {
 };
 
 export const PRECOMMIT_MANAGERS = ["lefthook", "husky", "pre-commit", "simple-git-hooks"];
-export const MERGE_STYLES = ["squash", "merge", "rebase"];
+// Merge commits by default: every branch stays visible in the history graph.
+export const MERGE_STYLES = ["merge", "squash", "rebase"];
 export const ARCHITECTURES = ["none", "clean", "ddd", "ecs", "feature-based", "hexagonal", "layered", "mvc"];
 // Where the guard hooks live: shipped in the repo (teammates and cloud
 // sessions get them), or only in each person's ~/.claude (global-template).
@@ -50,7 +51,7 @@ export function defaults({ team = false, client = false } = {}) {
       codeResearch: "none",
       branching: "gitflow",
       devIsDefault: false,
-      mergeStyle: "squash",
+      mergeStyle: "merge",
       architecture: "none",
       hookLocation: "repo",
       attributionGuard: true,

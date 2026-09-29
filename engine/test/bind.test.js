@@ -93,6 +93,8 @@ test("license body is filled with holder and year", async () => {
 });
 
 test("merge style picks the matching merge command", async () => {
+  assert.equal(defaults().advanced.mergeStyle, "merge", "merge commits are the default");
+  assert.match((await run(defaults())).get(".claude/rules/git.md"), /gh pr merge <pr> --merge --delete-branch/);
   for (const style of ["squash", "merge", "rebase"]) {
     const a = defaults();
     a.advanced.mergeStyle = style;
