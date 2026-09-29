@@ -177,19 +177,28 @@ test("the adherence script ships only with a code-research tool", async () => {
   }
 });
 
+// Bash rule matching as documented at code.claude.com/docs/en/permissions#wildcard-patterns:
+// `*` matches any text including spaces, at any position; a trailing `:*` equals a trailing
+// ` *`; and a trailing ` *` that is the rule's only wildcard also matches the bare command.
+const toRegex = (rule) => {
+  const p = rule.replace(/:\*$/, " *");
+  const esc = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  if (p.endsWith(" *") && p.indexOf("*") === p.length - 1) return new RegExp(`^${esc(p.slice(0, -2))}( .*)?$`);
+  return new RegExp("^" + p.split("*").map(esc).join(".*") + "$");
+};
+// Deferred placeholders are filled by setup later; blank them to parse.
+const settingsOf = (files, path) => JSON.parse(files.get(path).replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
+const bashRules = (list) => list.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map(toRegex);
+// The deny list lives in the committed settings, so every teammate and cloud session gets it.
+const denyMatcher = (files) => {
+  const rules = bashRules(settingsOf(files, `${STAGING}.claude/settings.json`).permissions.deny);
+  return (cmd) => rules.some((r) => r.test(cmd));
+};
+
 test("the deny list blocks force pushes but allows --force-with-lease", async () => {
   const files = await run(defaults());
-  // Deferred placeholders are filled by setup later; blank them to parse.
-  const settings = JSON.parse(files.get(".claude/settings.local.json").replace(/\{\{[A-Z0-9_]+\}\}/g, ""));
-  // Bash rule matching as documented at code.claude.com/docs/en/permissions#wildcard-patterns:
-  // `*` matches any text including spaces, at any position; a trailing `:*` equals a trailing
-  // ` *`; and a trailing ` *` that is the rule's only wildcard also matches the bare command.
-  const toRegex = (rule) => {
-    const p = rule.replace(/:\*$/, " *");
-    const esc = (s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-    if (p.endsWith(" *") && p.indexOf("*") === p.length - 1) return new RegExp(`^${esc(p.slice(0, -2))}( .*)?$`);
-    return new RegExp("^" + p.split("*").map(esc).join(".*") + "$");
-  };
+  const settings = settingsOf(files, ".claude/settings.local.json");
+  assert.equal(settings.permissions.deny, undefined, "the local settings carry no deny list");
   // The matcher must reproduce the docs' own example table before it judges our rules.
   for (const [rule, yes, no] of [
     ["npm run *", ["npm run build", "npm run test --watch", "npm run"], ["npm install"]],
@@ -204,8 +213,7 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
     for (const cmd of yes) assert.ok(toRegex(rule).test(cmd), `matcher: ${rule} should match ${cmd}`);
     for (const cmd of no) assert.ok(!toRegex(rule).test(cmd), `matcher: ${rule} should not match ${cmd}`);
   }
-  const rules = settings.permissions.deny.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map(toRegex);
-  const denied = (cmd) => rules.some((r) => r.test(cmd));
+  const denied = denyMatcher(files);
   for (const cmd of ["git push --force", "git push --force origin x", "git push origin x --force", "git push -f origin x",
     "git push origin -f", "git push -fu origin x", "git push origin x -fu", "git push -uf origin x", "git push origin -uf x",
     "git push origin +main", "git push --mirror origin", "git push origin --mirror",
@@ -226,7 +234,7 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
   // Short-flag bundles like `-qf` cannot be denied by text rules without also denying
   // `--force-with-lease`; only the global push guard catches them. Without it, they must
   // at least not be auto-approved, so the person sees the command before it runs.
-  const allows = settings.permissions.allow.map((r) => r.match(/^Bash\((.*)\)$/)?.[1]).filter(Boolean).map(toRegex);
+  const allows = bashRules(settings.permissions.allow);
   for (const cmd of ["git push -qf origin main", "git push -vf origin main", "git push -uqf origin main",
     "git push origin main -qf", "git push -u origin x -qf"]) {
     assert.ok(!allows.some((r) => r.test(cmd)), `${cmd} must not be auto-approved`);
@@ -242,6 +250,44 @@ test("the deny list blocks force pushes but allows --force-with-lease", async ()
     assert.match(readFileSync(join(repo, page), "utf8"), /stack command that is \\`git push\\` or starts with it/,
       `${page} fallback setup must skip git push stack commands`);
   }
+});
+
+test("the deny profiles protect the long-lived branches and grow with strict", async () => {
+  const always = ["git push origin main", "git push -u origin main", "git push origin main --follow-tags",
+    "git push origin HEAD:main", "git push origin feature/x:main", "git push origin HEAD:refs/heads/main",
+    "git push origin refs/heads/main", "git push origin refs/heads/main --follow-tags", "git push origin --delete refs/heads/main",
+    "git push origin :refs/heads/main", "git push origin main:main", "git push -d origin main", "git push --set-upstream origin main",
+    "git push origin --delete main", "git push origin :main",
+    "git rebase -i HEAD~3", "git rebase --interactive origin/develop", "git rebase origin/develop -i",
+    "gh pr merge 12 --squash --admin", "gh pr merge --admin 12"];
+  const develop = ["git push origin develop", "git push origin HEAD:develop", "git push origin develop --tags",
+    "git push origin :develop", "git push origin HEAD:refs/heads/develop", "git push origin refs/heads/develop"];
+  const strictOnly = ["git reset --hard", "git reset --hard origin/develop", "git reset -q --hard HEAD~1",
+    "git clean -f", "git clean -fd", "git clean -df", "git clean -xdf", "git clean -d -f", "git clean --force",
+    "git branch -D main", "gh repo delete owner/repo --yes", "gh api -X DELETE repos/o/r/git/refs/heads/x",
+    "gh api repos/o/r/git/refs/heads/x --method DELETE", "gh api repos/o/r/git/refs/heads/x -X delete"];
+  const never = ["git push origin feature/main", "git push origin main-fix", "git push origin feature/x",
+    "git push origin refs/heads/main-fix", "git push origin HEAD:refs/heads/main-fix", "git push origin HEAD:mainline",
+    "git push --force-with-lease origin feature/x", "git push origin v1.4.0", "git push -u origin chore/cascade-x",
+    "git rebase origin/develop", "git rebase origin/develop --ignore-date", "git reset HEAD~1", "git reset --soft HEAD~1",
+    "git clean -n", "git branch -D feature/x", "gh api repos/o/r/pulls", "gh pr merge 12 --squash", "gh pr merge 12 --merge"];
+  for (const denyProfile of ["standard", "strict"]) {
+    for (const branching of ["gitflow", "trunk"]) {
+      const a = defaults();
+      Object.assign(a.advanced, { denyProfile, branching });
+      const label = `${denyProfile}/${branching}`;
+      const denied = denyMatcher(await run(a));
+      const gitflow = branching === "gitflow";
+      for (const cmd of always) assert.ok(denied(cmd), `${label}: ${cmd} should be denied`);
+      for (const cmd of develop) assert.equal(denied(cmd), gitflow, `${label}: ${cmd}`);
+      for (const cmd of strictOnly) assert.equal(denied(cmd), denyProfile === "strict", `${label}: ${cmd}`);
+      assert.equal(denied("git branch -D develop"), denyProfile === "strict" && gitflow, `${label}: git branch -D develop`);
+      for (const cmd of never) assert.ok(!denied(cmd), `${label}: ${cmd} should be allowed`);
+    }
+  }
+  const bad = defaults();
+  bad.advanced.denyProfile = "paranoid";
+  await assert.rejects(run(bad), /deny profile/);
 });
 
 // `python` first: on Windows, `python3` is often an App Execution Alias, and starting
