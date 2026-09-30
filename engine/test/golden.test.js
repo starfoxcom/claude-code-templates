@@ -22,9 +22,16 @@ const readFile = async (p) => {
 };
 const coreFiles = JSON.parse(readFileSync(join(engine, "core-files.json"), "utf8"));
 
-// `python` first: on Windows, `python3` is often an App Execution Alias, and starting
-// an interpreter by its full path after that alias crashes Node 20's process spawner.
-const python = ["python", "python3"].find((cmd) => spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8)"]).status === 0);
+// The interpreter's full path, found by a throwaway Node process. On Windows
+// `python` is often an App Execution Alias, and once a process has started one,
+// Node 20 aborts on its next start of an interpreter by full path
+// (AssignProcessToJobObject: (87)). This process starts interpreters by full path only.
+const python = spawnSync(process.execPath, ["-e", `
+  const { spawnSync } = require("node:child_process");
+  for (const cmd of ["python", "python3"]) {
+    const r = spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8); print(sys.executable)"], { encoding: "utf8" });
+    if (r.status === 0 && r.stdout.trim()) { process.stdout.write(r.stdout.trim()); break; }
+  }`], { encoding: "utf8" }).stdout || undefined;
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
