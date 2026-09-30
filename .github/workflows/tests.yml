@@ -1,23 +1,15 @@
 name: Tests
 
 # Runs the bind engine tests (JS engine, and the golden test against its Python
-# twin) and the Python tests for the guard hooks and receipts. Not a review
-# gate: it reports a check on the PR and on develop after each merge. No
-# manual trigger: the push to develop after each merge already covers it.
+# twin) and the Python tests for the guard hooks and receipts. Its check,
+# "Engine and hook tests", is required on develop, so pull requests run it
+# whatever they change: a path filter would leave the required check
+# waiting forever on a PR that touches none of the listed files. Pushes to
+# develop run it only when tested files change. No manual trigger.
 
 on:
   pull_request:
     branches: [develop, main]
-    paths:
-      - "engine/**"
-      - "_core/**"
-      - "tools/**"
-      - ".claude/hooks/**"
-      - ".claude/settings.json"
-      - "SETUP.md"
-      - "index.html"
-      - "redesign/**"
-      - ".github/workflows/tests.yml"
   push:
     branches: [develop]
     paths:
