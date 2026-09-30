@@ -315,9 +315,16 @@ test("the deny profiles protect the long-lived branches and grow with strict", a
   await assert.rejects(run(bad), /deny profile/);
 });
 
-// `python` first: on Windows, `python3` is often an App Execution Alias, and starting
-// an interpreter by its full path after that alias crashes Node 20's process spawner.
-const python = ["python", "python3"].find((cmd) => spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8)"]).status === 0);
+// The interpreter's full path, found by a throwaway Node process. On Windows
+// `python` is often an App Execution Alias, and once a process has started one,
+// Node 20 aborts on its next start of an interpreter by full path
+// (AssignProcessToJobObject: (87)). This process starts interpreters by full path only.
+const python = spawnSync(process.execPath, ["-e", `
+  const { spawnSync } = require("node:child_process");
+  for (const cmd of ["python", "python3"]) {
+    const r = spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8); print(sys.executable)"], { encoding: "utf8" });
+    if (r.status === 0 && r.stdout.trim()) { process.stdout.write(r.stdout.trim()); break; }
+  }`], { encoding: "utf8" }).stdout || undefined;
 
 test("the adherence script counts only code searches", { skip: !python && "needs Python 3.8+" }, async () => {
   const a = defaults();
@@ -388,7 +395,7 @@ test("the push guard blocks force pushes in any flag bundle", { skip: !python &&
   const stackStep = setup.slice(setup.indexOf("5. **Render `{{STACK_COMMANDS_ALLOWLIST}}`**"), setup.indexOf("6.", setup.indexOf("5. **Render `{{STACK_COMMANDS_ALLOWLIST}}`**")));
   assert.match(stackStep, /Never widen `git push` here\.\*\* Skip any entry that is `git push`/);
   const step = setup.slice(setup.indexOf("7c. **Install the push guard GLOBALLY**"));
-  const exe = spawnSync(python, ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" }).stdout.trim();
+  const exe = python;
   const home = mkdtempSync(join(tmpdir(), "push-guard-")).split("\\").join("/");
   const entry = JSON.parse(step.match(/```json\r?\n([\s\S]*?)```/)[1]
     .replace("<python>", JSON.stringify(exe).slice(1, -1)).replace("<home>", home)).hooks[0];
