@@ -8,6 +8,8 @@ export type Watch = {
   startedAt: number
   checks: Record<string, string>
   stablePolls: number
+  // When the checks last went quiet; unset while any runs.
+  quietSince?: number
   outcome?: 'passed' | 'failed' | 'timeout'
   settledAt?: number
   /** Set when the watch starts; names its wake claim (see `claimWake`). */
@@ -15,8 +17,13 @@ export type Watch = {
 }
 
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
-const PUSH_OR_PR = /\bgit\b[^|;&\n]*\bpush\b|\bgh\b[^|;&\n]*\bpr\b[^|;&\n]*\bcreate\b/
-const PR_MERGE = /\bgh\b[^|;&\n]*\bpr\s+merge\b([^|;&\n]*)/
+// Matched on the command with its quoted text and here-doc bodies blanked (see `commandWords`), and on
+// the subcommand word: `git commit -m "explain the push"` is not a push. Global options may come first.
+const GIT_OPTS = String.raw`(?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*`
+const GH_OPTS = String.raw`(?:\s+(?:-R\s+\S+|--repo[=\s]\S+))*`
+const AT_START = String.raw`(?:^|[\s;&|({])`
+const PUSH_OR_PR = new RegExp(`${AT_START}git${GIT_OPTS}\\s+push\\b|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`)
+const PR_MERGE = new RegExp(`${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+merge\\b([^|;&\\n]*)`)
 const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
@@ -29,23 +36,46 @@ const live: { pollMs: number; timeoutMs: number; watches: Watch[]; isPolling: bo
   isPolling: false,
 }
 
-export function settle(watch: Watch, checks: Record<string, string>, now: number, timeoutMs: number): Watch {
+export function settle(watch: Watch, checks: Record<string, string>, now: number, timeoutMs: number, quietMs: number): Watch {
   const names = Object.keys(checks)
   const isQuiet = names.length > 0 && names.every(name => !PENDING.has(checks[name] ?? ''))
   const stablePolls = isQuiet ? watch.stablePolls + 1 : 0
-  const next: Watch = { ...watch, checks, stablePolls }
+  const quietSince = isQuiet ? (watch.quietSince ?? now) : undefined
+  const next: Watch = { ...watch, checks, stablePolls, quietSince }
   // Nothing wakes the session while any check or workflow still runs: a fix pushed mid-run
-  // restarts the rest. Two quiet polls also let a workflow that starts late show up.
+  // restarts the rest. Two quiet polls also let a workflow that starts late show up, and the
+  // checks must stay quiet a full poll interval: instances left by a hot reload poll seconds
+  // apart, and right after a push GitHub can still answer with the old commit's results.
   const hasFailed = names.some(name => FAILED.has(checks[name] ?? ''))
-  if (stablePolls >= SETTLE_POLLS) return { ...next, outcome: hasFailed ? 'failed' : 'passed', settledAt: now }
+  if (stablePolls >= SETTLE_POLLS && now - (quietSince ?? now) >= quietMs) return { ...next, outcome: hasFailed ? 'failed' : 'passed', settledAt: now }
   if (now - watch.startedAt > timeoutMs) return { ...next, outcome: 'timeout', settledAt: now }
   return next
+}
+
+// The command with quoted strings emptied and here-doc bodies dropped, so message text never reads as
+// a command. Folders come from the raw command (`targetFolder`).
+export function commandWords(command: string): string {
+  const lines = command.split('\n')
+  const kept: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    kept.push(line)
+    const doc = /<<-?\s*(["']?)([A-Za-z_][\w.-]*)\1/.exec(line)
+    if (!doc) continue
+    while (i + 1 < lines.length && (lines[i + 1] ?? '').trim() !== doc[2]) i++
+    i++
+  }
+  return kept.join('\n').replace(/@'[\s\S]*?'@|@"[\s\S]*?"@|'[^']*'|"(?:[^"\\`]|[\\`][\s\S])*"/g, '""')
+}
+
+export function isPushOrPr(command: string): boolean {
+  return PUSH_OR_PR.test(commandWords(command))
 }
 
 // A merged PR's watch is noise: the chat already says it merged. Returns the
 // PR number a `gh pr merge` names, 0 when it names none (the branch's PR).
 export function mergedNumber(command: string): number | undefined {
-  const merge = PR_MERGE.exec(command)
+  const merge = PR_MERGE.exec(commandWords(command))
   if (!merge) return undefined
   const named = /(?:^|\s)#?(\d+)(?=\s|$)/.exec(merge[1] ?? '')
   return named ? Number(named[1]) : 0
@@ -182,7 +212,7 @@ async function poll($: EngineInterface): Promise<void> {
       continue
     }
     const head = await headOf($, current.repo, current.number)
-    const base = head && head !== current.headSha ? { ...current, headSha: head, startedAt: now, stablePolls: 0, checks: {} } : current
+    const base = head && head !== current.headSha ? { ...current, headSha: head, startedAt: now, stablePolls: 0, quietSince: undefined, checks: {} } : current
     let checks: Record<string, string> | undefined
     try {
       const rows = JSON.parse(await gh($, ['pr', 'checks', String(base.number), '--repo', base.repo, '--json', 'name,bucket'])) as {
@@ -195,7 +225,7 @@ async function poll($: EngineInterface): Promise<void> {
       // next poll tries again. Only the time limit can settle the watch meanwhile.
     }
     const next = checks
-      ? settle(base, checks, now, live.timeoutMs)
+      ? settle(base, checks, now, live.timeoutMs, live.pollMs)
       : now - base.startedAt > live.timeoutMs
         ? { ...base, outcome: 'timeout' as const, settledAt: now }
         : base
@@ -265,7 +295,7 @@ export const register: Register = (on, options) => {
       await save($)
       return result
     }
-    if (!PUSH_OR_PR.test(command)) return result
+    if (!isPushOrPr(command)) return result
     // `gh pr create` prints the new PR's URL; otherwise ask about the branch in the folder the command ran in.
     const created = PR_URL.exec(JSON.stringify(result.result ?? ''))
     if (created) {
