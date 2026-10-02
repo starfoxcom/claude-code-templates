@@ -8,15 +8,28 @@ These files live OUTSIDE your project repo, in your home Claude config. They app
 global-template/
 ├── README.md                              # (this file)
 ├── CLAUDE.md.additions                    # Append to ~/.claude/CLAUDE.md
+├── statusline-command.sh.template         # One-line bash status line
+├── statusline.js                          # Node status line that reads what the mods write (see mods/README.md)
+├── statusline.config.example.json         # Optional local-runner list for statusline.js
 ├── memory-template/
 │   ├── README.md                          # How the memory system works
 │   └── MEMORY.md                          # Empty index — copy to the per-project memory dir
-└── hooks/
-    ├── code-research-first.py.template    # Generic PreToolUse hook (rendered at bind time)
-    ├── code-research-profiles.json        # Per-tool profiles consumed by the renderer
-    ├── push-guard.py                      # PreToolUse hook that blocks ordinary force pushes
-    ├── no-ai-attribution.py               # PreToolUse hook that blocks AI attribution in commits and PRs
-    └── time-injection.snippet.md          # Optional UserPromptSubmit hook — injects [time] ... per prompt
+├── hooks/
+│   ├── code-research-first.py.template    # Generic PreToolUse hook (rendered at bind time)
+│   ├── code-research-profiles.json        # Per-tool profiles consumed by the renderer
+│   ├── push-guard.py                      # PreToolUse hook that blocks ordinary force pushes
+│   ├── no-ai-attribution.py               # PreToolUse hook that blocks AI attribution in commits and PRs
+│   └── time-injection.snippet.md          # Optional UserPromptSubmit hook — injects [time] ... per prompt
+└── mods/                                  # Optional function-hook plugins (Claude Code 2.1.287+)
+    ├── README.md                          # What each mod does, install, options, tests
+    ├── ci-watch/                          # Watches a pushed PR's checks, wakes the session once
+    ├── compact-handoff/                   # Compaction as a focused hand-off, plus a recall tool
+    ├── guards/                            # In-process attribution and CI-watcher guard
+    ├── session-facts/                     # Time, context fill and plan usage on every prompt
+    ├── shared-pc/                         # One session at a time runs heavy work on the machine
+    ├── skill-check/                       # Follows up when a skill's run skips a required step
+    ├── tasks/                             # Keeps the task list honest and visible
+    └── usage-guard/                       # Pauses sessions near a plan limit, resumes after the reset
 ```
 
 ---
@@ -160,6 +173,12 @@ SETUP.md § Phase 7c installs it to `~/.claude/hooks/push-guard.py`, registers i
 `hooks/no-ai-attribution.py` denies a git or gh write whose text, or a message file it names, carries AI attribution: an AI co-author trailer, a "generated with" line, a session link or the robot emoji. Plain mentions of a tool pass. SETUP.md § Phase 7d installs it next to the push guard and turns off the harness's own trailers in `~/.claude/settings.json`.
 
 By default a bind ships both guards inside the project instead (`.claude/hooks/`, registered in the committed `.claude/settings.json`), so teammates and cloud sessions get them too; SETUP.md skips 7c and 7d then. A project launcher steps aside for a guard registered here, so a guard never runs twice.
+
+## 4d. Mods (optional, Claude Code 2.1.287+)
+
+`mods/` holds eight function-hook plugins that run inside Claude Code: session facts on every prompt, a compaction hand-off, a local CI watcher, an in-process guard, a shared-machine work queue, skill step checks, task-list upkeep and a plan-usage pause. Each is optional; `session-facts` is the one recommended for everyone, and it supersedes the time-injection hook from § 4. They install globally through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` and keep their data under `~/.claude/mods-data/<mod>/`. `statusline.js` (with `statusline.config.example.json`) is the status line that shows what they track.
+
+See [`mods/README.md`](mods/README.md) for what each mod does, its default and options, how to install, test and validate it, and notes for writing your own.
 
 ---
 
