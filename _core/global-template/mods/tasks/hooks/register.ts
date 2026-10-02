@@ -376,12 +376,12 @@ function withContext<T extends object>(result: T, note: string | undefined): T {
 
 // The engine's panel under the spinner draws the task files in the engine's store. The mod answers
 // the task tools itself, so files there are leftovers from before it did: import what the list lacks,
-// then delete them, which leaves the panel empty (it hides). Runs once per start or reload.
+// then delete them, which leaves the panel empty (it hides). Runs at a session start only.
 // A subagent's task calls still go to the engine and land in this same folder (only a team gets its
-// own), and a background subagent can outlive a turn. None survives a restart, so a start imports and
-// deletes everything; after a hot reload the mod deletes only files matching a mirror task by id and
-// subject (its own pre-mod copies) and imports nothing.
-async function clearEngineStore($: EngineInterface, isStart: boolean): Promise<void> {
+// own), numbered from 1 like the mirror's, and a background subagent can outlive a turn; nothing in a
+// file tells whose it is. None survives a restart, so a start imports and deletes everything. A hot
+// reload deletes nothing: a subagent may be live then, and leftovers wait for the next start.
+async function clearEngineStore($: EngineInterface): Promise<void> {
   if (live.isEngineCleared) return
   live.isEngineCleared = true
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
@@ -399,22 +399,14 @@ async function clearEngineStore($: EngineInterface, isStart: boolean): Promise<v
     try {
       found.set(name, JSON.parse(String(await $.fs.read(`${dir}/${name}`))) as EngineTask)
     } catch {
-      // At a start, a half-written file is deleted with the rest; after a reload it is left alone.
+      // A half-written file is deleted with the rest.
     }
   }
   const mirror = await mirrorOf($)
-  if (!isStart) {
-    names = names.filter(name => {
-      const item = found.get(name)
-      return item && mirror.tasks.some(task => task.id === String(item.id) && task.subject === item.subject)
-    })
-    if (names.length === 0) return
-  } else {
-    const now = await $.clock.now()
-    if (importEngineTasks(mirror, [...found.values()], live.turn, now)) {
-      mirror.changedAt = now
-      await saveMirror($, mirror)
-    }
+  const now = await $.clock.now()
+  if (importEngineTasks(mirror, [...found.values()], live.turn, now)) {
+    mirror.changedAt = now
+    await saveMirror($, mirror)
   }
   await $.process.run(['node', '-e', UNLINK_SCRIPT, dir, ...names], { timeoutMs: 20_000 })
 }
@@ -447,14 +439,12 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     const dir = await dataDir($)
     void $.process.run(['node', '-e', SWEEP_SCRIPT, dir, String(SWEEP_DAYS)], { timeoutMs: 20_000 }).catch(() => undefined)
-    await clearEngineStore($, true).catch(() => undefined)
+    await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)
     return result
   })
 
   on('turn.start', async ($, e, next) => {
-    // A hot reload starts the module over without a session.start.
-    if (!live.isEngineCleared) await clearEngineStore($, false).catch(() => undefined)
     live.turn += 1
     live.isTurnRunning = true
     live.toolsThisTurn = 0

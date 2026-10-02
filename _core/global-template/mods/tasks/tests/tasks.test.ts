@@ -230,15 +230,15 @@ test("the engine's leftover task files are imported, then deleted", async ($, on
   expect(mirror(seen).tasks.map(item => item.id)).toEqual(['4', '5'])
 })
 
-test('after a reload only the mirror\'s own copies are deleted, a subagent\'s files stay', async ($, on) => {
+test("after a reload the engine's store is left alone, even a subagent task matching a mirror task", async ($, on) => {
   const seen = world(on)
   const engine = 'C:/Users/me/.claude/tasks/sess-a'
-  seen.files.set(MIRROR_FILE, JSON.stringify({ session: 'sess-a', updatedAt: 1, turn: 1, tasks: [{ id: '2', subject: 'mine', status: 'pending', createdTurn: 1 }] }))
-  seen.files.set(`${engine}/2.json`, JSON.stringify({ id: '2', subject: 'mine', status: 'pending' }))
-  seen.files.set(`${engine}/3.json`, JSON.stringify({ id: '3', subject: 'a subagent step', status: 'in_progress' }))
-  // A hot reload: no session.start, the next turn runs the cleanup.
+  seen.files.set(MIRROR_FILE, JSON.stringify({ session: 'sess-a', updatedAt: 1, turn: 1, tasks: [{ id: '1', subject: 'run the tests', status: 'pending', createdTurn: 1 }] }))
+  // A live subagent's first task: the engine numbers it 1, and the step was delegated word for word.
+  seen.files.set(`${engine}/1.json`, JSON.stringify({ id: '1', subject: 'run the tests', status: 'in_progress' }))
+  seen.files.set(`${engine}/2.json`, JSON.stringify({ id: '2', subject: 'a subagent step', status: 'pending' }))
+  // A hot reload: no session.start before the next turn.
   await turn($)
-  const unlink = seen.runs.find(run => run.includes(engine))
-  expect(unlink?.slice(-2)).toEqual([engine, '2.json'])
-  expect(mirror(seen).tasks.map(task => task.id)).toEqual(['2'])
+  expect(seen.runs.find(run => run.includes(engine))).toBeUndefined()
+  expect(mirror(seen).tasks.map(task => [task.id, task.status])).toEqual([['1', 'pending']])
 })
