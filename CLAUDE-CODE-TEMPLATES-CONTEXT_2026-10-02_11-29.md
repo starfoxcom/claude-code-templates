@@ -1,4 +1,4 @@
-# claude-code-templates — session handoff (2026-10-02 11:15)
+# claude-code-templates — session handoff (2026-10-02 11:29)
 
 Single source of truth for what this session left undone. `/session-start` reads this first. It records only current state that `git log`, open issues, the CHANGELOG and `docs/v2/PLAN.md` don't already show.
 
@@ -7,8 +7,13 @@ Single source of truth for what this session left undone. `/session-start` reads
 ## Headline: mods are planned as opt-in `~/.claude` extras
 
 - **Claude Code 2.1.287 added mods** (plugins of function hooks). `docs/v2/PLAN.md` now records the decision (Decisions row "Claude Code mods") and a Phase 2b item: session facts pre-checked; compaction hand-off, shared-PC, usage guard and status line pieces opt-in. Guard hooks stay settings hooks.
-- **Four global mods are live on the maintainer's PC** (outside this repo), loaded through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`: `session-facts`, `compact-handoff`, `usage-guard` (built by the GameProject session) and `shared-pc` (built here). Status line: `~/.claude/statusline.js` with `statusline.config.json`.
+- **Four global mods are live on the maintainer's PC** (outside this repo), loaded through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`: `session-facts`, `compact-handoff`, `usage-guard` (built by the GameProject session) and `shared-pc` (built here). A fifth, `ci-watch` (GameProject session), watches a pushed PR's checks and wakes the session once they settle; the global CLAUDE.md CI rule now says ci-watch first, Monitor as fallback. Status line: `~/.claude/statusline.js` with `statusline.config.json`.
 - **`~/.claude/mods/shared-pc/TEMPLATES-NOTES.md` is the porting brief**: what each mod does, defaults, the disk/token constraints, and the mod-API lessons (test kit quirks, validator rules, the 10 s hook budget, why the request card lives inside the band). Read it before porting any mod into `_core/global-template/mods/`. `DESIGN.md` beside it is the shared-PC design.
+
+## Mod tests run 2026-10-02 (after 11:15)
+
+- **compact-handoff, first live shadow run (manual /compact, 11:23):** hand-off file written; it covers goal, next step, decisions, dead ends and live state; recall reaches pre-compaction rows. One bug: messages typed mid-turn (stored as `queued_command` attachments) were missing from the verbatim block. The GameProject session fixed it, and a replay on this transcript confirmed all three now appear once. Cost: the shadow pass roughly doubles the compaction step itself (cache-priced fork plus ~5k tokens of output), under 1% across a session. Plan: 1-2 more shadow compactions (GameProject runs the next), then switch to `on`.
+- **usage-guard wrap-up and wake (in progress at this hand-off):** a hand-written `~/.claude/mods-data/usage-guard/pause.json` (5-hour at 91%, `triggeredBy: live-test`, the GameProject session pre-marked handled) fired this automatic /session-close at 11:29. The wake is due at 11:37:19 and should run /session-start. A hand-written pause never runs the stop commands; only the session that creates the pause from its own readings does. After the wake: confirm the file says `done`, then delete it, and ask the maintainer whether the GameProject status line showed "PAUSED → <time>" until the wake.
 
 ## Shared-PC mod (done, installed 2026-10-02)
 
