@@ -16,6 +16,7 @@
 //   unread, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
+import { stripPaths } from './policy'
 import { parse, programOf } from './shell'
 import type { Statement, Word } from './shell'
 
@@ -56,13 +57,16 @@ type Reading = {
   method?: string
 }
 
-type Kind = 'text' | 'file' | 'skip' | 'repo' | 'branch' | 'field' | 'data' | 'method'
+// `attached`: a flag whose value can only be attached (`-S<keyid>`, `--gpg-sign=<keyid>`); it never takes
+// the next word, and in a bundle the rest of the word is its value.
+type Kind = 'text' | 'file' | 'skip' | 'repo' | 'branch' | 'field' | 'data' | 'method' | 'attached'
 type Spec = Record<string, Kind>
 
 const COMMIT: Spec = {
   '-m': 'text', '--message': 'text', '-F': 'file', '--file': 'file', '-t': 'file', '--template': 'file',
   '-C': 'skip', '-c': 'skip', '--reuse-message': 'skip', '--reedit-message': 'skip', '--fixup': 'skip',
   '--squash': 'skip', '--author': 'text', '--date': 'skip', '--trailer': 'text', '--cleanup': 'skip',
+  '-S': 'attached', '--gpg-sign': 'attached', '-u': 'attached', '--untracked-files': 'attached',
 }
 const MESSAGE: Spec = { '-m': 'text', '--message': 'text', '-F': 'file', '--file': 'file' }
 const GH_BODY: Spec = {
@@ -116,6 +120,9 @@ export function inspect(command: string, powershell: boolean): Plan {
     f.written = true
     feed(writer.st, { ...r, ps: writer.ps }, `${f.where} (file ${f.path})`)
   }
+  // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
+  // for credit lines, so a spelling the reading does not model still cannot carry one into history.
+  if (plan.isWrite) plan.texts.push({ where: 'the command text', text: stripPaths(command), creditOnly: true })
   return plan
 }
 
@@ -393,13 +400,14 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
       const eq = t.indexOf('=')
       const flag = eq === -1 ? t : t.slice(0, eq)
       const kind = spec[flag]
-      if (!kind) continue
+      if (!kind || kind === 'attached') continue
       const value = eq === -1 ? args[++i] : { ...w, text: t.slice(eq + 1) }
       if (value) take(kind, value, r, where)
       else missing(kind, r, where)
       continue
     }
     if (t.startsWith('-') && t.length > 1 && !w.dynamic) {
+      if (spec[t] === 'attached') continue
       if (spec[t]) {
         const value = args[++i]
         if (value) take(spec[t] as Kind, value, r, where)
@@ -410,6 +418,7 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
       for (let j = 1; j < t.length; j++) {
         const kind = spec[`-${t[j]}`]
         if (!kind) continue
+        if (kind === 'attached') break
         const attached = t.slice(j + 1)
         const value = attached ? { ...w, text: attached } : args[++i]
         if (value) take(kind, value, r, where)
@@ -458,6 +467,7 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       return message({ ...value, text: v }, r, where)
     }
     case 'data':
+      if (value.text === '@-') return void r.stdin++
       if (value.text.startsWith('@')) return void plan.files.push({ where, path: value.text.slice(1) })
       return message(value, r, where)
   }
