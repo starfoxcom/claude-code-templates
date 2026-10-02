@@ -112,6 +112,7 @@ Places where this repo's bound text differs on purpose from what the renderer pr
 | File | Deviation | Reason |
 |---|---|---|
 | `.claude/rules/review-tiers.md` | The Model column names the backup model and both efforts. | The live workflows run two models per tier; one model name would misstate them. |
+| `.claude/rules/collaboration.md` | "Who reviews" replaces "ask the owner of the touched directory" and "every PR needs an approval from someone other than its author" with: zero required approvals, the AI routine verdict (plus the deep verdict when raised) is the gate, the maintainer merges on 🟢, and an external contributor's PR also needs the maintainer's read of the whole diff. | Maintainer decision 2026-10-02. This is a solo-maintainer repo (`codeowners: false`); its branch protection requires zero approvals because an author cannot approve their own PR, so the canonical approval line could never be met. Root `CLAUDE.md` "Review discipline" states the same external-contributor rule. |
 
 ## Re-bind procedure (until Audit mode lands)
 
