@@ -35,7 +35,12 @@ const CREDIT = new RegExp(
   'imu',
 )
 
-const NAME = new RegExp(`${CLAUDE}|${ANTHROPIC}`, 'iu')
+// The plain name is a whole word: no letter right before or after it ("philanthropic" passes), and only
+// zero-width characters or the separators -_.* between its letters, never spaces or line breaks
+// ("the critic lauded" passes). The credit rules keep the wider set, anchored by their own words.
+const NZ = '[\\u200b\\u200c\\u200d\\u2060\\ufeff\\-_.*]*'
+const wordOf = (word: string) => `(?<!\\p{L})${[...word].join(NZ)}(?!\\p{L})`
+const NAME = new RegExp(`${wordOf('claude')}|${wordOf('anthropic')}`, 'iu')
 
 // Repo identifiers and review-trigger words that carry the name without crediting anyone.
 const IDENTIFIERS =

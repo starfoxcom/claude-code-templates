@@ -53,7 +53,8 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
 - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`, `ssh host ...`, a program named through a variable (`$GIT commit`), or any other program that writes to GitHub on its own (a Python script, an SDK);
 - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the file does not exist yet when the guard looks, so it reports that it could not read it;
 - the output of another program used as a message (`git log --format=%B | git commit -F -`, a variable set from outside the command): named unread, its text never checked;
-- AI credit hidden on purpose (assembled from pieces, encoded, fetched at run time): out of scope.
+- AI credit hidden on purpose (assembled from pieces, encoded, fetched at run time): out of scope;
+- with `mentionRepos` narrowed, the plain product name only as a whole word: written with letters, zero-width characters or `-_.*` between them, and no letter right before or after. The name spread across spaces or line breaks, or run into another word, passes, so ordinary words that contain it ("philanthropic", "the critic lauded") are never blocked.
 
 ---
 
