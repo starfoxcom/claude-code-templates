@@ -1,0 +1,20 @@
+{
+  "name": "usage-guard",
+  "version": "0.1.0",
+  "description": "Near a plan usage limit, every session saves its work and stops background jobs, then work resumes on its own after the limit resets.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "wrapUpAt": {
+      "type": "number",
+      "title": "Wrap up at (% used)",
+      "description": "When any plan window (5-hour, weekly) reaches this percentage, sessions wrap up. The rest is left for the wrap-up itself and for CI jobs already running.",
+      "default": 90
+    },
+    "wakeDelayMinutes": {
+      "type": "number",
+      "title": "Resume delay (minutes)",
+      "description": "How long after the limit resets the sessions resume work.",
+      "default": 2
+    }
+  }
+}
