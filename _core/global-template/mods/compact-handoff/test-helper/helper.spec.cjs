@@ -6,18 +6,22 @@ const assert = require('node:assert')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
-const { execFileSync } = require('child_process')
+const { execFileSync, spawnSync } = require('child_process')
 
 const HELPER = path.join(__dirname, '..', 'scripts', 'helper.cjs')
-const { PERSON_MARK } = require(HELPER)
+const { PERSON_MARK, INJECTED_LINE } = require(HELPER)
 
 // A config folder holding one session's transcript.
-function transcript(records) {
+function configWith(records) {
   const config = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-handoff-'))
   fs.mkdirSync(path.join(config, 'projects', 'p'), { recursive: true })
   fs.writeFileSync(path.join(config, 'projects', 'p', 's1.jsonl'), records.map(r => JSON.stringify(r)).join('\n') + '\n')
+  return config
+}
+
+function transcript(records) {
   const out = execFileSync(process.execPath, [HELPER, 'persons', 's1'], {
-    env: { ...process.env, CLAUDE_CONFIG_DIR: config },
+    env: { ...process.env, CLAUDE_CONFIG_DIR: configWith(records) },
     encoding: 'utf8',
   })
   return JSON.parse(out)
@@ -39,9 +43,34 @@ test('the carried block and system lines are not read back as the person\'s mess
   assert.deepStrictEqual(found, ['now fix the tests'])
 })
 
-test('the helper and the hooks module carry the same mark', () => {
+test('prompts the mods submit and the lines they attach are not the person\'s words', () => {
+  const found = transcript([
+    user('[ci-watch] #12: all 3 checks settled with no failure. Verify it is mergeable.'),
+    user('[usage-guard] Plan usage limit nearly reached (automatic wrap-up).'),
+    user('[shared-pc] The person approved your request: this session goes next on the PC.'),
+    user('[skill-check] /session-close is not finished: no sign of the push.'),
+    user('[tasks] Open: #1 Fix the parser (in progress).\n[session-facts] 2026-10-02 10:00 | ctx 40%'),
+    user('keep the parser strict\n[tasks] Open: #1 Fix the parser.\n[session-facts] 2026-10-02 10:01 | ctx 41%'),
+    user('[link](https://example.com) is the spec to follow'),
+  ])
+  assert.deepStrictEqual(found, ['keep the parser strict', '[link](https://example.com) is the spec to follow'])
+})
+
+test('no transcript for the session is a failure, so the hook falls back to the compaction\'s list', () => {
+  const run = spawnSync(process.execPath, [HELPER, 'persons', 'other-session'], {
+    env: { ...process.env, CLAUDE_CONFIG_DIR: configWith([user('first ask')]) },
+    encoding: 'utf8',
+  })
+  assert.notStrictEqual(run.status, 0)
+  assert.strictEqual(run.stdout.trim(), '')
+})
+
+test('the helper and the hooks module carry the same mark and the same injected-line pattern', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'hooks', 'register.ts'), 'utf8')
   const mark = /export const PERSON_MARK = "([^"]+)"/.exec(source)
   assert.ok(mark, 'PERSON_MARK found in register.ts')
   assert.strictEqual(mark[1], PERSON_MARK)
+  const injected = /export const INJECTED_LINE = \/(.+)\/\s*$/m.exec(source)
+  assert.ok(injected, 'INJECTED_LINE found in register.ts')
+  assert.strictEqual(injected[1], INJECTED_LINE.source)
 })

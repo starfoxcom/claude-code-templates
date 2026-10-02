@@ -22,8 +22,11 @@ const RECALL_MAX_CHARS = 6_000
 const KEEP_FILES = 20
 const MAX_AGE_DAYS = 14
 
-// Lines other hooks attach to a prompt; they are not the person's words.
-const INJECTED_LINE = /^\[(session-facts|time|task-tracking)\]/
+// Lines the mods attach to a prompt, and whole prompts they submit, start with
+// the mod's tag ("[session-facts] ...", "[tasks] ...", "[ci-watch] ..."); they
+// are not the person's words. scripts/helper.cjs carries the same pattern
+// (test-helper/helper.spec.cjs keeps the two equal).
+export const INJECTED_LINE = /^\[[a-z][a-z0-9-]*\](?: |$)/
 
 type Mode = 'off' | 'shadow' | 'on'
 
@@ -52,24 +55,26 @@ export function handoffPrompt(limitTokens: number): string {
   ].join('\n')
 }
 
-function isPersonMessage(message: SessionMessage): boolean {
-  if (message.role !== 'user' || (message.toolResults?.length ?? 0) > 0) return false
-  const text = message.text.trim()
-  return (
-    text.length > 0 &&
-    !text.startsWith('<') &&
-    !text.startsWith('[SYSTEM') &&
-    !text.startsWith('This session is being continued') &&
-    !text.startsWith(PERSON_MARK)
-  )
-}
-
 function stripInjected(text: string): string {
   return text
     .split('\n')
     .filter(line => !INJECTED_LINE.test(line.trim()))
     .join('\n')
     .trim()
+}
+
+// A prompt a mod submitted is only mod lines (its own, plus the context other
+// mods attached), so nothing is left once they are stripped.
+function isPersonMessage(message: SessionMessage): boolean {
+  if (message.role !== 'user' || (message.toolResults?.length ?? 0) > 0) return false
+  const text = message.text.trim()
+  return (
+    !text.startsWith('<') &&
+    !text.startsWith('[SYSTEM') &&
+    !text.startsWith('This session is being continued') &&
+    !text.startsWith(PERSON_MARK) &&
+    stripInjected(text).length > 0
+  )
 }
 
 // Earlier compactions carried the person's words forward in a block of ours;
@@ -125,15 +130,23 @@ async function dataDir($: EngineInterface): Promise<string> {
   return `${configured ?? `${home}/.claude`}/mods-data/compact-handoff`.replace(/\\/g, '/')
 }
 
-async function helper($: EngineInterface, args: readonly string[]): Promise<string> {
+async function runHelper($: EngineInterface, args: readonly string[]) {
   const script = `${$.plugin.root}/scripts/helper.cjs`
-  const { exitCode, stdout, stderr } = await $.process.run(['node', script, ...args], { timeoutMs: 60_000 })
+  return $.process.run(['node', script, ...args], { timeoutMs: 60_000 })
+}
+
+async function helper($: EngineInterface, args: readonly string[]): Promise<string> {
+  const { exitCode, stdout, stderr } = await runHelper($, args)
   return exitCode === 0 ? stdout.trim() : `helper failed: ${stderr.trim() || `exit ${exitCode}`}`
 }
 
+// The transcript's own list, or undefined when the helper fails (no transcript
+// under this session id, no node): the caller then uses the compaction's list.
 async function transcriptWords($: EngineInterface): Promise<string[] | undefined> {
   try {
-    const parsed: unknown = JSON.parse(await helper($, ['persons', await $.session.id()]))
+    const { exitCode, stdout } = await runHelper($, ['persons', await $.session.id()])
+    if (exitCode !== 0) return undefined
+    const parsed: unknown = JSON.parse(stdout)
     return Array.isArray(parsed) ? parsed.map(String) : undefined
   } catch {
     return undefined
@@ -203,7 +216,9 @@ export const register: Register = (on, options) => {
         required: ['query'],
       },
     })
-    void dataDir($).then(dir => helper($, ['sweep', dir, String(KEEP_FILES), String(MAX_AGE_DAYS)]))
+    void dataDir($)
+      .then(dir => helper($, ['sweep', dir, String(KEEP_FILES), String(MAX_AGE_DAYS)]))
+      .catch(() => undefined)
     return next(e)
   })
 
