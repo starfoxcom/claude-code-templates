@@ -1,4 +1,4 @@
-# claude-code-templates — session handoff (2026-10-02 11:29)
+# claude-code-templates — session handoff (2026-10-02 12:20)
 
 Single source of truth for what this session left undone. `/session-start` reads this first. It records only current state that `git log`, open issues, the CHANGELOG and `docs/v2/PLAN.md` don't already show.
 
@@ -13,13 +13,21 @@ Single source of truth for what this session left undone. `/session-start` reads
 ## Mod tests run 2026-10-02 (after 11:15)
 
 - **compact-handoff, first live shadow run (manual /compact, 11:23):** hand-off file written; it covers goal, next step, decisions, dead ends and live state; recall reaches pre-compaction rows. One bug: messages typed mid-turn (stored as `queued_command` attachments) were missing from the verbatim block. The GameProject session fixed it, and a replay on this transcript confirmed all three now appear once. Cost: the shadow pass roughly doubles the compaction step itself (cache-priced fork plus ~5k tokens of output), under 1% across a session. Plan: 1-2 more shadow compactions (GameProject runs the next), then switch to `on`.
-- **usage-guard wrap-up and wake (in progress at this hand-off):** a hand-written `~/.claude/mods-data/usage-guard/pause.json` (5-hour at 91%, `triggeredBy: live-test`, the GameProject session pre-marked handled) fired this automatic /session-close at 11:29. The wake is due at 11:37:19 and should run /session-start. A hand-written pause never runs the stop commands; only the session that creates the pause from its own readings does. After the wake: confirm the file says `done`, then delete it, and ask the maintainer whether the GameProject status line showed "PAUSED → <time>" until the wake.
+- **usage-guard, live:** a hand-written `pause.json` fired the automatic /session-close at 11:29 and the wake ran /session-start at 11:37:19 to the second; the file went to `done`, the GameProject status line showed PAUSED. A second wake (11:46:57) also landed on time. A hand-written pause never runs the stop commands; only the session that creates the pause from its own readings does. Not yet tested live: a true `claude --resume` during a pause (same start-up code path as a reload; see below).
+- **Editing any file in a mod folder reloads the mods in every open session**, and a reload re-runs `session.start`. During a pause that re-arms the wake regardless of `handled`, which is what made the test sessions wake without a resume. Harmless in real use (nobody edits mods during a pause), but a test setup must not rely on `handled` while mods are being edited.
+- **Fixes made today (all installed, tests pass):**
+  - GameProject: a session that changed nothing waits instead of running /session-close; `handled` lists each session once.
+  - Here: that "changed nothing" check never fired (core sets `isReadOnly` to `true` or leaves it out, never `false`), so every real session would have skipped its wrap-up. Fixed and the test fake now matches core.
+  - Here, at the maintainer's request: no mod uses `$.ui.toast` any more. usage-guard events (paused, reset, missed wake, cancelled) are one shared card in `mods-data/usage-guard/card.json`, drawn in every session above the prompt with Dismiss and, while paused, "Cancel auto-resume (all sessions)"; both act for every session. shared-pc's band now keeps what other mods draw there, and its error notices are red cards that stay until dismissed.
+  - Card colors (maintainer rule): yellow = the person must or may act, blue = information, green = good news, red = an error. Verified live in both sessions.
+- **shared-pc with a real holder (12:17-12:19):** GameProject held the seat; this session's request card showed in both sessions and cleared once approved; approval did not kick the holder; the green "your turn" card showed only here; Release on the holder's bar freed the seat at once.
+- **Global changes by the GameProject session (maintainer's request):** the State line ends every reply that ends a turn (the mobile app shows only the chat). The old `[time]` prompt hook is removed because session-facts covers it; the templates must ship one or the other, never both.
 
 ## Shared-PC mod (done, installed 2026-10-02)
 
 - One session at a time holds "the seat" for heavy work; heavy Bash/PowerShell commands wait in line inside the call (Esc leaves the line). A one-line band above the prompt shows the seat and your place in line; skip-the-line requests are shared across sessions as a bordered yellow card with Approve/Decline that stays until answered, and the answer wakes an idle asker. Refuses new heavy work during a usage-guard pause.
-- Tests: 9 mod tests (`claude plugin test`), 15 lock tests (`node --test test-helper/pcctl.spec.cjs`), validate and `tsc` clean. Data in `~/.claude/mods-data/shared-pc/`.
-- Verified live: in-line wait past the hook budget, background jobs holding the seat, Esc leaving the line, approve and decline wake-ups. Cross-session card: one approval arrived from the second session right after the restart; confirm with the maintainer that the card drew there.
+- Tests: 10 mod tests (`claude plugin test`), 15 lock tests (`node --test test-helper/pcctl.spec.cjs`), validate and `tsc` clean. Data in `~/.claude/mods-data/shared-pc/`.
+- Verified live: in-line wait past the hook budget, background jobs holding the seat, Esc leaving the line, approve and decline wake-ups, the request card in both sessions.
 - The written turn-taking rule in `~/.claude/CLAUDE.md` stays as the fallback. Once the mod has run a few days, propose a shorter rule that points to it (maintainer's call).
 
 ---
