@@ -1,0 +1,5 @@
+{
+  "name": "skill-check",
+  "version": "0.1.0",
+  "description": "Checks that a skill's run shows the steps its contract requires (~/.claude/skill-contracts.json); when the turn ends with steps missing, one follow-up turn names them."
+}
