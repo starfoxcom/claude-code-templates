@@ -14,7 +14,7 @@ When canonical templates evolve in `_core/project-template/.claude/rules/`, re-b
 
 This rule is enforced by a hook at `~/.claude/hooks/tokensave-first.py` (installed **globally**, never project-local — see `reference_tokensave_hook_global_install` memory for why). Grep/Glob/raw-grep calls are **blocked** when tokensave is available.
 
-**This repo has a tokensave index** at `.tokensave/` (32 files / 287 nodes, schema v9). The hook routes code-research through tokensave MCP tools by default. Re-sync incrementally with `tokensave sync` after edits; full rebuild via `tokensave sync -f` after schema migrations or large refactors.
+**This repo has a tokensave index** at `.tokensave/` (`tokensave_status` shows its size and freshness). The hook routes code-research through tokensave MCP tools by default. Re-sync incrementally with `tokensave sync` after edits; full rebuild via `tokensave sync -f` after schema migrations or large refactors.
 
 Fallback to Grep/Glob is allowed when:
 1. You've tried tokensave with 2+ keyword variants and got nothing usable
