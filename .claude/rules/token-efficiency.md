@@ -1,113 +1,39 @@
-# Token efficiency — mandatory rules
+# Token efficiency
 
-## Read before writing
+## Find before you read
 
-Before reading any source file to understand a symbol, first locate it through this project's code-research tool, then read only the relevant function/class — never the whole file unless context genuinely requires it.
+Locate a symbol before opening a file, then read only the function or section you need. `/find` (`.claude/skills/find/SKILL.md`) holds the lookup sequence for this project's code-research tool, **tokensave**, and when to fall back to Grep, Glob and Read.
 
-The canonical sequence for **tokensave** lives in `.claude/skills/find/SKILL.md`. Invoke `/find` (or follow its sequence inline) before any `Read` of a file you haven't opened yet this session. The `/find` skill also documents the fallback conditions for dropping back to plain `Grep`/`Glob`/`Read`.
+Enable an MCP server only while the work needs it. Every enabled server adds its tool definitions to every message.
 
-For this project (tokensave): start with `tokensave_search <name>` for symbol lookup, fall through to `tokensave_context <natural-language query>` for fuzzy exploration, then `tokensave_body <symbol>` to read a single function instead of the whole file.
+## Shell commands
 
----
+- One command per call where you can. Permission rules match the whole command string, so `&&` chains prompt more and fail in confusing ways.
+- Never retry a timed-out command with the same timeout. Builds and installs start at 420 000 ms; each retry adds 180 000 ms (600 000, 780 000, then +120 000 per retry after that).
 
-## Command timeout scaling
+## Watching CI
 
-Never retry a timed-out command with the same timeout. Each retry escalates:
+After every push, watch the PR's checks with the **Monitor tool** where it exists; never use `gh run watch`:
 
-| Attempt | Timeout |
-|---|---|
-| 1 | 420 000 ms (7 min) |
-| 2 | 600 000 ms (10 min) |
-| 3 | 780 000 ms (13 min) |
-| 4+ | +120 000 ms per retry |
+- One monitor per PR, timeout one hour, so a stuck check becomes a loud timeout instead of a silent wait.
+- Inside it, poll `gh pr checks <pr> --json name,bucket` about every 60 seconds. Filter on the `bucket` field with `gh`'s own `--jq` (the standalone `jq` binary is missing on some shells, and an empty result looks exactly like "still running").
+- Print each check as it settles and finish with an explicit "all checks settled" line.
+- On a new push to the same PR, stop the old monitor and start a new one.
 
-Default starting timeout for build commands (CMake, scons, cargo build, dart pub get, npm install, etc.): **420 000 ms**.
-
----
-
-## CI monitoring + auto-merge
-
-**Never use streaming log watchers** (`gh run watch`). After every push to a PR branch, poll **all** workflow runs for the branch's HEAD SHA every 7 minutes until every one reaches `status: completed`. Multiple workflows can run per push — don't accept a partial result.
-
-Run the polling loop with `run_in_background: true` so the conversation isn't frozen on the wait. The harness notifies when the background command exits; pick up other work or wait for the user in the meantime.
-
-> **Background shell constraint — critical:** the background Bash environment **may not** have the external `jq` binary available (it's absent on Windows Git Bash, stripped-down containers, and some sandboxed harness shells; present on `ubuntu-latest` runners, Homebrew macOS, and most devcontainer images). Piping to `jq` where it's missing produces `jq: command not found`, silently breaks the `&&` chain, and leaves the loop running forever. Use a portable extraction method instead:
-> - **Preferred:** `gh`'s built-in `--jq` flag (e.g. `--jq '.[0].status'`) — no external tool, works wherever `gh` works
-> - **Fallback:** `python3 -c "import sys,json; ..."` reading from stdin — guard with `command -v python3` if you need cross-platform support (Windows Git Bash often ships `python` only, minimal containers may have neither)
+Monitor is missing on some cloud providers and when non-essential traffic is disabled. Without it, run this as one Bash call with `run_in_background` and act when it exits. It stops after about nine minutes; if checks are still pending, run it again.
 
 ```bash
-SHA=$(git rev-parse HEAD)
-while true; do
-  INFLIGHT=$(gh run list --branch <branch> --limit 10 \
-    --json status,headSha \
-    --jq "[.[] | select(.headSha == \"$SHA\") | select(.status != \"completed\")] | length")
-  [ "$INFLIGHT" = "0" ] && break
-  sleep 420
+sleep 45
+for i in $(seq 8); do
+  state=$(gh pr checks <pr> --json bucket --jq 'if length == 0 then "none" else ([.[] | select(.bucket == "pending")] | length | tostring) end')
+  [ "$state" = "0" ] && break
+  sleep 60
 done
+gh pr checks <pr> --json name,bucket --jq '.[] | "\(.name): \(.bucket)"'
 ```
 
-**On all-green (🟢 verdict):** merge every PR with `gh pr merge --merge`, so each branch stays visible in the history graph and `main` and `develop` never diverge.
+When everything is green, merge per `git.md` § Merging. On a red check, read the failing log (`gh run view <id> --log-failed`), fix it on the branch and push. Ask first only when the failure is ambiguous (flaky test, infrastructure outage, or the test and the change disagree about intended behavior).
 
-**On any-red (🔴 verdict or workflow failure):** fetch failing logs with `gh run view <id> --log-failed`, identify the offending job + step, propose the fix in one sentence, apply it, push. The push triggers a fresh polling loop on the new SHA. Don't ask permission for routine breakages (compile errors, missing-file paths, lint, dependency-version pins) — fix and push. Ask only when the failure is genuinely ambiguous (flaky test, infra outage, behavior-change-vs-test disagreement).
+## Long sessions
 
-### Fast-path / auto-pass PRs
-
-When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks resolve to passing states. The whole run completes in ~30 seconds.
-
-```bash
-# Background pattern — uses gh's built-in --jq; no external jq required:
-until [ "$(gh run list --branch <branch> --workflow=claude-code-review.yml --limit 1 --json status --jq '.[0].status')" = "completed" ]; do
-  sleep 90
-done
-gh pr view <pr> --json statusCheckRollup
-```
-
-After the notification:
-
-1. **Check the gate** — `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS`, and `Claude On-Demand: SKIPPED`.
-2. **Verify the PR is mergeable** — `gh pr view <pr> --json mergeable,mergeStateStatus` should report `MERGEABLE` + `CLEAN`. Anything else, including `BLOCKED`: stop and report the state. Never merge past a rule.
-3. **Merge** with `gh pr merge <pr> --merge`.
-4. **Delete branches** (local + remote) per standing authorization.
-
-This fast path is **only** for PRs the routine reviewer skips — if `Diff triage` reports `run_review=true`, fall back to the standard 7-minute polling loop and read the verdict comment.
-
----
-
-## Usage ceiling rule
-
-When usage ≥ 80%: commit locally, do not push to PR (deep code review costs ~10–15% per cycle).
-
-Present two options:
-
-**Option 1 — Close session:** commit → regenerate context file (if you use them) → update ROADMAPs → summarize.
-
-**Option 2 — Continue:** estimate remaining capacity:
-
-| Operation | Approximate cost |
-|---|---|
-| Read small file (< 100 lines) | ~0.5% |
-| Read large file (200–500 lines) | ~1–2% |
-| Write / rewrite file | ~1–2% |
-| Build + analyze | ~1% |
-| Git commit + push | ~0.5% |
-| Session close | ~3–5% |
-| Deep review CI run | ~10–15% |
-
-Always leave ≥ 5% buffer for session close.
-
----
-
-## Long-session signals → cut immediately
-
-- Context saturated (tool calls slow, responses degraded)
-- Multiple `<system-reminder>` blocks accumulating
-- Repeated reads of the same file
-- User notices rapid token consumption
-
-When triggered: prepare session close ritual immediately.
-
----
-
-## Read review-comment verdict, not workflow conclusion
-
-`gh run list --headSha <sha>` misses issue-comment-triggered deep reviews (the deep review's workflow run won't show under the original PR commit's SHA). Always read the 🔴/🟢 verdict line directly from the latest review comment via `gh pr view <pr> --json comments` (or `gh api "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/pulls/<pr>/comments"` if you need the lower-level API with the owner/repo slug rather than the full URL stored in `https://github.com/starfoxcom/claude-code-templates`).
+Cut to the session-close ritual when responses slow down or degrade, the same file keeps getting re-read, or system reminders pile up. Leave room to finish the close cleanly.
