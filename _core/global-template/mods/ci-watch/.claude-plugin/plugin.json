@@ -14,6 +14,12 @@
       "title": "Give up after (minutes)",
       "description": "A watch still pending after this long wakes the session with what is stuck.",
       "default": 60
+    },
+    "deepTierPattern": {
+      "type": "string",
+      "title": "Deep review checks (pattern)",
+      "description": "Check names that belong to a slower deep review tier, so a faster review's failure waits for it: no early wake while one of these is still pending. A case-insensitive regular expression.",
+      "default": "on-demand|deep"
     }
   }
 }
