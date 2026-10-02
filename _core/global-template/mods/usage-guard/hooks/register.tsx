@@ -318,7 +318,14 @@ async function check($: EngineInterface): Promise<void> {
     if (await claim($, `pause-${resetKey(planned)}`)) {
       await writePause($, pause)
       await stopBackground($)
-    } else if ((await readPause($))?.resetsAt !== planned.resetsAt) await writePause($, pause)
+    } else {
+      // The loser acts on the shared file, never on its own plan: a cancel written
+      // since the winner's pause stands.
+      const shared = await readPause($)
+      if (shared?.resetsAt !== planned.resetsAt) await writePause($, pause)
+      else if (shared.status !== 'active') return
+      else pause = shared
+    }
   }
   if (pause) await act($, pause)
 }
