@@ -21,7 +21,7 @@ One ❌ means the feature is not complete. If an item stopped making sense mid-w
 
 Write `CLAUDE-CODE-TEMPLATES-CONTEXT_YYYY-MM-DD_HH-MM.md` at the repo root and `git rm` the previous one, so exactly one exists. It holds current state only: where the work stands, decisions made and why, what the next session should do first. Rules and conventions stay in `.claude/rules/`.
 
-For the timestamp, use the latest `[time]` line in the conversation if a hook provides one. Otherwise read the local clock: `date '+%Y-%m-%d %H:%M'`, or `Get-Date -Format 'yyyy-MM-dd HH:mm'` in PowerShell. Never hardcode a timezone.
+For the timestamp, if a hook injects the time into each prompt (a `[session-facts]` or `[time]` line), reuse the most recent one. If none is available, read the local clock: `date '+%Y-%m-%d %H:%M'`, or `Get-Date -Format 'yyyy-MM-dd HH:mm'` in PowerShell. Never hardcode a timezone.
 
 ## 3. Derived docs
 
