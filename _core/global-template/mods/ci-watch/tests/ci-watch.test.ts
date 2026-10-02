@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Watch } from '../hooks/register'
-import { mergedNumber, settle, wakeText } from '../hooks/register'
+import { mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
@@ -83,4 +83,11 @@ test('a merge names its PR, or 0 for the branch PR; other commands are not merge
   expect(mergedNumber('gh pr merge --merge --delete-branch')).toBe(0)
   expect(mergedNumber('gh pr view 1278 --json mergeable')).toBeUndefined()
   expect(mergedNumber('git merge origin/develop')).toBeUndefined()
+})
+
+test('a push in another folder is looked up there', () => {
+  expect(targetFolder('git -C "C:/repo wt" push -u origin feature/x')).toBe('C:/repo wt')
+  expect(targetFolder('cd ../wt-ci && git push')).toBe('../wt-ci')
+  expect(targetFolder("Set-Location 'D:/wt'; git push")).toBe('D:/wt')
+  expect(targetFolder('git push -u origin feature/x')).toBeUndefined()
 })
