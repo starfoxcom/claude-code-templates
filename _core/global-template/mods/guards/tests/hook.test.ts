@@ -53,6 +53,17 @@ test('a body file is read, and a credit inside it is found', async ($, on) => {
   expect(seen.files.get(LOG)).toContain('file /c/tmp/body.md')
 })
 
+test('a body file the same command writes is read from the command text', async ($, on) => {
+  const seen = world(on)
+  await bash($, `cat > /tmp/b.md <<'EOF'\n## What\n${AI_TRAILER}\nEOF\ngh pr create --title t --body-file /tmp/b.md`)
+  const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+  expect(entry.mod).toContain('file /tmp/b.md')
+  // Written by another program: the guard cannot read it, and says so.
+  await bash($, 'gh pr view 5 --json body --jq .body > /tmp/c.md; gh pr edit 5 --body-file /tmp/c.md')
+  const next = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+  expect(next.unread).toEqual(['the PR edit (file /tmp/c.md)'])
+})
+
 test('a commit looks at the lines it adds', async ($, on) => {
   const seen = world(on, {}, `+++ b/src/a.ts\n@@ -0,0 +1 @@\n+// ${AI_TRAILER}\n`)
   await bash($, "git commit -m 'feat: x'")
