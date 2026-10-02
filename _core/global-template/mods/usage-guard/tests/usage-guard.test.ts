@@ -331,3 +331,37 @@ test('stop commands are found by the project folder name, case-insensitively, an
   expect(Object.keys(STOP_COMMANDS)).toEqual([])
   expect(stopCommandsFor('C:/Repos/my-game')).toEqual([])
 })
+
+test('crossing the line mid-turn waits for the turn to end before the wrap-up runs', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.turn.start({ turnId: 't1' } as never)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  // The 60-second check fires while the turn is still running.
+  await seen.clock.advance(60_000)
+
+  expect(pauseOf(seen)?.status).toBe('active')
+  expect(cardOf(seen)?.id).toBe(`paused:${RESET}`)
+  expect(seen.commands).toEqual([])
+
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+  // Once only: later checks find the wrap-up done.
+  await seen.clock.advance(60_000)
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
+test('a wrap-up owed by a running turn is dropped when the pause is cancelled before it ends', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.turn.start({ turnId: 't1' } as never)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+  await $.command.run({ command: 'usage-guard', args: 'cancel' } as never)
+  await endTurn($)
+
+  expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
+})

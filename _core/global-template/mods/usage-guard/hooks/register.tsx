@@ -65,6 +65,8 @@ const live: {
   hasWork: boolean
   isStatusShown: boolean
   wakeTimer?: Timer
+  /** A wrap-up due when the running turn ends: the pause it is for. */
+  pendingWrapUp?: Pause
   /** Claims this module already holds or found taken, so a 60-second check spawns no helper. */
   handled: Set<string>
   wrapUpAt: number
@@ -228,10 +230,29 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
     return
   }
   await notice($, `${limitName(pause)} plan usage at ${pause.percentUsed}%: saving work now. Work resumes on its own at ${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`)
+  // Mid-turn, the wrap-up never starts beside the running turn: the turn is told to finish its
+  // step, and turn.complete runs the wrap-up once it has ended.
   if (live.isTurnRunning) {
+    live.pendingWrapUp = pause
     const note = `[usage-guard] Plan usage at ${pause.percentUsed}%. Finish the current step and end this turn now; the wrap-up runs right after.`
     await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: note }] } }).catch(() => undefined)
+    return
   }
+  await startWrapUp($, pause)
+}
+
+// The wrap-up a turn that ended owed, unless the pause was cancelled or ended meanwhile.
+async function runPendingWrapUp($: EngineInterface): Promise<void> {
+  const pending = live.pendingWrapUp
+  if (!pending) return
+  live.pendingWrapUp = undefined
+  const pause = await readPause($)
+  if (pause?.status !== 'active' || pause.resetsAt !== pending.resetsAt) return
+  await startWrapUp($, pause)
+}
+
+async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
+  const resumeAt = localTime(pause.wakeAt)
   if (await hasCommand($, 'session-close')) {
     void $.command.run({ command: 'session-close', args: WRAP_UP_ARGS }).catch(() => undefined)
   } else {
@@ -396,6 +417,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     live.isTurnRunning = false
     const result = await next(e)
+    await runPendingWrapUp($).catch(() => undefined)
     await check($).catch(() => undefined)
     return result
   })
