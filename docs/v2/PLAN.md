@@ -71,9 +71,9 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 - [ ] Adopt mode, the project-owned manifest and keep markers.
 - [ ] Add-ons: GitHub Project board tracking in place of `ROADMAP.md`; a code-size checker with a baseline ratchet that fails CI on any new breach.
 - [ ] `/bindwright:update` and the daily SessionStart notice.
-- [ ] `/bindwright:audit`: measurements from session logs, proposed edits applied on approval.
+- [ ] `/bindwright:audit`: measurements from session logs, proposed edits applied on approval. It covers only what the built-in `/doctor prompt-audit` misses (that one already checks instruction files for outdated advice, stale paths and commands, and contradictions) and points to it for the rest (maintainer, 2026-10-02).
 - [ ] Marketplace: own marketplace first, then a community-marketplace submission.
-- [ ] Mods as `~/.claude` extras: canonical copies in `_core/global-template/mods/`, `/bindwright:setup` writes the `CLAUDE_CODE_PLUGIN_DIRS` entry only with consent, and a version check skips them before 2.1.287. Still to verify first: whether a project's `.claude/skills/<name>` folder loads as a plugin (a repo could ship a mod to its teammates), what the built-in "You should know" mod does, and whether `/doctor prompt-audit` overlaps `/bindwright:audit`.
+- [ ] Mods as `~/.claude` extras: canonical copies in `_core/global-template/mods/`, `/bindwright:setup` writes the `CLAUDE_CODE_PLUGIN_DIRS` entry only with consent, and a version check skips them before 2.1.287. Checked 2026-10-02: a mod inside a project's `.claude/skills/<name>` folder does not load (the same mod loads through `--plugin-dir`), so a repo cannot ship a mod to its teammates that way; mods stay `~/.claude` extras. The built-in "You should know" mod is a side agent that reviews each session for misses: it costs a model call per check and needs telemetry, overlaps none of these mods, and setup leaves it off by default with a one-line note on its cost.
 
 ### Phase 3: the page
 Built in visual slices of about 150 lines each, checked locally by the maintainer before any push.
