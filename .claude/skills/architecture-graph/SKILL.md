@@ -28,7 +28,9 @@ Maintained well, this kills the "cognitive debt" of architecture drifting silent
 
 ## Generation procedure (first time)
 
-1. **Map the high-level boundaries first** — top-level directories that represent distinct subsystems (e.g., `apps/`, `packages/`, `services/`, `src/<module>/`). Use the project's code-research tool's file-listing primitive (per `.claude/skills/find/SKILL.md`), or `Glob` (with a `# TOKENSAVE_BYPASS: <reason>` bypass marker if the hook is installed and the listing is non-code). For this project (tokensave): `tokensave_files <pattern>`.
+1. **Map the high-level boundaries first** — top-level directories that represent distinct subsystems (e.g., `apps/`, `packages/`, `services/`, `src/<module>/`). Use the file-listing step of `/find`.
+   With tokensave: `tokensave_files` for the tree, `tokensave_dsm` for which modules depend on which.
+   Otherwise `Glob '*/'` for the top level, then one level down.
 2. **Identify external boundaries** — databases, message queues, external APIs, file system, network. Read package manifests / lock files to find them.
 3. **Trace data paths** through 3–5 key user-facing features. Pick the most central ones; don't try to map everything on first pass.
 4. **Identify control-flow seams** — interface boundaries, event/message channels, dependency-injection seams.
@@ -50,12 +52,14 @@ Maintained well, this kills the "cognitive debt" of architecture drifting silent
    }
    ```
 6. **Render `index.html`** from a template (see scaffold below) that loads `diagram.json` and renders a force-directed or grid graph with click-to-highlight-connections behavior.
-7. **Commit both files** atomically: `docs: scaffold architecture diagram` — no PR, just land it.
+7. **Commit both files** in one commit, `docs: scaffold architecture diagram`, and land it through a PR like any other change.
 
 ## Refresh procedure
 
 1. Read existing `docs/architecture/diagram.json`.
-2. Diff against current code reality to find new/removed modules. Use `tokensave_dsm` (dependency-structure matrix) + `tokensave_coupling` + `tokensave_files` — fast, deterministic, no whole-tree walk.
+2. Diff against current code reality to find new/removed modules.
+   With tokensave: `tokensave_dsm` and `tokensave_coupling` give the dependency matrix directly.
+   Otherwise use the call-graph step of `/find`, or Grep each module's import statements (`import`, `from ... import`, `require(`, `use`, `#include`) and count cross-module edges.
 3. Update nodes / edges / groups. Bump `generated_at`.
 4. Commit: `docs: refresh architecture diagram after <change>`.
 
