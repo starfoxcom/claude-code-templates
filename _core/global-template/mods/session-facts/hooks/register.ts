@@ -43,12 +43,22 @@ async function readWindow($: EngineInterface): Promise<Window | undefined> {
   }
 }
 
+// The engine's fs makes no missing folders, so the data folder is made through node, once per load.
+export const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
+const madeDirs = new Set<string>()
+async function ensureDir($: EngineInterface, dir: string): Promise<void> {
+  if (madeDirs.has(dir)) return
+  const { exitCode } = await $.process.run(['node', '-e', MKDIR_SCRIPT, dir], { timeoutMs: 10_000 })
+  if (exitCode === 0) madeDirs.add(dir)
+}
+
 async function shareWindow($: EngineInterface, window: Window | undefined): Promise<void> {
   if (!window) return
   try {
     const configured = await $.env.get('CLAUDE_CONFIG_DIR')
     const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
     const dir = `${configured ?? `${home}/.claude`}/mods-data/session-facts`.replaceAll('\\', '/')
+    await ensureDir($, dir)
     await $.fs.write(`${dir}/${await $.session.id()}.json`, JSON.stringify(window))
   } catch {
     // The status line falls back to settings when the file is missing.
