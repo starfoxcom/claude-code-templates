@@ -15,6 +15,15 @@ const BEAT_MS = 10_000
 const REFRESH_MS = 2_000
 const LONG_SEAT_MS = 30 * 60_000
 const NOTICE_CARD_MS = 10_000
+const HOUR_MS = 60 * 60_000
+// The hooks run in a sandbox with no time zone of its own (its clock reads UTC), so the host's UTC
+// offset and zone name are read through node at set-up and again every hour, as session-facts and
+// usage-guard do.
+const READ_ZONE = [
+  'node',
+  '-e',
+  'console.log(new Date().getTimezoneOffset() + " " + Intl.DateTimeFormat().resolvedOptions().timeZone)',
+]
 
 type Seat = {
   session: string
@@ -61,6 +70,8 @@ const ctx = {
   delivered: new Set<string>(),
   // Short notices for this session's own card ("Your turn on the PC"), each with an end time.
   notices: [] as { key: string; body: string; tone: CardTone; until: number }[],
+  // The host's time zone; UTC until it is read.
+  zone: { offsetMinutes: 0, name: 'UTC' },
 }
 
 export const register: Register = on => {
@@ -254,6 +265,8 @@ async function setUp($: Engine) {
     return
   }
   loadRules()
+  await readZone($)
+  $.clock.every(HOUR_MS, () => void readZone($))
   await beat($)
   $.clock.every(BEAT_MS, () => void beat($))
   $.clock.every(REFRESH_MS, () => void refresh($))
@@ -455,13 +468,7 @@ async function gate($: Engine, command: string, run: () => Promise<any>, signal:
     const startedAt = await $.clock.now()
     const behind = await holderName($, claim)
     await refresh($)
-    let out = ''
-    try {
-      for await (const piece of $.process.spawn({ argv: ['node', ctx.pcctl, 'wait', ctx.me] })) {
-        if ('text' in piece && piece.stream === 'stdout') out += piece.text
-        if (signal.aborted) break
-      }
-    } catch {}
+    const out = await waitInLine($, signal)
     let reply: Reply = {}
     try {
       reply = JSON.parse(out.trim().split('\n').pop() || '{}')
@@ -483,6 +490,37 @@ async function gate($: Engine, command: string, run: () => Promise<any>, signal:
   return waited && ran && ran.deny === undefined ? { ...ran, context: [...(ran.context ?? []), waited] } : ran
 }
 
+// The helper's `wait` child prints nothing until this session gets the seat or is out of line, so
+// an abort (Esc) cannot wait for its next piece: each pull races the signal, and an abort ends the
+// wait at once and closes the child, whatever the engine does with the stream. The caller then
+// leaves the line.
+async function waitInLine($: Engine, signal: AbortSignal): Promise<string> {
+  let onAbort = () => {}
+  const aborted = new Promise<'aborted'>(resolve => {
+    onAbort = () => resolve('aborted')
+    if (signal.aborted) resolve('aborted')
+    else signal.addEventListener('abort', onAbort, { once: true })
+  })
+  const child = $.process.spawn({ argv: ['node', ctx.pcctl, 'wait', ctx.me] })
+  let out = ''
+  try {
+    for (;;) {
+      const pull = child.next()
+      // A pull left behind by an abort settles when the child is closed; nothing waits on it.
+      pull.catch(() => undefined)
+      const step = await Promise.race([pull, aborted])
+      if (step === 'aborted' || step.done) break
+      if (step.value.stream === 'stdout') out += step.value.text
+    }
+  } catch {
+    // A child that cannot start counts as not granted.
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+    if (signal.aborted) void child.return({ code: null, signal: null }).catch(() => undefined)
+  }
+  return out
+}
+
 // The usage-guard mod's shared pause (mods-data/usage-guard/pause.json): while it is active, sessions
 // wrap up, so no new heavy work should start. Returns when the pause ends, or 0 when there is none.
 async function usagePauseEnd($: Engine): Promise<number> {
@@ -499,9 +537,20 @@ async function usagePauseEnd($: Engine): Promise<number> {
   }
 }
 
+async function readZone($: Engine): Promise<void> {
+  try {
+    const { exitCode, stdout } = await $.process.run(READ_ZONE, { timeoutMs: 10_000 })
+    const [offset, name] = stdout.trim().split(' ')
+    if (exitCode === 0 && Number.isFinite(Number(offset)) && name) ctx.zone = { offsetMinutes: Number(offset), name }
+  } catch {
+    // UTC stays; the times shown say so.
+  }
+}
+
+// The host's local time of day, with its zone, the way usage-guard's card shows the same pause.
 function clockTime(epochMs: number): string {
-  const d = new Date(epochMs)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const local = new Date(epochMs - ctx.zone.offsetMinutes * 60_000)
+  return `${local.toISOString().slice(11, 16)} (${ctx.zone.name})`
 }
 
 async function holderName($: Engine, reply: Reply): Promise<string> {
