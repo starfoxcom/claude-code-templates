@@ -52,7 +52,7 @@ Maintained well, this kills the "cognitive debt" of architecture drifting silent
    }
    ```
 6. **Render `index.html`** from a template (see scaffold below) that loads `diagram.json` and renders a force-directed or grid graph with click-to-highlight-connections behavior.
-7. **Commit both files** atomically: `docs: scaffold architecture diagram` — no PR, just land it.
+7. **Commit both files** in one commit, `docs: scaffold architecture diagram`, and land it through a PR like any other change.
 
 ## Refresh procedure
 
