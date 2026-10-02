@@ -1,0 +1,1 @@
+{ "name": "session-facts", "version": "0.1.0", "description": "Adds the exact local time and context fill to every prompt, for the model only." }
