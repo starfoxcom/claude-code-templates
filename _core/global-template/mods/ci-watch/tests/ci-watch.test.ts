@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Watch } from '../hooks/register'
-import { deepTierOf, earlyFailures, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
+import { mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
@@ -13,28 +13,16 @@ test('passed only after two quiet polls in a row', () => {
   expect(second.outcome).toBe('passed')
 })
 
-test('a pending check resets the quiet count; a failure wakes early but settles only when the rest do', () => {
+test('a failure settles only after every check is done, two quiet polls in a row', () => {
   const quiet = settle(BASE, { build: 'pass' }, 1, HOUR)
   expect(settle(quiet, { build: 'pass', late: 'pending' }, 2, HOUR).stablePolls).toBe(0)
-  const early = settle(BASE, { build: 'fail', review: 'pending' }, 1, HOUR)
-  expect(early.outcome).toBeUndefined()
-  expect(earlyFailures(early)).toEqual(['build'])
-  expect(wakeText(early)).toContain('still running: review')
-  const reported: Watch = { ...early, reported: ['build'] }
-  expect(earlyFailures(settle(reported, { build: 'fail', review: 'pending' }, 2, HOUR))).toEqual([])
-  const final = settle(reported, { build: 'fail', review: 'fail' }, 3, HOUR)
+  const running = settle(BASE, { build: 'fail', review: 'pending' }, 1, HOUR)
+  expect(running.outcome).toBeUndefined()
+  const once = settle(running, { build: 'fail', review: 'fail' }, 2, HOUR)
+  expect(once.outcome).toBeUndefined()
+  const final = settle(once, { build: 'fail', review: 'fail' }, 3, HOUR)
   expect(final.outcome).toBe('failed')
   expect(wakeText(final)).toContain('failed: build, review')
-  const deep = settle(BASE, { 'Evaluate review outcome': 'fail', 'Claude On-Demand': 'pending' }, 1, HOUR)
-  expect(earlyFailures(deep)).toEqual([])
-})
-
-test('the deep-tier pattern comes from the option, falling back to the default', () => {
-  const deep = settle(BASE, { review: 'fail', 'Slow audit': 'pending' }, 1, HOUR)
-  expect(earlyFailures(deep)).toEqual(['review'])
-  expect(earlyFailures(deep, deepTierOf('slow audit'))).toEqual([])
-  expect(deepTierOf('').source).toBe('on-demand|deep')
-  expect(deepTierOf('(').source).toBe('on-demand|deep')
 })
 
 test('no checks reported is never a pass; the time limit wakes with what is stuck', () => {
@@ -116,20 +104,7 @@ function otherInstanceRecords(seen: Seen, change: Partial<Watch>) {
   seen.files.set(STATE, JSON.stringify({ watches: saved.watches.map(w => ({ ...w, ...change })) }))
 }
 
-test('an early failure another instance already reported during the gh calls is not sent again', async ($, on) => {
-  const { seen, clock } = world(on)
-  seen.isReadable = true
-  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
-  seen.bucket = 'fail'
-  seen.rows = [{ name: 'review', bucket: 'pending' }]
-  seen.duringChecks = () => otherInstanceRecords(seen, { checks: { build: 'fail', review: 'pending' }, reported: ['build'] })
-  await clock.advance(60_000)
-
-  expect(seen.prompts).toEqual([])
-})
-
-test('a settlement another instance already woke the session for is not sent again', async ($, on) => {
+test('a settlement another instance already woke the session for during the gh calls is not sent again', async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
@@ -142,7 +117,7 @@ test('a settlement another instance already woke the session for is not sent aga
   expect(seen.prompts).toEqual([])
 })
 
-test('an early failure still wakes the session when no other instance sent it', async ($, on) => {
+test('a failure wakes the session once, only after every check is done', async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
@@ -151,9 +126,15 @@ test('an early failure still wakes the session when no other instance sent it', 
   seen.rows = [{ name: 'review', bucket: 'pending' }]
   await clock.advance(60_000)
   await clock.advance(60_000)
+  expect(seen.prompts).toEqual([])
 
+  seen.rows = [{ name: 'review', bucket: 'pass' }]
+  await clock.advance(60_000)
+  expect(seen.prompts).toEqual([])
+  await clock.advance(60_000)
+  await clock.advance(60_000)
   expect(seen.prompts.length).toBe(1)
-  expect(seen.prompts[0]).toContain('build failed; still running: review')
+  expect(seen.prompts[0]).toContain('all checks settled; failed: build')
 })
 
 test('a merge names its PR, or 0 for the branch PR; other commands are not merges', () => {
