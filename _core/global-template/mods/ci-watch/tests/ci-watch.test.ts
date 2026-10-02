@@ -89,5 +89,6 @@ test('a push in another folder is looked up there', () => {
   expect(targetFolder('git -C "C:/repo wt" push -u origin feature/x')).toBe('C:/repo wt')
   expect(targetFolder('cd ../wt-ci && git push')).toBe('../wt-ci')
   expect(targetFolder("Set-Location 'D:/wt'; git push")).toBe('D:/wt')
+  expect(targetFolder('git -C /c/Users/me/wt push -q')).toBe('c:/Users/me/wt')
   expect(targetFolder('git push -u origin feature/x')).toBeUndefined()
 })
