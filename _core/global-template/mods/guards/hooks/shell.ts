@@ -11,6 +11,8 @@ export type Word = {
   dynamic: boolean
   /** Here-doc bodies written inside a `$(...)` of this word: `-m "$(cat <<'EOF' ... EOF)"`. */
   bodies: string[]
+  /** Its first character came from quotes or an escape, so a leading `<` or `>` is text, not a redirect. */
+  literalStart?: boolean
 }
 
 export type Statement = {
@@ -54,12 +56,12 @@ export function parse(command: string, powershell: boolean): Statement[] {
       return
     }
     const bare = REDIRECT.exec(w.text)
-    if (bare && !w.dynamic) {
+    if (bare && !w.dynamic && !w.literalStart) {
       if (!bare[3]) redirectNext = bare[2] === '<' ? 'read' : 'write'
       return
     }
     const attached = REDIRECT_ATTACHED.exec(w.text)
-    if (attached && !w.dynamic && /^[\d<>]/.test(w.text)) {
+    if (attached && !w.dynamic && !w.literalStart && /^[\d<>]/.test(w.text)) {
       const target = attached[1] === '<' ? st.reads : st.writes
       target.push(attached[2] ?? '')
       return
@@ -176,6 +178,14 @@ export function parse(command: string, powershell: boolean): Statement[] {
       i = end === -1 ? n : end
       continue
     }
+    // Bash: `<(...)` and `>(...)` are process substitutions, a file name built at run time.
+    if (!powershell && (c === '<' || c === '>') && command[i + 1] === '(') {
+      const w = startWord()
+      w.text += c
+      i++
+      substitution(w)
+      continue
+    }
     // Bash: `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
     if (!powershell && (c === '(' || c === ')')) {
       i++
@@ -225,6 +235,7 @@ export function parse(command: string, powershell: boolean): Statement[] {
         const end = close === -1 ? n : close
         const body = command.slice(i + open[0].length, end).replace(/\r$/, '')
         const w = startWord()
+        if (w.text === '') w.literalStart = true
         w.text += body
         if (q === '"' && /\$/.test(body)) w.dynamic = true
         i = close === -1 ? n : close + 3
@@ -232,6 +243,7 @@ export function parse(command: string, powershell: boolean): Statement[] {
       }
     }
     const w = startWord()
+    if ((c === "'" || c === '"' || c === esc) && w.text === '') w.literalStart = true
     if (c === "'") {
       let j = i + 1
       while (j < n) {

@@ -120,6 +120,32 @@ test('body files are found in every spelling, and text built at run time is name
   expect(written.written).toEqual(['/tmp/b.md'])
 })
 
+test('a quoted value that starts with < or > is text, not a redirect', () => {
+  for (const command of [
+    `gh pr comment 5 --body "<details><summary>Logs</summary>${GENERATED}</details>"`,
+    `gh pr comment 5 --body "> quoted ${GENERATED}"`,
+    `gh pr comment 5 --body '<!-- note --> ${GENERATED}'`,
+    `git commit -m "<scope>: x ${GENERATED}"`,
+    `gh pr create --title "<WIP> x" --body "${GENERATED}"`,
+  ]) {
+    expect(verdict(command, true)).toBe('credit')
+  }
+  // Unquoted redirects keep working, a quoted target included.
+  const written = inspect(`cat >"/tmp/b.md" <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md`, false)
+  expect(written.written).toEqual(['/tmp/b.md'])
+  expect(inspect('git commit -F - < "/tmp/m.txt"', false).files.map(f => f.path)).toEqual(['/tmp/m.txt'])
+})
+
+test('cmd with the command as one quoted word, and a message flag left without its value, are read or named', () => {
+  for (const command of [`cmd /c "git commit -m \\"${AI_TRAILER}\\""`, `cmd //c "git commit -m '${AI_TRAILER}'"`]) {
+    expect(verdict(command, true)).toBe('credit')
+  }
+  expect(verdict(`cmd /c "git commit -m '${AI_TRAILER}'"`, true, true)).toBe('credit')
+  expect(inspect(`git commit -F <(printf 'fix: x')`, false).unread).toEqual(['the commit message'])
+  expect(inspect(`gh pr create --title t --body-file >(cat)`, false).unread).toEqual(['the PR text'])
+  expect(inspect('git commit -m', false).unread).toEqual(['the commit message'])
+})
+
 test('a commit checks the lines it adds for credit lines, not quoted rules', () => {
   const diff = (line: string) => `+++ b/src/a.ts\n@@ -0,0 +1 @@\n+${line}\n`
   expect(checkAddedLines(diff(`// ${GENERATED}`))?.file).toBe('src/a.ts')

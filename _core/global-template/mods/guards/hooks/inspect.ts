@@ -240,9 +240,12 @@ function script(name: string, args: Word[]): { statements: Statement[]; ps: bool
   if (/^(bash|sh|zsh|dash|ksh)$/.test(name)) return of(args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a.text)), false)
   if (/^(pwsh|powershell)$/.test(name)) return of(args.findIndex(a => /^-(c|command)$/i.test(a.text)), true)
   if (name === 'cmd') {
-    const i = args.findIndex(a => /^\/[ck]$/i.test(a.text))
+    // Git Bash turns `/c` into a path, so it is typed `//c` there.
+    const i = args.findIndex(a => /^\/{1,2}[ck]$/i.test(a.text))
     if (i === -1) return undefined
     const words = args.slice(i + 1)
+    // `cmd /c "git commit -m \"...\""`: the command as one quoted word is read as a command line.
+    if (words.length === 1) return { statements: parse(words[0]?.text ?? '', false), ps: false, dynamic: words[0]?.dynamic ?? false }
     return { statements: [{ words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }], ps: false, dynamic: false }
   }
   return undefined
@@ -393,12 +396,14 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
       if (!kind) continue
       const value = eq === -1 ? args[++i] : { ...w, text: t.slice(eq + 1) }
       if (value) take(kind, value, r, where)
+      else missing(kind, r, where)
       continue
     }
     if (t.startsWith('-') && t.length > 1 && !w.dynamic) {
       if (spec[t]) {
         const value = args[++i]
         if (value) take(spec[t] as Kind, value, r, where)
+        else missing(spec[t] as Kind, r, where)
         continue
       }
       // A bundle: the first letter that takes a value takes the rest of the word, or the next word.
@@ -408,6 +413,7 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
         const attached = t.slice(j + 1)
         const value = attached ? { ...w, text: attached } : args[++i]
         if (value) take(kind, value, r, where)
+        else missing(kind, r, where)
         break
       }
       continue
@@ -415,6 +421,12 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
     positional.push(w)
   }
   return positional
+}
+
+// A message flag with nothing after it: the reading lost its value (a word it could not split, such as
+// `-F <(...)` cut short), so the message is named as unread.
+function missing(kind: Kind, r: Reading, where: string) {
+  if (where && (kind === 'text' || kind === 'file' || kind === 'field' || kind === 'data')) r.plan.unread.push(where)
 }
 
 function take(kind: Kind, value: Word, r: Reading, where: string) {
@@ -456,7 +468,7 @@ const SUBSTITUTION = /\$\((?:[^()]|\([^()]*\))*\)/g
 // A value with its variables replaced by what the command set them to; `unresolved` when any part is
 // built at run time in a way the reading does not know.
 function expand(text: string, r: Reading): { text: string; unresolved: boolean } {
-  let unresolved = /\$\(|^\(|@[({]/.test(text) || (!r.ps && text.includes('`'))
+  let unresolved = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`'))
   const out = text.replace(SUBSTITUTION, ' ').replace(/\$\{?([A-Za-z_]\w*)\}?/g, (_, name: string) => {
     const v = r.vars.get(name.toLowerCase())
     if (v?.literal) return v.text
