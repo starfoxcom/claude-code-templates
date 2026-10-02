@@ -96,7 +96,7 @@ const PERSON_MARK = "[compact-handoff] The person's messages, word for word"
 // Lines the mods attach to a prompt, and whole prompts they submit, start with
 // the mod's tag. The same pattern as INJECTED_LINE in hooks/register.ts (the
 // spec keeps the two equal).
-const INJECTED_LINE = /^\[[a-z][a-z0-9-]*\](?: |$)/
+const INJECTED_LINE = /^\[(?:session-facts|time|task-tracking|tasks|ci-watch|shared-pc|skill-check|usage-guard|compact-handoff|guards)\](?: |$)/
 
 function stripInjected(text) {
   return text.split('\n').filter(line => !INJECTED_LINE.test(line.trim())).join('\n').trim()
