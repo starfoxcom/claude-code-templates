@@ -136,6 +136,42 @@ test('a quoted value that starts with < or > is text, not a redirect', () => {
   expect(inspect('git commit -F - < "/tmp/m.txt"', false).files.map(f => f.path)).toEqual(['/tmp/m.txt'])
 })
 
+test('the whole command text of a write is checked for credit, whatever spelling the reading misses', () => {
+  for (const command of [
+    `git commit -Sabc -m '${AI_TRAILER}'`,
+    `git -c user.name=Bot -c user.email=noreply@anthro${'pic.com'} commit -m fix`,
+    `GIT_AUTHOR_EMAIL=noreply@anthro${'pic.com'} git commit -m fix`,
+  ]) {
+    expect(verdict(command, true)).toBe('credit')
+  }
+  // A read-only command is not checked, and paths in a write never read as credit.
+  expect(inspect(`echo '${AI_TRAILER}'`, false).texts).toEqual([])
+  expect(verdict('git commit -F C:/Users/me/AppData/Local/Temp/session_01V8SAUxUZBbVPekZUHDL9FZ/m.txt', true)).toBeUndefined()
+})
+
+test('an attached-only flag value never swallows the next word', () => {
+  const texts = (c: string) => inspect(c, false).texts.filter(t => !t.creditOnly).map(t => t.text)
+  expect(texts("git commit -Sabc -m 'fix: x'")).toEqual(['fix: x'])
+  expect(texts("git commit -S -m 'fix: x'")).toEqual(['fix: x'])
+  expect(texts("git commit -unormal -m 'fix: x'")).toEqual(['fix: x'])
+  expect(texts("git commit --gpg-sign=ABC -m 'fix: x'")).toEqual(['fix: x'])
+})
+
+test('a stdin body through curl -d @- or a here-doc the line goes on past is read', () => {
+  const plan = inspect(`curl -X POST https://api.github.com/repos/o/r/issues/1/comments -d @- <<'EOF'\n{"body":"ok"}\nEOF`, false)
+  expect(plan.files).toEqual([])
+  expect(plan.unread).toEqual([])
+  for (const command of [
+    `git commit -F - <<'EOF' && git push\nfix: x\nEOF`,
+    `gh pr create --title t --body-file - <<'EOF' | tee log\nbody\nEOF`,
+    `gh pr create --title t --body-file - <<'EOF' ; echo done\nbody\nEOF`,
+  ]) {
+    const p = inspect(command, false)
+    expect(p.unread).toEqual([])
+    expect(p.texts.some(t => !t.creditOnly && (t.text === 'fix: x' || t.text === 'body'))).toBe(true)
+  }
+})
+
 test('cmd with the command as one quoted word, and a message flag left without its value, are read or named', () => {
   for (const command of [`cmd /c "git commit -m \\"${AI_TRAILER}\\""`, `cmd //c "git commit -m '${AI_TRAILER}'"`]) {
     expect(verdict(command, true)).toBe('credit')
