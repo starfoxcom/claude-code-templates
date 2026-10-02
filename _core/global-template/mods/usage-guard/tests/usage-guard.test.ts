@@ -29,6 +29,8 @@ type World = {
   sessionId: string
   /** Times the stop commands were looked up (the shipped list is empty, so none run). */
   stopLookups: number
+  /** Runs as a claim is made: another session acting meanwhile. */
+  duringClaim?: (name: string) => void
 }
 
 function world(on: On, root = 'C:/Repos/my-game'): World {
@@ -59,6 +61,7 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     let out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
     if (e.argv[2] === CLAIM) {
       const name = e.argv[4] ?? ''
+      seen.duringClaim?.(name)
       out = seen.claims.has(name) ? 'taken\n' : 'won\n'
       seen.claims.add(name)
     }
@@ -306,6 +309,28 @@ test('of two sessions crossing the line together, only the claim winner stops ba
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   await seen.clock.advance(WAKE - NOW)
   expect(seen.commands.at(-1)).toEqual({ command: 'session-start', args: '' })
+})
+
+test('a session that loses the pause claim honours a cancel written since the winner paused', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  // The other session won the claim and wrote its pause; the person cancelled it before this check.
+  seen.claims.add(`pause-${KEY}`)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  // Its pause lands, already cancelled, while this session makes its claim.
+  seen.duringClaim = name => {
+    if (name !== `pause-${KEY}`) return
+    const cancelled = { status: 'cancelled', kinds: ['five_hour'], percentUsed: 91, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b' }
+    seen.files.set(PAUSE_FILE, JSON.stringify(cancelled))
+  }
+  await endTurn($)
+
+  expect(pauseOf(seen)?.status).toBe('cancelled')
+  expect(seen.commands).toEqual([])
+  expect(seen.claims.has(`${KEY}-sess-a`)).toBe(false)
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands).toEqual([])
 })
 
 test('after a hot reload during a pause, the first turn arms the wake timer again', async ($, on) => {
