@@ -56,6 +56,14 @@ test('the product name: allowed where it is the subject, blocked elsewhere, neve
   const mention = `git commit -m 'docs: add guide for using ${NAME} Code'`
   expect(verdict(mention, true)).toBeUndefined()
   expect(verdict(mention, false)).toBe('name')
+  // Still the name: between punctuation, with separators inside it, or in a snake_case word.
+  for (const command of [
+    `git commit -m 'docs: thanks, ${NAME}!'`,
+    `git commit -m 'docs: ask ${NAME.slice(0, 3)}-${NAME.slice(3)} first'`,
+    `git commit -m 'feat: add the ${NAME.toLowerCase()}_helper module'`,
+  ]) {
+    expect(verdict(command, false)).toBe('name')
+  }
   for (const command of [
     "git commit -m 'docs: update CLAUDE.md and .claude/rules/git.md'",
     "git commit -m 'fix(ci): pin the claude.yml checkout'",
@@ -63,6 +71,11 @@ test('the product name: allowed where it is the subject, blocked elsewhere, neve
     "gh pr create --title t --body 'See https://github.com/acme/claude-helpers/issues/3'",
     'git add .github/workflows/claude.yml; git commit -q -m "fix(ci): drop admin hints"; git push -q -u origin hotfix/drop-admin-text-claude-yml',
     'cd "C:/Users/a/Repos/claude-helpers" && git commit -q -F "C:/Users/a/AppData/Local/Temp/claude/x/msg.txt"',
+    // The name is a whole word only, never part of a longer word or spread across spaces or lines.
+    "git commit -m 'docs: thank the philanthropic and misanthropic reviewers'",
+    "git commit -m 'docs: the critic lauded the change'",
+    "git commit -m 'docs: quote the spec' -m 'spec\nlauded by the team'",
+    "git commit -m 'docs: credit Marc Laude for the parser'",
   ]) {
     expect(verdict(command, false)).toBeUndefined()
   }
