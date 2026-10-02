@@ -2,6 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Mirror } from '../hooks/register'
+import { MKDIR_SCRIPT } from '../hooks/register'
 
 const MIRROR_FILE = 'C:/Users/me/.claude/mods-data/tasks/sess-a.json'
 
@@ -75,6 +76,9 @@ test('the mirror keeps every task, finished ones too', async ($, on) => {
     ['1', 'completed'],
     ['2', 'pending'],
   ])
+  // The engine's fs makes no folders: the mirror's folder is made through node, once per load.
+  const made = seen.runs.filter(argv => argv[2] === MKDIR_SCRIPT)
+  expect(made).toEqual([['node', '-e', MKDIR_SCRIPT, 'C:/Users/me/.claude/mods-data/tasks']])
 })
 
 test('a second task in progress gets a one-at-a-time note', async ($, on) => {

@@ -1,7 +1,7 @@
 import type { On, SessionMessage } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { PERSON_MARK, personWords } from '../hooks/register'
+import { MKDIR_SCRIPT, PERSON_MARK, personWords } from '../hooks/register'
 
 const SESSION = 'sess-1'
 
@@ -95,6 +95,8 @@ test('on: the hand-off instructions reach the summarizer and the person is kept 
   expect(texts[1]).not.toContain('file contents')
   expect(texts[2]).toBe('kept tail')
   expect(seen.writes.at(-1)?.path.replaceAll('\\', '/')).toBe('C:/Users/me/.claude/mods-data/compact-handoff/sess-1.md')
+  // The engine's fs makes no folders: the data folder is made through node first.
+  expect(seen.runs.filter(argv => argv[2] === MKDIR_SCRIPT)).toEqual([['node', '-e', MKDIR_SCRIPT, 'C:/Users/me/.claude/mods-data/compact-handoff']])
 })
 
 test('on: an ahead-of-time summary gets the same hand-off brief, so the real compaction can reuse it', { options: { mode: 'on' } }, async ($, on) => {

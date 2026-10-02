@@ -128,6 +128,15 @@ async function budgetTokens($: EngineInterface): Promise<number> {
   }
 }
 
+// The engine's fs makes no missing folders, so the data folder is made through node, once per load.
+export const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
+const madeDirs = new Set<string>()
+async function ensureDir($: EngineInterface, dir: string): Promise<void> {
+  if (madeDirs.has(dir)) return
+  const { exitCode } = await $.process.run(['node', '-e', MKDIR_SCRIPT, dir], { timeoutMs: 10_000 })
+  if (exitCode === 0) madeDirs.add(dir)
+}
+
 async function dataDir($: EngineInterface): Promise<string> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
@@ -164,7 +173,9 @@ function summaryText(result: SessionCompactResult): string {
 async function record($: EngineInterface, name: string, sections: Record<string, string>): Promise<void> {
   try {
     const body = Object.entries(sections).map(([title, text]) => `## ${title}\n\n${text}`).join('\n\n')
-    await $.fs.write(`${await dataDir($)}/${name}.md`, `${body}\n`)
+    const dir = await dataDir($)
+    await ensureDir($, dir)
+    await $.fs.write(`${dir}/${name}.md`, `${body}\n`)
   } catch {
     // A record that cannot be written never blocks a compaction.
   }

@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Watch } from '../hooks/register'
-import { claimWake, isPushOrPr, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
+import { MKDIR_SCRIPT, claimWake, isPushOrPr, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
@@ -57,10 +57,14 @@ type Seen = {
   duringChecks?: () => void
   /** `gh pr checks` fails (network, auth) with nothing on stdout. */
   isChecksDown?: boolean
+  /** Folder makes and file writes, in order. */
+  order: string[]
+  /** Every write fails (a folder that cannot be made). */
+  isWriteDown?: boolean
 }
 
 function world(on: On) {
-  const seen: Seen = { prompts: [], files: new Map(), bucket: 'pending', rows: [], isReadable: false }
+  const seen: Seen = { prompts: [], files: new Map(), bucket: 'pending', rows: [], isReadable: false, order: [] }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   on('session.id', () => ({ value: 's1' }))
@@ -68,7 +72,9 @@ function world(on: On) {
   on('tool.register', ($, e) => ({ value: { tool: `mcp__ci-watch__${e.name}` } }))
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   on('fs.write', ($, e) => {
+    if (seen.isWriteDown) throw new Error('ENOENT')
     seen.files.set(e.path.replaceAll('\\', '/'), e.text)
+    seen.order.push(`write ${e.path.replaceAll('\\', '/')}`)
     return { value: undefined }
   })
   on('fs.read', ($, e) => {
@@ -78,6 +84,7 @@ function world(on: On) {
   })
   on('process.run', ($, e) => {
     const args = e.argv.join(' ')
+    if (e.argv[2] === MKDIR_SCRIPT) seen.order.push(`mkdir ${e.argv[3]}`)
     if (args.includes('pr checks')) seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {
       return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -112,6 +119,17 @@ test('a push starts a watch and the session is woken once when it passes', async
   expect(seen.prompts[0]).toContain('o/r#7: all 1 checks settled')
   await clock.advance(60_000)
   expect(seen.prompts.length).toBe(1)
+})
+
+test('the data folder is made before the first save, and a failed save never fails the push', async ($, on) => {
+  const { seen } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  expect(seen.order.slice(0, 2)).toEqual(['mkdir C:/Users/me/.claude/mods-data/ci-watch', 'write C:/Users/me/.claude/mods-data/ci-watch/s1.json'])
+
+  seen.isWriteDown = true
+  const pushed = await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  expect(pushed.isError ?? false).toBe(false)
 })
 
 const STATE = 'C:/Users/me/.claude/mods-data/ci-watch/s1.json'

@@ -95,6 +95,15 @@ export function wakeText(watch: Watch): string {
   return `[ci-watch] ${pr}: all ${entries.length} checks settled with no failure. Verify it is mergeable and finish it per the project rules.`
 }
 
+// The engine's fs makes no missing folders, so the data folder is made through node, once per load.
+export const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
+const madeDirs = new Set<string>()
+async function ensureDir($: EngineInterface, dir: string): Promise<void> {
+  if (madeDirs.has(dir)) return
+  const { exitCode } = await $.process.run(['node', '-e', MKDIR_SCRIPT, dir], { timeoutMs: 10_000 })
+  if (exitCode === 0) madeDirs.add(dir)
+}
+
 async function statePath($: EngineInterface): Promise<string> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
@@ -102,8 +111,15 @@ async function statePath($: EngineInterface): Promise<string> {
   return `${dir}/${await $.session.id()}.json`.replaceAll('\\', '/')
 }
 
+// A failed write never rejects a hook: the push it follows has already run.
 async function save($: EngineInterface): Promise<void> {
-  await $.fs.write(await statePath($), JSON.stringify({ watches: live.watches }))
+  try {
+    const path = await statePath($)
+    await ensureDir($, path.slice(0, path.lastIndexOf('/')))
+    await $.fs.write(path, JSON.stringify({ watches: live.watches }))
+  } catch {
+    // The watches stay in memory; the next save tries again.
+  }
 }
 
 async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {

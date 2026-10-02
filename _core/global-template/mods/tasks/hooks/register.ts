@@ -336,6 +336,15 @@ export function nudgeText(tools: number): string {
   return `[tasks] This turn ran ${tools} tool calls with no task list. If the work has 3+ steps, create the tasks now (TaskCreate) and keep their status current.`
 }
 
+// The engine's fs makes no missing folders, so the data folder is made through node, once per load.
+export const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
+const madeDirs = new Set<string>()
+async function ensureDir($: EngineInterface, dir: string): Promise<void> {
+  if (madeDirs.has(dir)) return
+  const { exitCode } = await $.process.run(['node', '-e', MKDIR_SCRIPT, dir], { timeoutMs: 10_000 })
+  if (exitCode === 0) madeDirs.add(dir)
+}
+
 async function dataDir($: EngineInterface): Promise<string> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
@@ -365,7 +374,9 @@ async function saveMirror($: EngineInterface, mirror: Mirror): Promise<void> {
     const drop = new Set(finished.slice(0, mirror.tasks.length - KEEP_TASKS).map(task => task.id))
     mirror.tasks = mirror.tasks.filter(task => !drop.has(task.id))
   }
-  await $.fs.write(`${await dataDir($)}/${mirror.session}.json`, JSON.stringify(mirror, null, 1)).catch(() => undefined)
+  const dir = await dataDir($)
+  await ensureDir($, dir).catch(() => undefined)
+  await $.fs.write(`${dir}/${mirror.session}.json`, JSON.stringify(mirror, null, 1)).catch(() => undefined)
 }
 
 function withContext<T extends object>(result: T, note: string | undefined): T {
