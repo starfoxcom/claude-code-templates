@@ -1,53 +1,26 @@
-# Collaboration rules
+# Collaboration
 
-This rule applies when multiple humans push to the repo — open-source, team project, or paid client team. The discipline below complements `git.md`; everything in `git.md` still applies.
+Applies when more than one person pushes to the repo. Everything in `git.md` still applies.
 
----
+## Branches
 
-## Branch hygiene
+- Fetch and merge `develop` into your branch before starting, so you do not fix something already fixed.
+- Never push to someone else's branch without agreeing in the PR first. Never force-push a shared branch.
 
-- **Pull `develop` before starting** — `git fetch && git merge origin/develop` so you don't waste a PR on an already-fixed bug.
-- **Rebase or merge dev INTO your feature branch** when dev advances, never the other way (the PR's merge commit handles dev). The cascade is:
-  ```bash
-  git checkout feature/<n>
-  git merge origin/develop
-  git push origin feature/<n>
-  ```
-- **Don't push to other people's branches** without coordinating in the PR. Force-push to a shared branch is a hard no.
-- **One concern per branch.** If you find a tangential bug while working on a feature, fix it on its own branch and PR — don't bundle.
+## Pull requests
 
----
+- Open as a draft while the work is incomplete; mark it ready only when you want review.
+- Read your own diff on GitHub before asking for review.
+- Answer every review comment before asking again: fix it, push back with a reason, or link the issue that tracks it.
+- After review starts, add fixup commits instead of force-pushing, so reviewers keep their place. The merge style in `git.md` decides how they land.
+- Make review comments specific: "this O(n²) loop runs on every keystroke", not "this won't scale".
 
-## PR etiquette
+## Who reviews
 
-- **Open as Draft** when the work is incomplete but you want CI feedback. Mark Ready for Review only when you actually want eyes.
-- **Self-review first** — read your own diff in the GitHub UI before requesting review. You'll catch half your own findings.
-- **Respond to every comment** before re-requesting review. Either fix it, push back with a reason, or "tracked in #N" if deferring.
-- **Don't force-push after review starts** unless you note the rewrite explicitly. Reviewers lose their place. Use additive fixup commits; PRs land as merge commits, so give each commit a meaningful message.
-- **Be specific in review comments.** "This won't scale" is not actionable; "this O(n²) loop runs on every keystroke" is.
-
----
-
-## Review distribution
-
-If `CODEOWNERS` is configured, GitHub auto-requests reviewers. Otherwise:
-
-- Request reviewers based on the **directory the change touches**, not seniority. The owner of the affected module reviews.
-- For cross-cutting changes, request a reviewer per affected module.
-- Don't merge your own PR — at least one other human approval is required.
-
----
+- This repo has one maintainer and no `CODEOWNERS` file. Branch protection requires zero approvals, so the AI review gates decide: a PR merges on a 🟢 routine verdict, plus a 🟢 deep verdict when a deep review was raised (`review-tiers.md`). The maintainer merges on a 🟢 gate without a separate approval.
+- A PR from an external contributor also needs the maintainer to read its whole diff before it merges, on top of the AI verdicts.
 
 ## When CI is red
 
-If the routine review posts 🔴, **fix on the PR branch** — don't open a new PR. Re-request review after pushing the fix. Don't "merge anyway" — the workflow's `Evaluate review outcome` step blocks merge.
-
-If CI is red for **infrastructure reasons** (flaky test, runner outage), surface it to the maintainer who manages CI. Don't disable the workflow just to merge.
-
----
-
-## Mandatory deep review
-
-For PRs whose diff touches the deep-review trigger surface (parsers, threading, public API, auth, migrations, scheduler/DAG, save/load format), the on-demand deep review is **mandatory** before merge — not optional. The routine review auto-applies the `needs-deep-review` label AND posts the structured `@claude review this PR` follow-up. Merge is blocked until the deep review's 🟢 verdict lands.
-
-If the deep review is 🔴, fix on the PR branch, re-request the deep review with another comment that starts with `@claude review this PR — re-check on <focus>`.
+- A 🔴 review verdict is fixed on the same PR branch. Never merge past it.
+- A red check caused by infrastructure (flaky test, runner outage) goes to whoever maintains CI. Never disable a workflow to get a merge through.
