@@ -99,7 +99,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 3. runners: local CI runners on or off, only when `statusline.config.json` lists them (machine-wide, checked once a minute);
 4. budgets: context fill and tokens left before compaction (exact with `session-facts`; without it the threshold is left out), plan usage per window (or the `usage-guard` pause), and the prompt-cache countdown in its last minutes.
 
-Mods that draw their own band above the prompt (`shared-pc`, `tasks`) get no status-line piece. Install it with `"statusLine": { "type": "command", "command": "node \"<home>/.claude/statusline.js\"" }` in `~/.claude/settings.json`. Use it in place of the simpler `statusline-command.sh.template` (one line, bash only); Claude Code runs a single status line command.
+Mods that draw their own band above the prompt (`shared-pc`, `tasks`) get no status-line piece. Install it with `"statusLine": { "type": "command", "command": "node \"<home>/.claude/statusline.js\"", "refreshInterval": 15 }` in `~/.claude/settings.json`. `refreshInterval` re-runs the command every 15 seconds on top of the usual events, so the CI and runner lines keep updating while the session is idle; without it they change only when something happens in the session. Use it in place of the simpler `statusline-command.sh.template` (one line, bash only); Claude Code runs a single status line command.
 
 ---
 
