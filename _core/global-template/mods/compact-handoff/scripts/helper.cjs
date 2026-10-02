@@ -88,6 +88,22 @@ function sweep(dir, keepNewest, maxAgeDays) {
   })
 }
 
+// The block the mod carries through each compaction (PERSON_MARK in
+// hooks/register.ts; test-helper/helper.spec.cjs keeps the two equal). Read back
+// as a message, it would carry every earlier message forward a second time.
+const PERSON_MARK = "[compact-handoff] The person's messages, word for word"
+
+// The same filter as isPersonMessage in hooks/register.ts, for the transcript's records.
+function isPersonText(text) {
+  return (
+    text.length > 0 &&
+    !text.startsWith('<') &&
+    !text.startsWith('[SYSTEM') &&
+    !text.startsWith('This session is being continued') &&
+    !text.startsWith(PERSON_MARK)
+  )
+}
+
 // The person's own messages since the last compaction, oldest first: typed
 // prompts plus those typed while a turn ran (stored as queued_command
 // attachments, which the compaction's message list does not show as typed).
@@ -112,14 +128,18 @@ async function persons(sessionId) {
       }
     }
     text = text.trim()
-    if (!text || text.startsWith('<') || text.startsWith('This session is being continued')) continue
+    if (!isPersonText(text)) continue
     if (found[found.length - 1] !== text) found.push(text)
   }
   console.log(JSON.stringify(found))
 }
 
-const [command, ...args] = process.argv.slice(2)
-if (command === 'recall') recall(args[0], Number(args[1]), args.slice(2).join(' '))
-else if (command === 'persons') persons(args[0])
-else if (command === 'sweep') sweep(args[0], Number(args[1]), Number(args[2]))
-else { console.error('usage: recall|sweep'); process.exit(2) }
+module.exports = { PERSON_MARK, isPersonText }
+
+if (require.main === module) {
+  const [command, ...args] = process.argv.slice(2)
+  if (command === 'recall') recall(args[0], Number(args[1]), args.slice(2).join(' '))
+  else if (command === 'persons') persons(args[0])
+  else if (command === 'sweep') sweep(args[0], Number(args[1]), Number(args[2]))
+  else { console.error('usage: recall|persons|sweep'); process.exit(2) }
+}

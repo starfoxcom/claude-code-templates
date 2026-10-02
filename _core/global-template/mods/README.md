@@ -111,6 +111,7 @@ From the folder that holds the mods:
 claude plugin validate <mod>   # reads the manifest and hooks module as the engine will; lists hooks, calls and env reads
 claude plugin test <mod>       # runs every *.test.ts / *.test.tsx under the mod against the engine
 node --test shared-pc/test-helper/pcctl.spec.cjs   # shared-pc's Node helper
+node --test compact-handoff/test-helper/helper.spec.cjs   # compact-handoff's Node helper
 ```
 
 Validation reports one warning per mod (no `author` field); that is expected.
