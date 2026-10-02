@@ -60,19 +60,24 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
   const top = (await git($, cwd, ['rev-parse', '--show-toplevel'])).trim()
   const repo = (plan.repo ?? top.split(/[\\/]/).pop() ?? '').toLowerCase()
   const mayName = live.mentionRepos.includes('*') || live.mentionRepos.includes(repo)
-  for (const { where, text } of plan.texts) {
-    const v = checkText(text, mayName)
+  for (const { where, text, creditOnly } of plan.texts) {
+    const v = checkText(text, mayName || Boolean(creditOnly))
     if (v) return describe(v, where)
   }
   const written = new Set(plan.written.map(p => osPath(p, cwd).toLowerCase()))
-  for (const { where, path } of plan.files) {
+  for (const { where, path, written: fromCommand } of plan.files) {
     const full = osPath(path, cwd)
     let text: string
     try {
       text = String(await $.fs.read(full))
     } catch {
-      // A body file this same command writes is read from the command text, already checked above.
-      if (written.has(full.toLowerCase())) continue
+      // A body file this same command writes does not exist yet: what it writes was read from the
+      // command text above. One written under another spelling of its path is named unread.
+      if (fromCommand) continue
+      if (written.has(full.toLowerCase())) {
+        plan.unread.push(where)
+        continue
+      }
       return `could not read the body file ${full} for ${where}. Write the file first, or check the path.`
     }
     const v = checkText(text, mayName)
