@@ -50,8 +50,8 @@ Per `.claude/rules/git.md` (resolved from canonical `_core/project-template/.cla
   - `main` — stable releases only, tag every release commit
   - `develop` — base for all in-flight work
   - `feature/<n>` — branches from `develop`, merges back to `develop`
-  - `release/<v>` — branches from `develop`, merges to `main` AND `develop`
-  - `hotfix/<n>` — branches from `main`, merges to `main` AND `develop`
+  - `release/<v>` — branches from `develop`, merges to `main`, then reaches `develop` through a cascade PR opened by hand (`.claude/rules/git.md` § "Cascade after every merge into `main`")
+  - `hotfix/<n>` — branches from `main`, merges to `main`, then the same hand-opened cascade PR into `develop`
 - **Every PR merges with a merge commit** (`gh pr merge <pr> --merge`), so each branch stays visible in the history graph. Keep every commit on the branch meaningful; the PR title (64 characters max) goes into the merge commit. Squash and rebase merges are not used here.
 
 ---
