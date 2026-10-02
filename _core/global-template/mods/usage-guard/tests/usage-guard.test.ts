@@ -323,6 +323,22 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
   expect(seen.commands).toEqual([{ command: 'session-start', args: '' }])
 })
 
+test('a session resumes once per reset, even with an instance from before a hot reload still running', async ($, on) => {
+  const seen = world(on)
+  const pause = {
+    status: 'done', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-a', handled: ['sess-a'],
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'active' }))
+  seen.claims.add(`${KEY}-sess-a`)
+  await $.turn.start({ turnId: 't2' } as never)
+  // The instance from before the reload woke first: it claimed this session's resume and marked the pause done.
+  seen.claims.add(`resume-${KEY}-sess-a`)
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  await seen.clock.advance(WAKE - NOW)
+
+  expect(seen.commands).toEqual([])
+})
+
 test('stop commands are found by the project folder name, case-insensitively, and only for that project', () => {
   const table = { 'My-Game': [['docker', 'compose', 'stop']] }
   expect(stopCommandsFor('C:\\Repos\\my-game', table)).toEqual([['docker', 'compose', 'stop']])
