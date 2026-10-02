@@ -10,6 +10,8 @@ export type Watch = {
   stablePolls: number
   outcome?: 'passed' | 'failed' | 'timeout'
   settledAt?: number
+  // Failed checks already reported while others still ran.
+  reported?: string[]
 }
 
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
@@ -32,7 +34,10 @@ export function settle(watch: Watch, checks: Record<string, string>, now: number
   const isQuiet = names.length > 0 && names.every(name => !PENDING.has(checks[name] ?? ''))
   const stablePolls = isQuiet ? watch.stablePolls + 1 : 0
   const next: Watch = { ...watch, checks, stablePolls }
-  if (names.some(name => FAILED.has(checks[name] ?? ''))) return { ...next, outcome: 'failed', settledAt: now }
+  // A failure wakes the session at once (see earlyFailures), but the watch settles only once
+  // nothing is pending, so a later failure (a slower review tier) is not missed.
+  const hasFailed = names.some(name => FAILED.has(checks[name] ?? ''))
+  if (hasFailed && isQuiet) return { ...next, outcome: 'failed', settledAt: now }
   if (stablePolls >= SETTLE_POLLS) return { ...next, outcome: 'passed', settledAt: now }
   if (now - watch.startedAt > timeoutMs) return { ...next, outcome: 'timeout', settledAt: now }
   return next
@@ -47,12 +52,24 @@ export function mergedNumber(command: string): number | undefined {
   return named ? Number(named[1]) : 0
 }
 
+// Failed checks not yet reported while others are still pending; empty when there is nothing new.
+export function earlyFailures(watch: Watch): string[] {
+  if (watch.outcome) return []
+  return Object.entries(watch.checks)
+    .filter(([name, bucket]) => FAILED.has(bucket) && !(watch.reported ?? []).includes(name))
+    .map(([name]) => name)
+}
+
 export function wakeText(watch: Watch): string {
   const entries = Object.entries(watch.checks)
   const pr = `PR ${watch.repo}#${watch.number}`
+  const failed = entries.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
+  if (!watch.outcome && failed.length > 0) {
+    const pending = entries.filter(([, bucket]) => PENDING.has(bucket)).map(([name]) => name)
+    return `[ci-watch] ${pr}: ${failed.join(', ')} failed; still running: ${pending.join(', ')}. Start on the failure; you will be woken again once the rest settle.`
+  }
   if (watch.outcome === 'failed') {
-    const failed = entries.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
-    return `[ci-watch] ${pr}: ${failed.join(', ')} failed. Fetch the failing logs (gh run view --log-failed), fix and push; the watch restarts on the new commit.`
+    return `[ci-watch] ${pr}: all checks settled; failed: ${failed.join(', ')}. Fetch the failing logs (gh run view --log-failed) or the review comment, fix and push; the watch restarts on the new commit.`
   }
   if (watch.outcome === 'timeout') {
     const pending = entries.filter(([, bucket]) => PENDING.has(bucket)).map(([name]) => name)
@@ -149,7 +166,7 @@ async function poll($: EngineInterface): Promise<void> {
       continue
     }
     const head = await headOf($, current.repo, current.number)
-    const base = head && head !== current.headSha ? { ...current, headSha: head, startedAt: now, stablePolls: 0, checks: {} } : current
+    const base = head && head !== current.headSha ? { ...current, headSha: head, startedAt: now, stablePolls: 0, checks: {}, reported: [] } : current
     let checks: Record<string, string> = base.checks
     try {
       const rows = JSON.parse(await gh($, ['pr', 'checks', String(base.number), '--repo', base.repo, '--json', 'name,bucket'])) as {
@@ -160,7 +177,12 @@ async function poll($: EngineInterface): Promise<void> {
     } catch {
       // No checks reported yet; the next poll tries again.
     }
-    const next = settle(base, checks, now, live.timeoutMs)
+    let next = settle(base, checks, now, live.timeoutMs)
+    const early = earlyFailures(next)
+    if (early.length > 0) {
+      void $.prompt.submit({ text: wakeText(next) }).catch(() => undefined)
+      next = { ...next, reported: [...(next.reported ?? []), ...early] }
+    }
     kept.push(next)
     changed = true
     if (next.outcome) void $.prompt.submit({ text: wakeText(next) }).catch(() => undefined)
