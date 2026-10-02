@@ -10,6 +10,8 @@ export type Watch = {
   stablePolls: number
   outcome?: 'passed' | 'failed' | 'timeout'
   settledAt?: number
+  /** Set when the watch starts; names its wake claim (see `claimWake`). */
+  id?: string
 }
 
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
@@ -93,6 +95,17 @@ function isRecorded(saved: readonly Watch[] | undefined, watch: Watch): boolean 
   return there?.outcome !== undefined
 }
 
+// Instances left beside each other by a hot reload share one process, so a claim on the global
+// object, checked and set with no await in between, lets exactly one of them send each wake.
+export function claimWake(watch: Watch): boolean {
+  const shared = globalThis as { __ciWatchWoken?: Set<string> }
+  const woken = (shared.__ciWatchWoken ??= new Set())
+  const key = `${watch.id ?? ''}|${watch.repo}#${watch.number}@${watch.headSha}`
+  if (woken.has(key)) return false
+  woken.add(key)
+  return true
+}
+
 // The folder a push or `gh pr create` ran in: `git -C <dir>` or a `cd <dir>` / `Set-Location <dir>`
 // before it. Undefined means the session's folder.
 export function targetFolder(command: string): string | undefined {
@@ -143,7 +156,9 @@ async function headOf($: EngineInterface, repo: string, number: number): Promise
 }
 
 async function startWatch($: EngineInterface, repo: string, number: number, headSha: string): Promise<Watch> {
-  const fresh: Watch = { repo, number, headSha, startedAt: await $.clock.now(), checks: {}, stablePolls: 0 }
+  const startedAt = await $.clock.now()
+  const id = `${startedAt}-${Math.random().toString(36).slice(2)}`
+  const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id }
   live.watches = [...live.watches.filter(w => !(w.repo === repo && w.number === number)), fresh]
   await save($)
   return fresh
@@ -168,7 +183,7 @@ async function poll($: EngineInterface): Promise<void> {
     }
     const head = await headOf($, current.repo, current.number)
     const base = head && head !== current.headSha ? { ...current, headSha: head, startedAt: now, stablePolls: 0, checks: {} } : current
-    let checks: Record<string, string> = base.checks
+    let checks: Record<string, string> | undefined
     try {
       const rows = JSON.parse(await gh($, ['pr', 'checks', String(base.number), '--repo', base.repo, '--json', 'name,bucket'])) as {
         name: string
@@ -176,9 +191,14 @@ async function poll($: EngineInterface): Promise<void> {
       }[]
       checks = Object.fromEntries(rows.map(row => [row.name, row.bucket]))
     } catch {
-      // No checks reported yet; the next poll tries again.
+      // A failed read (network, auth, no checks yet) is not a quiet poll: the count stands and the
+      // next poll tries again. Only the time limit can settle the watch meanwhile.
     }
-    const next = settle(base, checks, now, live.timeoutMs)
+    const next = checks
+      ? settle(base, checks, now, live.timeoutMs)
+      : now - base.startedAt > live.timeoutMs
+        ? { ...base, outcome: 'timeout' as const, settledAt: now }
+        : base
     kept.push(next)
     changed = true
     if (next.outcome) settled.push(next)
@@ -190,7 +210,7 @@ async function poll($: EngineInterface): Promise<void> {
   const recorded = settled.length > 0 ? await readSaved($) : undefined
   if (changed) await save($)
   for (const watch of settled) {
-    if (!isRecorded(recorded, watch)) void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
+    if (!isRecorded(recorded, watch) && claimWake(watch)) void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
   }
 }
 
