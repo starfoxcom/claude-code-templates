@@ -5,7 +5,9 @@ import type { UsageCard } from '../types'
 import { stopCommandsFor } from './rules'
 
 // One shared file tells every session on the machine that a pause is on, so
-// a session that never crossed the line itself still wraps up.
+// a session that never crossed the line itself still wraps up. Which sessions
+// have wrapped up is kept as claims beside it (see `claim`), never in this file,
+// so no two sessions rewrite it at once.
 export type Pause = {
   status: 'active' | 'done' | 'cancelled'
   kinds: string[]
@@ -13,7 +15,6 @@ export type Pause = {
   resetsAt: string
   wakeAt: number
   triggeredBy: string
-  handled: string[]
 }
 
 const CHECK_EVERY_MS = 60_000
@@ -48,7 +49,6 @@ export function planPause(hot: readonly SessionRateLimit[], delayMinutes: number
     resetsAt,
     wakeAt: Date.parse(resetsAt) + delayMinutes * 60_000,
     triggeredBy: sessionId,
-    handled: [],
   }
 }
 
@@ -65,6 +65,8 @@ const live: {
   hasWork: boolean
   isStatusShown: boolean
   wakeTimer?: Timer
+  /** Claims this module already holds or found taken, so a 60-second check spawns no helper. */
+  handled: Set<string>
   wrapUpAt: number
   delayMinutes: number
 } = {
@@ -75,6 +77,7 @@ const live: {
   // read has nothing to save, so near a limit it waits instead of wrapping up.
   hasWork: false,
   isStatusShown: false,
+  handled: new Set(),
   wrapUpAt: 90,
   delayMinutes: 2,
 }
@@ -96,6 +99,34 @@ async function readPause($: EngineInterface): Promise<Pause | undefined> {
 async function writePause($: EngineInterface, pause: Pause): Promise<void> {
   await $.fs.write(await pausePath($), JSON.stringify(pause, null, 2))
 }
+
+// Claims under mods-data/usage-guard/claims/. `mkdir` is atomic, so of several
+// sessions acting on one pause at the same moment exactly one wins each claim:
+// `pause-<reset>`, the session that writes the pause and stops its project's
+// background work; `<reset>-<session>`, that session has wrapped up (or, opened
+// during the pause, only waits). The helper also makes the data folder, which
+// the engine's fs cannot, and sweeps claims older than two weeks.
+export const CLAIM =
+  'const fs=require("fs"),p=require("path");const [d,n]=process.argv.slice(1);const c=p.join(d,"claims");' +
+  'fs.mkdirSync(c,{recursive:true});for(const x of fs.readdirSync(c)){try{const f=p.join(c,x);' +
+  'if(Date.now()-fs.statSync(f).mtimeMs>12096e5)fs.rmdirSync(f)}catch{}}' +
+  'try{fs.mkdirSync(p.join(c,n));console.log("won")}catch(e){if(e.code!=="EEXIST")throw e;console.log("taken")}'
+
+// True when this session won the claim; a helper that fails counts as a win, as
+// before claims existed, so a missing `node` never stops the wrap-up.
+async function claim($: EngineInterface, name: string): Promise<boolean> {
+  if (live.handled.has(name)) return false
+  live.handled.add(name)
+  const dir = (await pausePath($)).replace(/\/pause\.json$/, '')
+  try {
+    const { exitCode, stdout } = await $.process.run(['node', '-e', CLAIM, dir, name.replace(/[^\w-]/g, '_')], { timeoutMs: 10_000 })
+    return exitCode !== 0 || stdout.trim() !== 'taken'
+  } catch {
+    return true
+  }
+}
+
+const resetKey = (pause: Pause) => String(Date.parse(pause.resetsAt))
 
 async function readZone($: EngineInterface): Promise<void> {
   try {
@@ -225,7 +256,20 @@ async function resume($: EngineInterface, resetsAt: string): Promise<void> {
 async function armWake($: EngineInterface, pause: Pause): Promise<void> {
   live.wakeTimer?.cancel()
   const wait = Math.max(0, pause.wakeAt - (await $.clock.now()))
-  live.wakeTimer = $.clock.after(wait, () => void resume($, pause.resetsAt))
+  live.wakeTimer = $.clock.after(wait, () => {
+    live.wakeTimer = undefined
+    void resume($, pause.resetsAt)
+  })
+}
+
+// This session's part in a live pause: it wraps up once, and its wake timer is
+// armed. A hot reload drops the timer, so a pause this session already handled
+// gets its timer back here.
+async function act($: EngineInterface, pause: Pause): Promise<void> {
+  if (await claim($, `${resetKey(pause)}-${await $.session.id()}`)) {
+    await armWake($, pause)
+    await wrapUp($, pause)
+  } else if (!live.wakeTimer) await armWake($, pause)
 }
 
 async function check($: EngineInterface): Promise<void> {
@@ -243,15 +287,15 @@ async function check($: EngineInterface): Promise<void> {
     // same high reading.
     if (pause?.resetsAt === planned.resetsAt) return
     pause = planned
-    await writePause($, pause)
-    await stopBackground($)
+    // Of several sessions crossing the line together, one writes the pause and
+    // stops its project's background work. The others write the same pause only
+    // if the winner has not yet, so a cancel written in between is not undone.
+    if (await claim($, `pause-${resetKey(planned)}`)) {
+      await writePause($, pause)
+      await stopBackground($)
+    } else if ((await readPause($))?.resetsAt !== planned.resetsAt) await writePause($, pause)
   }
-  if (!pause || pause.handled.includes(sessionId)) return
-
-  pause = { ...pause, handled: [...pause.handled, sessionId] }
-  await writePause($, pause)
-  await armWake($, pause)
-  await wrapUp($, pause)
+  if (pause) await act($, pause)
 }
 
 // The time zone and the two timers (pause check, shared card refresh), once per module load.
@@ -260,6 +304,8 @@ async function startTimers($: EngineInterface): Promise<void> {
   live.isStarted = true
   await readZone($)
   await refresh($)
+  const pause = await readPause($)
+  if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) await act($, pause)
   $.clock.every(CHECK_EVERY_MS, () => void check($).catch(() => undefined))
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
 }
@@ -276,8 +322,7 @@ export const register: Register = (on, options) => {
     if (pause?.status === 'active') {
       if (pause.wakeAt > now) {
         // A new session has nothing to save yet: it only waits for the reset.
-        const sessionId = await $.session.id()
-        if (!pause.handled.includes(sessionId)) await writePause($, { ...pause, handled: [...pause.handled, sessionId] })
+        await claim($, `${resetKey(pause)}-${await $.session.id()}`)
         await armWake($, pause)
         setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
         await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))

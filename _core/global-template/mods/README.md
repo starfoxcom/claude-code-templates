@@ -87,7 +87,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 | `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json` |
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
-| `usage-guard` | `pause.json` (the shared pause) and `card.json` (the card every session draws) |
+| `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session per pause, so each wraps up once; swept after 14 days) |
 | status line | `statusline/runners.json` (runner check cache), `statusline/swept.json` |
 
 ## Status line
