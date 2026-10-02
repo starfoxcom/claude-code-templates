@@ -155,6 +155,14 @@ async function startWatch($: EngineInterface, repo: string, number: number, head
 }
 
 async function poll($: EngineInterface): Promise<void> {
+  // Start from the saved state: a hot reload can leave an earlier instance's timer running beside
+  // this one, and reading the file keeps a watch the other already settled from waking twice.
+  try {
+    const saved = JSON.parse(String(await $.fs.read(await statePath($)))) as { watches?: Watch[] }
+    if (saved.watches) live.watches = saved.watches
+  } catch {
+    // No saved file yet: the watches in memory stand.
+  }
   const now = await $.clock.now()
   let changed = false
   const kept: Watch[] = []
