@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Watch } from '../hooks/register'
-import { mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
+import { claimWake, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
@@ -42,6 +42,8 @@ type Seen = {
   isReadable: boolean
   /** Runs inside each `gh pr checks` call: another instance acting while this one waits on gh. */
   duringChecks?: () => void
+  /** `gh pr checks` fails (network, auth) with nothing on stdout. */
+  isChecksDown?: boolean
 }
 
 function world(on: On) {
@@ -64,6 +66,9 @@ function world(on: On) {
   on('process.run', ($, e) => {
     const args = e.argv.join(' ')
     if (args.includes('pr checks')) seen.duringChecks?.()
+    if (args.includes('pr checks') && seen.isChecksDown) {
+      return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     const stdout = args.includes('pr checks')
       ? JSON.stringify([{ name: 'build', bucket: seen.bucket }, ...seen.rows])
       : JSON.stringify({ number: 7, url: 'https://github.com/o/r/pull/7', headRefOid: 'a1' })
@@ -135,6 +140,31 @@ test('a failure wakes the session once, only after every check is done', async (
   await clock.advance(60_000)
   expect(seen.prompts.length).toBe(1)
   expect(seen.prompts[0]).toContain('all checks settled; failed: build')
+})
+
+test('a failed checks read is not a quiet poll: stale results never settle a watch', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  await clock.advance(60_000)
+  seen.isChecksDown = true
+  await clock.advance(60_000)
+  await clock.advance(60_000)
+  expect(seen.prompts).toEqual([])
+
+  seen.isChecksDown = false
+  await clock.advance(60_000)
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.prompts[0]).toContain('o/r#7: all 1 checks settled')
+})
+
+test('each settled watch is claimed for one wake per process', () => {
+  const watch: Watch = { ...BASE, id: 'claim-test', outcome: 'passed', settledAt: 1 }
+  expect(claimWake(watch)).toBe(true)
+  expect(claimWake({ ...watch })).toBe(false)
+  expect(claimWake({ ...watch, headSha: 'b2' })).toBe(true)
+  expect(claimWake({ ...watch, id: 'claim-test-restarted' })).toBe(true)
 })
 
 test('a merge names its PR, or 0 for the branch PR; other commands are not merges', () => {
