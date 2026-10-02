@@ -1,0 +1,14 @@
+{
+  "name": "compact-handoff",
+  "version": "0.1.0",
+  "description": "Turns compaction into a focused hand-off: the person's messages kept word for word, a budgeted hand-off, and a recall tool over the full transcript.",
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "off: stock compaction. shadow: stock compaction, plus the hand-off written beside it for comparison. on: the hand-off replaces the stock summary.",
+      "options": ["off", "shadow", "on"],
+      "default": "on"
+    }
+  }
+}
