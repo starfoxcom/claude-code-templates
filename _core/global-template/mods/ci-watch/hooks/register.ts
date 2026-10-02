@@ -21,12 +21,26 @@ const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 const KEEP_SETTLED_MS = 60 * 60_000
+// Check names of a slower, deeper review tier (the deepTierPattern option).
+const DEEP_TIER_DEFAULT = 'on-demand|deep'
+const DEEP_TIER = new RegExp(DEEP_TIER_DEFAULT, 'i')
 
-const live: { pollMs: number; timeoutMs: number; watches: Watch[]; isPolling: boolean } = {
+const live: { pollMs: number; timeoutMs: number; deepTier: RegExp; watches: Watch[]; isPolling: boolean } = {
   pollMs: 60_000,
   timeoutMs: 60 * 60_000,
+  deepTier: DEEP_TIER,
   watches: [],
   isPolling: false,
+}
+
+// The deepTierPattern option as a case-insensitive pattern; an empty or invalid one falls back to the default.
+export function deepTierOf(pattern: unknown): RegExp {
+  if (typeof pattern !== 'string' || !pattern.trim()) return DEEP_TIER
+  try {
+    return new RegExp(pattern, 'i')
+  } catch {
+    return DEEP_TIER
+  }
 }
 
 export function settle(watch: Watch, checks: Record<string, string>, now: number, timeoutMs: number): Watch {
@@ -53,8 +67,12 @@ export function mergedNumber(command: string): number | undefined {
 }
 
 // Failed checks not yet reported while others are still pending; empty when there is nothing new.
-export function earlyFailures(watch: Watch): string[] {
+// A deeper review tier still running means more findings are coming: no early wake, so the
+// fixes land in one round once everything settles.
+export function earlyFailures(watch: Watch, deepTier: RegExp = DEEP_TIER): string[] {
   if (watch.outcome) return []
+  const isDeepPending = Object.entries(watch.checks).some(([name, bucket]) => PENDING.has(bucket) && deepTier.test(name))
+  if (isDeepPending) return []
   return Object.entries(watch.checks)
     .filter(([name, bucket]) => FAILED.has(bucket) && !(watch.reported ?? []).includes(name))
     .map(([name]) => name)
@@ -89,13 +107,27 @@ async function save($: EngineInterface): Promise<void> {
   await $.fs.write(await statePath($), JSON.stringify({ watches: live.watches }))
 }
 
-async function load($: EngineInterface): Promise<void> {
+async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {
   try {
     const saved = JSON.parse(String(await $.fs.read(await statePath($)))) as { watches?: Watch[] }
-    live.watches = saved.watches ?? []
+    return saved.watches
   } catch {
-    live.watches = []
+    return undefined
   }
+}
+
+async function load($: EngineInterface): Promise<void> {
+  live.watches = (await readSaved($)) ?? []
+}
+
+type Wake = { watch: Watch; early: string[] }
+
+// True when the saved file already records this wake: another instance sent it.
+function isRecorded(saved: readonly Watch[] | undefined, wake: Wake): boolean {
+  const there = saved?.find(w => w.repo === wake.watch.repo && w.number === wake.watch.number && w.headSha === wake.watch.headSha)
+  if (!there) return false
+  if (wake.early.length > 0) return there.outcome !== undefined || wake.early.every(name => (there.reported ?? []).includes(name))
+  return there.outcome !== undefined
 }
 
 // The folder a push or `gh pr create` ran in: `git -C <dir>` or a `cd <dir>` / `Set-Location <dir>`
@@ -157,15 +189,13 @@ async function startWatch($: EngineInterface, repo: string, number: number, head
 async function poll($: EngineInterface): Promise<void> {
   // Start from the saved state: a hot reload can leave an earlier instance's timer running beside
   // this one, and reading the file keeps a watch the other already settled from waking twice.
-  try {
-    const saved = JSON.parse(String(await $.fs.read(await statePath($)))) as { watches?: Watch[] }
-    if (saved.watches) live.watches = saved.watches
-  } catch {
-    // No saved file yet: the watches in memory stand.
-  }
+  // No saved file yet: the watches in memory stand.
+  const start = await readSaved($)
+  if (start) live.watches = start
   const now = await $.clock.now()
   let changed = false
   const kept: Watch[] = []
+  const wakes: Wake[] = []
   for (const current of live.watches) {
     if (current.outcome) {
       // A merge made outside this session (the web page) clears it here.
@@ -186,17 +216,24 @@ async function poll($: EngineInterface): Promise<void> {
       // No checks reported yet; the next poll tries again.
     }
     let next = settle(base, checks, now, live.timeoutMs)
-    const early = earlyFailures(next)
+    const early = earlyFailures(next, live.deepTier)
     if (early.length > 0) {
-      void $.prompt.submit({ text: wakeText(next) }).catch(() => undefined)
+      wakes.push({ watch: next, early })
       next = { ...next, reported: [...(next.reported ?? []), ...early] }
     }
     kept.push(next)
     changed = true
-    if (next.outcome) void $.prompt.submit({ text: wakeText(next) }).catch(() => undefined)
+    if (next.outcome) wakes.push({ watch: next, early: [] })
   }
   live.watches = kept
+  // The two instances poll on their own phases and spend seconds in gh, so the file is read again
+  // right before waking: a wake it already records was sent by the other instance. This instance's
+  // record is written before its prompt goes out.
+  const recorded = wakes.length > 0 ? await readSaved($) : undefined
   if (changed) await save($)
+  for (const wake of wakes) {
+    if (!isRecorded(recorded, wake)) void $.prompt.submit({ text: wakeText(wake.watch) }).catch(() => undefined)
+  }
 }
 
 // A hot reload starts the module over without a new session.start: the next
@@ -211,6 +248,7 @@ async function startPolling($: EngineInterface): Promise<void> {
 export const register: Register = (on, options) => {
   live.pollMs = Number(options.pollSeconds ?? 60) * 1000
   live.timeoutMs = Number(options.timeoutMinutes ?? 60) * 60_000
+  live.deepTier = deepTierOf(options.deepTierPattern)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
