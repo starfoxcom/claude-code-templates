@@ -6,10 +6,11 @@ The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x impr
 
 ## Bind metadata
 
-- **Bound at:** 2026-05-17 12:33 (America/Mazatlan)
+- **Bound at:** 2026-05-17 12:33 (America/Mazatlan); rules, skills and this file re-bound 2026-10-02 14:12 (local clock) from `develop` at `3c7fa31`
 - **Bundle:** `2-multi-dev-oss` (open-source library / shared personal project, multi-dev, human review gate, public CONTRIBUTING/PR template)
 - **Mode:** Manual hand-bind by Claude during interactive session (no SETUP wizard run — issue #12)
 - **Source of templates:** `_core/project-template/` in this same repo (the project dogfoods itself)
+- **2026-10-02 re-bind:** `.claude/rules/*.md`, `.claude/skills/*/SKILL.md` and `.claude/scripts/research-adherence.py` were rendered with the engine's own template renderer (`engine/render.js`: toggle blocks, then placeholders, then blank-line folding) using the toggle and placeholder state below, then the tailoring and deviations listed in "Self-bind deviations" were applied by hand. Root `CLAUDE.md`, `.github/` and the guard hooks were not re-bound.
 
 ## Placeholders resolved
 
@@ -25,8 +26,12 @@ The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x impr
 | `{{GITFLOW_OR_TRUNK}}` | `Gitflow` | from CLAUDE.md "Git workflow" + CONTRIBUTING.md "Branch from develop" |
 | `{{CONVERSATION_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
 | `{{CODE_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
-| `{{REVIEW_DEEP_MODEL}}` | `claude-opus-4-8` | deep-review tier model (`.github/workflows/claude.yml`); this repo's deliberate pin per SETUP.md Phase 3 default |
-| `{{REVIEW_ROUTINE_MODEL}}` | `claude-sonnet-4-6` | routine-review tier model (`.github/workflows/claude-code-review.yml`); deliberate pin per SETUP.md Phase 3 default |
+| `{{REVIEW_DEEP_MODEL}}` | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high | what `.github/workflows/claude.yml` runs today (the 2026-05 pin was `claude-opus-4-8`). The canonical table cell holds one model; this bind names the backup too (see "Self-bind deviations"). |
+| `{{REVIEW_ROUTINE_MODEL}}` | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high | what `.github/workflows/claude-code-review.yml` runs today (the 2026-05 pin was `claude-sonnet-4-6`). Same treatment as the deep row. |
+| `{{TOOLS_CODE_RESEARCH_NAME}}` | `tokensave` | `code_research: tokensave` |
+| `{{TOOLS_CODE_RESEARCH_URL}}` | `https://github.com/aovestdipaperino/tokensave` | `engine/model.js` `CODE_RESEARCH_TOOLS.tokensave` |
+| `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` | `TOKENSAVE_BYPASS:` | same |
+| `{{TOOLS_CODE_RESEARCH_MATCH}}` | `tokensave` | same (tool-name regex in `.claude/scripts/research-adherence.py`) |
 
 ## Toggles resolved
 
@@ -51,19 +56,38 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 | `architecture_rules_scaffold` | `none` | Single hand-authored `index.html` + nine sibling `redesign/*.jsx` modules. No formal architecture pattern (Clean / Hexagonal / Layered / DDD / etc.) fits the actual shape; over-scaffolding one would be cargo-culting. |
 | `visual_test_discipline` | `true` | The page IS the deliverable — `CHANGELOG.md` v1.1.0 cites visual-slice discipline; `_core/project-template/.claude/rules/visual.md` is already referenced from this repo's CLAUDE.md. |
 
+Added at the 2026-10-02 re-bind (toggles and choices the canonical templates gained since 2026-05; neither the table above nor `bundles/2-multi-dev-oss/bundle.toggles.md` lists them, so each was resolved from repo state, with the engine default as the tie-breaker):
+
+| Toggle / choice | Value | Repo evidence |
+|---|---|---|
+| `attribution_guard` | `true` | `.claude/settings.json` blanks the commit and PR attribution and runs `.claude/hooks/no-ai-attribution.py`; the engine default is also on. Keeps the attribution line in `git.md`. |
+| `default_branch_is_dev` | `false` | The GitHub default branch is `main` (`gh repo view --json defaultBranchRef`). `git.md` keeps the "always pass `--base develop`" line and the "workflow changes land on `main` as a hotfix" paragraph. |
+| `merge_style` | `merge` | Founder decision 2026-09-29: every PR merges with `--merge` (root `CLAUDE.md` "Git workflow"). |
+| `precommit` (tool slot) | `none` | Follows `precommit_hooks_scaffold: false` below. |
+| `plainWriting` (ships `.claude/rules/shipped-text.md`) | off | Not in this file or in the bundle; the engine default is off. Not bound. |
+| `guard_hooks_repo` | `true` | The guard hooks live in `.claude/hooks/` in this repo. No rule or skill template reads it; recorded for completeness. |
+
+Toggles this file lists that the current canonical rules and skills no longer read: `mandatory_deep_review_before_merge` and `oncall_awareness` (both gone from `collaboration.md`; deep-review gating now lives in `review-tiers.md` under `github_actions_deep_review_auto_fire`), `binary_verdict_rule`, `branch_protection_strict` and `team_handoff_notes`. Their values above are unchanged and still describe the repo.
+
+Bundle 2 now defaults `precommit_hooks_scaffold` to `true`; this repo keeps it `false` (see "Intentional non-artifacts").
+
 ## Artifacts produced
 
 | Artifact | Status |
 |---|---|
-| `.claude/skills/session-start/SKILL.md` | Resolved (Step 1 reads CONTEXT file, placeholders substituted, renumbered) |
-| `.claude/skills/session-close/SKILL.md` | Resolved (DoD + context + tokensave-adherence kept, devlog step stripped, placeholders substituted) |
-| `.claude/skills/find/SKILL.md` | Resolved (per-tool blocks for tokensave / ast-grep / sourcegraph / ctags / semgrep / none / custom; this bind resolves to the tokensave block, all others stripped). Issue #10 closed by the v1.3-unreleased code_research agnostification. |
-| `.claude/skills/architecture-graph/SKILL.md` | Resolved (per-tool blocks for the enumerate + diff-coupling steps; this bind resolves to the tokensave commands). |
-| `.claude/rules/git.md` | Resolved (`branching_model_gitflow` blocks kept, `branching_model_trunk` stripped; the new `precommit_hooks_scaffold` Pre-commit hooks section stripped — OFF for this repo; `{{MAIN_BRANCH}}` → `main`, `{{DEV_BRANCH}}` → `develop`). |
-| `.claude/rules/review-tiers.md` | Resolved (`github_actions_deep_review_auto_fire` block kept, `:off` variant stripped). |
-| `.claude/rules/token-efficiency.md` | Resolved (`code_research:tokensave` block kept, other 6 per-tool blocks stripped; `github_actions_paths_ignore_auto_merge` block stripped; `{{TOOLS_CODE_RESEARCH_NAME}}` → `tokensave`, `{{REPO_URL}}` → `https://github.com/starfoxcom/claude-code-templates`). |
-| `.claude/rules/collaboration.md` | Resolved (`mandatory_deep_review_before_merge` block kept, `oncall_awareness` block stripped per Discovery resolution; `{{DEV_BRANCH}}` → `develop`). |
-| `.claude/rules/visual.md` | Resolved (no toggles, no placeholders — verbatim copy). |
+| `.claude/skills/session-start/SKILL.md` | Re-bound 2026-10-02 (`context_refresh_files` block kept; `{{PROJECT_NAME_UPPER}}` and `{{DEV_BRANCH}}` substituted). |
+| `.claude/skills/session-close/SKILL.md` | Re-bound 2026-10-02 (`definition_of_done_verification`, `context_refresh_files`, `code_research_first` and `branching_model_gitflow` blocks kept; placeholders substituted). |
+| `.claude/skills/find/SKILL.md` | Re-bound 2026-10-02 (`code_research:tokensave` block kept, the `lsp-plugins` / `codegraph` / `serena` / `codebase-memory` / `none` blocks stripped; `code_research_first` fallback block kept). |
+| `.claude/skills/architecture-graph/SKILL.md` | Re-bound 2026-10-02 (`code_research:tokensave` blocks kept in the enumerate and diff steps). The engine no longer ships this skill to new binds; this repo keeps its copy because it already had one. |
+| `.claude/scripts/research-adherence.py` | New 2026-10-02. The session-close code-research count runs it; it ships whenever `code_research_first` is on. Rendered with the tokensave values (the engine's blank-line folding also folds the script's double blank lines). |
+| `.claude/rules/git.md` | Re-bound 2026-10-02 (`attribution_guard`, `branching_model_gitflow`, `default_branch_is_dev:off` and `merge_style:merge` blocks kept; `branching_model_trunk`, `default_branch_is_dev`, the other `merge_style` values and `precommit_hooks_scaffold` stripped; `{{MAIN_BRANCH}}` → `main`, `{{DEV_BRANCH}}` → `develop`). |
+| `.claude/rules/review-tiers.md` | Re-bound 2026-10-02 (`github_actions_deep_review_auto_fire` block kept, `:off` variant stripped; model cells per the placeholder table). |
+| `.claude/rules/token-efficiency.md` | Re-bound 2026-10-02 (`{{TOOLS_CODE_RESEARCH_NAME}}` → `tokensave`; the `github_actions_paths_ignore_auto_merge` docs-only fast-path block stripped, since that toggle is off). |
+| `.claude/rules/collaboration.md` | Re-bound 2026-10-02 (no toggles left in the canonical file; `{{DEV_BRANCH}}` → `develop`). |
+| `.claude/rules/visual.md` | Re-bound 2026-10-02 (no toggles, no placeholders: verbatim copy). |
+| `.claude/rules/task-tracking.md` | New 2026-10-02. Canonical core rule with no toggle (the engine ships it to every bind): verbatim copy. |
+| `.claude/rules/testing.md` | New 2026-10-02. Canonical core rule with no toggle, scoped by its own `paths:` frontmatter to source files: verbatim copy. |
+| `.claude/rules/code-size.md` | New 2026-10-02. Canonical core rule with no toggle, scoped by `paths:` to source files. Tailored: the per-language table keeps only the JavaScript / TypeScript and Python rows (`engine/`, `redesign/`, `tools/`, `.claude/hooks/`), and the "keep the rows for this project's languages" instruction is removed. |
 | `.github/PULL_REQUEST_TEMPLATE.md` | Resolved (`audit_trail_commits` block stripped per bundle 2) |
 | `.claude/BIND.md` | This file |
 | `CLAUDE.md` (root) | Edited to reflect now-local skills + rules |
@@ -73,6 +97,7 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 | Artifact | Why omitted |
 |---|---|
 | `.claude/rules/clean-room.md` | `clean_room_rule: false` (not a derived-from-prior-art project). |
+| `.claude/rules/shipped-text.md` | `plainWriting` off (see the toggle table above). |
 | `.claude/rules/confidentiality.md` | `confidentiality_rule: false` (open-source toolkit, no NDA stake). |
 | `.claude/rules/architecture/*.md` | `architecture_rules_scaffold: none` (single hand-authored `index.html` + sibling `redesign/*.jsx` modules; no formal architecture pattern fits the actual shape). |
 | `CODEOWNERS` | `codeowners: false` (solo-maintained) |
@@ -80,13 +105,21 @@ Discovery resolutions (4 null-in-bundle, inferred from repo state — the 5th nu
 | Devlog scaffolding (`devlog/posts/0000-template/`) | `dod_devlog_step: false` (no devlog tradition for this project — release notes live in `CHANGELOG.md` and GitHub Releases). |
 | `.claude/rules/git.md` Pre-commit hooks section + a repo-root precommit config | `precommit_hooks_scaffold: false` — new toggle ([Unreleased]); this repo resolves it OFF (overriding the bundle-2 ON default) because it has no build/lint/test tooling to gate on. Mirrors `architecture_rules_scaffold: none` — over-scaffolding would be cargo-culting. |
 
+## Self-bind deviations
+
+Places where this repo's bound text differs on purpose from what the renderer produces from the canonical templates. Re-apply them after every re-bind until the canonical text covers them.
+
+| File | Deviation | Reason |
+|---|---|---|
+| `.claude/rules/review-tiers.md` | The Model column names the backup model and both efforts. | The live workflows run two models per tier; one model name would misstate them. |
+
 ## Re-bind procedure (until Audit mode lands)
 
 When toggles change or templates evolve in `_core/`:
 
 1. Open issue describing the re-bind intent.
 2. Branch `chore/rebind-<reason>` off `develop`.
-3. Re-resolve any affected `.claude/skills/*.md`, `.claude/rules/*.md`, `.github/PULL_REQUEST_TEMPLATE.md`, this file's toggle table, and CLAUDE.md from the latest `_core/project-template/` sources.
+3. Re-resolve any affected `.claude/skills/*.md`, `.claude/rules/*.md`, `.claude/scripts/`, `.github/PULL_REQUEST_TEMPLATE.md`, this file's toggle table, and CLAUDE.md from the latest `_core/project-template/` sources. `engine/render.js` resolves one template from the flags, choices and values recorded above; then re-apply "Self-bind deviations".
 4. Atomic commits per artifact category.
 5. Standard PR + merge to `develop`.
 
