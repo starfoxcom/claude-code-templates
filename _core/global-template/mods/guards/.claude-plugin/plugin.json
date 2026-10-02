@@ -13,8 +13,8 @@
     "mentionRepos": {
       "type": "string",
       "title": "Repos that may name the product",
-      "description": "Comma-separated repo folder names (case-insensitive, e.g. \"my-cli-plugin, docs-site\") whose subject is Claude Code itself, so commit, PR and branch text there may name the product. Empty (the default): the plain product name is blocked in every repo. AI credit lines stay blocked everywhere.",
-      "default": ""
+      "description": "Comma-separated repo folder names (case-insensitive, e.g. \"my-cli-plugin, docs-site\") whose subject is Claude Code itself, so commit, PR and branch text there may name the product. \"*\" (the default) allows the plain product name everywhere, as the toolkit's attribution rule does (no credit, mentions are fine); a list narrows it to those repos; empty blocks it in every repo. AI credit lines stay blocked everywhere.",
+      "default": "*"
     }
   }
 }

@@ -13,7 +13,7 @@ import { checkAddedLines, checkBranch, checkText, describe } from './policy'
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
 
 const LOG_CAP = 256 * 1024
-const live = { mode: 'shadow', mentionRepos: [] as string[], home: '', dir: '' }
+const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '' }
 
 async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
@@ -59,7 +59,7 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
   const cwd = osPath(plan.cwd ?? (await $.session.cwd()), await $.session.cwd())
   const top = (await git($, cwd, ['rev-parse', '--show-toplevel'])).trim()
   const repo = (plan.repo ?? top.split(/[\\/]/).pop() ?? '').toLowerCase()
-  const mayName = live.mentionRepos.includes(repo)
+  const mayName = live.mentionRepos.includes('*') || live.mentionRepos.includes(repo)
   for (const { where, text } of plan.texts) {
     const v = checkText(text, mayName)
     if (v) return describe(v, where)
@@ -162,7 +162,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
 
 export const register: Register = (on, options) => {
   live.mode = String(options.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
-  live.mentionRepos = String(options.mentionRepos ?? '')
+  live.mentionRepos = String(options.mentionRepos ?? '*')
     .split(',')
     .map(s => s.trim().toLowerCase())
     .filter(Boolean)
