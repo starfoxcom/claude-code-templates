@@ -14,12 +14,16 @@ const CONVERSATION: SessionMessage[] = [
   { role: 'assistant', text: 'Locked.', toolUses: [] },
   { role: 'user', text: 'file contents', toolUses: [], toolResults: [{ tool_use_id: 't1', text: 'x', isError: false, result: 'x' }] },
   said('<system-reminder>not the person</system-reminder>'),
-  said('Keep cloud shadows ON from frame one.\n[session-facts] 2026-10-02 10:00 | ctx 40%'),
+  said('Keep cloud shadows ON from frame one.\n[session-facts] 2026-10-02 10:00 | ctx 40%\n[tasks] Open: #1 Bake the rings.'),
+  // Prompts the other mods submit are not the person's words either.
+  said('[ci-watch] #12: all 3 checks settled with no failure. Verify it is mergeable.'),
+  said('[usage-guard] Plan usage limit nearly reached (automatic wrap-up).\n[session-facts] 2026-10-02 10:05 | ctx 41%'),
 ]
 
 type World = { writes: { path: string; text: string }[]; runs: (readonly string[])[]; forks: string[]; registered: string[] }
+type Run = { exitCode: number; stdout: string } | 'reject'
 
-function world(on: On): World {
+function world(on: On, helperRuns: Record<string, Run> = {}): World {
   const seen: World = { writes: [], runs: [], forks: [], registered: [] }
   mock.clock(on, { now: Date.UTC(2026, 9, 2, 17, 0, 0) })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
@@ -37,7 +41,9 @@ function world(on: On): World {
   })
   on('process.run', ($, e) => {
     seen.runs.push(e.argv)
-    const out = { exitCode: 0, stdout: 'found it\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
+    const run = helperRuns[e.argv[2] ?? ''] ?? { exitCode: 0, stdout: 'found it\n' }
+    if (run === 'reject') throw new Error('spawn node ENOENT')
+    const out = { ...run, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
     return { value: out }
   })
   on('model.fork', ($, e) => {
@@ -75,6 +81,10 @@ test('on: the hand-off instructions reach the summarizer and the person is kept 
   expect(texts[1]).toContain('Lock the far rings at 2/1/1/1')
   expect(texts[1]).toContain('Keep cloud shadows ON from frame one.')
   expect(texts[1]).not.toContain('[session-facts]')
+  expect(texts[1]).not.toContain('[tasks]')
+  expect(texts[1]).not.toContain('[ci-watch]')
+  expect(texts[1]).not.toContain('[usage-guard]')
+  expect(texts[1]).not.toContain('automatic wrap-up')
   expect(texts[1]).not.toContain('system-reminder')
   expect(texts[1]).not.toContain('file contents')
   expect(texts[2]).toBe('kept tail')
@@ -111,6 +121,36 @@ test('the recall tool searches the transcript through the helper', { options: { 
   expect((answer as { result?: unknown }).result).toBe('found it')
   const call = seen.runs.find(argv => argv.includes('recall'))
   expect(call?.slice(2)).toEqual(['recall', SESSION, '6000', 'far rings'])
+})
+
+test('the transcript list is used when the helper finds it', { options: { mode: 'on' } }, async ($, on) => {
+  world(on, { persons: { exitCode: 0, stdout: '["typed while a turn ran"]\n' } })
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }] }))
+  await start($)
+  const result = await $.session.compact({ trigger: 'manual', messages: CONVERSATION } as never)
+
+  expect(result.messages?.[1]?.text).toContain('typed while a turn ran')
+  expect(result.messages?.[1]?.text).not.toContain('Lock the far rings')
+})
+
+test("a failed helper falls back to the compaction's own messages", { options: { mode: 'on' } }, async ($, on) => {
+  // No transcript under this session id: the helper exits non-zero.
+  world(on, { persons: { exitCode: 1, stdout: '[]\n' } })
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }] }))
+  await start($)
+  const result = await $.session.compact({ trigger: 'manual', messages: CONVERSATION } as never)
+
+  expect(result.messages?.[1]?.text).toContain('Lock the far rings at 2/1/1/1')
+  expect(result.messages?.[1]?.text).toContain('Keep cloud shadows ON from frame one.')
+})
+
+test('a sweep that cannot start node does not fail the session start', { options: { mode: 'on' } }, async ($, on) => {
+  const seen = world(on, { sweep: 'reject' })
+  await start($)
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  expect(seen.registered).toEqual(['recall'])
+  expect(seen.runs.some(argv => argv.includes('sweep'))).toBe(true)
 })
 
 test('off: no tool, no rewrite', { options: { mode: 'off' } }, async ($, on) => {

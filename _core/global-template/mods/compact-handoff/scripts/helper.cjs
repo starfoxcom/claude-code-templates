@@ -93,14 +93,23 @@ function sweep(dir, keepNewest, maxAgeDays) {
 // as a message, it would carry every earlier message forward a second time.
 const PERSON_MARK = "[compact-handoff] The person's messages, word for word"
 
+// Lines the mods attach to a prompt, and whole prompts they submit, start with
+// the mod's tag. The same pattern as INJECTED_LINE in hooks/register.ts (the
+// spec keeps the two equal).
+const INJECTED_LINE = /^\[[a-z][a-z0-9-]*\](?: |$)/
+
+function stripInjected(text) {
+  return text.split('\n').filter(line => !INJECTED_LINE.test(line.trim())).join('\n').trim()
+}
+
 // The same filter as isPersonMessage in hooks/register.ts, for the transcript's records.
 function isPersonText(text) {
   return (
-    text.length > 0 &&
     !text.startsWith('<') &&
     !text.startsWith('[SYSTEM') &&
     !text.startsWith('This session is being continued') &&
-    !text.startsWith(PERSON_MARK)
+    !text.startsWith(PERSON_MARK) &&
+    stripInjected(text).length > 0
   )
 }
 
@@ -109,7 +118,13 @@ function isPersonText(text) {
 // attachments, which the compaction's message list does not show as typed).
 async function persons(sessionId) {
   const file = findTranscript(sessionId)
-  if (!file) return console.log('[]')
+  // A failure, not an empty list: the hook then falls back to the compaction's
+  // own message list instead of carrying none of the person's words.
+  if (!file) {
+    console.error(`No transcript found for session ${sessionId}.`)
+    process.exitCode = 1
+    return
+  }
   let found = []
   const lines = readline.createInterface({ input: fs.createReadStream(file, 'utf8'), crlfDelay: Infinity })
   for await (const line of lines) {
@@ -129,12 +144,13 @@ async function persons(sessionId) {
     }
     text = text.trim()
     if (!isPersonText(text)) continue
+    text = stripInjected(text)
     if (found[found.length - 1] !== text) found.push(text)
   }
   console.log(JSON.stringify(found))
 }
 
-module.exports = { PERSON_MARK, isPersonText }
+module.exports = { PERSON_MARK, INJECTED_LINE, isPersonText }
 
 if (require.main === module) {
   const [command, ...args] = process.argv.slice(2)
