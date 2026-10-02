@@ -39,7 +39,20 @@ const GH_BODY: Spec = {
   '-R': 'repo', '--repo': 'repo', '-T': 'skip', '--template': 'skip', '-B': 'skip', '--base': 'skip',
   '-H': 'skip', '--head': 'skip', '-a': 'skip', '--assignee': 'skip', '-l': 'skip', '--label': 'skip',
   '-m': 'skip', '--milestone': 'skip', '-p': 'skip', '--project': 'skip', '-r': 'skip', '--reviewer': 'skip',
-  '--add-label': 'skip', '--remove-label': 'skip', '--subject': 'text', '-c': 'text', '--comment': 'text',
+  '--add-label': 'skip', '--remove-label': 'skip', '--comment': 'text',
+}
+// Subcommands whose short flags mean something else: a boolean read as value-taking would swallow the
+// next word (`gh pr review 5 -a -b '<text>'` would hide the body), so each gets its own table. Flags
+// absent from a table are read as booleans.
+const GH_REVIEW: Spec = {
+  '-b': 'text', '--body': 'text', '-F': 'file', '--body-file': 'file', '-R': 'repo', '--repo': 'repo',
+}
+const GH_MERGE: Spec = {
+  '-b': 'text', '--body': 'text', '-F': 'file', '--body-file': 'file', '-t': 'text', '--subject': 'text',
+  '-A': 'skip', '--author-email': 'skip', '--match-head-commit': 'skip', '-R': 'repo', '--repo': 'repo',
+}
+const GH_CLOSE: Spec = {
+  '-c': 'text', '--comment': 'text', '-r': 'skip', '--reason': 'skip', '-R': 'repo', '--repo': 'repo',
 }
 const GH_RELEASE: Spec = {
   '-t': 'text', '--title': 'text', '-n': 'text', '--notes': 'text', '-F': 'file', '--notes-file': 'file',
@@ -163,7 +176,13 @@ function gh(st: Statement, args: Word[], plan: Plan) {
   }
   const where = `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`
   write(plan, st, where)
-  const spec = group === 'release' ? GH_RELEASE : group === 'gist' || group === 'repo' ? GH_DESC : GH_BODY
+  const spec =
+    group === 'release' ? GH_RELEASE
+    : group === 'gist' || group === 'repo' ? GH_DESC
+    : group === 'pr' && action === 'review' ? GH_REVIEW
+    : group === 'pr' && action === 'merge' ? GH_MERGE
+    : action === 'close' || action === 'reopen' ? GH_CLOSE
+    : GH_BODY
   walk(args.slice(2), spec, plan, where)
 }
 
