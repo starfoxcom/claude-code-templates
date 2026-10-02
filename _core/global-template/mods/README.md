@@ -82,7 +82,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 | Mod | Files |
 |---|---|
 | `session-facts` | `<session>.json` per session (the status line sweeps files older than three days) |
-| `compact-handoff` | hand-off files: one per session in `on` mode; newest 20, at most 14 days, in `shadow` mode |
+| `compact-handoff` | hand-off files: one per session in `on` mode, plus `<session>-precompute.md` when the engine writes a summary ahead of time; newest 20, at most 14 days, in `shadow` mode |
 | `ci-watch` | `<session>.json`; a settled watch is dropped after an hour, or at once when the PR is merged or closed |
 | `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json` |
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
