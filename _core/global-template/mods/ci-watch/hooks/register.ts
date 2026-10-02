@@ -81,15 +81,25 @@ async function load($: EngineInterface): Promise<void> {
   }
 }
 
-async function gh($: EngineInterface, args: readonly string[]): Promise<string> {
+// The folder a push or `gh pr create` ran in: `git -C <dir>` or a `cd <dir>` / `Set-Location <dir>`
+// before it. Undefined means the session's folder.
+export function targetFolder(command: string): string | undefined {
+  const unquote = (raw: string) => raw.replace(/^["']|["']$/g, '')
+  const gitC = /\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)/.exec(command)
+  if (gitC) return unquote(gitC[1]!)
+  const cd = /(?:^|[;&|]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/.exec(command)
+  return cd ? unquote(cd[1]!) : undefined
+}
+
+async function gh($: EngineInterface, args: readonly string[], cwd?: string): Promise<string> {
   // `gh pr checks` exits non-zero while checks are pending; its JSON is still on stdout.
-  const { stdout } = await $.process.run(['gh', ...args], { timeoutMs: 30_000 })
+  const { stdout } = await $.process.run(['gh', ...args], { timeoutMs: 30_000, ...(cwd ? { cwd } : {}) })
   return stdout.trim()
 }
 
-async function prOfBranch($: EngineInterface): Promise<{ repo: string; number: number; headSha: string } | undefined> {
+async function prOfBranch($: EngineInterface, cwd?: string): Promise<{ repo: string; number: number; headSha: string } | undefined> {
   try {
-    const view = JSON.parse(await gh($, ['pr', 'view', '--json', 'number,url,headRefOid'])) as {
+    const view = JSON.parse(await gh($, ['pr', 'view', '--json', 'number,url,headRefOid'], cwd)) as {
       number: number
       url: string
       headRefOid: string
@@ -210,7 +220,14 @@ export const register: Register = (on, options) => {
       return result
     }
     if (!PUSH_OR_PR.test(command)) return result
-    const pr = await prOfBranch($)
+    // `gh pr create` prints the new PR's URL; otherwise ask about the branch in the folder the command ran in.
+    const created = PR_URL.exec(JSON.stringify(result.result ?? ''))
+    if (created) {
+      const [, repo, number] = created
+      await startWatch($, repo!, Number(number), await headOf($, repo!, Number(number)))
+      return result
+    }
+    const pr = (await prOfBranch($, targetFolder(command))) ?? (await prOfBranch($))
     if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
     return result
   })
