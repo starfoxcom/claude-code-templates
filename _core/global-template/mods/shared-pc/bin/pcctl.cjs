@@ -29,36 +29,106 @@ const SESSION_FILE_TTL_MS = 24 * 60 * 60_000
 const now = () => Date.now()
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
+// The mutex directory holds an `owner` file with the holder's token; its mtime is when it was taken.
+// Only the holder removes it, and a breaker only moves away the very mutex it judged stale, so a writer
+// that stalls past MUTEX_STALE_MS can lose its mutex but never removes the next writer's.
+const OWNER = path.join(MUTEX, 'owner')
+let held = null
+
+class MutexLost extends Error {}
+
+function ownerOf(dir) {
+  try {
+    const file = path.join(dir, 'owner')
+    return { token: fs.readFileSync(file, 'utf8'), at: fs.statSync(file).mtimeMs }
+  } catch {
+    // Taken but not stamped yet (or the holder crashed in between): the folder's own time counts.
+    try {
+      return { token: '', at: fs.statSync(dir).mtimeMs }
+    } catch {
+      return null
+    }
+  }
+}
+
 function lock() {
   fs.mkdirSync(DIR, { recursive: true })
+  const token = `${process.pid}-${now()}-${Math.random().toString(36).slice(2, 10)}`
   const deadline = now() + 10_000
   for (;;) {
     try {
       fs.mkdirSync(MUTEX)
+      fs.writeFileSync(OWNER, token)
+      held = token
       return
     } catch (err) {
       if (err.code !== 'EEXIST') throw err
     }
-    try {
-      // A mutex this old belongs to a writer that crashed mid-operation. Rename is atomic, so only one
-      // breaker wins; the window where a breaker renames a fresh mutex needs a crash plus a race within ms.
-      if (now() - fs.statSync(MUTEX).mtimeMs > MUTEX_STALE_MS) {
-        fs.renameSync(MUTEX, `${MUTEX}.stale-${process.pid}-${now()}`)
-        log({ op: 'mutex-broken' })
-        continue
-      }
-    } catch {}
+    breakStale()
     if (now() > deadline) throw new Error('mutex timeout')
     sleep(10 + Math.floor(Math.random() * 20))
   }
 }
 
-function unlock() {
+// A mutex stamped this long ago belongs to a writer that crashed or stalled. Rename is atomic, so one
+// breaker wins; it then checks that it moved the mutex it judged stale, and hands back one that was
+// released and taken again in between. Left out of reach: a third writer creating the folder in the
+// microseconds between that check and the hand-back.
+function breakStale() {
+  const seen = ownerOf(MUTEX)
+  if (!seen || now() - seen.at <= MUTEX_STALE_MS) return
+  const aside = `${MUTEX}.stale-${now()}-${process.pid}`
   try {
-    fs.rmdirSync(MUTEX)
-  } catch {}
+    fs.renameSync(MUTEX, aside)
+  } catch {
+    return
+  }
+  const moved = ownerOf(aside)
+  if (moved && moved.token !== seen.token) {
+    try {
+      fs.renameSync(aside, MUTEX)
+      return
+    } catch {
+      log({ op: 'mutex-restore-failed', owner: moved.token })
+    }
+  }
+  log({ op: 'mutex-broken', owner: seen.token })
+}
+
+const owns = () => held !== null && ownerOf(MUTEX)?.token === held
+
+function unlock() {
+  const token = held
+  held = null
+  if (token && ownerOf(MUTEX)?.token === token) {
+    // Moved aside before removal and checked again, so a breaker's swap in between is put back.
+    const mine = `${MUTEX}.release-${token}`
+    try {
+      fs.renameSync(MUTEX, mine)
+      if (ownerOf(mine)?.token === token) fs.rmSync(mine, { recursive: true, force: true })
+      else fs.renameSync(mine, MUTEX)
+    } catch {}
+  } else if (token) log({ op: 'mutex-lost', owner: token })
+  // Mutexes moved aside by breakers (or by a holder that died before removing its own): removed once
+  // nobody can still be checking them.
   for (const name of safeList(DIR)) {
-    if (name.startsWith('.mutex.stale-')) fs.rmSync(path.join(DIR, name), { recursive: true, force: true })
+    const at = /^\.mutex\.(?:stale-(\d+)-|release-\d+-(\d+)-)/.exec(name)
+    if (at && now() - Number(at[1] ?? at[2]) > 60_000) fs.rmSync(path.join(DIR, name), { recursive: true, force: true })
+  }
+}
+
+// Runs one operation under the mutex. A writer whose mutex was broken while it stalled writes nothing
+// and runs the operation again from the state as it is now.
+function locked(op, args) {
+  for (let attempt = 1; ; attempt++) {
+    lock()
+    try {
+      return apply(op, args)
+    } catch (err) {
+      if (!(err instanceof MutexLost) || attempt >= 3) throw err
+    } finally {
+      unlock()
+    }
   }
 }
 
@@ -371,6 +441,7 @@ function apply(op, args) {
     default:
       throw new Error(`unknown op ${op}`)
   }
+  if (!owns()) throw new MutexLost('mutex lost')
   writeState(s)
   return out
 }
@@ -385,13 +456,7 @@ function main() {
   if (op === 'wait') {
     // Blocks until the seat is ours (exit 0) or we left the line (exit 3). Killed on Esc.
     for (;;) {
-      lock()
-      let out
-      try {
-        out = apply('poll', args)
-      } finally {
-        unlock()
-      }
+      const out = locked('poll', args)
       if (out.granted) {
         process.stdout.write(JSON.stringify(out) + '\n')
         return
@@ -411,6 +476,8 @@ function main() {
     unlock()
   }
 }
+
+module.exports = { lock, unlock, locked, owns, MUTEX }
 
 if (require.main === module) {
   try {

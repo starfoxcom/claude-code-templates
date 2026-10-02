@@ -222,6 +222,51 @@ test('a stale mutex left by a crash is broken', () => {
   assert.ok(!fs.existsSync(mutex))
 })
 
+// Two writers in one process: each `require` of a fresh module copy is its own writer.
+function writer(dir) {
+  const saved = process.env.SHARED_PC_DIR
+  process.env.SHARED_PC_DIR = dir
+  delete require.cache[require.resolve(PCCTL)]
+  try {
+    return require(PCCTL)
+  } finally {
+    if (saved === undefined) delete process.env.SHARED_PC_DIR
+    else process.env.SHARED_PC_DIR = saved
+  }
+}
+
+test('a writer whose stale mutex was broken never removes the next writer\'s mutex', () => {
+  const sb = sandbox()
+  const a = writer(sb.dir)
+  const b = writer(sb.dir)
+  a.lock()
+  // A stalls past the stale limit while holding the mutex.
+  const old = (Date.now() - 10_000) / 1000
+  fs.utimesSync(path.join(a.MUTEX, 'owner'), old, old)
+  b.lock()
+  assert.ok(b.owns(), 'b broke the stale mutex and holds its own')
+  assert.ok(!a.owns(), 'a sees it lost the mutex, so it writes nothing')
+  a.unlock()
+  assert.ok(fs.existsSync(b.MUTEX), "a's unlock leaves b's mutex in place")
+  assert.ok(b.owns())
+  assert.throws(() => fs.mkdirSync(b.MUTEX), /EEXIST/, 'a third writer still waits')
+  b.unlock()
+  assert.ok(!fs.existsSync(b.MUTEX))
+})
+
+test('a fresh mutex is never broken', () => {
+  const sb = sandbox()
+  const a = writer(sb.dir)
+  a.lock()
+  const out = sb.runAsync('status', 'x')
+  return new Promise(r => setTimeout(r, 300)).then(async () => {
+    assert.ok(a.owns(), 'the waiting writer did not take a live mutex')
+    a.unlock()
+    const done = await out
+    assert.strictEqual(done.code, 0)
+  })
+})
+
 test('session end frees the seat and removes the registry file', () => {
   const sb = sandbox()
   sb.register('a')
