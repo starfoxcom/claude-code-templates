@@ -210,3 +210,11 @@ test('a bracket tag the person types is their words; only the mods\' tags are dr
   expect(words).toContain('[wip] split the loader')
   expect(words).not.toContain('[tasks]')
 })
+
+test('a message the last compaction kept beside its summary is carried once', async () => {
+  const first = personWords([said('lock the rings'), said('bake the shadows')], 10_000)
+  // The engine kept "bake the shadows" as the tail, so it is in the next list as well as in the block.
+  const second = personWords([said(first), said('bake the shadows'), said('ship it')], 10_000)
+  expect(second.split('bake the shadows').length - 1).toBe(1)
+  expect(second.indexOf('bake the shadows')).toBeLessThan(second.indexOf('ship it'))
+})
