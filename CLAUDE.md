@@ -8,9 +8,9 @@ When canonical templates evolve in `_core/project-template/.claude/rules/`, re-b
 
 ---
 
-## 🚨 BEFORE ANY CODE RESEARCH
+## Code research
 
-**The first tool for any "where is X / what calls Y / find usages of Z / locate the implementation of W" task MUST be `tokensave_search` or `tokensave_context`. NOT `Grep`. NOT `Glob`. NOT raw `grep`/`rg` in Bash.**
+Start any "where is X / what calls Y / find usages of Z" task with `tokensave_search` or `tokensave_context`, not Grep, Glob or raw `grep`/`rg`.
 
 This rule is enforced by a hook at `~/.claude/hooks/tokensave-first.py` (installed **globally**, never project-local — see `reference_tokensave_hook_global_install` memory for why). Grep/Glob/raw-grep calls are **blocked** when tokensave is available.
 
