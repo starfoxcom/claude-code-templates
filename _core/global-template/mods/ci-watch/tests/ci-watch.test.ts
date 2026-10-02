@@ -1,33 +1,46 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Watch } from '../hooks/register'
-import { claimWake, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
+import { claimWake, isPushOrPr, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
 
 test('passed only after two quiet polls in a row', () => {
-  const first = settle(BASE, { build: 'pass', review: 'pass' }, 1, HOUR)
+  const first = settle(BASE, { build: 'pass', review: 'pass' }, 1, HOUR, 1)
   expect(first.outcome).toBeUndefined()
-  const second = settle(first, { build: 'pass', review: 'skipping' }, 2, HOUR)
+  const second = settle(first, { build: 'pass', review: 'skipping' }, 2, HOUR, 1)
   expect(second.outcome).toBe('passed')
 })
 
 test('a failure settles only after every check is done, two quiet polls in a row', () => {
-  const quiet = settle(BASE, { build: 'pass' }, 1, HOUR)
-  expect(settle(quiet, { build: 'pass', late: 'pending' }, 2, HOUR).stablePolls).toBe(0)
-  const running = settle(BASE, { build: 'fail', review: 'pending' }, 1, HOUR)
+  const quiet = settle(BASE, { build: 'pass' }, 1, HOUR, 1)
+  expect(settle(quiet, { build: 'pass', late: 'pending' }, 2, HOUR, 1).stablePolls).toBe(0)
+  const running = settle(BASE, { build: 'fail', review: 'pending' }, 1, HOUR, 1)
   expect(running.outcome).toBeUndefined()
-  const once = settle(running, { build: 'fail', review: 'fail' }, 2, HOUR)
+  const once = settle(running, { build: 'fail', review: 'fail' }, 2, HOUR, 1)
   expect(once.outcome).toBeUndefined()
-  const final = settle(once, { build: 'fail', review: 'fail' }, 3, HOUR)
+  const final = settle(once, { build: 'fail', review: 'fail' }, 3, HOUR, 1)
   expect(final.outcome).toBe('failed')
   expect(wakeText(final)).toContain('failed: build, review')
 })
 
+test('two quiet polls seconds apart do not settle: the checks must stay quiet a full poll interval', () => {
+  const POLL = 60_000
+  const first = settle(BASE, { build: 'fail', review: 'fail' }, 1_000, HOUR, POLL)
+  const second = settle(first, { build: 'fail', review: 'fail' }, 6_000, HOUR, POLL)
+  expect(second.outcome).toBeUndefined()
+  // The new commit's runs show up: the quiet time starts over.
+  const pushed = settle(second, { build: 'fail', review: 'pending' }, 30_000, HOUR, POLL)
+  expect(pushed.quietSince).toBeUndefined()
+  const again = settle(pushed, { build: 'pass', review: 'pass' }, 90_000, HOUR, POLL)
+  expect(settle(again, { build: 'pass', review: 'pass' }, 120_000, HOUR, POLL).outcome).toBeUndefined()
+  expect(settle(again, { build: 'pass', review: 'pass' }, 150_000, HOUR, POLL).outcome).toBe('passed')
+})
+
 test('no checks reported is never a pass; the time limit wakes with what is stuck', () => {
-  expect(settle(BASE, {}, 1, HOUR).outcome).toBeUndefined()
-  const stuck = settle(BASE, { review: 'pending' }, HOUR + 1, HOUR)
+  expect(settle(BASE, {}, 1, HOUR, 1).outcome).toBeUndefined()
+  const stuck = settle(BASE, { review: 'pending' }, HOUR + 1, HOUR, 1)
   expect(stuck.outcome).toBe('timeout')
   expect(wakeText(stuck)).toContain('review')
 })
@@ -173,6 +186,21 @@ test('a merge names its PR, or 0 for the branch PR; other commands are not merge
   expect(mergedNumber('gh pr merge --merge --delete-branch')).toBe(0)
   expect(mergedNumber('gh pr view 1278 --json mergeable')).toBeUndefined()
   expect(mergedNumber('git merge origin/develop')).toBeUndefined()
+  expect(mergedNumber('gh -R o/r pr merge 9 --merge')).toBe(9)
+  expect(mergedNumber('git commit -m "docs: how gh pr merge works"')).toBeUndefined()
+  expect(mergedNumber("gh pr comment 5 --body 'run gh pr merge 3 after'")).toBeUndefined()
+})
+
+test('a push or a new PR is the subcommand, never words inside a message', () => {
+  expect(isPushOrPr('git push origin feature/x')).toBe(true)
+  expect(isPushOrPr('git -C "C:/repo wt" push -u origin feature/x')).toBe(true)
+  expect(isPushOrPr('git add -u && git commit -m "fix: x" && git push')).toBe(true)
+  expect(isPushOrPr('gh pr create --base develop --title "t" --body-file b.md')).toBe(true)
+  expect(isPushOrPr('gh -R o/r pr create -t t -b b')).toBe(true)
+  expect(isPushOrPr('git commit -m "docs: explain the push guard"')).toBe(false)
+  expect(isPushOrPr("gh pr comment 5 --body 'create the gh pr create docs'")).toBe(false)
+  expect(isPushOrPr("git commit -F - <<'EOF'\nfix: then git push it\nEOF")).toBe(false)
+  expect(isPushOrPr('git log --oneline origin/x..HEAD')).toBe(false)
 })
 
 test('a push in another folder is looked up there', () => {
