@@ -96,7 +96,9 @@ function carriedForward(messages: readonly SessionMessage[]): { kept: string[]; 
 export function personWords(messages: readonly SessionMessage[], budgetChars: number, typed?: readonly string[]): string {
   const previous = carriedForward(messages)
   const source = typed ?? messages.filter(isPersonMessage).map(message => message.text)
-  const fresh = source.map(stripInjected).filter(Boolean)
+  // A message the last compaction kept in the context beside its summary is still in the list now:
+  // it is carried once, from the block. (A word-for-word repeat of a carried message is folded too.)
+  const fresh = source.map(stripInjected).filter(text => text && !previous.kept.includes(text))
   const all = [...previous.kept, ...fresh]
 
   const kept: string[] = []
@@ -209,7 +211,8 @@ async function replace($: EngineInterface, e: SessionCompactInput, next: (e: Ses
   // would otherwise hide this cycle's messages from the helper.
   const typed = await transcriptWords($)
   const result = await next({ ...e, instructions: await handoffInstructions($, e, budget) })
-  if (!result.messages) return result
+  // The engine rejects an empty list (a compaction keeps at least one message); a skip passes through.
+  if (!result.messages?.length) return result
 
   const words = personWords(e.messages, budget * PERSON_SHARE * CHARS_PER_TOKEN, typed)
   const [summary, ...rest] = result.messages
