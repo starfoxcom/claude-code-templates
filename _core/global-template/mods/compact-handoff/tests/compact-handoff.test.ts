@@ -20,12 +20,18 @@ const CONVERSATION: SessionMessage[] = [
   said('[usage-guard] Plan usage limit nearly reached (automatic wrap-up).\n[session-facts] 2026-10-02 10:05 | ctx 41%'),
 ]
 
-type World = { writes: { path: string; text: string }[]; runs: (readonly string[])[]; forks: string[]; registered: string[] }
+type World = {
+  writes: { path: string; text: string }[]
+  runs: (readonly string[])[]
+  forks: string[]
+  registered: string[]
+  clock: ReturnType<typeof mock.clock>
+}
 type Run = { exitCode: number; stdout: string } | 'reject'
 
 function world(on: On, helperRuns: Record<string, Run> = {}): World {
-  const seen: World = { writes: [], runs: [], forks: [], registered: [] }
-  mock.clock(on, { now: Date.UTC(2026, 9, 2, 17, 0, 0) })
+  const clock = mock.clock(on, { now: Date.UTC(2026, 9, 2, 17, 0, 0) })
+  const seen: World = { writes: [], runs: [], forks: [], registered: [], clock }
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   on('session.id', () => ({ value: SESSION }))
   on('session.usage', () => ({
@@ -161,7 +167,8 @@ test("a failed helper falls back to the compaction's own messages", { options: {
 test('a sweep that cannot start node does not fail the session start', { options: { mode: 'on' } }, async ($, on) => {
   const seen = world(on, { sweep: 'reject' })
   await start($)
-  await new Promise(resolve => setTimeout(resolve, 0))
+  // The sweep is not awaited by session.start; let its chain run (an unhandled rejection fails the file).
+  await seen.clock.settle()
 
   expect(seen.registered).toEqual(['recall'])
   expect(seen.runs.some(argv => argv.includes('sweep'))).toBe(true)
