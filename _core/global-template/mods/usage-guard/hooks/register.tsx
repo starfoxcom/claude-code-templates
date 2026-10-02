@@ -263,6 +263,9 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
 async function resume($: EngineInterface, resetsAt: string): Promise<void> {
   const pause = await readPause($)
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
+  // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
+  // timer beside this one. The shared `done` status cannot be the claim: every session resumes.
+  if (!(await claim($, `resume-${resetKey(pause)}-${await $.session.id()}`))) return
   if (pause.status === 'active') await writePause($, { ...pause, status: 'done' })
   setStatus($, undefined)
   await showCard($, `reset:${resetsAt}`, 'Plan limits have reset. Sessions are resuming their saved work.')
@@ -284,8 +287,9 @@ async function armWake($: EngineInterface, pause: Pause): Promise<void> {
 }
 
 // This session's part in a live pause: it wraps up once, and its wake timer is
-// armed. A hot reload drops the timer, so a pause this session already handled
-// gets its timer back here.
+// armed. A hot reload starts this module without its timer, while the earlier
+// instance's timer may still run: a pause this session already handled gets its
+// timer back here, and the resume claim keeps the two from resuming twice.
 async function act($: EngineInterface, pause: Pause): Promise<void> {
   if (await claim($, `${resetKey(pause)}-${await $.session.id()}`)) {
     await armWake($, pause)
