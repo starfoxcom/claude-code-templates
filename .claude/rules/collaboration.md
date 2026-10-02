@@ -17,8 +17,8 @@ Applies when more than one person pushes to the repo. Everything in `git.md` sti
 
 ## Who reviews
 
-- With a `CODEOWNERS` file, GitHub requests the owners of the touched paths. Without one, ask the owner of the touched directory, one reviewer per module for cross-cutting changes.
-- Every PR needs an approval from someone other than its author, in addition to the AI review verdict.
+- This repo has one maintainer and no `CODEOWNERS` file. Branch protection requires zero approvals, so the AI review gates decide: a PR merges on a 🟢 routine verdict, plus a 🟢 deep verdict when a deep review was raised (`review-tiers.md`). The maintainer merges on a 🟢 gate without a separate approval.
+- A PR from an external contributor also needs the maintainer to read its whole diff before it merges, on top of the AI verdicts.
 
 ## When CI is red
 
