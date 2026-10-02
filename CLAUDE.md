@@ -44,7 +44,7 @@ The page itself is the deliverable. There is no separate frontend build step; `i
 Per `.claude/rules/git.md` (resolved from canonical `_core/project-template/.claude/rules/git.md`):
 
 - **Atomic commits.** One logical change per commit. Format: `<type>(<scope>): <imperative description>` (max 72 chars).
-- **Conventional types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `data`.
+- **Conventional types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `data`, `style`.
 - **No AI-attribution markers** anywhere — not in commit messages, PR titles, PR bodies, or issue comments. No `Co-Authored-By: Claude`, no `Generated with Claude Code`, no `claude.com` links in footers. The discipline is the work; the tool is a detail.
 - **Gitflow branching model.** Per the project's own `_core/project-template/.claude/rules/git.md`:
   - `main` — stable releases only, tag every release commit
@@ -83,7 +83,7 @@ Per `.claude/rules/review-tiers.md` (resolved from canonical `_core/project-temp
 
 - **Two tiers.** Routine review (every PR) + on-demand deep review (fired by a comment starting with `@claude review this PR`). Both run Fable 5.1 at low effort with an Opus 5.5 high-effort backup; the deep tier retries Fable once before falling back. The gate names the model whose attempt wrote the verdict: in the `Evaluate review outcome` step's annotation and summary for the routine tier, and in the `Claude On-Demand` check title and summary for the deep tier.
 - **Binary verdict rule.** `🟢 LGTM` only when fully clean. `🔴 Blocking` when *any* real finding exists. No "minor non-blocking" rot. This applies to both tiers.
-- **Auto-fire deep review** on the trigger surface (parsing/codec/serialization, threading, scheduling, save/load formats, mod-loader DAG changes — full list in `git.md`). The routine reviewer applies the `needs-deep-review` label automatically.
+- **Auto-fire deep review** on the trigger surface (parsing/codec/serialization, threading, scheduling, save/load formats, mod-loader DAG changes — full list in `.claude/rules/review-tiers.md` § Deep review triggers). The routine reviewer applies the `needs-deep-review` label automatically.
 - **Strict OSS review posture on `main` AND `develop`:**
   - Required status checks: `Evaluate review outcome` and `Claude On-Demand` must pass before merge. On `develop`, `Engine and hook tests` (the `Tests` workflow: engine, Python twin and guard-hook tests) is required too; it runs on every PR so it never waits on a docs-only one
   - Required approvals: 0 (the AI gates decide; a solo maintainer cannot approve their own PR)
@@ -99,7 +99,7 @@ The routine-review + deep-review workflows are installed and active in this repo
 
 The page IS a visual artifact. Per `.claude/rules/visual.md` (resolved from canonical `_core/project-template/.claude/rules/visual.md`):
 
-- Ship one verifiable slice at a time. Smaller than ~150 lines of net change per slice.
+- Ship one verifiable slice at a time, each checkable with one short yes/no list.
 - **Local-iterate-then-push** for visual changes. Commit locally, report, wait for visual approval, then push. Skipping this burns CI cycles on iteration.
 - **Concrete visual smoke-test checklists** — never "verify no regressions." Hand the reviewer a specific yes/no list tied to what changed.
 
