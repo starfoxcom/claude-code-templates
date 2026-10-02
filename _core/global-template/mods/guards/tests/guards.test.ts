@@ -16,7 +16,7 @@ function verdict(command: string, mayName: boolean, powershell = false): string 
   const plan = inspect(command, powershell)
   if (plan.block) return 'run-watch'
   for (const t of plan.texts) {
-    const v = checkText(t.text, mayName)
+    const v = checkText(t.text, mayName || Boolean(t.creditOnly))
     if (v) return v.rule
   }
   for (const b of plan.branches) if (checkBranch(b, mayName)) return 'branch'
@@ -153,4 +153,108 @@ test('review, merge and close flags that are switches never swallow the body', (
   }
   expect(texts(`gh issue close 5 -r completed -c '${body}'`)).toContain(body)
   expect(texts(`gh pr close 5 -d -c '${body}'`)).toContain(body)
+})
+
+test('git and gh behind a shell keyword, a wrapper, a subshell or another shell are read', () => {
+  for (const command of [
+    `if true; then git commit -m 'fix: x' -m '${AI_TRAILER}'; fi`,
+    `if git diff --quiet; then :; else git commit -am '${AI_TRAILER}'; fi`,
+    `if gh pr comment 5 -b '${GENERATED}'; then echo ok; fi`,
+    `for n in 1 2; do gh pr comment $n -b '${GENERATED}'; done`,
+    `while read n; do gh pr comment "$n" --body '${GENERATED}'; done < prs.txt`,
+    `{ git commit -m '${AI_TRAILER}'; }`,
+    `(git commit -m '${AI_TRAILER}')`,
+    `cd repo && (git add -A && git commit -m '${AI_TRAILER}')`,
+    `! git commit -m '${AI_TRAILER}'`,
+    `time git commit -m '${AI_TRAILER}'`,
+    `sudo -u bob git commit -m '${AI_TRAILER}'`,
+    `env GIT_AUTHOR_NAME=x git commit -m '${AI_TRAILER}'`,
+    `GIT_EDITOR=true command git commit -m '${AI_TRAILER}'`,
+    `nohup gh pr comment 5 -b '${GENERATED}'`,
+    `timeout 60 gh pr comment 5 -b '${GENERATED}'`,
+    `echo 5 | xargs -I{} gh pr comment {} -b '${GENERATED}'`,
+    `PR=$(gh pr create --title t --body '${GENERATED}')`,
+    `echo "opened $(gh pr create --title t --body '${GENERATED}')"`,
+    `bash -c "git commit -m '${AI_TRAILER}'"`,
+    `powershell -Command "git commit -m '${AI_TRAILER}'"`,
+    `cmd /c git commit -m "${AI_TRAILER}"`,
+  ]) {
+    expect(verdict(command, true)).toBe('credit')
+  }
+  for (const command of [
+    `foreach ($n in 1..2) { gh pr comment $n -b '${GENERATED}' }`,
+    `if ($ok) { git commit -m '${AI_TRAILER}' }`,
+    `1..2 | ForEach-Object { gh pr comment $_ --body '${GENERATED}' }`,
+  ]) {
+    expect(verdict(command, true, true)).toBe('credit')
+  }
+  expect(inspect('command -v git', false).isWrite).toBe(false)
+  expect(inspect('if git diff --quiet; then echo clean; fi', false).isWrite).toBe(false)
+})
+
+test('a global repo flag before the gh subcommand is skipped with its value', () => {
+  for (const command of [
+    `gh -R o/r pr comment 5 -b '${GENERATED}'`,
+    `gh --repo o/r pr comment 5 --body '${GENERATED}'`,
+    `gh --repo=o/r issue create -t t -b '${GENERATED}'`,
+    `gh pr -R o/r comment 5 -b '${GENERATED}'`,
+  ]) {
+    expect(verdict(command, true)).toBe('credit')
+  }
+  expect(inspect('gh -R o/r pr comment 5 -b x', false).repo).toBe('r')
+  expect(inspect('gh -R o/r pr view 5', false).isWrite).toBe(false)
+})
+
+test('gh api reads its method in every spelling and a here-doc fed to --input', () => {
+  const doc = `<<'EOF'\n{"body":"${GENERATED}"}\nEOF`
+  for (const command of [
+    `gh api -XPOST repos/o/r/issues/1/comments --input - ${doc}`,
+    `gh api --method=POST repos/o/r/issues/1/comments --input - ${doc}`,
+    `gh api -X PATCH repos/o/r/issues/comments/9 --input - ${doc}`,
+    `gh api repos/o/r/issues/1/comments --input - ${doc}`,
+  ]) {
+    expect(verdict(command, true)).toBe('credit')
+  }
+  expect(inspect('gh api -X GET search/issues -f q=is:open', false).isWrite).toBe(false)
+  expect(inspect('gh api repos/o/r/pulls/5', false).isWrite).toBe(false)
+})
+
+test('text piped in, set in a variable, or written to a file earlier in the command is read', () => {
+  for (const command of [
+    `echo '{"body":"${GENERATED}"}' | gh api repos/o/r/issues -X POST --input -`,
+    `printf 'fix: x\\n\\n${AI_TRAILER}\\n' | git commit -F -`,
+    `echo '${GENERATED}' | gh pr comment 5 -F -`,
+    `cat <<'EOF' | gh pr comment 5 --body-file -\n${GENERATED}\nEOF`,
+    `cat > /tmp/b.md <<'EOF'\n${AI_TRAILER}\nEOF\ngh pr create --title t --body-file /tmp/b.md`,
+    `echo '${GENERATED}' > b.md && gh pr comment 5 --body-file ./b.md`,
+    `MSG='${AI_TRAILER}'; git commit -m "fix: x" -m "$MSG"`,
+    `export BODY='${GENERATED}'\ngh pr comment 5 --body "\${BODY}"`,
+    `read -r -d '' BODY <<'EOF'\n${GENERATED}\nEOF\ngh pr create --title t --body "$BODY"`,
+    `git commit -m "$(printf '%s\\n' 'fix: x' '${AI_TRAILER}')"`,
+    `git commit -m "$(echo '${AI_TRAILER}')"`,
+  ]) {
+    expect(verdict(command, true)).toBe('credit')
+  }
+  for (const command of [
+    `'${GENERATED}' | gh pr comment 5 -F -`,
+    `$b = '${GENERATED}'; gh pr comment 5 --body $b`,
+    `$p = @{ title = 't'; body = '${GENERATED}' }; gh pr create @p`,
+  ]) {
+    expect(verdict(command, true, true)).toBe('credit')
+  }
+  const plan = (c: string, ps = false) => inspect(c, ps)
+  expect(plan('git commit -F - < /tmp/m.txt').files.map(f => f.path)).toEqual(['/tmp/m.txt'])
+  expect(plan('cat /tmp/b.md | gh pr create --title t --body-file -').files.map(f => f.path)).toEqual(['/tmp/b.md'])
+  expect(plan('F=/tmp/b.md; gh pr create --title t --body-file "$F"').files.map(f => f.path)).toEqual(['/tmp/b.md'])
+  const fed = plan("cat > /tmp/b.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md").files
+  expect(fed).toEqual([{ where: 'the PR text', path: '/tmp/b.md', written: true }])
+  // A message made by something the reading cannot follow is named, never dropped.
+  expect(plan('git log -1 --format=%B | git commit -F -').unread).toEqual(['the commit message'])
+  expect(plan('git commit -F -').unread).toEqual(['the commit message'])
+  expect(plan('gh pr view 5 --json body --jq .body > b.md; gh pr edit 5 --body-file b.md').unread).toEqual([
+    'the PR edit (file b.md)',
+  ])
+  expect(plan(`$p = @{ title = 't' }; gh pr create @p`, true).unread).toEqual(['the PR text'])
+  expect(plan('bash -c "git commit -m \\"$MSG\\""').unread).toContain('a bash script built at run time')
+  expect(plan('MSG=fixed; git commit -m "$MSG"').unread).toEqual([])
 })

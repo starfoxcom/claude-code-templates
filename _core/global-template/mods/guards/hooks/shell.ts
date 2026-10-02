@@ -19,6 +19,12 @@ export type Statement = {
   heredocs: string[]
   /** Files this statement writes through `>` / `>>`. */
   writes: string[]
+  /** Files fed to this statement through `<`. */
+  reads: string[]
+  /** Its input comes from the statement before it, through a pipe. */
+  pipeIn: boolean
+  /** Commands run inside a `$(...)` of its words (`PR=$(gh pr create ...)`); they run before it. */
+  inner: Statement[]
 }
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
@@ -27,7 +33,8 @@ const REDIRECT_ATTACHED = /^\d*(>>?|<)(?!&)(.+)$/
 export function parse(command: string, powershell: boolean): Statement[] {
   const esc = powershell ? '`' : '\\'
   const out: Statement[] = []
-  let st: Statement = { words: [], heredocs: [], writes: [] }
+  const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
+  let st = fresh()
   let word: Word | null = null
   let pending: { delim: string; strip: boolean }[] = []
   let redirectNext: 'write' | 'read' | 'text' | null = null
@@ -41,6 +48,7 @@ export function parse(command: string, powershell: boolean): Statement[] {
     word = null
     if (redirectNext) {
       if (redirectNext === 'write') st.writes.push(w.text)
+      if (redirectNext === 'read') st.reads.push(w.text)
       if (redirectNext === 'text') st.heredocs.push(w.text)
       redirectNext = null
       return
@@ -52,16 +60,17 @@ export function parse(command: string, powershell: boolean): Statement[] {
     }
     const attached = REDIRECT_ATTACHED.exec(w.text)
     if (attached && !w.dynamic && /^[\d<>]/.test(w.text)) {
-      if (attached[1] !== '<') st.writes.push(attached[2] ?? '')
+      const target = attached[1] === '<' ? st.reads : st.writes
+      target.push(attached[2] ?? '')
       return
     }
     st.words.push(w)
   }
-  const endStatement = () => {
+  const endStatement = (pipeNext = false) => {
     endWord()
     redirectNext = null
     if (st.words.length > 0 || st.heredocs.length > 0) out.push(st)
-    st = { words: [], heredocs: [], writes: [] }
+    st = fresh(pipeNext)
   }
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
   const readBodies = (into: string[]) => {
@@ -94,8 +103,9 @@ export function parse(command: string, powershell: boolean): Statement[] {
     i += m[0].length
     return true
   }
-  // `$(` at `i`: the substitution read whole and kept raw, its own here-doc bodies collected.
-  const substitution = (w: Word) => {
+  // `$(` at `i` (PowerShell also `(`, `@(` and `@{`): the substitution read whole and kept raw, its own
+  // here-doc bodies collected, and the commands inside it read as statements of their own.
+  const substitution = (w: Word, braces = false) => {
     let depth = 0
     let quote = ''
     const start = i
@@ -109,8 +119,8 @@ export function parse(command: string, powershell: boolean): Statement[] {
         continue
       }
       if (c === "'" || c === '"') quote = c
-      else if (c === '(') depth++
-      else if (c === ')') {
+      else if (c === '(' || (braces && c === '{')) depth++
+      else if (c === ')' || (braces && c === '}')) {
         depth--
         if (depth === 0) {
           i++
@@ -134,8 +144,11 @@ export function parse(command: string, powershell: boolean): Statement[] {
       }
       i++
     }
-    w.text += command.slice(start, i)
+    const raw = command.slice(start, i)
+    w.text += raw
     w.dynamic = true
+    const open = raw.indexOf(braces ? '{' : '(')
+    if (!braces && open !== -1 && raw.endsWith(')')) st.inner.push(...parse(raw.slice(open + 1, -1), powershell))
   }
 
   while (i < n) {
@@ -161,6 +174,31 @@ export function parse(command: string, powershell: boolean): Statement[] {
     if (!word && c === '#') {
       const end = command.indexOf('\n', i)
       i = end === -1 ? n : end
+      continue
+    }
+    // Bash: `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
+    if (!powershell && (c === '(' || c === ')')) {
+      i++
+      endStatement()
+      continue
+    }
+    // PowerShell: `(...)` is a value built at run time, and `{` `}` hold script blocks (`foreach`, `if`).
+    if (powershell && !word && c === '(') {
+      substitution(startWord())
+      continue
+    }
+    if (powershell && !word && (c === '{' || c === '}')) {
+      i++
+      endStatement()
+      continue
+    }
+    if (powershell && !word && c === '@' && (command[i + 1] === '(' || command[i + 1] === '{')) {
+      substitution(startWord(), command[i + 1] === '{')
+      continue
+    }
+    if (c === '|' && command[i + 1] !== '|') {
+      i += command[i + 1] === '&' ? 2 : 1
+      endStatement(true)
       continue
     }
     if (c === ';' || c === '|' || c === '&') {
@@ -255,11 +293,43 @@ export function parse(command: string, powershell: boolean): Statement[] {
   return out
 }
 
-/** The program a statement runs: its first word past `VAR=x` assignments, cut to the file name. */
+// Words that run the command after them: shell keywords (`then git commit ...` in an `if`, `do gh ...`
+// in a loop) and wrappers, with the options of each that take a value.
+const WRAPPERS = new Map<string, RegExp | null>(Object.entries({
+  if: null, then: null, elif: null, else: null, while: null, until: null, do: null, '!': null, '{': null,
+  time: null, nohup: null, builtin: null, command: null,
+  exec: /^-a$/,
+  sudo: /^-[ugpCDhrtTU]$|^--(user|group|prompt|chdir|host|role|type|other-user|close-from)$/,
+  env: /^-[uCS]$|^--(unset|chdir|split-string)$/,
+  nice: /^-n$|^--adjustment$/,
+  timeout: /^-[sk]$|^--(signal|kill-after)$/,
+  xargs: /^-[IiLlnPdEsa]$|^--(replace|max-lines|max-args|max-procs|delimiter|eof|max-chars|arg-file)$/,
+}))
+
+/**
+ * The program a statement runs: its first word past `VAR=x` assignments, shell keywords and wrappers
+ * (`sudo`, `env`, `time`, `timeout 60`, `xargs -I{}`, ...), cut to the file name.
+ */
 export function programOf(st: Statement): { name: string; args: Word[] } {
+  const words = st.words
   let k = 0
-  while (k < st.words.length && /^[A-Za-z_]\w*=/.test(st.words[k]?.text ?? '')) k++
-  const first = st.words[k]?.text ?? ''
+  for (;;) {
+    while (k < words.length && /^[A-Za-z_]\w*=/.test(words[k]?.text ?? '')) k++
+    const head = words[k]
+    if (!head || head.dynamic || !WRAPPERS.has(head.text)) break
+    const values = WRAPPERS.get(head.text)
+    k++
+    while (k < words.length && /^-./.test(words[k]?.text ?? '') && !words[k]?.dynamic) {
+      const t = words[k]?.text ?? ''
+      // `command -v git` only looks the program up.
+      if (head.text === 'command' && /^-[vV]$/.test(t)) return { name: '', args: [] }
+      k += values?.test(t) ? 2 : 1
+      if (t === '--') break
+    }
+    // `timeout 60 git push`: the duration comes first.
+    if (head.text === 'timeout') k++
+  }
+  const first = words[k]?.text ?? ''
   const name = (first.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
-  return { name, args: st.words.slice(k + 1) }
+  return { name, args: words.slice(k + 1) }
 }

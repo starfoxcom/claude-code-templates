@@ -45,6 +45,15 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
 
 `skill-check` reads its contracts from `~/.claude/skill-contracts.json`. Start from `skill-check/skill-contracts.example.json`, which holds contracts for this toolkit's `/session-start` and `/session-close` skills; remove any step whose feature you turned off at bind time.
 
+### What guards cannot see
+
+`guards` is a safety net for commands written the ordinary way, not a sandbox. It reads git and gh where people and agents really put them: behind `if`/`then`/`do`/`{`/`(`/`!`, behind `sudo`, `env`, `time`, `timeout`, `nohup`, `command`, `xargs`, inside `$(...)`, `bash -c`, `powershell -Command` and `cmd /c`, with `gh -R owner/name` before the subcommand. It reads messages from variables set earlier in the same command, here-docs, here-strings, `< file`, a pipe from `echo`/`printf`/`cat`, and files the command writes itself with `>`. When a message exists but is made by something it cannot follow, it names that message as **unread** in `decisions.jsonl` instead of passing it silently. Out of its reach:
+
+- commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`, `ssh host ...`, a program named through a variable (`$GIT commit`), or any other program that writes to GitHub on its own (a Python script, an SDK);
+- a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the file does not exist yet when the guard looks, so it reports that it could not read it;
+- the output of another program used as a message (`git log --format=%B | git commit -F -`, a variable set from outside the command): named unread, its text never checked;
+- AI credit hidden on purpose (assembled from pieces, encoded, fetched at run time): out of scope.
+
 ---
 
 ## Install
