@@ -10,7 +10,9 @@ const path = require('path')
 
 // Same data root as the other global mods (mods-data/<mod>), outside every mod folder so writes here
 // never hot-reload a mod.
-const DIR = process.env.SHARED_PC_DIR || path.join(os.homedir(), '.claude', 'mods-data', 'shared-pc')
+const DIR =
+  process.env.SHARED_PC_DIR ||
+  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'mods-data', 'shared-pc')
 const SESSIONS = path.join(DIR, 'sessions')
 const STATE = path.join(DIR, 'state.json')
 const LOG = path.join(DIR, 'log.jsonl')
