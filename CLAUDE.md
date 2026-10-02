@@ -8,13 +8,13 @@ When canonical templates evolve in `_core/project-template/.claude/rules/`, re-b
 
 ---
 
-## 🚨 BEFORE ANY CODE RESEARCH
+## Code research
 
-**The first tool for any "where is X / what calls Y / find usages of Z / locate the implementation of W" task MUST be `tokensave_search` or `tokensave_context`. NOT `Grep`. NOT `Glob`. NOT raw `grep`/`rg` in Bash.**
+Start any "where is X / what calls Y / find usages of Z" task with `tokensave_search` or `tokensave_context`, not Grep, Glob or raw `grep`/`rg`.
 
 This rule is enforced by a hook at `~/.claude/hooks/tokensave-first.py` (installed **globally**, never project-local — see `reference_tokensave_hook_global_install` memory for why). Grep/Glob/raw-grep calls are **blocked** when tokensave is available.
 
-**This repo has a tokensave index** at `.tokensave/` (32 files / 287 nodes, schema v9). The hook routes code-research through tokensave MCP tools by default. Re-sync incrementally with `tokensave sync` after edits; full rebuild via `tokensave sync -f` after schema migrations or large refactors.
+**This repo has a tokensave index** at `.tokensave/` (`tokensave_status` shows its size and freshness). The hook routes code-research through tokensave MCP tools by default. Re-sync incrementally with `tokensave sync` after edits; full rebuild via `tokensave sync -f` after schema migrations or large refactors.
 
 Fallback to Grep/Glob is allowed when:
 1. You've tried tokensave with 2+ keyword variants and got nothing usable
@@ -44,34 +44,34 @@ The page itself is the deliverable. There is no separate frontend build step; `i
 Per `.claude/rules/git.md` (resolved from canonical `_core/project-template/.claude/rules/git.md`):
 
 - **Atomic commits.** One logical change per commit. Format: `<type>(<scope>): <imperative description>` (max 72 chars).
-- **Conventional types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `data`.
+- **Conventional types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `data`, `style`.
 - **No AI-attribution markers** anywhere — not in commit messages, PR titles, PR bodies, or issue comments. No `Co-Authored-By: Claude`, no `Generated with Claude Code`, no `claude.com` links in footers. The discipline is the work; the tool is a detail.
 - **Gitflow branching model.** Per the project's own `_core/project-template/.claude/rules/git.md`:
   - `main` — stable releases only, tag every release commit
   - `develop` — base for all in-flight work
   - `feature/<n>` — branches from `develop`, merges back to `develop`
-  - `release/<v>` — branches from `develop`, merges to `main` AND `develop`
-  - `hotfix/<n>` — branches from `main`, merges to `main` AND `develop`
+  - `release/<v>` — branches from `develop`, merges to `main`, then reaches `develop` through a cascade PR opened by hand (`.claude/rules/git.md` § "Cascade after every merge into `main`")
+  - `hotfix/<n>` — branches from `main`, merges to `main`, then the same hand-opened cascade PR into `develop`
 - **Every PR merges with a merge commit** (`gh pr merge <pr> --merge`), so each branch stays visible in the history graph. Keep every commit on the branch meaningful; the PR title (64 characters max) goes into the merge commit. Squash and rebase merges are not used here.
 
 ---
 
 ## Token-efficiency discipline
 
-Per `.claude/rules/token-efficiency.md` (resolved from canonical `_core/project-template/.claude/rules/token-efficiency.md`):
+Rules from `.claude/rules/token-efficiency.md`, `.claude/rules/task-tracking.md` and `.claude/rules/git.md`, plus a few that live only here:
 
-- **Task tracking is mandatory for 3+ step sessions.** Use the `TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet` tools (standard Claude Code as of v2.1.142, default-flip May 2026; opt-in available since v2.1.16, Jan 2026; on older builds or when `CLAUDE_CODE_ENABLE_TASKS=0` is set, `TodoWrite` is the fallback). Enumerate the planned steps with `TaskCreate` at session start. To chain dependencies, capture each new task's ID from the `tool_result` and call `TaskUpdate({ taskId, addBlockedBy: [<prereq-id>] })` (`addBlockedBy` is a `TaskUpdate` input parameter, not a separate tool). `TaskUpdate({ taskId, status: 'in_progress' })` BEFORE starting; `TaskUpdate({ taskId, status: 'completed' })` immediately when done — don't batch. New follow-ups discovered mid-session get their own `TaskCreate` call. The task list is the in-session source of truth and the basis for the session-close DoD audit. Single-task or trivial conversational work doesn't need it; the threshold is 3+ discrete items. **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front and chain dependencies with `TaskUpdate({ taskId, addBlockedBy: [<prior-pr-task-id>] })` so the task list mirrors the merge order — treating a 10-PR chain as ad-hoc work burns hours on out-of-sequence routing.
+- **Task tracking is mandatory for 3+ step sessions** (`.claude/rules/task-tracking.md`). Use the `TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet` tools (`TodoWrite` where they are not available). Enumerate the planned steps with `TaskCreate` at session start. To chain dependencies, capture each new task's ID from the `tool_result` and call `TaskUpdate({ taskId, addBlockedBy: [<prereq-id>] })` (`addBlockedBy` is a `TaskUpdate` input parameter, not a separate tool). `TaskUpdate({ taskId, status: 'in_progress' })` BEFORE starting; `TaskUpdate({ taskId, status: 'completed' })` immediately when done — don't batch. New follow-ups discovered mid-session get their own `TaskCreate` call. The task list is the in-session source of truth and the basis for the session-close DoD audit. Single-task or trivial conversational work doesn't need it; the threshold is 3+ discrete items. **For multi-PR workstreams** (hotfix + cascade chains, large refactors split for review), create one task per PR up-front and chain dependencies with `TaskUpdate({ taskId, addBlockedBy: [<prior-pr-task-id>] })` so the task list mirrors the merge order — treating a 10-PR chain as ad-hoc work burns hours on out-of-sequence routing.
 - **Read before writing.** Locate the relevant function/class before reading whole files. Use `tokensave_body <symbol>` to pull a single symbol's source when reading the whole file would be wasteful.
-- **Command timeout scaling.** Default starting timeout for builds: 420 000 ms. Each retry escalates by 120 000 ms.
-- **Never use `gh run watch`.** Always poll `gh run list` with a background loop — see the canonical pattern in the rule file.
-- **CI polling cadence is fixed by PR class, and ALL cadences run in the background.** Use the Bash tool with `run_in_background: true` and an until-loop — never foreground-sleep. The harness notifies on exit; pick up other work while CI runs.
-  - **Fast-path / auto-pass PRs** (docs-only, rules-only, anything `triage` classifies non-reviewable) — background until-loop with `sleep 90` per check, then `gh pr view <pr> --json statusCheckRollup`. Expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS` (auto-passes via `if: always()`), `Claude On-Demand: SKIPPED` (`evaluate-review-outcome` PATCHes the deep check for non-reviewable diffs). Merge with `gh pr merge <pr> --merge` once the PR reports `CLEAN`.
-  - **Normal-review PRs** — background until-loop with `sleep 420` (7 minutes) between checks. Read the routine reviewer's verdict comment via `gh pr view <pr> --json comments` and act on the last non-empty 🟢/🔴 line. On 🟢, merge with `--merge`; on 🔴, fix on the PR branch and push.
-  - **Workflow-only PRs** (only `.github/workflows/` files) — triage never reviews workflow files, so these pass both checks like a docs PR. The review action would refuse to run anyway: it requires the PR's workflow file to match the default branch's. Keep workflow edits in a PR of their own with no reviewable files. It merges only as `.claude/rules/review-tiers.md` § "Workflow-only PRs skip the review" describes: two local 🟢 reviews on the head commit when every commit came from our own sessions, otherwise the maintainer's read.
+- **Command timeout scaling** follows `.claude/rules/token-efficiency.md`.
+- **Never use `gh run watch`.** When the ci-watch mod is loaded, it watches the PR after `git push`/`gh pr create` and wakes the session once all checks settle; without it, use the watchers in `.claude/rules/token-efficiency.md` (the Monitor tool, then a bounded background loop).
+- **What the checks report by PR class:**
+  - **Docs-only / non-reviewable PRs** (anything `triage` classifies non-reviewable) — expect `Diff triage: SUCCESS`, `Evaluate review outcome: SUCCESS`, and the deep-tier check `SKIPPED`. Merge with `gh pr merge <pr> --merge` once the PR reports `CLEAN`.
+  - **Normal-review PRs** — read the routine reviewer's verdict comment via `gh pr view <pr> --json comments` and act on the last non-empty 🟢/🔴 line. On 🟢, merge with `--merge`; on 🔴, fix on the PR branch and push.
+  - **Workflow-only PRs** (only `.github/workflows/` files) — triage never reviews workflow files, so these pass both checks like a docs PR. The review action would refuse to run anyway: it requires the PR's workflow file to match the default branch's. Keep workflow edits in a PR of their own with no reviewable files. It merges only as `.claude/rules/review-tiers.md` § "PRs that edit the review workflow" describes: two local 🟢 reviews on the head commit when every commit came from our own sessions, otherwise the maintainer's read.
 - **No admin bypass, ever.** Never `gh pr merge --admin`. The rulesets have no bypass actors; `BLOCKED` means find and fix the cause.
-- **Branch cleanup after every merge.** Delete the branch BOTH locally and on remote. Chain `git branch -D <name> && git push origin --delete <name>` into the post-merge sequence — `gh pr merge --delete-branch` only handles remote.
+- **Branch cleanup after every merge** follows `.claude/rules/git.md` § Merging: `gh pr merge --delete-branch` removes the remote branch (and the local one when it is checked out); run `git branch -D <name>` as a separate call if it remains. Never `&&`-chain cleanup commands: permission rules match the whole command string, so chained calls get denied.
 - **Auto-merge on paths-ignore PRs is OFF** for this repo. The OSS bundle defaults this off because a public repo deserves a human eyeball on every PR.
-- **Usage ceiling:** at ≥80%, commit locally and stop. Don't push to PR (CI run costs 10–15% of remaining capacity).
+- **Usage ceiling** (a rule of this file only): at ≥80%, commit locally and stop. Don't push to PR (CI run costs 10–15% of remaining capacity).
 
 ---
 
@@ -83,7 +83,7 @@ Per `.claude/rules/review-tiers.md` (resolved from canonical `_core/project-temp
 
 - **Two tiers.** Routine review (every PR) + on-demand deep review (fired by a comment starting with `@claude review this PR`). Both run Fable 5.1 at low effort with an Opus 5.5 high-effort backup; the deep tier retries Fable once before falling back. The gate names the model whose attempt wrote the verdict: in the `Evaluate review outcome` step's annotation and summary for the routine tier, and in the `Claude On-Demand` check title and summary for the deep tier.
 - **Binary verdict rule.** `🟢 LGTM` only when fully clean. `🔴 Blocking` when *any* real finding exists. No "minor non-blocking" rot. This applies to both tiers.
-- **Auto-fire deep review** on the trigger surface (parsing/codec/serialization, threading, scheduling, save/load formats, mod-loader DAG changes — full list in `git.md`). The routine reviewer applies the `needs-deep-review` label automatically.
+- **Auto-fire deep review** on the trigger surface (parsing/codec/serialization, threading, scheduling, save/load formats, mod-loader DAG changes — full list in `.claude/rules/review-tiers.md` § Deep review triggers). The routine reviewer applies the `needs-deep-review` label automatically.
 - **Strict OSS review posture on `main` AND `develop`:**
   - Required status checks: `Evaluate review outcome` and `Claude On-Demand` must pass before merge. On `develop`, `Engine and hook tests` (the `Tests` workflow: engine, Python twin and guard-hook tests) is required too; it runs on every PR so it never waits on a docs-only one
   - Required approvals: 0 (the AI gates decide; a solo maintainer cannot approve their own PR)
@@ -99,7 +99,7 @@ The routine-review + deep-review workflows are installed and active in this repo
 
 The page IS a visual artifact. Per `.claude/rules/visual.md` (resolved from canonical `_core/project-template/.claude/rules/visual.md`):
 
-- Ship one verifiable slice at a time. Smaller than ~150 lines of net change per slice.
+- Ship one verifiable slice at a time, each checkable with one short yes/no list.
 - **Local-iterate-then-push** for visual changes. Commit locally, report, wait for visual approval, then push. Skipping this burns CI cycles on iteration.
 - **Concrete visual smoke-test checklists** — never "verify no regressions." Hand the reviewer a specific yes/no list tied to what changed.
 

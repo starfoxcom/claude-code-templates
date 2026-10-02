@@ -1,149 +1,79 @@
 # Git rules
 
-## Atomic commits
+## Commits
 
-One logical change per commit. No mixing features with refactors or fixes with config.
-
-### Format
+One logical change per commit. Never mix a feature with a refactor, or a fix with config.
 
 ```
 <type>(<scope>): <imperative description>
 ```
 
-- Max 72 characters
-- Imperative: `add`, `fix`, `remove`, `update`, `refactor`, `extract`
-- `scope` = system or layer
-- **NEVER** include any AI-attribution markers anywhere — not in commit messages, not in PR titles, not in PR bodies. Specifically banned strings and patterns:
-  - `Co-Authored-By: Claude <…>` (or any Claude email)
-  - `Co-Authored-By:` referencing Claude in any form
-  - `🤖 Generated with [Claude Code](…)` or any variant
-  - `🤖 Generated with Claude Code`
-  - Any sentence ending with "Claude", "via Claude Code", "with Claude", etc., as an attribution line
-  - Any link to `claude.com/claude-code`, `claude.ai`, or `anthropic.com` in commit/PR footers
-- These bans apply to commits AND PR bodies AND PR titles AND issue comments authored programmatically. The work itself is attributed via authorship metadata if at all — never via a body footer.
-
-### Valid types
-
-| Type | When |
-|---|---|
-| `feat` | New feature |
-| `fix` | Bug fix |
-| `refactor` | No new functionality or fix |
-| `perf` | Performance improvement |
-| `test` | Tests |
-| `docs` | Documentation, README, ROADMAP, ADRs |
-| `chore` | Build, CI, tooling, dependency bumps |
-| `data` | Game/app data, configs, assets |
-| `style` | Formatting only (no logic change) |
+- 72 characters max. Imperative verb: `add`, `fix`, `remove`, `update`, `refactor`, `extract`.
+- `scope` is the system or layer touched.
+- Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore` (build, CI, tooling, deps), `data` (app data, configs, assets), `style` (formatting only).
+- No AI-attribution lines anywhere: no co-author trailers, "generated with" footers or session links in commits, PR titles, PR bodies or comments. `.claude/settings.json` turns off the harness's own trailers, and the `no-ai-attribution` hook catches the ones written by hand.
 
 ---
 
 ## Branches (Gitflow)
 
-| Branch | Prefix | Purpose |
+| Branch | From | Merges into |
 |---|---|---|
-| Production | `main` | Stable releases only |
-| Development | `develop` | Base for all work |
-| Feature | `feature/<n>` | From `develop`, merges back to `develop` |
-| Release | `release/<v>` | From `develop`, merges to `main` + `develop` |
-| Hotfix | `hotfix/<n>` | From `main`, merges to `main` + `develop` |
+| `main` | | Production. Every release commit is tagged. |
+| `develop` | | Integration. Base for all work. |
+| `feature/<name>` | `develop` | `develop` |
+| `release/<version>` | `develop` | `main`, then cascade to `develop` |
+| `hotfix/<name>` | `main` | `main`, then cascade to `develop` |
 
-- Kebab-case branch names: `feature/user-auth-flow`
-- **Always** `gh pr create --base develop` — repo default may be `main`, override explicitly
-- **Every PR merges with a merge commit** (`gh pr merge <pr> --merge`), so each branch stays visible in the history graph. Keep every commit on the branch meaningful; the PR title (64 characters max) goes into the merge commit. Release and cascade PRs use `--merge` too, so `main` and `develop` never diverge.
-- **Never** push directly to `main` or `develop`
+- Kebab-case names: `feature/user-auth-flow`.
+- Never push directly to `main` or `develop`.
+- The GitHub default branch is `main`, so always pass `--base develop` to `gh pr create` for work PRs.
 
-### Scope discipline
+### Keep branches current
 
-If a branch is `feature/<name>`, only files within that feature's directory tree should change. Cross-cutting changes (shared utilities, core layers) need their own branch and a merged-to-dev pre-requisite.
+When the base branch advances, merge it into your open branches before continuing (`git fetch origin`, then `git merge origin/develop` on the work branch, then push). Never rewrite a branch someone else has pulled.
 
-### When `develop` advances
+### Scope
 
-Cascade to all open feature branches before resuming work on them:
+A branch changes one concern. A tangential bug gets its own branch. Before coding, list the directories the work will touch; anything outside the branch's scope becomes a prerequisite branch and PR that merges first.
+
+### Check the branch before the first edit
+
+Run `git branch --show-current` before editing. Switch or branch first, then edit. If you notice you edited on the wrong branch, stop and say so instead of stashing and moving the work silently.
+
+---
+
+## Merging
+
+- Every PR merges with a merge commit: `gh pr merge <pr> --merge --delete-branch`. Keep each commit buildable, and read history with `git log --first-parent`.
+- Release PRs (`develop` into `main`) and cascade PRs (`main` into `develop`) always use `--merge`. Squashing them makes the two branches diverge and turns the next release into a conflict.
+- After merging: `--delete-branch` removes the remote branch, but the local one only when it is checked out. Run `git branch -D <name>` if it remains, then confirm with `git branch`.
+- Re-run a failed CI workflow as a whole (or push again). Re-running only the failed job can leave a required check stuck.
+
+### Cascade after every merge into `main`
+
+GitHub does not copy `main` back into `develop`. After a hotfix or release merges:
 
 ```bash
 git fetch origin
-git checkout feature/<n>
-git merge origin/develop
-git push origin feature/<n>
-```
-
----
-
-## Branch verification before editing
-
-Verify your current branch BEFORE editing any file whose correct home depends on category. Open the editor SECOND, not first.
-
-| File category | Correct home |
-|---|---|
-| `.github/workflows/*` (live workflows) | `hotfix/<n>` from `main` |
-| Canonical / template files the project ships verbatim to downstream consumers (shipped config templates, reference files copy-pasted into bind output, etc.) | `feature/<n>` or `chore/<n>` from `develop` |
-| Release-prep fixes (reviewer findings on an open release) | `release/<v>` (already cut from `develop`) |
-| Lockstep pairs (e.g. UI source ↔ inlined bundle, canonical ↔ live mirror) | Whichever branch the pair already lives on; edit both |
-
-- Before the first edit of a task, run `git branch --show-current`. Switch first, branch second, then edit.
-- Never edit on the wrong branch and rely on `git stash → checkout → branch → stash pop` to recover. The stash dance works mechanically but hides the scope violation that put you on the wrong branch, and trains you to skip verification next time. If you find yourself reaching for it, pause — that's the signal that the up-front check got skipped.
-- Bolting a workflow change onto a different-scope PR because the cursor was already on that branch tempts the App-auth OIDC failure → a PR with no verdict → a mixed-scope PR stuck until it is split. Three downstream mistakes from one missed `git branch --show-current` call. The cost of the check is ~0; the cost of the recovery can be a published revert.
-
----
-
-## Cascade after every merge to `main`
-
-Gitflow's "hotfix merges to `main` AND `develop`" is a **discipline you execute, not a GitHub feature.** No platform auto-cascades from `main` to `develop` for you. Same applies to `release/*` merges — they also need a cascade-to-`develop` PR.
-
-**The merge-to-`main` sequence is a triple, not a single:**
-
-```bash
-# 1. Land the hotfix or release PR on main
-gh pr merge <pr> --merge --delete-branch
-
-# 2. Open the cascade PR
-git fetch origin && git checkout develop && git pull --ff-only
-git checkout -b chore/cascade-<hotfix-or-release-name>
+git checkout -b chore/cascade-<name> origin/develop
 git merge --no-ff origin/main -m "chore: cascade <name> into develop"
-git push -u origin chore/cascade-<hotfix-or-release-name>
-gh pr create --base develop --head chore/cascade-<hotfix-or-release-name> ...
-
-# 3. Close the cascade — wait for routine verdict, merge, delete branch local + remote
+git push -u origin chore/cascade-<name>
+gh pr create --base develop --title "chore: cascade <name> into develop" --body-file <file>
 ```
 
-- **The hotfix/release is not "done" until step 3 completes.** Mark the task complete only after the cascade PR is merged and its branch is cleaned up. "Merged to `main`" is half the job.
-- **Bundle multiple back-to-back hotfixes** into one cascade PR only if no `develop` work landed between them. Otherwise each gets its own cascade PR — merge history stays readable.
-- **Drift is silent and compounds.** A hotfix that fixes a workflow file on `main` but never lands on `develop` means every PR off `develop` runs under stale workflow logic, and the next release branch cut from `develop` starts from the wrong baseline.
+The hotfix or release is done only when the cascade PR is merged and its branch deleted.
+
+### Workflow file changes
+
+Review workflows triggered by comments or schedules run the copy on the GitHub default branch, and the review action refuses to run when a PR's workflow file differs from that copy.
+Because `main` is the default branch, a change to `.github/workflows/` lands on `main` first as a `hotfix/<name>` PR, then cascades to `develop`. A workflow change made on a feature branch fails the review check.
 
 ---
 
-## Review tiers
+## Pull requests
 
-Two review tiers, both fully workflow-driven via `.github/workflows/`:
-
-| Tier | Trigger | Cost | What it does |
-|---|---|---|---|
-| **Routine** | Auto on every PR (`claude-code-review.yml`) | Subscription-included (Fable 5.1 low, backup Opus 5.5 high) | Pre-screen + architectural review + **binary 🔴/🟢 verdict comment**. Required check — exits red on 🔴, merge blocked. |
-| **On-demand deep** | A comment starting with `@claude review this PR` (`claude.yml`) | Subscription-included (Fable 5.1 low, backup Opus 5.5 high) | Depth pass on the focus the routine review escalated to. Same binary 🔴/🟢 rule. **Required** — verdict PATCHed into the `Claude On-Demand` check via the Checks API; merge blocked on 🔴 (this repo configures `Claude On-Demand` as required on `main` and `develop`). |
-
-The deep review **auto-fires** when the routine review's Step 2.5 detects the diff touches the trigger surface (parsers, threading, public API, auth, migrations) — see `review-tiers.md`.
-
-### Binary verdict rule
-
-- **🟢 LGTM ONLY when fully clean** — zero caveats, zero nits, zero "with caveats" headings.
-- **🔴 Blocking when ANY real finding exists.**
-- The only legitimate omission is style preferences or future-proofing for hypothetical changes — those get **DROPPED**, not labeled non-blocking.
-
-A 🟢 with "minor non-blocking" findings tucked in the body becomes useless — the findings rot, the merge proceeds, they re-surface weeks later as the same review.
-
-### Local Claude's role
-
-Local-session Claude (this harness) does NOT auto-fire the CI reviews. The workflow does. The one local review is the workflow-only PR path in `review-tiers.md`. Local responsibilities:
-
-- Push the branch + open the PR per PR format below.
-- Run the CI polling loop (`token-efficiency.md` § "CI monitoring + auto-merge") and report PR state.
-- On approval (🟢), merge via `gh pr merge --merge` and clean up branches (standing authorization).
-- On 🔴, fetch failing logs, propose the fix in one sentence, apply it, push. Re-enter polling loop.
-
----
-
-## PR format
+Write the body to a file and pass `--body-file <path>`. Inline bodies get truncated or mangled by the shell.
 
 ```
 ## What
@@ -153,13 +83,20 @@ Local-session Claude (this harness) does NOT auto-fire the CI reviews. The workf
 <1-2 lines>
 
 ## Notes (optional)
-<Non-obvious decisions, perf implications, required manual steps>
+<non-obvious decisions, performance impact, manual steps>
 ```
 
-No empty sections. No generic testing checklist. The reviewer reads the diff, not the PR body — the body is for context the diff can't show.
+No empty sections and no generic testing checklist. The body carries what the diff cannot show.
+
+Review tiers, the verdict rule and CI watching live in `review-tiers.md` and `token-efficiency.md`.
 
 ---
 
-## Definition of "feature complete"
+## Dead code does not ship
 
-A feature is complete when it can be exercised end-to-end in the running app — not when the code compiles. CI green ≠ feature complete. See `CLAUDE.md` § "SESSION CLOSE / 0. Definition-of-done verification".
+Code with no remaining caller is deleted in the same PR that orphaned it. Check with the project's lint or dead-code tool, then judge the result: a symbol reached only through reflection, dependency injection, bindings or serialization is not dead. If a tool reports a false positive, record the exception where the tool reads it instead of silencing the tool.
+
+## Definition of done
+
+A feature is done when it works end to end in the running app, not when it compiles. CI green is necessary, not sufficient.
+
