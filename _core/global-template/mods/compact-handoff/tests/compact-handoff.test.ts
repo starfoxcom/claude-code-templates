@@ -203,3 +203,10 @@ test('over budget, the oldest words become an index and later compactions carry 
   expect(second).toContain(d ?? '')
   expect(second.indexOf(b ?? '')).toBeLessThan(second.indexOf(d ?? ''))
 })
+
+test('a bracket tag the person types is their words; only the mods\' tags are dropped', async () => {
+  const words = personWords([said('[x] done with the parser'), said('[wip] split the loader\n[tasks] Open: #3'), said('[tasks] Open: #4')], 10_000)
+  expect(words).toContain('[x] done with the parser')
+  expect(words).toContain('[wip] split the loader')
+  expect(words).not.toContain('[tasks]')
+})

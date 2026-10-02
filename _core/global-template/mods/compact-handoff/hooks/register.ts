@@ -24,9 +24,11 @@ const MAX_AGE_DAYS = 14
 
 // Lines the mods attach to a prompt, and whole prompts they submit, start with
 // the mod's tag ("[session-facts] ...", "[tasks] ...", "[ci-watch] ..."); they
-// are not the person's words. scripts/helper.cjs carries the same pattern
+// are not the person's words. The tags are listed by name so a line the person
+// types, such as "[x] done" or "[wip] ...", is kept. A new mod that writes into
+// prompts adds its tag here. scripts/helper.cjs carries the same pattern
 // (test-helper/helper.spec.cjs keeps the two equal).
-export const INJECTED_LINE = /^\[[a-z][a-z0-9-]*\](?: |$)/
+export const INJECTED_LINE = /^\[(?:session-facts|time|task-tracking|tasks|ci-watch|shared-pc|skill-check|usage-guard|compact-handoff|guards)\](?: |$)/
 
 type Mode = 'off' | 'shadow' | 'on'
 
@@ -168,6 +170,7 @@ async function record($: EngineInterface, name: string, sections: Record<string,
 
 async function shadow($: EngineInterface, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>) {
   const budget = await budgetTokens($)
+  const typed = await transcriptWords($)
   const [result, fork] = await Promise.all([
     next(e),
     // A refused fork must never fail the hook after the stock compaction ran.
@@ -182,7 +185,7 @@ async function shadow($: EngineInterface, e: SessionCompactInput, next: (e: Sess
     Trigger: `${e.trigger}, budget ${budget} tokens, ${result.messages ? 'stock compaction stood' : `skipped: ${result.skip}`}`,
     'Stock summary (what the session kept)': result.messages ? summaryText(result) : '(none)',
     'Hand-off (shadow, not used)': fork.isAnswered ? fork.text : `(no hand-off: ${fork.reason})`,
-    "The person's messages": personWords(e.messages, budget * PERSON_SHARE * CHARS_PER_TOKEN, await transcriptWords($)),
+    "The person's messages": personWords(e.messages, budget * PERSON_SHARE * CHARS_PER_TOKEN, typed),
   })
   return result
 }
@@ -202,10 +205,13 @@ async function precompute($: EngineInterface, e: SessionCompactInput, next: (e: 
 
 async function replace($: EngineInterface, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>) {
   const budget = await budgetTokens($)
+  // Read before the compaction runs: the boundary it writes to the transcript
+  // would otherwise hide this cycle's messages from the helper.
+  const typed = await transcriptWords($)
   const result = await next({ ...e, instructions: await handoffInstructions($, e, budget) })
   if (!result.messages) return result
 
-  const words = personWords(e.messages, budget * PERSON_SHARE * CHARS_PER_TOKEN, await transcriptWords($))
+  const words = personWords(e.messages, budget * PERSON_SHARE * CHARS_PER_TOKEN, typed)
   const [summary, ...rest] = result.messages
   const carried: SessionMessage = { role: 'user', text: words, toolUses: [] }
   await record($, await $.session.id(), { 'Hand-off': summaryText(result), "The person's messages": words })
