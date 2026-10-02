@@ -187,10 +187,22 @@ async function shadow($: EngineInterface, e: SessionCompactInput, next: (e: Sess
   return result
 }
 
+async function handoffInstructions($: EngineInterface, e: SessionCompactInput, budget: number): Promise<string> {
+  const asked = e.instructions ? `\nThe person also asked the summary to keep: ${e.instructions}` : ''
+  return handoffPrompt(budget) + asked
+}
+
+// An ahead-of-time summary written to the stock brief would be thrown away
+// when the real compaction asks for the hand-off: write it to the same brief.
+async function precompute($: EngineInterface, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>) {
+  const stamp = new Date(await $.clock.now()).toISOString()
+  await record($, `${await $.session.id()}-precompute`, { 'Ran at': stamp })
+  return next({ ...e, instructions: await handoffInstructions($, e, await budgetTokens($)) })
+}
+
 async function replace($: EngineInterface, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>) {
   const budget = await budgetTokens($)
-  const asked = e.instructions ? `\nThe person also asked the summary to keep: ${e.instructions}` : ''
-  const result = await next({ ...e, instructions: handoffPrompt(budget) + asked })
+  const result = await next({ ...e, instructions: await handoffInstructions($, e, budget) })
   if (!result.messages) return result
 
   const words = personWords(e.messages, budget * PERSON_SHARE * CHARS_PER_TOKEN, await transcriptWords($))
@@ -230,7 +242,8 @@ export const register: Register = (on, options) => {
   })
 
   on('session.compact', async ($, e, next) => {
-    if (e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined) return next(e)
+    if (e.trigger === 'precompute') return mode === 'on' ? precompute($, e, next) : next(e)
     return mode === 'on' ? replace($, e, next) : shadow($, e, next)
   })
 }

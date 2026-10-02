@@ -91,6 +91,20 @@ test('on: the hand-off instructions reach the summarizer and the person is kept 
   expect(seen.writes.at(-1)?.path.replaceAll('\\', '/')).toBe('C:/Users/me/.claude/mods-data/compact-handoff/sess-1.md')
 })
 
+test('on: an ahead-of-time summary gets the same hand-off brief, so the real compaction can reuse it', { options: { mode: 'on' } }, async ($, on) => {
+  const seen = world(on)
+  let instructions: string | undefined
+  on('session.compact', ($, e) => {
+    instructions = e.instructions
+    return { messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }] }
+  })
+  await start($)
+  await $.session.compact({ trigger: 'precompute', messages: CONVERSATION } as never)
+
+  expect(instructions).toContain('## Read next')
+  expect(seen.writes.at(-1)?.path.replaceAll('\\', '/')).toBe('C:/Users/me/.claude/mods-data/compact-handoff/sess-1-precompute.md')
+})
+
 test('shadow: the stock compaction stands and the hand-off is recorded beside it', { options: { mode: 'shadow' } }, async ($, on) => {
   const seen = world(on)
   let instructions: string | undefined = 'unset'

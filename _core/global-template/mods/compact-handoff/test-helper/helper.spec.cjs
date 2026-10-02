@@ -73,4 +73,10 @@ test('the helper and the hooks module carry the same mark and the same injected-
   const injected = /export const INJECTED_LINE = \/(.+)\/\s*$/m.exec(source)
   assert.ok(injected, 'INJECTED_LINE found in register.ts')
   assert.strictEqual(injected[1], INJECTED_LINE.source)
+  // And both read the same fixture the same way.
+  const hooksLine = new RegExp(injected[1])
+  for (const line of ['[tasks] Open: #1', '[ci-watch] #12: all checks settled', '[link](https://example.com)', 'plain words']) {
+    assert.strictEqual(hooksLine.test(line), INJECTED_LINE.test(line), line)
+  }
+  assert.ok(INJECTED_LINE.test('[tasks] Open: #1') && INJECTED_LINE.test('[ci-watch] #12: all checks settled'))
 })
