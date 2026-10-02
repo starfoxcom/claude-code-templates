@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Watch } from '../hooks/register'
-import { mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
+import { earlyFailures, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
@@ -13,12 +13,18 @@ test('passed only after two quiet polls in a row', () => {
   expect(second.outcome).toBe('passed')
 })
 
-test('a pending check resets the quiet count, a failed one settles at once', () => {
+test('a pending check resets the quiet count; a failure wakes early but settles only when the rest do', () => {
   const quiet = settle(BASE, { build: 'pass' }, 1, HOUR)
   expect(settle(quiet, { build: 'pass', late: 'pending' }, 2, HOUR).stablePolls).toBe(0)
-  const failed = settle(BASE, { build: 'fail', review: 'pending' }, 1, HOUR)
-  expect(failed.outcome).toBe('failed')
-  expect(wakeText(failed)).toContain('build failed')
+  const early = settle(BASE, { build: 'fail', review: 'pending' }, 1, HOUR)
+  expect(early.outcome).toBeUndefined()
+  expect(earlyFailures(early)).toEqual(['build'])
+  expect(wakeText(early)).toContain('still running: review')
+  const reported: Watch = { ...early, reported: ['build'] }
+  expect(earlyFailures(settle(reported, { build: 'fail', review: 'pending' }, 2, HOUR))).toEqual([])
+  const final = settle(reported, { build: 'fail', review: 'fail' }, 3, HOUR)
+  expect(final.outcome).toBe('failed')
+  expect(wakeText(final)).toContain('failed: build, review')
 })
 
 test('no checks reported is never a pass; the time limit wakes with what is stuck', () => {
