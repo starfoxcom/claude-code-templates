@@ -1,4 +1,4 @@
-# claude-code-templates — session handoff (2026-10-02 12:20)
+# claude-code-templates — session handoff (2026-10-02 13:22)
 
 Single source of truth for what this session left undone. `/session-start` reads this first. It records only current state that `git log`, open issues, the CHANGELOG and `docs/v2/PLAN.md` don't already show.
 
@@ -7,7 +7,7 @@ Single source of truth for what this session left undone. `/session-start` reads
 ## Headline: mods are planned as opt-in `~/.claude` extras
 
 - **Claude Code 2.1.287 added mods** (plugins of function hooks). `docs/v2/PLAN.md` now records the decision (Decisions row "Claude Code mods") and a Phase 2b item: session facts pre-checked; compaction hand-off, shared-PC, usage guard and status line pieces opt-in. Guard hooks stay settings hooks.
-- **Four global mods are live on the maintainer's PC** (outside this repo), loaded through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`: `session-facts`, `compact-handoff`, `usage-guard` (built by the Emberholm session) and `shared-pc` (built here). A fifth, `ci-watch` (Emberholm session), watches a pushed PR's checks and wakes the session once they settle; the global CLAUDE.md CI rule now says ci-watch first, Monitor as fallback. Status line: `~/.claude/statusline.js` with `statusline.config.json`.
+- **Global mods are live on the maintainer's PC** (outside this repo), loaded through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`: `session-facts`, `compact-handoff`, `usage-guard` (built by the Emberholm session) and `shared-pc` (built here). A fifth, `ci-watch` (Emberholm session), watches a pushed PR's checks and wakes the session once they settle; the global CLAUDE.md CI rule now says ci-watch first, Monitor as fallback. Status line: `~/.claude/statusline.js` with `statusline.config.json`.
 - **`~/.claude/mods/shared-pc/TEMPLATES-NOTES.md` is the porting brief**: what each mod does, defaults, the disk/token constraints, and the mod-API lessons (test kit quirks, validator rules, the 10 s hook budget, why the request card lives inside the band). Read it before porting any mod into `_core/global-template/mods/`. `DESIGN.md` beside it is the shared-PC design.
 
 ## Mod tests run 2026-10-02 (after 11:15)
@@ -48,6 +48,18 @@ Single source of truth for what this session left undone. `/session-start` reads
 
 ---
 
+## Afternoon, 2026-10-02: more global mods (outside this repo)
+
+The porting brief `~/.claude/mods/shared-pc/TEMPLATES-NOTES.md` has the detail for each; summary here.
+
+- **Eight mods are now in `CLAUDE_CODE_PLUGIN_DIRS`:** session-facts, compact-handoff, usage-guard, shared-pc, ci-watch, tasks, skill-check, guards. Settings backup from the guards addition: `~/.claude/settings.json.bak-guards`.
+- **tasks** (logic by the Emberholm session, view by this one): mirrors the native task tools into `mods-data/tasks/<session>.json` so lists survive compaction and completion; states 🔨 working / 📝 open / 🚧 on hold / ✅ done / 🚫 dropped; a band line with a List pane is the only surface (built-in todo panel off). Carry-over: a new session in the same folder shows the previous session's unfinished tasks as "carried over" and one note asks the model to check them against this hand-off. The native Task tools stay (the mod mirrors them); nothing else native is left to remove.
+- **skill-check** (Emberholm session): contracts in `~/.claude/skill-contracts.json`; a skill turn that ends with required steps missing gets one follow-up naming them.
+- **guards** (this session), **shadow mode** since 13:04: one in-process check replacing the attribution and `gh run watch` scripts, reading the command instead of its raw text. Maintainer policy: AI credit blocked in every repo; the plain product name allowed only in `mentionRepos` (default claude-code-templates). On 590 real past commands it passed all 300 ordinary writes and all 98 false script blocks. Logs: `mods-data/guards/decisions.jsonl` (mod vs scripts disagreements) and `stats.json` (per-day counts). **Due in a few days:** compare the logs, then the maintainer decides enforce mode and retiring the two scripts. push-guard and the PR/issue body contracts stay scripts.
+- **Cards replace the toast in every mod** (maintainer): yellow = act, blue = information, green = good news, red = error. usage-guard's pause card is shared by all sessions (Dismiss and "Cancel auto-resume (all sessions)" act everywhere).
+- **Mod API lessons learned today** (in the brief): one hooks module per plugin; `$` never crosses an import; a second hook on an event needs a matcher; render hooks may not write state; hot reload fires only when the hooks.json entry file changes and does not re-run `session.start`; `$.fs.write` makes no folders.
+- **Global rule changes** (maintainer, made by the Emberholm session): the State line ends every reply; the `[time]` prompt hook is retired (session-facts covers it; the templates ship one or the other, never both); with shared-pc loaded, heavy work is first come, first served on the seat, with no peer "go" messages.
+
 ## Open work
 
 Next in Phase 1 (`docs/v2/PLAN.md`):
@@ -57,7 +69,10 @@ Next in Phase 1 (`docs/v2/PLAN.md`):
 
 Other items:
 
-- Port the mods into `_core/global-template/mods/` (Phase 2b item), after the three checks listed there.
+- Port the mods into `_core/global-template/mods/` (Phase 2b item), after the three checks listed there: whether a project `.claude/skills/<name>` folder loads as a plugin, what the built-in "You should know" mod does, and whether `/doctor prompt-audit` overlaps `/bindwright:audit`. All eight mods now, from the live `~/.claude/mods` copies; the brief lists what is machine- or project-specific.
+- Guards shadow comparison (see above), then the maintainer's enforce decision.
+- Not yet tested live: a true `claude --resume` during a usage pause.
+- Later, maintainer's call: a shorter shared-PC rule in `~/.claude/CLAUDE.md` now that the mod runs the seat.
 - At v2.0.0: decide whether `Engine and hook tests` becomes required on `main` too.
 - Receipts "session stories" for the Phase 3 evidence section.
 - Phase 2 notes: `setup-review-gate.sh` merge-commit title/body settings; develop and main rulesets `[merge]`.
