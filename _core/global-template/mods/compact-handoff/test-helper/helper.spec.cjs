@@ -75,8 +75,12 @@ test('the helper and the hooks module carry the same mark and the same injected-
   assert.strictEqual(injected[1], INJECTED_LINE.source)
   // And both read the same fixture the same way.
   const hooksLine = new RegExp(injected[1])
-  for (const line of ['[tasks] Open: #1', '[ci-watch] #12: all checks settled', '[link](https://example.com)', 'plain words']) {
+  for (const line of ['[tasks] Open: #1', '[ci-watch] #12: all checks settled', '[link](https://example.com)', '[x] done', '[wip] refactor the parser', 'plain words']) {
     assert.strictEqual(hooksLine.test(line), INJECTED_LINE.test(line), line)
   }
   assert.ok(INJECTED_LINE.test('[tasks] Open: #1') && INJECTED_LINE.test('[ci-watch] #12: all checks settled'))
+  // Lines the person types with a bracket tag of their own are their words.
+  for (const line of ['[x] done', '[wip] refactor the parser', '[q] why is it slow', '[bug] crash on load']) {
+    assert.ok(!INJECTED_LINE.test(line), line)
+  }
 })
