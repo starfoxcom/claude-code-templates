@@ -38,7 +38,8 @@ export function parse(command: string, powershell: boolean): Statement[] {
   const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
   let st = fresh()
   let word: Word | null = null
-  let pending: { delim: string; strip: boolean }[] = []
+  // `owner`: the here-doc list of the statement that opened it; a line can go on past it (`<<'EOF' && git push`).
+  let pending: { delim: string; strip: boolean; owner?: string[] }[] = []
   let redirectNext: 'write' | 'read' | 'text' | null = null
   let i = 0
   const n = command.length
@@ -76,7 +77,7 @@ export function parse(command: string, powershell: boolean): Statement[] {
   }
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
   const readBodies = (into: string[]) => {
-    for (const { delim, strip } of pending) {
+    for (const { delim, strip, owner } of pending) {
       const lines: string[] = []
       while (i < n) {
         const end = command.indexOf('\n', i)
@@ -86,7 +87,7 @@ export function parse(command: string, powershell: boolean): Statement[] {
         if (line.trim() === delim) break
         lines.push(line)
       }
-      into.push(lines.join('\n'))
+      ;(owner ?? into).push(lines.join('\n'))
     }
     pending = []
   }
@@ -101,7 +102,7 @@ export function parse(command: string, powershell: boolean): Statement[] {
     const m = /^<<(-?)[ \t]*(["']?)([A-Za-z_][\w.-]*)\2/.exec(command.slice(i))
     if (!m) return false
     endWord()
-    pending.push({ delim: m[3] ?? '', strip: m[1] === '-' })
+    pending.push({ delim: m[3] ?? '', strip: m[1] === '-', owner: st.heredocs })
     i += m[0].length
     return true
   }

@@ -50,6 +50,11 @@ const URLS = /\bhttps?:\/\/\S+/g
 
 export type Verdict = { rule: 'credit' | 'name'; match: string } | undefined
 
+/** Masks file paths, so a scratch folder named after a session cannot read as a credit line. */
+export function stripPaths(text: string): string {
+  return text.replace(PATHS, ' ')
+}
+
 /** Checks message text. `mayName`: this repo's subject is Claude Code, so the plain name passes. */
 export function checkText(text: string, mayName: boolean): Verdict {
   const credit = CREDIT.exec(text)
