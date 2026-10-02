@@ -38,7 +38,7 @@ Take the first row that matches:
 | Situation | Do |
 |---|---|
 | Branch goal not finished | Commit the work. No PR. |
-| Only the hand-off file changed | Commit and open the PR; it takes the docs-only path in `token-efficiency.md`. |
+| Only the hand-off file changed | Commit and open the PR; a docs-only diff passes both review checks in about 30 seconds (`review-tiers.md`). Watch the checks and merge on 🟢 like any other PR. |
 | `hotfix/*` finished | PR to `main`. After it merges, open the cascade PR into `develop` (`git.md` § Cascade). Done only when the cascade merges. |
 | `release/*` finished | Same as a hotfix: PR to `main`, tag the release commit, then cascade. |
 | Any other branch finished | Commit, open a PR to `develop`, watch the checks, merge on 🟢. |
