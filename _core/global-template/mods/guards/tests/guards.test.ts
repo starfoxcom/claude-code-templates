@@ -135,3 +135,22 @@ test('Bash keeps backslashes inside double quotes unless they escape $ ` " \\ or
   expect(word('echo "one\\\ntwo"')).toBe('onetwo')
   expect(word('echo "a\\nb"')).toBe('a\\nb')
 })
+
+test('review, merge and close flags that are switches never swallow the body', () => {
+  const body = `fix: x\n\n${AI_TRAILER}`
+  const texts = (c: string) => inspect(c, false).texts.map(t => t.text)
+  for (const command of [
+    `gh pr review 5 -a -b '${body}'`,
+    `gh pr review 5 -r -b '${body}'`,
+    `gh pr review 5 -c -b '${body}'`,
+    `gh pr review 5 --comment -b '${body}'`,
+    `gh pr merge 5 -m -b '${body}'`,
+    `gh pr merge 5 -r -d -b '${body}'`,
+    `gh pr merge 5 --merge --match-head-commit abc123 -t '${body}'`,
+  ]) {
+    expect(texts(command)).toContain(body)
+    expect(verdict(command, true)).toBeDefined()
+  }
+  expect(texts(`gh issue close 5 -r completed -c '${body}'`)).toContain(body)
+  expect(texts(`gh pr close 5 -d -c '${body}'`)).toContain(body)
+})
