@@ -10,7 +10,10 @@ function fakeHost(on: Parameters<Parameters<typeof test>[1] & ((...a: never[]) =
   on('session.id', () => ({ value: 'me-session-id' }))
   on('session.root', () => ({ value: ROOT }))
   on('process.run', (_$: unknown, e: { argv: readonly string[] }) => {
-    const stdout = e.argv.includes('where')
+    // The host's time zone probe (node -e): six hours behind UTC.
+    const stdout = e.argv[1] === '-e'
+      ? '360 America/Mexico_City\n'
+      : e.argv.includes('where')
       ? JSON.stringify({ dir: `${DATA}/shared-pc`, aliveMs: 45_000, lingerMs: 60_000 })
       : JSON.stringify({ seat: null, line: [], nextUp: null, requests: [], granted: true, mine: 'seat' })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -54,4 +57,15 @@ test('a finished or cancelled pause does not block heavy work', async ($, on) =>
   await $.session.start({ source: 'startup', cwd: ROOT } as never)
   const heavy = await $.tool.call({ tool: 'Bash', command: 'flutter test' } as never)
   expect(refusal(heavy)).toBe('')
+})
+
+test('the pause end is shown in the host time zone, not the sandbox clock', async ($, on) => {
+  // 17:00 UTC now; the pause ends at 20:05 UTC, which is 14:05 on a host six hours behind UTC.
+  mock.clock(on, { now: Date.UTC(2026, 9, 2, 17, 0, 0) })
+  fakeHost(on, { status: 'active', wakeAt: Date.UTC(2026, 9, 2, 20, 5, 0) })
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const heavy = await $.tool.call({ tool: 'Bash', command: 'flutter test' } as never)
+  expect(refusal(heavy)).toContain('until 14:05 (America/Mexico_City)')
+  const hold = await $.tool.call({ tool: 'mcp__shared-pc__pc', action: 'hold', minutes: 10 } as never)
+  expect(JSON.stringify(hold)).toContain('until 14:05 (America/Mexico_City)')
 })
