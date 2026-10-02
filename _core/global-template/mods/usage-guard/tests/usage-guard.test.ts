@@ -2,7 +2,7 @@ import type { On, SessionRateLimit } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Pause } from '../hooks/register'
-import { WRAP_UP_ARGS } from '../hooks/register'
+import { CLAIM, WRAP_UP_ARGS } from '../hooks/register'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
@@ -15,6 +15,7 @@ const RESET = '2026-10-02T19:00:00.000Z'
 const WAKE = Date.parse(RESET) + 2 * 60_000
 const PAUSE_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/pause.json'
 const CARD_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/card.json'
+const KEY = String(Date.parse(RESET))
 
 type World = {
   files: Map<string, string>
@@ -23,6 +24,11 @@ type World = {
   prompts: string[]
   clock: ReturnType<typeof mock.clock>
   limits: SessionRateLimit[]
+  /** The claim folders the helper made (`mkdir` wins once per name). */
+  claims: Set<string>
+  sessionId: string
+  /** Times the stop commands were looked up (the shipped list is empty, so none run). */
+  stopLookups: number
 }
 
 function world(on: On, root = 'C:/Repos/my-game'): World {
@@ -33,6 +39,9 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     prompts: [],
     clock: mock.clock(on, { now: NOW }),
     limits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: RESET }],
+    claims: new Set(),
+    sessionId: 'sess-a',
+    stopLookups: 0,
   }
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
@@ -47,11 +56,20 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
   })
   on('process.run', ($, e) => {
     seen.runs.push([...e.argv])
-    const out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
+    let out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
+    if (e.argv[2] === CLAIM) {
+      const name = e.argv[4] ?? ''
+      out = seen.claims.has(name) ? 'taken\n' : 'won\n'
+      seen.claims.add(name)
+    }
     return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('session.id', () => ({ value: 'sess-a' }))
-  on('session.root', () => ({ value: root }))
+  on('session.id', () => ({ value: seen.sessionId }))
+  on('session.root', () => {
+    seen.stopLookups++
+    return { value: root }
+  })
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: seen.limits } }))
   on('command.list', () => ({
     value: [
@@ -119,7 +137,8 @@ test('crossing the line wraps up, stops background work and resumes after the re
   const pause = pauseOf(seen)
   expect(pause?.status).toBe('active')
   expect(pause?.wakeAt).toBe(WAKE)
-  expect(pause?.handled).toEqual(['sess-a'])
+  expect(seen.claims).toEqual(new Set([`pause-${KEY}`, `${KEY}-sess-a`]))
+  expect(seen.stopLookups).toBe(1)
   expect(stopsRun(seen)).toEqual([])
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
@@ -133,7 +152,7 @@ test('another session sees the shared pause, wraps up once and leaves the stop c
   const seen = world(on)
   await start($)
   const other: Pause = {
-    status: 'active', kinds: ['seven_day'], percentUsed: 92, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b', handled: ['sess-b'],
+    status: 'active', kinds: ['seven_day'], percentUsed: 92, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(other))
   await doWork($)
@@ -141,14 +160,15 @@ test('another session sees the shared pause, wraps up once and leaves the stop c
   await endTurn($)
 
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
-  expect(stopsRun(seen)).toEqual([])
-  expect(pauseOf(seen)?.handled).toEqual(['sess-b', 'sess-a'])
+  expect(seen.stopLookups).toBe(0)
+  expect(seen.claims).toEqual(new Set([`${KEY}-sess-a`]))
+  expect(pauseOf(seen)).toEqual(other)
 })
 
 test('a session opened during a pause only waits, then resumes', async ($, on) => {
   const seen = world(on)
   const pause: Pause = {
-    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b', handled: ['sess-b'],
+    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   await start($)
@@ -162,7 +182,7 @@ test('a session opened during a pause only waits, then resumes', async ($, on) =
 test('a session opened after the reset is told to resume by hand', async ($, on) => {
   const seen = world(on)
   const pause: Pause = {
-    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: NOW - 1, triggeredBy: 'sess-b', handled: ['sess-b'],
+    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: NOW - 1, triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   await start($)
@@ -229,9 +249,9 @@ test('the pause shows a card that stays until dismissed, for every session', asy
   await ui.press({ key: 'usage-dismiss' })
   expect(cardOf(seen)?.dismissed).toBe(true)
   // Another session reaching the same event does not raise the dismissed card again.
-  const other: Pause = { ...pauseOf(seen)!, handled: [] }
-  seen.files.set(PAUSE_FILE, JSON.stringify(other))
+  seen.sessionId = 'sess-b'
   await seen.clock.advance(60_000)
+  expect(seen.claims.has(`${KEY}-sess-b`)).toBe(true)
   expect(cardOf(seen)?.dismissed).toBe(true)
 })
 
@@ -257,6 +277,50 @@ test('the resume replaces the pause card', async ($, on) => {
   await seen.clock.advance(WAKE - NOW)
 
   expect(cardOf(seen)).toEqual({ id: `reset:${RESET}`, text: 'Plan limits have reset. Sessions are resuming their saved work.', dismissed: false })
+})
+
+test('a session whose entry in the shared pause was overwritten does not wrap up twice', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  // Another session wrote the shared pause at the same moment, from an older read.
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pauseOf(seen), triggeredBy: 'sess-b', handled: ['sess-b'] }))
+  await seen.clock.advance(60_000)
+  await endTurn($)
+
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
+test('of two sessions crossing the line together, only the claim winner stops background work', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  // The other session won the pause claim and has not written the file yet.
+  seen.claims.add(`pause-${KEY}`)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+
+  expect(seen.stopLookups).toBe(0)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.at(-1)).toEqual({ command: 'session-start', args: '' })
+})
+
+test('after a hot reload during a pause, the first turn arms the wake timer again', async ($, on) => {
+  const seen = world(on)
+  // This session wrapped up before the reload; the reload dropped its timer and skipped session.start.
+  const pause = {
+    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-a', handled: ['sess-a'],
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  seen.claims.add(`${KEY}-sess-a`)
+  await $.turn.start({ turnId: 't2' } as never)
+
+  expect(seen.commands).toEqual([])
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands).toEqual([{ command: 'session-start', args: '' }])
 })
 
 test('stop commands are found by the project folder name, case-insensitively, and only for that project', () => {
