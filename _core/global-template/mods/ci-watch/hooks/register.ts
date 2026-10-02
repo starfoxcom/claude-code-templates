@@ -84,7 +84,8 @@ async function load($: EngineInterface): Promise<void> {
 // The folder a push or `gh pr create` ran in: `git -C <dir>` or a `cd <dir>` / `Set-Location <dir>`
 // before it. Undefined means the session's folder.
 export function targetFolder(command: string): string | undefined {
-  const unquote = (raw: string) => raw.replace(/^["']|["']$/g, '')
+  // Git Bash paths (/c/Users/...) mean nothing to a Windows process: turn them into C:/Users/...
+  const unquote = (raw: string) => raw.replace(/^["']|["']$/g, '').replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:')
   const gitC = /\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)/.exec(command)
   if (gitC) return unquote(gitC[1]!)
   const cd = /(?:^|[;&|]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/.exec(command)
