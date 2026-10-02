@@ -1,0 +1,420 @@
+#!/usr/bin/env node
+// shared-pc state helper. Every change to the shared seat/line state goes through here, under a mutex
+// directory (mkdir is atomic on NTFS and POSIX). The hooks module reads state.json directly and only
+// spawns this helper to change it. Output: one line of JSON on stdout.
+'use strict'
+
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+
+// Same data root as the other global mods (mods-data/<mod>), outside every mod folder so writes here
+// never hot-reload a mod.
+const DIR = process.env.SHARED_PC_DIR || path.join(os.homedir(), '.claude', 'mods-data', 'shared-pc')
+const SESSIONS = path.join(DIR, 'sessions')
+const STATE = path.join(DIR, 'state.json')
+const LOG = path.join(DIR, 'log.jsonl')
+const MUTEX = path.join(DIR, '.mutex')
+
+const ALIVE_MS = Number(process.env.SHARED_PC_ALIVE_MS || 45_000)
+const LINGER_MS = Number(process.env.SHARED_PC_LINGER_MS || 60_000)
+const NEXT_UP_MS = 3 * 60_000
+const REQUEST_TTL_MS = 15 * 60_000
+const MUTEX_STALE_MS = 5_000
+const WAIT_POLL_MS = Number(process.env.SHARED_PC_POLL_MS || 2_000)
+const SESSION_FILE_TTL_MS = 24 * 60 * 60_000
+
+const now = () => Date.now()
+const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+
+function lock() {
+  fs.mkdirSync(DIR, { recursive: true })
+  const deadline = now() + 10_000
+  for (;;) {
+    try {
+      fs.mkdirSync(MUTEX)
+      return
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+    }
+    try {
+      // A mutex this old belongs to a writer that crashed mid-operation. Rename is atomic, so only one
+      // breaker wins; the window where a breaker renames a fresh mutex needs a crash plus a race within ms.
+      if (now() - fs.statSync(MUTEX).mtimeMs > MUTEX_STALE_MS) {
+        fs.renameSync(MUTEX, `${MUTEX}.stale-${process.pid}-${now()}`)
+        log({ op: 'mutex-broken' })
+        continue
+      }
+    } catch {}
+    if (now() > deadline) throw new Error('mutex timeout')
+    sleep(10 + Math.floor(Math.random() * 20))
+  }
+}
+
+function unlock() {
+  try {
+    fs.rmdirSync(MUTEX)
+  } catch {}
+  for (const name of safeList(DIR)) {
+    if (name.startsWith('.mutex.stale-')) fs.rmSync(path.join(DIR, name), { recursive: true, force: true })
+  }
+}
+
+function safeList(dir) {
+  try {
+    return fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+}
+
+function readState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(STATE, 'utf8'))
+    return {
+      seat: s.seat ?? null,
+      line: s.line ?? [],
+      nextUp: s.nextUp ?? null,
+      requests: s.requests ?? [],
+      updatedAt: s.updatedAt ?? 0,
+    }
+  } catch {
+    return { seat: null, line: [], nextUp: null, requests: [], updatedAt: 0 }
+  }
+}
+
+function writeState(s) {
+  s.updatedAt = now()
+  const tmp = `${STATE}.tmp-${process.pid}`
+  fs.writeFileSync(tmp, JSON.stringify(s, null, 1))
+  for (let i = 0; ; i++) {
+    try {
+      fs.renameSync(tmp, STATE)
+      return
+    } catch (err) {
+      // A reader holding state.json open blocks the replace on Windows for a moment.
+      if (i >= 50 || !['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) throw err
+      sleep(10)
+    }
+  }
+}
+
+// The log is capped: past LOG_CAP it moves to log.1.jsonl (replacing the older one), so the folder never
+// holds more than about twice the cap.
+const LOG_CAP = 256 * 1024
+
+function log(entry) {
+  try {
+    if (fs.existsSync(LOG) && fs.statSync(LOG).size > LOG_CAP) fs.renameSync(LOG, path.join(DIR, 'log.1.jsonl'))
+    fs.appendFileSync(LOG, JSON.stringify({ at: now(), ...entry }) + '\n')
+  } catch {}
+}
+
+function sessions() {
+  const out = {}
+  for (const name of safeList(SESSIONS)) {
+    if (!name.endsWith('.json')) continue
+    const file = path.join(SESSIONS, name)
+    try {
+      const s = JSON.parse(fs.readFileSync(file, 'utf8'))
+      if (now() - s.lastBeat > SESSION_FILE_TTL_MS) fs.rmSync(file, { force: true })
+      else out[s.id] = s
+    } catch {}
+  }
+  return out
+}
+
+const isAlive = (all, id) => all[id] !== undefined && now() - all[id].lastBeat < ALIVE_MS
+
+function beat(id) {
+  const file = path.join(SESSIONS, `${id}.json`)
+  try {
+    const s = JSON.parse(fs.readFileSync(file, 'utf8'))
+    s.lastBeat = now()
+    fs.writeFileSync(file, JSON.stringify(s))
+  } catch {}
+}
+
+// Brings the state up to date: drops dead sessions, ends expired seats, holds and reservations, and
+// hands a free seat to the front of the line.
+function normalize(s, all) {
+  const t = now()
+  s.line = s.line.filter(entry => {
+    const keep = isAlive(all, entry.session)
+    if (!keep) log({ op: 'pruned-from-line', session: entry.session })
+    return keep
+  })
+  if (s.nextUp && (t > s.nextUp.until || !isAlive(all, s.nextUp.session))) s.nextUp = null
+  // Skip-the-line requests: shown in every session until answered; an unanswered one ends when its
+  // session dies, gets the seat anyway, or after 15 minutes. An answered one waits for its session to
+  // read it (`ack`), unless that session died.
+  s.requests = s.requests.filter(r => {
+    if (!isAlive(all, r.session)) return false
+    if (r.answer) return true
+    const isServed = s.seat && s.seat.session === r.session && s.seat.since > r.at
+    return !isServed && t - r.at < REQUEST_TTL_MS
+  })
+  if (s.seat) {
+    const seat = s.seat
+    let reason = null
+    if (!isAlive(all, seat.session)) reason = 'holder-gone'
+    else if (seat.kind === 'hold' && t > seat.until) reason = 'hold-ended'
+    else if (seat.kind === 'work' && seat.running === 0 && seat.tasks.length === 0 && t - seat.lastHeavyEnd > LINGER_MS)
+      reason = 'linger-ended'
+    if (reason) {
+      log({ op: 'seat-freed', session: seat.session, reason, heldMs: t - seat.since })
+      s.seat = null
+    }
+  }
+  if (!s.seat && s.line.length > 0) {
+    const reserved = s.nextUp && !s.line.some(e => e.session === s.nextUp.session)
+    if (!reserved) grant(s, s.line.shift())
+  }
+  return s
+}
+
+function grant(s, entry) {
+  const t = now()
+  s.seat =
+    entry.kind === 'hold'
+      ? { session: entry.session, kind: 'hold', since: t, until: t + entry.minutes * 60_000, reason: entry.reason, label: entry.label }
+      : { session: entry.session, kind: 'work', since: t, running: 0, tasks: [], lastHeavyEnd: t, label: entry.label }
+  if (s.nextUp && s.nextUp.session === entry.session) s.nextUp = null
+  log({ op: 'seat-granted', session: entry.session, kind: s.seat.kind, waitedMs: entry.since ? t - entry.since : 0 })
+}
+
+function enqueue(s, entry) {
+  const at = s.line.findIndex(e => e.session === entry.session)
+  if (at >= 0) {
+    s.line[at] = { ...s.line[at], ...entry, since: s.line[at].since }
+    return
+  }
+  if (s.nextUp && s.nextUp.session === entry.session) {
+    s.line.unshift(entry)
+    s.nextUp = null
+  } else s.line.push(entry)
+}
+
+function view(s, all, id) {
+  const position = s.line.findIndex(e => e.session === id)
+  return {
+    seat: s.seat,
+    line: s.line,
+    nextUp: s.nextUp,
+    requests: s.requests,
+    mine: s.seat && s.seat.session === id ? 'seat' : position >= 0 ? 'line' : 'none',
+    position: position >= 0 ? position + 1 : 0,
+    names: Object.fromEntries(Object.values(all).filter(x => isAlive(all, x.id)).map(x => [x.id, x.name])),
+  }
+}
+
+function resolveTarget(all, target) {
+  const live = Object.values(all).filter(x => isAlive(all, x.id))
+  const lower = target.toLowerCase()
+  const hits = live.filter(x => x.id === target || x.name.toLowerCase() === lower || x.id.startsWith(target))
+  return hits.length === 1 ? hits[0].id : null
+}
+
+// Whether `id` may take a free seat now: it holds the reservation, or nobody else does and it is first.
+function mayTakeFreeSeat(s, id) {
+  if (s.seat) return false
+  if (s.nextUp) return s.nextUp.session === id
+  return s.line.length === 0 || s.line[0].session === id
+}
+
+// Moves `target` to the front of the line, behind the seat holder, or reserves the next seat for it.
+function jump(s, all, target) {
+  if (s.seat && s.seat.session === target) return { ...view(s, all, target), note: 'already has the seat' }
+  const at = s.line.findIndex(e => e.session === target)
+  if (at >= 0) s.line.unshift(...s.line.splice(at, 1))
+  else s.nextUp = { session: target, until: now() + NEXT_UP_MS }
+  log({ op: 'jump', session: target, waiting: at >= 0 })
+  return view(normalize(s, all), all, target)
+}
+
+// One operation under the mutex. Returns what goes to stdout.
+function apply(op, args) {
+  const all = sessions()
+  const s = normalize(readState(), all)
+  const id = args[0]
+  const t = now()
+  let out
+  switch (op) {
+    case 'status':
+      out = view(s, all, id)
+      break
+    case 'claim': {
+      // args: id label
+      const label = args[1] || ''
+      if (s.seat && s.seat.session === id) {
+        if (s.seat.kind === 'work') {
+          s.seat.running += 1
+          if (label) s.seat.label = label
+        }
+        out = { ...view(s, all, id), granted: true }
+      } else if (mayTakeFreeSeat(s, id)) {
+        s.line = s.line.filter(e => e.session !== id)
+        grant(s, { session: id, kind: 'work', label })
+        s.seat.running = 1
+        out = { ...view(s, all, id), granted: true }
+      } else {
+        enqueue(s, { session: id, kind: 'work', label, since: t })
+        log({ op: 'queued', session: id, label })
+        out = { ...view(s, all, id), granted: false }
+      }
+      break
+    }
+    case 'poll': {
+      // The waiter's step: the seat is ours once normalize handed it over.
+      beat(id)
+      if (s.seat && s.seat.session === id) {
+        if (s.seat.kind === 'work') s.seat.running += 1
+        out = { ...view(s, all, id), granted: true }
+      } else out = { ...view(s, all, id), granted: false }
+      break
+    }
+    case 'done': {
+      // args: id [backgroundTaskId]
+      if (s.seat && s.seat.session === id && s.seat.kind === 'work') {
+        s.seat.running = Math.max(0, s.seat.running - 1)
+        s.seat.lastHeavyEnd = t
+        if (args[1]) s.seat.tasks.push(args[1])
+      }
+      out = view(s, all, id)
+      break
+    }
+    case 'taskdone': {
+      // Only a task the seat still holds counts: a repeated notice must not restart the linger.
+      if (s.seat && s.seat.session === id && s.seat.kind === 'work' && s.seat.tasks.includes(args[1])) {
+        s.seat.tasks = s.seat.tasks.filter(x => x !== args[1])
+        s.seat.lastHeavyEnd = t
+        log({ op: 'task-done', session: id, task: args[1] })
+      }
+      out = view(s, all, id)
+      break
+    }
+    case 'leave':
+      if (s.line.some(e => e.session === id)) log({ op: 'left-line', session: id })
+      s.line = s.line.filter(e => e.session !== id)
+      if (s.nextUp && s.nextUp.session === id) s.nextUp = null
+      out = view(s, all, id)
+      break
+    case 'release':
+      if (s.seat && s.seat.session === id) {
+        log({ op: 'seat-freed', session: id, reason: 'released', heldMs: t - s.seat.since })
+        s.seat = null
+      }
+      out = view(normalize(s, all), all, id)
+      break
+    case 'end':
+      s.line = s.line.filter(e => e.session !== id)
+      if (s.nextUp && s.nextUp.session === id) s.nextUp = null
+      if (s.seat && s.seat.session === id) {
+        log({ op: 'seat-freed', session: id, reason: 'session-ended', heldMs: t - s.seat.since })
+        s.seat = null
+      }
+      fs.rmSync(path.join(SESSIONS, `${id}.json`), { force: true })
+      delete all[id]
+      out = view(normalize(s, all), all, id)
+      break
+    case 'hold': {
+      // args: id minutes reason
+      const minutes = Math.min(60, Math.max(1, Number(args[1]) || 0))
+      const reason = args.slice(2).join(' ') || 'hold'
+      if (mayTakeFreeSeat(s, id)) {
+        s.line = s.line.filter(e => e.session !== id)
+        grant(s, { session: id, kind: 'hold', minutes, reason, label: reason })
+      } else if (s.seat && s.seat.session === id) {
+        s.seat = { ...s.seat, kind: 'hold', until: t + minutes * 60_000, reason, label: reason }
+      } else enqueue(s, { session: id, kind: 'hold', minutes, reason, label: reason, since: t })
+      out = view(s, all, id)
+      break
+    }
+    case 'next': {
+      // args: target (id, name or id prefix): front of the line, behind the seat holder.
+      const target = resolveTarget(all, args[0] || '')
+      if (!target) {
+        out = { error: `no single live session matches "${args[0]}"` }
+        break
+      }
+      out = jump(s, all, target)
+      break
+    }
+    case 'ask': {
+      // args: id reason...: a skip-the-line request every session shows until the person answers.
+      const reason = args.slice(1).join(' ').trim()
+      s.requests = s.requests.filter(r => r.session !== id)
+      s.requests.push({ session: id, name: all[id] ? all[id].name : id.slice(0, 8), reason, at: t, answer: null })
+      log({ op: 'ask', session: id, reason })
+      out = view(s, all, id)
+      break
+    }
+    case 'answer': {
+      // args: requester approve|decline: answered from any session; approving jumps the requester.
+      const r = s.requests.find(x => x.session === args[0] && !x.answer)
+      if (!r) {
+        out = { error: 'no open request from that session' }
+        break
+      }
+      r.answer = args[1] === 'approve' ? 'approved' : 'declined'
+      log({ op: 'answer', session: r.session, answer: r.answer })
+      out = r.answer === 'approved' ? jump(s, all, r.session) : view(s, all, r.session)
+      break
+    }
+    case 'ack':
+      // The requester read its answer.
+      s.requests = s.requests.filter(r => !(r.session === id && r.answer))
+      out = view(s, all, id)
+      break
+    default:
+      throw new Error(`unknown op ${op}`)
+  }
+  writeState(s)
+  return out
+}
+
+function main() {
+  const [op, ...args] = process.argv.slice(2)
+  if (op === 'where') {
+    // The hooks module has no Node: it asks here where the shared state lives and the timings in force.
+    process.stdout.write(JSON.stringify({ dir: DIR, aliveMs: ALIVE_MS, lingerMs: LINGER_MS }) + '\n')
+    return
+  }
+  if (op === 'wait') {
+    // Blocks until the seat is ours (exit 0) or we left the line (exit 3). Killed on Esc.
+    for (;;) {
+      lock()
+      let out
+      try {
+        out = apply('poll', args)
+      } finally {
+        unlock()
+      }
+      if (out.granted) {
+        process.stdout.write(JSON.stringify(out) + '\n')
+        return
+      }
+      if (out.mine === 'none') {
+        process.stdout.write(JSON.stringify(out) + '\n')
+        process.exitCode = 3
+        return
+      }
+      sleep(WAIT_POLL_MS)
+    }
+  }
+  lock()
+  try {
+    process.stdout.write(JSON.stringify(apply(op, args)) + '\n')
+  } finally {
+    unlock()
+  }
+}
+
+if (require.main === module) {
+  try {
+    main()
+  } catch (err) {
+    process.stdout.write(JSON.stringify({ error: String(err && err.message) }) + '\n')
+    process.exitCode = 1
+  }
+}
