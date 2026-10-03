@@ -306,9 +306,16 @@ export const register: Register = (on, options) => {
     if (result.deny !== undefined || result.isError) return result
     const merged = mergedNumber(command)
     if (merged !== undefined) {
-      // No number: the branch's PR, gone with the branch once merged, so clear every finished watch.
-      live.watches = live.watches.filter(w => (merged ? w.number !== merged : !w.outcome))
-      await save($)
+      // No number: the branch's PR, so every finished watch is a candidate. A watch is dropped only once
+      // GitHub says its PR is merged or closed: `--auto` only queues the merge, and a refused merge
+      // leaves the PR open, and either way the watch still has to wake the session.
+      const candidates = live.watches.filter(w => (merged ? w.number === merged : w.outcome))
+      const gone: Watch[] = []
+      for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
+      if (gone.length > 0) {
+        live.watches = live.watches.filter(w => !gone.includes(w))
+        await save($)
+      }
       return result
     }
     if (!isPushOrPr(command)) return result
