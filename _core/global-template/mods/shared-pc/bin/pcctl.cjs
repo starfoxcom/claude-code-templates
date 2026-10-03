@@ -51,8 +51,14 @@ function ownerOf(dir) {
   }
 }
 
+// The state folder and its sessions folder. The hooks module writes heartbeats there through an fs that
+// makes no folders, so both exist by the time it first asks where the state lives.
+function makeDirs() {
+  fs.mkdirSync(SESSIONS, { recursive: true })
+}
+
 function lock() {
-  fs.mkdirSync(DIR, { recursive: true })
+  makeDirs()
   const token = `${process.pid}-${now()}-${Math.random().toString(36).slice(2, 10)}`
   const deadline = now() + 10_000
   for (;;) {
@@ -445,6 +451,7 @@ function main() {
   const [op, ...args] = process.argv.slice(2)
   if (op === 'where') {
     // The hooks module has no Node: it asks here where the shared state lives and the timings in force.
+    makeDirs()
     process.stdout.write(JSON.stringify({ dir: DIR, aliveMs: ALIVE_MS, lingerMs: LINGER_MS }) + '\n')
     return
   }
@@ -464,12 +471,7 @@ function main() {
       sleep(WAIT_POLL_MS)
     }
   }
-  lock()
-  try {
-    process.stdout.write(JSON.stringify(apply(op, args)) + '\n')
-  } finally {
-    unlock()
-  }
+  process.stdout.write(JSON.stringify(locked(op, args)) + '\n')
 }
 
 module.exports = { lock, unlock, locked, owns, MUTEX }

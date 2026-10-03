@@ -42,6 +42,18 @@ test('ten simultaneous claims: exactly one seat, nine in line, no duplicates', a
   assert.ok(!s.line.some(e => e.session === s.seat.session))
 })
 
+test('a fresh install: asking where the state lives makes the folders the heartbeats are written in', () => {
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'shared-pc-')), 'not-made-yet')
+  const env = { ...process.env, SHARED_PC_DIR: dir }
+  const where = JSON.parse(execFileSync(process.execPath, [PCCTL, 'where'], { env, encoding: 'utf8' }))
+  assert.strictEqual(where.dir, dir)
+  assert.ok(fs.statSync(path.join(dir, 'sessions')).isDirectory())
+  // Any change made first, before `where`, makes them too.
+  fs.rmSync(dir, { recursive: true, force: true })
+  execFileSync(process.execPath, [PCCTL, 'release', 'a'], { env, encoding: 'utf8' })
+  assert.ok(fs.statSync(path.join(dir, 'sessions')).isDirectory())
+})
+
 test('release hands the seat to the front of the line', () => {
   const sb = sandbox()
   ;['a', 'b', 'c'].forEach(id => sb.register(id))
