@@ -380,6 +380,17 @@ const OPS = {
     if (s.nextUp && s.nextUp.session === id) s.nextUp = null
     return view(s, all, id)
   },
+  // A wait given up (Esc, or the waiter out of line): it leaves the line, and a work seat it holds is
+  // freed. A wait only starts while the seat is someone else's, so a seat this session holds now was
+  // granted during the wait, for the command that will not run.
+  abandon(s, all, id, args, t) {
+    OPS.leave(s, all, id)
+    if (s.seat && s.seat.session === id && s.seat.kind === 'work') {
+      log({ op: 'seat-freed', session: id, reason: 'abandoned', heldMs: t - s.seat.since })
+      s.seat = null
+    }
+    return view(normalize(s, all), all, id)
+  },
   release(s, all, id, args, t) {
     if (s.seat && s.seat.session === id) {
       log({ op: 'seat-freed', session: id, reason: 'released', heldMs: t - s.seat.since })

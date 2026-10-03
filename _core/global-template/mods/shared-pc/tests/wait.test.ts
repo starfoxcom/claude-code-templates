@@ -56,7 +56,7 @@ test('a heavy command waits in line, then runs once the seat is granted', async 
   }
   expect(ran.deny).toBeUndefined()
   expect(ran.result).toBe('ran')
-  expect(calls.some(argv => argv.includes('leave'))).toBe(false)
+  expect(calls.some(argv => argv.includes('leave') || argv.includes('abandon'))).toBe(false)
 })
 
 test('a wait that ends without the seat leaves the line and runs nothing', async ($, on) => {
@@ -69,5 +69,6 @@ test('a wait that ends without the seat leaves the line and runs nothing', async
     text?: string
   }
   expect(ran.deny ?? ran.text ?? '').toContain('left the line')
-  expect(calls.some(argv => argv.includes('leave'))).toBe(true)
+  // Abandon, not just leave: a seat granted as the wait ended is freed with it.
+  expect(calls.some(argv => argv.includes('abandon'))).toBe(true)
 })

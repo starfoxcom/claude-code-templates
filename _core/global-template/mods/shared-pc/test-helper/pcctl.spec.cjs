@@ -54,6 +54,28 @@ test('a fresh install: asking where the state lives makes the folders the heartb
   assert.ok(fs.statSync(path.join(dir, 'sessions')).isDirectory())
 })
 
+test('a wait given up after its seat was granted frees the seat for the next in line', () => {
+  const sb = sandbox()
+  ;['a', 'b', 'c'].forEach(id => sb.register(id))
+  assert.ok(sb.run('claim', 'a', 'build').granted)
+  sb.run('claim', 'b', 'test')
+  sb.run('claim', 'c', 'run')
+  sb.run('done', 'a')
+  sb.run('release', 'a')
+  // b's waiter took the seat, then the person pressed Esc before the command ran.
+  assert.ok(sb.run('poll', 'b').granted)
+  sb.run('abandon', 'b')
+  const s = sb.state()
+  assert.strictEqual(s.seat.session, 'c')
+  assert.deepStrictEqual(s.line, [])
+  // Given up while still in line: only the line changes.
+  sb.register('d')
+  sb.run('claim', 'd', 'x')
+  sb.run('abandon', 'd')
+  assert.strictEqual(sb.state().seat.session, 'c')
+  assert.deepStrictEqual(sb.state().line, [])
+})
+
 test('release hands the seat to the front of the line', () => {
   const sb = sandbox()
   ;['a', 'b', 'c'].forEach(id => sb.register(id))
