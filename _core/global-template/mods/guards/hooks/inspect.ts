@@ -38,6 +38,8 @@ export type Plan = {
   repo?: string
   /** Where relative paths resolve: a leading `cd` or `git -C`. */
   cwd?: string
+  /** The `cd` or `-C` folder is built at run time (`cd "$REPO"`): relative paths cannot be found. */
+  isCwdUnknown?: boolean
   block?: string
   isWrite: boolean
 }
@@ -136,8 +138,8 @@ function read(statements: Statement[], r: Reading) {
     for (const path of st.writes) r.writers.set(norm(path), { st, ps: r.ps })
     const { name, args } = programOf(st)
     if (assign(st, name, args, r)) return
-    if ((name === 'cd' || name === 'set-location' || name === 'pushd' || name === 'sl') && !plan.cwd) {
-      plan.cwd = args.find(a => !a.text.startsWith('-'))?.text
+    if ((name === 'cd' || name === 'set-location' || name === 'pushd' || name === 'sl') && !plan.cwd && !plan.isCwdUnknown) {
+      setCwd(plan, args.find(a => !a.text.startsWith('-')))
       return
     }
     const inner = script(name, args)
@@ -258,6 +260,11 @@ function script(name: string, args: Word[]): { statements: Statement[]; ps: bool
   return undefined
 }
 
+function setCwd(plan: Plan, word: Word | undefined) {
+  if (word?.dynamic) plan.isCwdUnknown = true
+  else plan.cwd = word?.text
+}
+
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
 function write(plan: Plan, st: Statement, where: string): string {
   plan.isWrite = true
@@ -271,7 +278,7 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
   while (k < args.length) {
     const t = args[k]?.text ?? ''
     if (t === '-C') {
-      plan.cwd ??= args[k + 1]?.text
+      if (!plan.cwd && !plan.isCwdUnknown) setCwd(plan, args[k + 1])
       k += 2
     } else if (t === '-c' || t === '--git-dir' || t === '--work-tree' || t === '--namespace') k += 2
     else if (t.startsWith('-')) k++
