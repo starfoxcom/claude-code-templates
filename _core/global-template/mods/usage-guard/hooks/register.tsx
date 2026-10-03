@@ -230,8 +230,9 @@ async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
 // projects each stop their own, and of two sessions in one project only the first runs the commands.
 async function stopBackground($: EngineInterface, pause: Pause): Promise<void> {
   const root = await $.session.root()
-  const folder = (root.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? '').toLowerCase()
-  if (!(await claim($, `stop-${resetKey(pause)}-${folder}`))) return
+  // The whole path names the project: two repos may share a folder name (`~/work/app`, `~/clients/x/app`).
+  const project = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+  if (!(await claim($, `stop-${resetKey(pause)}-${project}`))) return
   for (const argv of stopCommandsFor(root)) {
     await $.process.run(argv, { timeoutMs: 60_000 }).catch(() => undefined)
   }
