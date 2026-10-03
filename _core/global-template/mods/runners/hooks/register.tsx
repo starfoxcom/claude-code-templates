@@ -24,6 +24,32 @@ const live = {
   /** Minutes behind UTC, as getTimezoneOffset gives it; null until read. */
   zoneOffset: null as number | null,
   schedules: new Map<string, { at: number; texts: string[] }>(),
+  /** rules.ts, then the machine's own list file: read once at start. */
+  runners: [...RUNNERS] as Runner[],
+  isChecking: false,
+  isRecheck: false,
+}
+
+// A per-machine list beside the shipped rules.ts, so a template update never overwrites it: a JSON
+// array of the same entries in mods-data/runners/runners.json. A missing or unreadable file adds none.
+async function listPath($: Engine): Promise<string> {
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  return `${configured ?? `${home}/.claude`}/mods-data/runners/runners.json`.replace(/\\/g, '/')
+}
+
+async function readList($: Engine): Promise<Runner[]> {
+  try {
+    const listed: unknown = JSON.parse(String(await $.fs.read(await listPath($))))
+    return Array.isArray(listed) ? listed.filter(isRunner) : []
+  } catch {
+    return []
+  }
+}
+
+function isRunner(entry: unknown): entry is Runner {
+  const r = entry as Runner
+  return typeof r?.label === 'string' && Array.isArray(r.processes) && r.processes.every(n => typeof n === 'string')
 }
 
 async function run($: Engine, argv: string[]): Promise<string | null> {
@@ -108,20 +134,40 @@ async function readRunner($: Engine, runner: Runner, now: number): Promise<Runne
 }
 
 // A reading takes seconds of `gh` calls. What the buttons set meanwhile (Start's grace, Stop's
-// question) comes from the row as it is now, not as it was when the reading began.
+// question) comes from the row as it is now, not as it was when the reading began. Stop's question
+// ends with the job it asked about (busy 0), so the next job is asked about again; a failed busy read
+// (undefined) keeps it.
 export function mergeReading(reading: RunnerView[], shown: RunnerView[] | undefined): RunnerView[] {
   return reading.map((row, i) => ({
     ...row,
     startedAt: shown?.[i]?.startedAt,
-    isConfirming: Boolean(shown?.[i]?.isConfirming) && row.isOn,
+    isConfirming: Boolean(shown?.[i]?.isConfirming) && row.isOn && row.busy !== 0,
   }))
 }
 
-async function check($: Engine): Promise<void> {
+async function readAll($: Engine): Promise<void> {
   const now = await $.clock.now()
   const reading: RunnerView[] = []
-  for (const runner of RUNNERS) reading.push(await readRunner($, runner, now))
+  for (const runner of live.runners) reading.push(await readRunner($, runner, now))
   await update($, view, shown => ({ rows: mergeReading(reading, shown?.rows) }))
+}
+
+// One reading at a time: a check asked for while one runs (a slow `gh`, a button press) runs once
+// after it, so readings never pile up and a press still sees a reading taken after it.
+async function check($: Engine): Promise<void> {
+  if (live.isChecking) {
+    live.isRecheck = true
+    return
+  }
+  live.isChecking = true
+  try {
+    do {
+      live.isRecheck = false
+      await readAll($)
+    } while (live.isRecheck)
+  } finally {
+    live.isChecking = false
+  }
 }
 
 async function readZone($: Engine): Promise<void> {
@@ -132,11 +178,14 @@ async function readZone($: Engine): Promise<void> {
 async function start($: Engine): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
+  live.runners = [...RUNNERS, ...(await readList($))]
+  if (live.runners.length === 0) return
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   await readZone($)
-  await check($).catch(() => undefined)
   $.clock.every(live.checkMs, () => void check($).catch(() => undefined))
   $.clock.every(HOUR_MS, () => void readZone($).catch(() => undefined))
+  // The first reading can take many `gh` calls: session start and the first turn never wait for it.
+  void check($).catch(() => undefined)
 }
 
 async function setRow($: Engine, index: number, change: Partial<RunnerView>): Promise<void> {
@@ -148,7 +197,7 @@ async function setRow($: Engine, index: number, change: Partial<RunnerView>): Pr
 }
 
 async function pressStart($: Engine, index: number): Promise<void> {
-  const argv = RUNNERS[index]?.start
+  const argv = live.runners[index]?.start
   if (!argv) return
   await run($, argv)
   await setRow($, index, { startedAt: await $.clock.now() })
@@ -160,10 +209,10 @@ async function pressStart($: Engine, index: number): Promise<void> {
 // since must still get the question.
 async function pressStop($: Engine, index: number): Promise<void> {
   const row = (await read($, view))?.rows[index]
-  const repo = RUNNERS[index]?.repo
+  const repo = live.runners[index]?.repo
   const busy = row && !row.isConfirming && repo ? ((await online($, repo))?.busy ?? row.busy) : row?.busy
   if (row && (busy ?? 0) > 0 && !row.isConfirming) return setRow($, index, { busy, isConfirming: true })
-  for (const argv of RUNNERS[index]?.stop ?? []) await run($, argv)
+  for (const argv of live.runners[index]?.stop ?? []) await run($, argv)
   await setRow($, index, { isConfirming: false, startedAt: undefined })
   await check($).catch(() => undefined)
 }
@@ -186,7 +235,6 @@ export function clockTime(ms: number, offsetMinutes: number | null): string {
 
 export const register: Register = (on, options) => {
   live.checkMs = Math.max(15, Number(options.checkSeconds ?? 60)) * 1000
-  if (RUNNERS.length === 0) return
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -218,10 +266,10 @@ export const register: Register = (on, options) => {
             <Text color={row.isOn ? 'green' : undefined} dimColor={!row.isOn} wrap="truncate-end">
               ⚙ {rowText(row, now, ms => clockTime(ms, live.zoneOffset))}{' '}
             </Text>
-            {!row.isOn && RUNNERS[i]?.start ? (
+            {!row.isOn && live.runners[i]?.start ? (
               <Button key={`runner-start-${i}`} label="Start" onPress={() => void pressStart($, i)} />
             ) : null}
-            {row.isOn && RUNNERS[i]?.stop ? (
+            {row.isOn && live.runners[i]?.stop ? (
               <Button
                 key={`runner-stop-${i}`}
                 label={row.isConfirming ? 'Stop anyway (a job is running)' : 'Stop'}

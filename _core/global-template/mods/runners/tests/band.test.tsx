@@ -1,10 +1,10 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 import { clockTime, isListed, mergeReading, pgrepPattern, rowText } from '../hooks/register'
 import type { RunnerView } from '../types'
 
-// The shipped runner list is empty and the mod under test loads its own copy of rules.ts, so the row
-// is tested through rowText, and the hooks only for drawing nothing without runners.
+// The shipped rules.ts is empty, so the drawn row is tested through the machine's list file, which
+// the tests fake.
 const NOW = Date.UTC(2026, 9, 2, 17, 0, 0)
 const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16)
 const ON: RunnerView = { label: 'runners', isOn: true, online: 4, busy: 1, queued: 2, nextRun: NOW + 3_600_000 }
@@ -39,6 +39,9 @@ test('a reading keeps a Start or Stop pressed while it was being taken', () => {
   const off: RunnerView[] = [{ label: 'runners', isOn: false }]
   expect(mergeReading(off, pressed)).toEqual([{ ...off[0], startedAt: NOW, isConfirming: false }])
   expect(mergeReading(reading, undefined)).toEqual([{ ...reading[0], startedAt: undefined, isConfirming: false }])
+  // The job it asked about has ended: the next Stop asks again if a new one starts.
+  const idle: RunnerView[] = [{ label: 'runners', isOn: true, online: 1, busy: 0 }]
+  expect(mergeReading(idle, pressed)).toEqual([{ ...idle[0], startedAt: NOW, isConfirming: false }])
 })
 
 test('a process counts as running only under its own full name', () => {
@@ -71,5 +74,50 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'runners', surface, component: 'AbovePrompt', props })
     expect(await ui.find({ key: 'beneath' })).toBeDefined()
     expect(await ui.find({ key: 'runner-0' })).toBeUndefined()
+  })
+}
+
+// A runner from the machine's own list file draws its row and buttons on both surfaces.
+const LISTED = [{ label: 'local', processes: ['Runner.Listener'], start: ['start-runners'], stop: [['stop-runners']] }]
+const LIST_FILE = 'C:/Users/me/.claude/mods-data/runners/runners.json'
+
+function machine(on: Parameters<Parameters<typeof test>[1]>[1], isUp: () => boolean) {
+  const runs: string[][] = []
+  const clock = mock.clock(on, { now: NOW })
+  mock.env(on, { USERPROFILE: 'C:/Users/me', OS: 'Windows_NT' })
+  on('fs.read', ($, e) => {
+    if (e.path.replaceAll('\\', '/') !== LIST_FILE) throw new Error('ENOENT')
+    return { value: JSON.stringify(LISTED) }
+  })
+  on('process.run', ($, e) => {
+    runs.push([...e.argv])
+    const listed = isUp() ? '"Runner.Listener.exe","1"\r\n' : ''
+    const out = e.argv[0] === 'node' ? '360\n' : e.argv[0] === 'tasklist' ? listed : ''
+    return { value: { exitCode: 0, stdout: out, stderr: '' } } as never
+  })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('ui.render', () => ({ type: 'Box', props: { key: 'beneath' }, children: [] }) as never)
+  return { runs, clock }
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`a listed runner draws its row and Start, then Stop once up, on ${surface}`, async ($, on) => {
+    let isRunning = false
+    const { runs, clock } = machine(on, () => isRunning)
+    await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+    // Session start does not wait for the first reading; it lands moments later.
+    await clock.advance(1_000)
+    const props = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
+    const ui = await $.ui.mount({ plugin: 'runners', surface, component: 'AbovePrompt', props })
+    expect(await ui.find({ key: 'runner-0' })).toBeDefined()
+    expect(await ui.find({ key: 'runner-stop-0' })).toBeUndefined()
+
+    isRunning = true
+    await ui.press({ key: 'runner-start-0' })
+    expect(runs).toContainEqual(['start-runners'])
+    await clock.advance(1_000)
+    await ui.redraw()
+    expect(await ui.find({ key: 'runner-start-0' })).toBeUndefined()
+    expect(await ui.find({ key: 'runner-stop-0' })).toBeDefined()
   })
 }
