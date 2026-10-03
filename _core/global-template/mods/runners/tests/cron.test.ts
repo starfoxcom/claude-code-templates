@@ -49,6 +49,8 @@ test('a range or list element with a missing number does not parse', () => {
   const bad = ['/5 * * * *', '-5 * * * *', '0,,5 * * * *', '0, * * * *', '1-/2 * * * *', '0 0 1 * 1-', '*/ * * * *']
   for (const expr of bad) expect([expr, parseCron(expr)]).toEqual([expr, null])
   expect(at('5/10 17 * * *')).toBe('2026-10-02T17:05:00.000Z')
+  // `5/10` runs on to the end of the hour, not only at :05.
+  expect(at('5/10 17 * * *', NOW + 5 * 60_000)).toBe('2026-10-02T17:15:00.000Z')
 })
 
 test('cron lines are read from workflow text, quoted or not', () => {
