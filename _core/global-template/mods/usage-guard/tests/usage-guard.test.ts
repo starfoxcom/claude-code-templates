@@ -136,7 +136,7 @@ test('crossing the line wraps up, stops background work and resumes after the re
   const pause = pauseOf(seen)
   expect(pause?.status).toBe('active')
   expect(pause?.wakeAt).toBe(WAKE)
-  expect(seen.claims).toEqual(new Set([`pause-${KEY}`, `${KEY}-sess-a`, `stop-${KEY}-my-game`]))
+  expect(seen.claims).toEqual(new Set([`pause-${KEY}`, `${KEY}-sess-a`, `stop-${KEY}-c__repos_my-game`]))
   expect(stopsRun(seen)).toEqual([])
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
@@ -159,13 +159,13 @@ test('another session in the same project wraps up once and leaves the stop comm
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(other))
   // The first session already stopped this project.
-  seen.claims.add(`stop-${KEY}-my-game`)
+  seen.claims.add(`stop-${KEY}-c__repos_my-game`)
   await doWork($)
   await seen.clock.advance(60_000)
   await endTurn($)
 
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
-  expect(seen.claims).toEqual(new Set([`stop-${KEY}-my-game`, `${KEY}-sess-a`]))
+  expect(seen.claims).toEqual(new Set([`stop-${KEY}-c__repos_my-game`, `${KEY}-sess-a`]))
   expect(pauseOf(seen)).toEqual(other)
 })
 
@@ -180,9 +180,26 @@ test("a session opened during a pause in another project stops that project's wo
     triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
-  seen.claims.add(`stop-${KEY}-my-game`)
+  seen.claims.add(`stop-${KEY}-c__repos_my-game`)
   await start($)
-  expect(seen.claims.has(`stop-${KEY}-web-app`)).toBe(true)
+  expect(seen.claims.has(`stop-${KEY}-c__repos_web-app`)).toBe(true)
+})
+
+test('two projects with the same folder name each stop their own work', async ($, on) => {
+  const seen = world(on, 'D:/Clients/x/my-game')
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  // C:/Repos/my-game already stopped its own work.
+  seen.claims.add(`stop-${KEY}-c__repos_my-game`)
+  await start($)
+  expect(seen.claims.has(`stop-${KEY}-d__clients_x_my-game`)).toBe(true)
 })
 
 test('a session opened during a pause only waits, then resumes', async ($, on) => {
@@ -333,11 +350,11 @@ test('a session that loses the pause claim still stops its own project once', as
   await doWork($)
   // The other session, in another project, won the pause claim and has not written the file yet.
   seen.claims.add(`pause-${KEY}`)
-  seen.claims.add(`stop-${KEY}-other-project`)
+  seen.claims.add(`stop-${KEY}-c__repos_other-project`)
   seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
   await endTurn($)
 
-  expect(seen.claims.has(`stop-${KEY}-my-game`)).toBe(true)
+  expect(seen.claims.has(`stop-${KEY}-c__repos_my-game`)).toBe(true)
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   await seen.clock.advance(WAKE - NOW)
   expect(seen.commands.at(-1)).toEqual({ command: 'session-start', args: '' })
