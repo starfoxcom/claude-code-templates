@@ -315,143 +315,127 @@ function jump(s, all, target) {
   return view(normalize(s, all), all, target)
 }
 
+// One function per operation, each given the state, the live sessions, the caller's id, the arguments
+// and the time; each returns what goes to stdout.
+const OPS = {
+  status: (s, all, id) => view(s, all, id),
+  // args: id label
+  claim(s, all, id, args, t) {
+    const label = args[1] || ''
+    if (s.seat && s.seat.session === id) {
+      if (s.seat.kind === 'work') {
+        s.seat.running += 1
+        if (label) s.seat.label = label
+      }
+      return { ...view(s, all, id), granted: true }
+    }
+    if (mayTakeFreeSeat(s, id)) {
+      s.line = s.line.filter(e => e.session !== id)
+      grant(s, { session: id, kind: 'work', label })
+      s.seat.running = 1
+      return { ...view(s, all, id), granted: true }
+    }
+    enqueue(s, { session: id, kind: 'work', label, since: t })
+    log({ op: 'queued', session: id, label })
+    return { ...view(s, all, id), granted: false }
+  },
+  // The waiter's step: the seat is ours once normalize handed it over.
+  poll(s, all, id) {
+    beat(id)
+    const isMine = Boolean(s.seat && s.seat.session === id)
+    if (isMine && s.seat.kind === 'work') s.seat.running += 1
+    return { ...view(s, all, id), granted: isMine }
+  },
+  // args: id [backgroundTaskId]
+  done(s, all, id, args, t) {
+    if (s.seat && s.seat.session === id && s.seat.kind === 'work') {
+      s.seat.running = Math.max(0, s.seat.running - 1)
+      s.seat.lastHeavyEnd = t
+      if (args[1]) s.seat.tasks.push(args[1])
+    }
+    return view(s, all, id)
+  },
+  // Only a task the seat still holds counts: a repeated notice must not restart the linger.
+  taskdone(s, all, id, args, t) {
+    if (s.seat && s.seat.session === id && s.seat.kind === 'work' && s.seat.tasks.includes(args[1])) {
+      s.seat.tasks = s.seat.tasks.filter(x => x !== args[1])
+      s.seat.lastHeavyEnd = t
+      log({ op: 'task-done', session: id, task: args[1] })
+    }
+    return view(s, all, id)
+  },
+  leave(s, all, id) {
+    if (s.line.some(e => e.session === id)) log({ op: 'left-line', session: id })
+    s.line = s.line.filter(e => e.session !== id)
+    if (s.nextUp && s.nextUp.session === id) s.nextUp = null
+    return view(s, all, id)
+  },
+  release(s, all, id, args, t) {
+    if (s.seat && s.seat.session === id) {
+      log({ op: 'seat-freed', session: id, reason: 'released', heldMs: t - s.seat.since })
+      s.seat = null
+    }
+    return view(normalize(s, all), all, id)
+  },
+  end(s, all, id, args, t) {
+    s.line = s.line.filter(e => e.session !== id)
+    if (s.nextUp && s.nextUp.session === id) s.nextUp = null
+    if (s.seat && s.seat.session === id) {
+      log({ op: 'seat-freed', session: id, reason: 'session-ended', heldMs: t - s.seat.since })
+      s.seat = null
+    }
+    fs.rmSync(path.join(SESSIONS, `${id}.json`), { force: true })
+    delete all[id]
+    return view(normalize(s, all), all, id)
+  },
+  // args: id minutes reason
+  hold(s, all, id, args, t) {
+    const minutes = Math.min(60, Math.max(1, Number(args[1]) || 0))
+    const reason = args.slice(2).join(' ') || 'hold'
+    if (mayTakeFreeSeat(s, id)) {
+      s.line = s.line.filter(e => e.session !== id)
+      grant(s, { session: id, kind: 'hold', minutes, reason, label: reason })
+    } else if (s.seat && s.seat.session === id) {
+      s.seat = { ...s.seat, kind: 'hold', until: t + minutes * 60_000, reason, label: reason }
+    } else enqueue(s, { session: id, kind: 'hold', minutes, reason, label: reason, since: t })
+    return view(s, all, id)
+  },
+  // args: target (id, name or id prefix): front of the line, behind the seat holder.
+  next(s, all, id, args) {
+    const target = resolveTarget(all, args[0] || '')
+    if (!target) return { error: `no single live session matches "${args[0]}"` }
+    return jump(s, all, target)
+  },
+  // args: id reason...: a skip-the-line request every session shows until the person answers.
+  ask(s, all, id, args, t) {
+    const reason = args.slice(1).join(' ').trim()
+    s.requests = s.requests.filter(r => r.session !== id)
+    s.requests.push({ session: id, name: all[id] ? all[id].name : id.slice(0, 8), reason, at: t, answer: null })
+    log({ op: 'ask', session: id, reason })
+    return view(s, all, id)
+  },
+  // args: requester approve|decline: answered from any session; approving jumps the requester.
+  answer(s, all, id, args) {
+    const r = s.requests.find(x => x.session === args[0] && !x.answer)
+    if (!r) return { error: 'no open request from that session' }
+    r.answer = args[1] === 'approve' ? 'approved' : 'declined'
+    log({ op: 'answer', session: r.session, answer: r.answer })
+    return r.answer === 'approved' ? jump(s, all, r.session) : view(s, all, r.session)
+  },
+  // The requester read its answer.
+  ack(s, all, id) {
+    s.requests = s.requests.filter(r => !(r.session === id && r.answer))
+    return view(s, all, id)
+  },
+}
+
 // One operation under the mutex. Returns what goes to stdout.
 function apply(op, args) {
+  const run = Object.hasOwn(OPS, op) ? OPS[op] : undefined
+  if (!run) throw new Error(`unknown op ${op}`)
   const all = sessions()
   const s = normalize(readState(), all)
-  const id = args[0]
-  const t = now()
-  let out
-  switch (op) {
-    case 'status':
-      out = view(s, all, id)
-      break
-    case 'claim': {
-      // args: id label
-      const label = args[1] || ''
-      if (s.seat && s.seat.session === id) {
-        if (s.seat.kind === 'work') {
-          s.seat.running += 1
-          if (label) s.seat.label = label
-        }
-        out = { ...view(s, all, id), granted: true }
-      } else if (mayTakeFreeSeat(s, id)) {
-        s.line = s.line.filter(e => e.session !== id)
-        grant(s, { session: id, kind: 'work', label })
-        s.seat.running = 1
-        out = { ...view(s, all, id), granted: true }
-      } else {
-        enqueue(s, { session: id, kind: 'work', label, since: t })
-        log({ op: 'queued', session: id, label })
-        out = { ...view(s, all, id), granted: false }
-      }
-      break
-    }
-    case 'poll': {
-      // The waiter's step: the seat is ours once normalize handed it over.
-      beat(id)
-      if (s.seat && s.seat.session === id) {
-        if (s.seat.kind === 'work') s.seat.running += 1
-        out = { ...view(s, all, id), granted: true }
-      } else out = { ...view(s, all, id), granted: false }
-      break
-    }
-    case 'done': {
-      // args: id [backgroundTaskId]
-      if (s.seat && s.seat.session === id && s.seat.kind === 'work') {
-        s.seat.running = Math.max(0, s.seat.running - 1)
-        s.seat.lastHeavyEnd = t
-        if (args[1]) s.seat.tasks.push(args[1])
-      }
-      out = view(s, all, id)
-      break
-    }
-    case 'taskdone': {
-      // Only a task the seat still holds counts: a repeated notice must not restart the linger.
-      if (s.seat && s.seat.session === id && s.seat.kind === 'work' && s.seat.tasks.includes(args[1])) {
-        s.seat.tasks = s.seat.tasks.filter(x => x !== args[1])
-        s.seat.lastHeavyEnd = t
-        log({ op: 'task-done', session: id, task: args[1] })
-      }
-      out = view(s, all, id)
-      break
-    }
-    case 'leave':
-      if (s.line.some(e => e.session === id)) log({ op: 'left-line', session: id })
-      s.line = s.line.filter(e => e.session !== id)
-      if (s.nextUp && s.nextUp.session === id) s.nextUp = null
-      out = view(s, all, id)
-      break
-    case 'release':
-      if (s.seat && s.seat.session === id) {
-        log({ op: 'seat-freed', session: id, reason: 'released', heldMs: t - s.seat.since })
-        s.seat = null
-      }
-      out = view(normalize(s, all), all, id)
-      break
-    case 'end':
-      s.line = s.line.filter(e => e.session !== id)
-      if (s.nextUp && s.nextUp.session === id) s.nextUp = null
-      if (s.seat && s.seat.session === id) {
-        log({ op: 'seat-freed', session: id, reason: 'session-ended', heldMs: t - s.seat.since })
-        s.seat = null
-      }
-      fs.rmSync(path.join(SESSIONS, `${id}.json`), { force: true })
-      delete all[id]
-      out = view(normalize(s, all), all, id)
-      break
-    case 'hold': {
-      // args: id minutes reason
-      const minutes = Math.min(60, Math.max(1, Number(args[1]) || 0))
-      const reason = args.slice(2).join(' ') || 'hold'
-      if (mayTakeFreeSeat(s, id)) {
-        s.line = s.line.filter(e => e.session !== id)
-        grant(s, { session: id, kind: 'hold', minutes, reason, label: reason })
-      } else if (s.seat && s.seat.session === id) {
-        s.seat = { ...s.seat, kind: 'hold', until: t + minutes * 60_000, reason, label: reason }
-      } else enqueue(s, { session: id, kind: 'hold', minutes, reason, label: reason, since: t })
-      out = view(s, all, id)
-      break
-    }
-    case 'next': {
-      // args: target (id, name or id prefix): front of the line, behind the seat holder.
-      const target = resolveTarget(all, args[0] || '')
-      if (!target) {
-        out = { error: `no single live session matches "${args[0]}"` }
-        break
-      }
-      out = jump(s, all, target)
-      break
-    }
-    case 'ask': {
-      // args: id reason...: a skip-the-line request every session shows until the person answers.
-      const reason = args.slice(1).join(' ').trim()
-      s.requests = s.requests.filter(r => r.session !== id)
-      s.requests.push({ session: id, name: all[id] ? all[id].name : id.slice(0, 8), reason, at: t, answer: null })
-      log({ op: 'ask', session: id, reason })
-      out = view(s, all, id)
-      break
-    }
-    case 'answer': {
-      // args: requester approve|decline: answered from any session; approving jumps the requester.
-      const r = s.requests.find(x => x.session === args[0] && !x.answer)
-      if (!r) {
-        out = { error: 'no open request from that session' }
-        break
-      }
-      r.answer = args[1] === 'approve' ? 'approved' : 'declined'
-      log({ op: 'answer', session: r.session, answer: r.answer })
-      out = r.answer === 'approved' ? jump(s, all, r.session) : view(s, all, r.session)
-      break
-    }
-    case 'ack':
-      // The requester read its answer.
-      s.requests = s.requests.filter(r => !(r.session === id && r.answer))
-      out = view(s, all, id)
-      break
-    default:
-      throw new Error(`unknown op ${op}`)
-  }
+  const out = run(s, all, args[0], args, now())
   if (!owns()) throw new MutexLost('mutex lost')
   writeState(s)
   return out
