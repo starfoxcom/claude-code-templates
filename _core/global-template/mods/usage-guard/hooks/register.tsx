@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-code'
 
-import type { UsageCard } from '../types'
+import type { ArmedWake, UsageCard } from '../types'
 import { stopCommandsFor } from './rules'
 import { register as settings, SETTINGS_PANE } from './settings'
 
@@ -26,6 +26,7 @@ const CHECK_EVERY_MS = 60_000
 // or a cancel in one session shows in the others.
 const REFRESH_MS = 2_000
 const band = atom({ plugin: 'usage-guard', key: 'band' } as const, null)
+const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
 const READ_ZONE = [
   'node',
   '-e',
@@ -56,6 +57,18 @@ export function planPause(hot: readonly SessionRateLimit[], delayMinutes: number
   }
 }
 
+const ARM_KINDS: Record<string, string> = { '5h': 'five_hour', week: 'seven_day' }
+
+// The wake `/usage-guard arm <5h|week>` sets: the named window's next reset plus the resume delay,
+// whatever its usage, or why there is none.
+export function planArm(limits: readonly SessionRateLimit[], which: string, delayMinutes: number): ArmedWake | string {
+  const kind = ARM_KINDS[which]
+  if (!kind) return 'Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.'
+  const resetsAt = limits.find(limit => limit.kind === kind)?.resetsAt
+  if (!resetsAt) return `No ${LIMIT_NAMES[kind]} reset is known yet, so there is nothing to arm.`
+  return { kind, resetsAt, wakeAt: Date.parse(resetsAt) + delayMinutes * 60_000 }
+}
+
 function limitName(pause: Pause): string {
   return pause.kinds.map(kind => LIMIT_NAMES[kind] ?? kind.replace(/_/g, '-')).join(' + ')
 }
@@ -69,6 +82,8 @@ const live: {
   hasWork: boolean
   isStatusShown: boolean
   wakeTimer?: Timer
+  /** The wake the person armed by hand (`armedWake`), counting down in this module. */
+  armTimer?: Timer
   /** A wrap-up due when the running turn ends: the pause it is for. */
   pendingWrapUp?: Pause
   /** Claims this module already holds or found taken, so a 60-second check spawns no helper. */
@@ -324,7 +339,11 @@ async function resume($: EngineInterface, resetsAt: string): Promise<void> {
   if (pause.status === 'active') await writePause($, { ...pause, status: 'done' })
   setStatus($, undefined)
   await showCard($, `reset:${resetsAt}`, 'Plan limits have reset. Sessions are resuming their saved work.')
-  await notice($, 'Plan limits have reset: resuming the saved work.')
+  await resumeWork($, 'Plan limits have reset: resuming the saved work.')
+}
+
+async function resumeWork($: EngineInterface, text: string): Promise<void> {
+  await notice($, text)
   if (await hasCommand($, 'session-start')) {
     void $.command.run({ command: 'session-start' }).catch(() => undefined)
   } else {
@@ -341,6 +360,45 @@ async function armWake($: EngineInterface, pause: Pause): Promise<void> {
     live.wakeTimer = undefined
     void resume($, pause.resetsAt)
   })
+}
+
+async function scheduleArm($: EngineInterface, arm: ArmedWake): Promise<void> {
+  live.armTimer?.cancel()
+  const wait = Math.max(0, arm.wakeAt - (await $.clock.now()))
+  live.armTimer = $.clock.after(wait, () => {
+    live.armTimer = undefined
+    void wakeArmed($, arm).catch(() => undefined)
+  })
+}
+
+// An armed wake that came due: this session resumes, unless the arm was dropped or replaced, or a
+// pause for the same reset resumes it already.
+async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
+  const current = await read($, armedWake)
+  if (current?.resetsAt !== arm.resetsAt || current.kind !== arm.kind) return
+  await update($, armedWake, () => null)
+  const pause = await readPause($)
+  if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled') return
+  await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
+}
+
+async function armByHand($: EngineInterface, which: string): Promise<string> {
+  const planned = planArm((await $.session.usage()).rateLimits, which, live.delayMinutes)
+  if (typeof planned === 'string') return planned
+  await update($, armedWake, () => planned)
+  await scheduleArm($, planned)
+  return (
+    `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
+    `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`
+  )
+}
+
+async function disarm($: EngineInterface): Promise<string> {
+  const current = await read($, armedWake)
+  live.armTimer?.cancel()
+  live.armTimer = undefined
+  await update($, armedWake, () => null)
+  return current ? 'Disarmed: this session will not resume on its own.' : 'Nothing was armed.'
 }
 
 // This session's part in a live pause: it wraps up once, and its wake timer is
@@ -395,6 +453,9 @@ async function startTimers($: EngineInterface): Promise<void> {
   await refresh($)
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) await act($, pause)
+  // A wake armed before a hot reload: the module's timer went with the old instance.
+  const arm = await read($, armedWake)
+  if (arm) await scheduleArm($, arm)
   $.clock.every(CHECK_EVERY_MS, () => void check($).catch(() => undefined))
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
 }
@@ -441,7 +502,7 @@ export const register: Register = (on, options) => {
     if (pause?.status === 'active') await meetPause($, pause)
     await $.command.register({
       name: 'usage-guard',
-      description: 'Show the usage pause; /usage-guard cancel cancels it, /usage-guard settings opens the settings',
+      description: 'Usage pause status. Also: cancel, arm 5h|week (resume after that reset), disarm, settings',
     })
 
     await startTimers($)
@@ -511,14 +572,19 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'usage-guard' }, async ($, e) => {
-    if (e.args.trim() === 'settings') {
+    const [verb = '', which = ''] = e.args.trim().split(/\s+/)
+    if (verb === 'settings') {
       await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
       return { text: 'Opened the usage-guard settings.' }
     }
+    if (verb === 'arm') return { text: await armByHand($, which) }
+    if (verb === 'disarm') return { text: await disarm($) }
+    const arm = await read($, armedWake)
+    const armedText = arm ? ` Armed to resume at ${localTime(arm.wakeAt)}.` : ''
     const pause = await readPause($)
     if (!pause || pause.status !== 'active')
-      return { text: `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.` }
-    if (e.args.trim() === 'cancel') {
+      return { text: `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}` }
+    if (verb === 'cancel') {
       await cancelPause($, pause)
       return { text: 'Usage pause cancelled: no automatic resume.' }
     }

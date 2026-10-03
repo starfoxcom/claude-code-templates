@@ -21,8 +21,19 @@ export type SettingsView = {
   errors: Record<string, string>
 }
 
+/**
+ * A wake the person armed by hand (`/usage-guard arm 5h|week`): this session alone resumes its saved
+ * work after that reset. Kept in state so a hot reload (a settings change, an edit) re-arms it.
+ */
+export type ArmedWake = {
+  /** The limit's kind: `five_hour` or `seven_day`. */
+  kind: string
+  resetsAt: string
+  wakeAt: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'usage-guard': { band: UsageGuardBand | null; settings: SettingsView | null }
+    'usage-guard': { band: UsageGuardBand | null; settings: SettingsView | null; armed: ArmedWake | null }
   }
 }

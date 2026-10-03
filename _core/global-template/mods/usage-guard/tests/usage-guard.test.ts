@@ -2,7 +2,7 @@ import type { On, SessionRateLimit } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Pause } from '../hooks/register'
-import { CLAIM, WRAP_UP_ARGS } from '../hooks/register'
+import { CLAIM, planArm, WRAP_UP_ARGS } from '../hooks/register'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
@@ -567,4 +567,52 @@ test('a wrap-up owed by a running turn is dropped when the pause is cancelled be
   await endTurn($)
 
   expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
+})
+
+test('an armed session resumes after the reset it named, below the line and without a pause', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Armed') }))
+
+  await seen.clock.advance(WAKE - NOW - 1)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  await seen.clock.advance(1)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  // Nothing is shared: no pause, no wrap-up, no card for the other sessions.
+  expect(pauseOf(seen)).toBeUndefined()
+  expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
+})
+
+test('disarm drops the armed wake', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  const answer = await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Disarmed') }))
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+})
+
+test('an arm for the reset a pause already resumes at does not resume the session twice', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  expect(pauseOf(seen)?.status).toBe('active')
+
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+})
+
+test('arming names a known reset, or says why it cannot', () => {
+  const limits: SessionRateLimit[] = [
+    { kind: 'five_hour', percentUsed: 40, resetsAt: RESET },
+    { kind: 'seven_day', percentUsed: 10 },
+  ]
+  expect(planArm(limits, '5h', 2)).toEqual({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE })
+  expect(planArm(limits, 'week', 2)).toBe('No weekly reset is known yet, so there is nothing to arm.')
+  expect(planArm(limits, '', 2)).toBe('Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.')
+  expect(planArm(limits, 'day', 2)).toBe('Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.')
 })
