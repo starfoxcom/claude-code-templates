@@ -23,7 +23,8 @@ const CREDIT = new RegExp(
     // Co-Authored-By naming an AI; a human co-author passes.
     `co${Z}-?${Z}authored${Z}-?${Z}by\\s*:?[^\\n]*?\\b${AI}\\b`,
     `noreply@${ANTHROPIC}`,
-    `\\b(?:generated|written|created|made|authored|produced|assisted|co-?written)${Z}(?:with|by|using|via)${Z}\\[?${AN}${AI}\\b`,
+    `\\b(?:generated|written|created|made|authored|produced|assisted|co-?written)` +
+      `${Z}(?:with|by|using|via)${Z}\\[?${AN}${AI}\\b`,
     // A line or quoted message that ends "via Claude Code" / "by Claude"; "compatible with Claude Code" is a mention.
     `\\b(?:by|via)${Z}${CLAUDE}(?:${Z}code)?(?=[\\s.!)\\]]*(?:$|['"\`]))`,
     `claude\\.(?:ai|com)/(?:code|claude-code)\\b`,
@@ -43,8 +44,19 @@ const wordOf = (word: string) => `(?<!\\p{L})${[...word].join(NZ)}(?!\\p{L})`
 const NAME = new RegExp(`${wordOf('claude')}|${wordOf('anthropic')}`, 'iu')
 
 // Repo identifiers and review-trigger words that carry the name without crediting anyone.
-const IDENTIFIERS =
-  /\bCLAUDE\.md\b|\.claude(?:[\\/][\w.-]*)*|`?claude(?:-code-review)?\*?\.yml`?|`?Claude On-Demand`?|`?claude-code-action`?|`?Claude Code Review`?|@claude\b|anthropics\/claude-code-action/gi
+const IDENTIFIERS = new RegExp(
+  [
+    String.raw`\bCLAUDE\.md\b`,
+    String.raw`\.claude(?:[\\/][\w.-]*)*`,
+    String.raw`\`?claude(?:-code-review)?\*?\.yml\`?`,
+    '`?Claude On-Demand`?',
+    '`?claude-code-action`?',
+    '`?Claude Code Review`?',
+    String.raw`@claude\b`,
+    String.raw`anthropics\/claude-code-action`,
+  ].join('|'),
+  'gi',
+)
 const PATHS = /(?<!:\/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.-]+)+/g
 const URLS = /\bhttps?:\/\/\S+/g
 
@@ -77,7 +89,9 @@ export function checkBranch(name: string, mayName: boolean): Verdict {
 // A credit line added to a project file: the line itself (after indentation and a comment marker)
 // starts with the credit, so docs that quote a banned trailer in a list or in backticks pass.
 const LINE_CREDIT = new RegExp(
-  `^\\s*(?:#+|//+|/\\*+|\\*+|<!--|--|;+|%+|REM\\b)?\\s*(?:co${Z}-?${Z}authored${Z}-?${Z}by\\s*:[^\\n]*\\b${AI}\\b|\\u{1F916}|(?:generated|written|created)${Z}(?:with|by)${Z}\\[?${AN}${AI}\\b)|claude\\.ai/code/session_`,
+  `^\\s*(?:#+|//+|/\\*+|\\*+|<!--|--|;+|%+|REM\\b)?\\s*(?:` +
+    `co${Z}-?${Z}authored${Z}-?${Z}by\\s*:[^\\n]*\\b${AI}\\b|\\u{1F916}|` +
+    `(?:generated|written|created)${Z}(?:with|by)${Z}\\[?${AN}${AI}\\b)|claude\\.ai/code/session_`,
   'imu',
 )
 
@@ -98,6 +112,8 @@ export function checkAddedLines(diff: string): { file: string; line: string } | 
 
 export function describe(v: NonNullable<Verdict>, where: string): string {
   return v.rule === 'credit'
-    ? `AI credit "${v.match.trim()}" in ${where}. Commits, PRs, issues, comments and releases carry no AI credit: no Co-Authored-By naming an AI, no "Generated with", no session link, no robot emoji.`
-    : `"${v.match.trim()}" named in ${where}. This repo keeps the product name out of its history; reword, or add the repo to the guards mod's mentionRepos setting if Claude Code is its subject.`
+    ? `AI credit "${v.match.trim()}" in ${where}. Commits, PRs, issues, comments and releases carry no AI credit: ` +
+        `no Co-Authored-By naming an AI, no "Generated with", no session link, no robot emoji.`
+    : `"${v.match.trim()}" named in ${where}. This repo keeps the product name out of its history; reword, or add ` +
+        `the repo to the guards mod's mentionRepos setting if Claude Code is its subject.`
 }

@@ -118,7 +118,9 @@ export const register: Register = on => {
         <Box flexDirection="column">
           {inner}
           <Box>
-            <Text color="magenta">↩ {carried.length} carried over from the last session, check them against the hand-off </Text>
+            <Text color="magenta">
+              ↩ {carried.length} carried over from the last session, check them against the hand-off{' '}
+            </Text>
             <Button key="tasks-list" label="List" onPress={() => openList($)} />
           </Box>
         </Box>
@@ -130,7 +132,9 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {inner}
         <Box>
-          <Text color={done === kept ? 'green' : undefined}>✅ {done}/{kept} </Text>
+          <Text color={done === kept ? 'green' : undefined}>
+            ✅ {done}/{kept}{' '}
+          </Text>
           {first ? (
             <Text color={active.length > 1 ? 'yellow' : 'cyan'} bold wrap="truncate-end">
               · 🔨 #{first.id} {first.activeForm ?? first.subject}
@@ -174,9 +178,7 @@ export const register: Register = on => {
             ))}
           </Box>
         ) : null}
-        <Text bold>
-          {tasks.length === 0 ? 'No tasks in this session.' : `${done} of ${kept} done`}
-        </Text>
+        <Text bold>{tasks.length === 0 ? 'No tasks in this session.' : `${done} of ${kept} done`}</Text>
         {KINDS.map(group => {
           const rows = tasks.filter(t => kindOf(t) === group.kind)
           if (rows.length === 0) return null

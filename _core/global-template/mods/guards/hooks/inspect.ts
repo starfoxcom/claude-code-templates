@@ -65,40 +65,113 @@ type Kind = 'text' | 'file' | 'skip' | 'repo' | 'branch' | 'field' | 'data' | 'm
 type Spec = Record<string, Kind>
 
 const COMMIT: Spec = {
-  '-m': 'text', '--message': 'text', '-F': 'file', '--file': 'file', '-t': 'file', '--template': 'file',
-  '-C': 'skip', '-c': 'skip', '--reuse-message': 'skip', '--reedit-message': 'skip', '--fixup': 'skip',
-  '--squash': 'skip', '--author': 'text', '--date': 'skip', '--trailer': 'text', '--cleanup': 'skip',
-  '-S': 'attached', '--gpg-sign': 'attached', '-u': 'attached', '--untracked-files': 'attached',
+  '-m': 'text',
+  '--message': 'text',
+  '-F': 'file',
+  '--file': 'file',
+  '-t': 'file',
+  '--template': 'file',
+  '-C': 'skip',
+  '-c': 'skip',
+  '--reuse-message': 'skip',
+  '--reedit-message': 'skip',
+  '--fixup': 'skip',
+  '--squash': 'skip',
+  '--author': 'text',
+  '--date': 'skip',
+  '--trailer': 'text',
+  '--cleanup': 'skip',
+  '-S': 'attached',
+  '--gpg-sign': 'attached',
+  '-u': 'attached',
+  '--untracked-files': 'attached',
 }
 const MESSAGE: Spec = { '-m': 'text', '--message': 'text', '-F': 'file', '--file': 'file' }
 const GH_BODY: Spec = {
-  '-t': 'text', '--title': 'text', '-b': 'text', '--body': 'text', '-F': 'file', '--body-file': 'file',
-  '-R': 'repo', '--repo': 'repo', '-T': 'skip', '--template': 'skip', '-B': 'skip', '--base': 'skip',
-  '-H': 'skip', '--head': 'skip', '-a': 'skip', '--assignee': 'skip', '-l': 'skip', '--label': 'skip',
-  '-m': 'skip', '--milestone': 'skip', '-p': 'skip', '--project': 'skip', '-r': 'skip', '--reviewer': 'skip',
-  '--add-label': 'skip', '--remove-label': 'skip', '--comment': 'text',
+  '-t': 'text',
+  '--title': 'text',
+  '-b': 'text',
+  '--body': 'text',
+  '-F': 'file',
+  '--body-file': 'file',
+  '-R': 'repo',
+  '--repo': 'repo',
+  '-T': 'skip',
+  '--template': 'skip',
+  '-B': 'skip',
+  '--base': 'skip',
+  '-H': 'skip',
+  '--head': 'skip',
+  '-a': 'skip',
+  '--assignee': 'skip',
+  '-l': 'skip',
+  '--label': 'skip',
+  '-m': 'skip',
+  '--milestone': 'skip',
+  '-p': 'skip',
+  '--project': 'skip',
+  '-r': 'skip',
+  '--reviewer': 'skip',
+  '--add-label': 'skip',
+  '--remove-label': 'skip',
+  '--comment': 'text',
 }
 // Subcommands whose short flags mean something else: a boolean read as value-taking would swallow the
 // next word (`gh pr review 5 -a -b '<text>'` would hide the body), so each gets its own table. Flags
 // absent from a table are read as booleans.
 const GH_REVIEW: Spec = {
-  '-b': 'text', '--body': 'text', '-F': 'file', '--body-file': 'file', '-R': 'repo', '--repo': 'repo',
+  '-b': 'text',
+  '--body': 'text',
+  '-F': 'file',
+  '--body-file': 'file',
+  '-R': 'repo',
+  '--repo': 'repo',
 }
 const GH_MERGE: Spec = {
-  '-b': 'text', '--body': 'text', '-F': 'file', '--body-file': 'file', '-t': 'text', '--subject': 'text',
-  '-A': 'skip', '--author-email': 'skip', '--match-head-commit': 'skip', '-R': 'repo', '--repo': 'repo',
+  '-b': 'text',
+  '--body': 'text',
+  '-F': 'file',
+  '--body-file': 'file',
+  '-t': 'text',
+  '--subject': 'text',
+  '-A': 'skip',
+  '--author-email': 'skip',
+  '--match-head-commit': 'skip',
+  '-R': 'repo',
+  '--repo': 'repo',
 }
 const GH_CLOSE: Spec = {
-  '-c': 'text', '--comment': 'text', '-r': 'skip', '--reason': 'skip', '-R': 'repo', '--repo': 'repo',
+  '-c': 'text',
+  '--comment': 'text',
+  '-r': 'skip',
+  '--reason': 'skip',
+  '-R': 'repo',
+  '--repo': 'repo',
 }
 const GH_RELEASE: Spec = {
-  '-t': 'text', '--title': 'text', '-n': 'text', '--notes': 'text', '-F': 'file', '--notes-file': 'file',
-  '-R': 'repo', '--repo': 'repo', '--target': 'skip',
+  '-t': 'text',
+  '--title': 'text',
+  '-n': 'text',
+  '--notes': 'text',
+  '-F': 'file',
+  '--notes-file': 'file',
+  '-R': 'repo',
+  '--repo': 'repo',
+  '--target': 'skip',
 }
 const GH_DESC: Spec = { '-d': 'text', '--desc': 'text', '--description': 'text', '-R': 'repo', '--repo': 'repo' }
 const GH_API: Spec = {
-  '-f': 'field', '--raw-field': 'field', '-F': 'field', '--field': 'field', '--input': 'file',
-  '-X': 'method', '--method': 'method', '-H': 'skip', '--header': 'skip', '--jq': 'skip', '-q': 'skip',
+  '-f': 'field',
+  '--raw-field': 'field',
+  '-F': 'field',
+  '--field': 'field',
+  '--input': 'file',
+  '-X': 'method',
+  '--method': 'method',
+  '-H': 'skip',
+  '--header': 'skip',
+  '--jq': 'skip',
+  '-q': 'skip',
 }
 const CURL: Spec = { '-d': 'data', '--data': 'data', '--data-raw': 'data', '--data-binary': 'data' }
 const PS_WEB: Spec = { '-body': 'text', '-infile': 'file' }
@@ -138,8 +211,15 @@ function read(statements: Statement[], r: Reading) {
     for (const path of st.writes) r.writers.set(norm(path), { st, ps: r.ps })
     const { name, args } = programOf(st)
     if (assign(st, name, args, r)) return
-    if ((name === 'cd' || name === 'set-location' || name === 'pushd' || name === 'sl') && !plan.cwd && !plan.isCwdUnknown) {
-      setCwd(plan, args.find(a => !a.text.startsWith('-')))
+    if (
+      (name === 'cd' || name === 'set-location' || name === 'pushd' || name === 'sl') &&
+      !plan.cwd &&
+      !plan.isCwdUnknown
+    ) {
+      setCwd(
+        plan,
+        args.find(a => !a.text.startsWith('-')),
+      )
       return
     }
     const inner = script(name, args)
@@ -153,10 +233,7 @@ function read(statements: Statement[], r: Reading) {
       return
     }
     const stdin = r.stdin
-    const where =
-      name === 'git' ? git(st, args, r)
-      : name === 'gh' ? gh(st, args, r)
-      : web(name, st, args, r)
+    const where = name === 'git' ? git(st, args, r) : name === 'gh' ? gh(st, args, r) : web(name, st, args, r)
     if (!where) return
     r.writes++
     // PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed.
@@ -246,16 +323,29 @@ function script(name: string, args: Word[]): { statements: Statement[]; ps: bool
     const text = rest.length === 1 ? (rest[0]?.text ?? '') : rest.map(a => a.text).join(' ')
     return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic) }
   }
-  if (/^(bash|sh|zsh|dash|ksh)$/.test(name)) return of(args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a.text)), false)
-  if (/^(pwsh|powershell)$/.test(name)) return of(args.findIndex(a => /^-(c|command)$/i.test(a.text)), true)
+  if (/^(bash|sh|zsh|dash|ksh)$/.test(name))
+    return of(
+      args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a.text)),
+      false,
+    )
+  if (/^(pwsh|powershell)$/.test(name))
+    return of(
+      args.findIndex(a => /^-(c|command)$/i.test(a.text)),
+      true,
+    )
   if (name === 'cmd') {
     // Git Bash turns `/c` into a path, so it is typed `//c` there.
     const i = args.findIndex(a => /^\/{1,2}[ck]$/i.test(a.text))
     if (i === -1) return undefined
     const words = args.slice(i + 1)
     // `cmd /c "git commit -m \"...\""`: the command as one quoted word is read as a command line.
-    if (words.length === 1) return { statements: parse(words[0]?.text ?? '', false), ps: false, dynamic: words[0]?.dynamic ?? false }
-    return { statements: [{ words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }], ps: false, dynamic: false }
+    if (words.length === 1)
+      return { statements: parse(words[0]?.text ?? '', false), ps: false, dynamic: words[0]?.dynamic ?? false }
+    return {
+      statements: [{ words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }],
+      ps: false,
+      dynamic: false,
+    }
   }
   return undefined
 }
@@ -271,6 +361,13 @@ function write(plan: Plan, st: Statement, where: string): string {
   for (const body of st.heredocs) plan.texts.push({ where, text: body })
   return where
 }
+
+// `git branch` flags that list, delete or configure instead of creating a branch.
+const BRANCH_NOT_CREATE = new RegExp(
+  '^-[dDlarvu]|^--(' +
+    'delete|list|all|remotes|show-current|contains|merged|no-merged|set-upstream|unset-upstream|edit-description' +
+    ')',
+)
 
 function git(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
@@ -290,7 +387,9 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
     case 'commit': {
       const where = write(plan, st, 'the commit message')
       const positional = walk(rest, COMMIT, r, where)
-      const all = rest.some(a => a.text === '--all' || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(a.text) && !a.text.startsWith('--'))
+      const all = rest.some(
+        a => a.text === '--all' || (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(a.text) && !a.text.startsWith('--')),
+      )
       plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
       return where
     }
@@ -319,8 +418,7 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
       const flags = rest.filter(a => a.text.startsWith('-')).map(a => a.text)
       const names = rest.filter(a => !a.text.startsWith('-')).map(a => a.text)
       if (flags.some(f => /^-(m|M|c|C)$|^--(move|copy)$/.test(f))) plan.branches.push(...names.slice(-1))
-      else if (!flags.some(f => /^-[dDlarvu]|^--(delete|list|all|remotes|show-current|contains|merged|no-merged|set-upstream|unset-upstream|edit-description)/.test(f)))
-        plan.branches.push(...names.slice(0, 1))
+      else if (!flags.some(f => BRANCH_NOT_CREATE.test(f))) plan.branches.push(...names.slice(0, 1))
       return undefined
     }
   }
@@ -347,14 +445,20 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const rest = args.filter((_, i) => i !== gi && i !== ai)
   if (group === 'run' && action === 'watch') {
     plan.block =
-      '`gh run watch` streams a live log into the tool call. Watch checks with the ci-watch mod (it starts on push), or the Monitor tool when that mod is not loaded.'
+      '`gh run watch` streams a live log into the tool call. Watch checks with the ci-watch mod (it starts on ' +
+      'push), or the Monitor tool when that mod is not loaded.'
     return undefined
   }
   if (group === 'api') {
     const before = plan.files.length + plan.texts.length + r.stdin
     r.method = undefined
     // The endpoint is a positional; keep it out of the field walk.
-    walk(args.filter((_, i) => i !== gi), GH_API, r, 'the GitHub API call')
+    walk(
+      args.filter((_, i) => i !== gi),
+      GH_API,
+      r,
+      'the GitHub API call',
+    )
     const hasFields = plan.files.length + plan.texts.length + r.stdin > before
     if (r.method === 'GET' || (!hasFields && !/^(POST|PATCH|PUT)$/.test(r.method ?? ''))) return undefined
     return write(plan, st, 'the GitHub API call')
@@ -365,12 +469,17 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   }
   const where = write(plan, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
   const spec =
-    group === 'release' ? GH_RELEASE
-    : group === 'gist' || group === 'repo' ? GH_DESC
-    : group === 'pr' && action === 'review' ? GH_REVIEW
-    : group === 'pr' && action === 'merge' ? GH_MERGE
-    : action === 'close' || action === 'reopen' ? GH_CLOSE
-    : GH_BODY
+    group === 'release'
+      ? GH_RELEASE
+      : group === 'gist' || group === 'repo'
+        ? GH_DESC
+        : group === 'pr' && action === 'review'
+          ? GH_REVIEW
+          : group === 'pr' && action === 'merge'
+            ? GH_MERGE
+            : action === 'close' || action === 'reopen'
+              ? GH_CLOSE
+              : GH_BODY
   walk(rest, spec, r, where)
   return where
 }
@@ -386,7 +495,12 @@ function web(name: string, st: Statement, args: Word[], r: Reading): string | un
   }
   if (/^(invoke-restmethod|invoke-webrequest|irm|iwr)$/.test(name)) {
     write(r.plan, st, where)
-    walk(args.map(a => ({ ...a, text: a.text.startsWith('-') ? a.text.toLowerCase() : a.text })), PS_WEB, r, where)
+    walk(
+      args.map(a => ({ ...a, text: a.text.startsWith('-') ? a.text.toLowerCase() : a.text })),
+      PS_WEB,
+      r,
+      where,
+    )
     return where
   }
   return undefined
@@ -510,7 +624,10 @@ function message(value: Word, r: Reading, where: string) {
 }
 
 function fileOrUnread(value: Word, plan: Plan, where: string) {
-  const cat = /(?:\$|^)\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$]+))(?:\s+-Raw)?\s*\)/i.exec(value.text)
+  const cat =
+    /(?:\$|^)\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$]+))(?:\s+-Raw)?\s*\)/i.exec(
+      value.text,
+    )
   if (cat) return void plan.files.push({ where, path: (cat[1] ?? cat[2] ?? cat[3]) as string })
   if (value.bodies.length > 0) return
   plan.unread.push(where)

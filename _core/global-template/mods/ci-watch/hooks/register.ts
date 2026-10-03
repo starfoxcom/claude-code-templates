@@ -22,7 +22,9 @@ const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
 const GIT_OPTS = String.raw`(?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*`
 const GH_OPTS = String.raw`(?:\s+(?:-R\s+\S+|--repo[=\s]\S+))*`
 const AT_START = String.raw`(?:^|[\s;&|({])`
-const PUSH_OR_PR = new RegExp(`${AT_START}git${GIT_OPTS}\\s+push\\b|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`)
+const PUSH_OR_PR = new RegExp(
+  `${AT_START}git${GIT_OPTS}\\s+push\\b|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`,
+)
 const PR_MERGE = new RegExp(`${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+merge\\b([^|;&\\n]*)`)
 const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
@@ -38,7 +40,13 @@ const live: { pollMs: number; timeoutMs: number; watches: Watch[]; isPolling: bo
   isUnsaved: false,
 }
 
-export function settle(watch: Watch, checks: Record<string, string>, now: number, timeoutMs: number, quietMs: number): Watch {
+export function settle(
+  watch: Watch,
+  checks: Record<string, string>,
+  now: number,
+  timeoutMs: number,
+  quietMs: number,
+): Watch {
   const names = Object.keys(checks)
   const isQuiet = names.length > 0 && names.every(name => !PENDING.has(checks[name] ?? ''))
   const stablePolls = isQuiet ? watch.stablePolls + 1 : 0
@@ -49,7 +57,8 @@ export function settle(watch: Watch, checks: Record<string, string>, now: number
   // checks must stay quiet a full poll interval: instances left by a hot reload poll seconds
   // apart, and right after a push GitHub can still answer with the old commit's results.
   const hasFailed = names.some(name => FAILED.has(checks[name] ?? ''))
-  if (stablePolls >= SETTLE_POLLS && now - (quietSince ?? now) >= quietMs) return { ...next, outcome: hasFailed ? 'failed' : 'passed', settledAt: now }
+  if (stablePolls >= SETTLE_POLLS && now - (quietSince ?? now) >= quietMs)
+    return { ...next, outcome: hasFailed ? 'failed' : 'passed', settledAt: now }
   if (now - watch.startedAt > timeoutMs) return { ...next, outcome: 'timeout', settledAt: now }
   return next
 }
@@ -88,13 +97,22 @@ export function wakeText(watch: Watch): string {
   const pr = `PR ${watch.repo}#${watch.number}`
   const failed = entries.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
   if (watch.outcome === 'failed') {
-    return `[ci-watch] ${pr}: all checks settled; failed: ${failed.join(', ')}. Fetch the failing logs (gh run view --log-failed) or the review comment, fix and push; the watch restarts on the new commit.`
+    return (
+      `[ci-watch] ${pr}: all checks settled; failed: ${failed.join(', ')}. Fetch the failing logs (gh run ` +
+      `view --log-failed) or the review comment, fix and push; the watch restarts on the new commit.`
+    )
   }
   if (watch.outcome === 'timeout') {
     const pending = entries.filter(([, bucket]) => PENDING.has(bucket)).map(([name]) => name)
-    return `[ci-watch] ${pr}: still pending after the time limit: ${pending.join(', ') || 'no checks reported'}. Look at why before waiting longer.`
+    return (
+      `[ci-watch] ${pr}: still pending after the time limit: ${pending.join(', ') || 'no checks reported'}. ` +
+      `Look at why before waiting longer.`
+    )
   }
-  return `[ci-watch] ${pr}: all ${entries.length} checks settled with no failure. Verify it is mergeable and finish it per the project rules.`
+  return (
+    `[ci-watch] ${pr}: all ${entries.length} checks settled with no failure. Verify it is mergeable and ` +
+    `finish it per the project rules.`
+  )
 }
 
 // The engine's fs makes no missing folders, so the data folder is made through node, once per load.
@@ -185,7 +203,10 @@ async function gh($: EngineInterface, args: readonly string[], cwd?: string): Pr
   return stdout.trim()
 }
 
-async function prOfBranch($: EngineInterface, cwd?: string): Promise<{ repo: string; number: number; headSha: string } | undefined> {
+async function prOfBranch(
+  $: EngineInterface,
+  cwd?: string,
+): Promise<{ repo: string; number: number; headSha: string } | undefined> {
   try {
     const view = JSON.parse(await gh($, ['pr', 'view', '--json', 'number,url,headRefOid'], cwd)) as {
       number: number
@@ -239,15 +260,21 @@ async function poll($: EngineInterface): Promise<void> {
   for (const current of live.watches) {
     if (current.outcome) {
       // A merge made outside this session (the web page) clears it here.
-      if (now - (current.settledAt ?? now) < KEEP_SETTLED_MS && !(await isClosed($, current.repo, current.number))) kept.push(current)
+      if (now - (current.settledAt ?? now) < KEEP_SETTLED_MS && !(await isClosed($, current.repo, current.number)))
+        kept.push(current)
       else changed = true
       continue
     }
     const head = await headOf($, current.repo, current.number)
-    const base = head && head !== current.headSha ? { ...current, headSha: head, startedAt: now, stablePolls: 0, quietSince: undefined, checks: {} } : current
+    const base =
+      head && head !== current.headSha
+        ? { ...current, headSha: head, startedAt: now, stablePolls: 0, quietSince: undefined, checks: {} }
+        : current
     let checks: Record<string, string> | undefined
     try {
-      const rows = JSON.parse(await gh($, ['pr', 'checks', String(base.number), '--repo', base.repo, '--json', 'name,bucket'])) as {
+      const rows = JSON.parse(
+        await gh($, ['pr', 'checks', String(base.number), '--repo', base.repo, '--json', 'name,bucket']),
+      ) as {
         name: string
         bucket: string
       }[]
@@ -272,7 +299,8 @@ async function poll($: EngineInterface): Promise<void> {
   const recorded = settled.length > 0 ? await readSaved($) : undefined
   if (changed) await save($)
   for (const watch of settled) {
-    if (!isRecorded(recorded, watch) && claimWake(watch)) void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
+    if (!isRecorded(recorded, watch) && claimWake(watch))
+      void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
   }
 }
 
@@ -295,13 +323,14 @@ export const register: Register = (on, options) => {
     await $.tool.register({
       name: 'watch',
       description:
-        'Watch a pull request\'s CI checks locally (no usage while waiting); the session is woken once when they settle. ' +
+        "Watch a pull request's CI checks locally (no usage while waiting); the session is woken once when they " +
+        'settle. ' +
         'Pushes and `gh pr create` are watched automatically; use this for any other PR.',
       inputSchema: {
         type: 'object',
         properties: {
           pr: { type: 'number', description: 'PR number.' },
-          repo: { type: 'string', description: 'owner/name; defaults to the current branch\'s PR repo.' },
+          repo: { type: 'string', description: "owner/name; defaults to the current branch's PR repo." },
         },
         required: ['pr'],
       },
@@ -352,7 +381,8 @@ export const register: Register = (on, options) => {
     const input = e as { pr?: unknown; repo?: unknown }
     const number = Number(input.pr)
     const repo = typeof input.repo === 'string' && input.repo ? input.repo : (await prOfBranch($))?.repo
-    if (!Number.isInteger(number) || !repo) return { deny: 'ci-watch needs a PR number, and a repo when the branch has no PR.' }
+    if (!Number.isInteger(number) || !repo)
+      return { deny: 'ci-watch needs a PR number, and a repo when the branch has no PR.' }
     await startWatch($, repo, number, await headOf($, repo, number))
     return { result: `Watching ${repo}#${number}; you will be woken once its checks settle.` }
   })

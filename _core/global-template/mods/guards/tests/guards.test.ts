@@ -38,7 +38,9 @@ test('AI credit is blocked in every repo, through every message route', () => {
   ]) {
     expect(verdict(command, true)).toBe('credit')
   }
-  expect(verdict(`$m = @'\n${AI_TRAILER}\n'@; gh pr create --title t --body @'\n${AI_TRAILER}\n'@`, true, true)).toBe('credit')
+  expect(verdict(`$m = @'\n${AI_TRAILER}\n'@; gh pr create --title t --body @'\n${AI_TRAILER}\n'@`, true, true)).toBe(
+    'credit',
+  )
 })
 
 test('a human co-author and plain words pass', () => {
@@ -69,7 +71,8 @@ test('the product name: allowed where it is the subject, blocked elsewhere, neve
     "git commit -m 'fix(ci): pin the claude.yml checkout'",
     "gh pr comment 5 --body '@claude review this PR - re-check on the parser'",
     "gh pr create --title t --body 'See https://github.com/acme/claude-helpers/issues/3'",
-    'git add .github/workflows/claude.yml; git commit -q -m "fix(ci): drop admin hints"; git push -q -u origin hotfix/drop-admin-text-claude-yml',
+    'git add .github/workflows/claude.yml; git commit -q -m "fix(ci): drop admin hints"; git push -q -u origin ' +
+      'hotfix/drop-admin-text-claude-yml',
     'cd "C:/Users/a/Repos/claude-helpers" && git commit -q -F "C:/Users/a/AppData/Local/Temp/claude/x/msg.txt"',
     // The name is a whole word only, never part of a longer word or spread across spaces or lines.
     "git commit -m 'docs: thank the philanthropic and misanthropic reviewers'",
@@ -90,13 +93,19 @@ test('a new branch name is checked once, when it is created', () => {
 
 test('flags and expansions outside message text never trip it', () => {
   for (const command of [
-    'git log -1', 'git merge -q origin/develop', 'git switch -q develop', 'git cherry-pick -n abc123',
-    'git tag -n', 'git tag -f v1.0.0', 'gh pr create -f --base develop', 'cd "$TMP" && git status',
+    'git log -1',
+    'git merge -q origin/develop',
+    'git switch -q develop',
+    'git cherry-pick -n abc123',
+    'git tag -n',
+    'git tag -f v1.0.0',
+    'gh pr create -f --base develop',
+    'cd "$TMP" && git status',
     'for n in 1 2; do c=$(gh api search/issues -q .total_count); echo $c; done',
     "gh api graphql -f query='query($owner: String!) { repository(owner: $owner) { id } }' -F owner=o",
     'gh run list --branch x --json status --jq ".[0].status"',
     'grep -rn "gh run watch" .claude/rules',
-    "node -e \"console.log('gh run watch is banned')\"",
+    'node -e "console.log(\'gh run watch is banned\')"',
   ]) {
     expect(verdict(command, false)).toBeUndefined()
   }
@@ -146,11 +155,16 @@ test('the whole command text of a write is checked for credit, whatever spelling
   }
   // A read-only command is not checked, and paths in a write never read as credit.
   expect(inspect(`echo '${AI_TRAILER}'`, false).texts).toEqual([])
-  expect(verdict('git commit -F C:/Users/me/AppData/Local/Temp/session_01V8SAUxUZBbVPekZUHDL9FZ/m.txt', true)).toBeUndefined()
+  expect(
+    verdict('git commit -F C:/Users/me/AppData/Local/Temp/session_01V8SAUxUZBbVPekZUHDL9FZ/m.txt', true),
+  ).toBeUndefined()
 })
 
 test('an attached-only flag value never swallows the next word', () => {
-  const texts = (c: string) => inspect(c, false).texts.filter(t => !t.creditOnly).map(t => t.text)
+  const texts = (c: string) =>
+    inspect(c, false)
+      .texts.filter(t => !t.creditOnly)
+      .map(t => t.text)
   expect(texts("git commit -Sabc -m 'fix: x'")).toEqual(['fix: x'])
   expect(texts("git commit -S -m 'fix: x'")).toEqual(['fix: x'])
   expect(texts("git commit -unormal -m 'fix: x'")).toEqual(['fix: x'])
@@ -158,7 +172,10 @@ test('an attached-only flag value never swallows the next word', () => {
 })
 
 test('a stdin body through curl -d @- or a here-doc the line goes on past is read', () => {
-  const plan = inspect(`curl -X POST https://api.github.com/repos/o/r/issues/1/comments -d @- <<'EOF'\n{"body":"ok"}\nEOF`, false)
+  const plan = inspect(
+    `curl -X POST https://api.github.com/repos/o/r/issues/1/comments -d @- <<'EOF'\n{"body":"ok"}\nEOF`,
+    false,
+  )
   expect(plan.files).toEqual([])
   expect(plan.unread).toEqual([])
   for (const command of [
@@ -197,7 +214,9 @@ test('the shell reading keeps quoted separators and here-docs in their statement
   expect(sts.map(s => s.words[0]?.text)).toEqual(['git', 'gh'])
   expect(sts[0]?.words[3]?.text).toBe('a; b && c')
   expect(sts[1]?.heredocs).toEqual(['x | y'])
-  expect(parse('& "C:\\Program Files\\Git\\bin\\git.exe" status', true)[0]?.words[0]?.text).toBe('C:\\Program Files\\Git\\bin\\git.exe')
+  expect(parse('& "C:\\Program Files\\Git\\bin\\git.exe" status', true)[0]?.words[0]?.text).toBe(
+    'C:\\Program Files\\Git\\bin\\git.exe',
+  )
 })
 
 test('Bash keeps backslashes inside double quotes unless they escape $ ` " \\ or a newline', () => {

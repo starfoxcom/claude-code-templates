@@ -121,7 +121,9 @@ async function claim($: EngineInterface, name: string): Promise<boolean> {
   live.handled.add(name)
   const dir = (await pausePath($)).replace(/\/pause\.json$/, '')
   try {
-    const { exitCode, stdout } = await $.process.run(['node', '-e', CLAIM, dir, name.replace(/[^\w-]/g, '_')], { timeoutMs: 10_000 })
+    const { exitCode, stdout } = await $.process.run(['node', '-e', CLAIM, dir, name.replace(/[^\w-]/g, '_')], {
+      timeoutMs: 10_000,
+    })
     return exitCode !== 0 || stdout.trim() !== 'taken'
   } catch {
     return true
@@ -180,7 +182,8 @@ async function showCard($: EngineInterface, id: string, text: string): Promise<v
 
 async function dismissCard($: EngineInterface): Promise<void> {
   const card = await readCard($)
-  if (card && !card.dismissed) await $.fs.write(await cardPath($), JSON.stringify({ ...card, dismissed: true }, null, 2))
+  if (card && !card.dismissed)
+    await $.fs.write(await cardPath($), JSON.stringify({ ...card, dismissed: true }, null, 2))
   await refresh($)
 }
 
@@ -198,7 +201,12 @@ async function cancelPause($: EngineInterface, pause: Pause): Promise<void> {
   live.wakeTimer?.cancel()
   await writePause($, { ...pause, status: 'cancelled' })
   setStatus($, undefined)
-  await showCard($, `cancelled:${pause.resetsAt}`, 'Automatic resume cancelled for every session. Run /session-start in a session when you want to pick its saved work back up.')
+  await showCard(
+    $,
+    `cancelled:${pause.resetsAt}`,
+    'Automatic resume cancelled for every session. Run /session-start in a session when you want to pick its ' +
+      'saved work back up.',
+  )
 }
 
 async function cancelFromCard($: EngineInterface): Promise<void> {
@@ -207,7 +215,10 @@ async function cancelFromCard($: EngineInterface): Promise<void> {
 }
 
 function pausedText(pause: Pause): string {
-  return `${limitName(pause)} plan usage at ${pause.percentUsed}%. Sessions save their work and pause. Work resumes on its own at ${localTime(pause.wakeAt)}.`
+  return (
+    `${limitName(pause)} plan usage at ${pause.percentUsed}%. Sessions save their work and pause. Work ` +
+    `resumes on its own at ${localTime(pause.wakeAt)}.`
+  )
 }
 
 async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
@@ -226,16 +237,28 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   setStatus($, `Plan limit near: paused until ${resumeAt}`)
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
   if (!live.hasWork) {
-    await notice($, `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, waiting. Work resumes on its own at ${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`)
+    await notice(
+      $,
+      `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, waiting. Work resumes on ` +
+        `its own at ${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`,
+    )
     return
   }
-  await notice($, `${limitName(pause)} plan usage at ${pause.percentUsed}%: saving work now. Work resumes on its own at ${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`)
+  await notice(
+    $,
+    `${limitName(pause)} plan usage at ${pause.percentUsed}%: saving work now. Work resumes on its own at ` +
+      `${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`,
+  )
   // Mid-turn, the wrap-up never starts beside the running turn: the turn is told to finish its
   // step, and turn.complete runs the wrap-up once it has ended.
   if (live.isTurnRunning) {
     live.pendingWrapUp = pause
-    const note = `[usage-guard] Plan usage at ${pause.percentUsed}%. Finish the current step and end this turn now; the wrap-up runs right after.`
-    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: note }] } }).catch(() => undefined)
+    const note =
+      `[usage-guard] Plan usage at ${pause.percentUsed}%. Finish the current step and end this turn ` +
+      `now; the wrap-up runs right after.`
+    await $.session
+      .append({ message: { type: 'user', content: [{ type: 'text', text: note }] } })
+      .catch(() => undefined)
     return
   }
   await startWrapUp($, pause)
@@ -256,7 +279,9 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
   if (await hasCommand($, 'session-close')) {
     void $.command.run({ command: 'session-close', args: WRAP_UP_ARGS }).catch(() => undefined)
   } else {
-    void $.prompt.submit({ text: `[usage-guard] ${WRAP_UP_ARGS} Work resumes automatically at ${resumeAt}.` }).catch(() => undefined)
+    void $.prompt
+      .submit({ text: `[usage-guard] ${WRAP_UP_ARGS} Work resumes automatically at ${resumeAt}.` })
+      .catch(() => undefined)
   }
 }
 
@@ -273,7 +298,9 @@ async function resume($: EngineInterface, resetsAt: string): Promise<void> {
   if (await hasCommand($, 'session-start')) {
     void $.command.run({ command: 'session-start' }).catch(() => undefined)
   } else {
-    void $.prompt.submit({ text: '[usage-guard] Plan limits have reset. Resume the saved work from your hand-off.' }).catch(() => undefined)
+    void $.prompt
+      .submit({ text: '[usage-guard] Plan limits have reset. Resume the saved work from your hand-off.' })
+      .catch(() => undefined)
   }
 }
 
@@ -358,7 +385,12 @@ export const register: Register = (on, options) => {
         await armWake($, pause)
         setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
         await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
-        await notice($, `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes on its own at ${localTime(pause.wakeAt)}; /session-start then picks up the saved work. To skip the automatic resume, run /usage-guard cancel.`)
+        await notice(
+          $,
+          `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes on its own ` +
+            `at ${localTime(pause.wakeAt)}; /session-start then picks up the saved work. To skip the automatic ` +
+            `resume, run /usage-guard cancel.`,
+        )
       } else {
         await writePause($, { ...pause, status: 'done' })
         const text = 'Plan limits have reset since the last wrap-up. Run /session-start to resume the saved work.'
@@ -366,7 +398,10 @@ export const register: Register = (on, options) => {
         await notice($, text)
       }
     }
-    await $.command.register({ name: 'usage-guard', description: 'Show the usage pause, or cancel it: /usage-guard cancel' })
+    await $.command.register({
+      name: 'usage-guard',
+      description: 'Show the usage pause, or cancel it: /usage-guard cancel',
+    })
 
     await startTimers($)
     return result
@@ -380,7 +415,11 @@ export const register: Register = (on, options) => {
     const shown = await read($, band)
     if (!shown?.card) return inner
     // yellow: the person may act (cancel the resume, run /session-start); blue: information; green: good news.
-    const tone = shown.card.id.startsWith('reset:') ? 'green' : shown.card.id.startsWith('cancelled:') ? 'blue' : 'yellow'
+    const tone = shown.card.id.startsWith('reset:')
+      ? 'green'
+      : shown.card.id.startsWith('cancelled:')
+        ? 'blue'
+        : 'yellow'
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
@@ -401,7 +440,9 @@ export const register: Register = (on, options) => {
           </Text>
           <Box>
             <Button key="usage-dismiss" label="Dismiss" variant="primary" onPress={() => dismissCard($)} />
-            {shown.canCancel && <Button key="usage-cancel" label="Cancel auto-resume (all sessions)" onPress={() => cancelFromCard($)} />}
+            {shown.canCancel && (
+              <Button key="usage-cancel" label="Cancel auto-resume (all sessions)" onPress={() => cancelFromCard($)} />
+            )}
           </Box>
         </Box>
         {inner}
@@ -435,7 +476,8 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'usage-guard' }, async ($, e) => {
     const pause = await readPause($)
-    if (!pause || pause.status !== 'active') return { text: `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.` }
+    if (!pause || pause.status !== 'active')
+      return { text: `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.` }
     if (e.args.trim() === 'cancel') {
       await cancelPause($, pause)
       return { text: 'Usage pause cancelled: no automatic resume.' }

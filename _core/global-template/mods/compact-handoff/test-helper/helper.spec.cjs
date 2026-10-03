@@ -9,13 +9,16 @@ const path = require('path')
 const { execFileSync, spawnSync } = require('child_process')
 
 const HELPER = path.join(__dirname, '..', 'scripts', 'helper.cjs')
-const { PERSON_MARK, INJECTED_LINE } = require(HELPER)
+const { PERSON_MARK, MOD_TAGS, INJECTED_LINE } = require(HELPER)
 
 // A config folder holding one session's transcript.
 function configWith(records) {
   const config = fs.mkdtempSync(path.join(os.tmpdir(), 'compact-handoff-'))
   fs.mkdirSync(path.join(config, 'projects', 'p'), { recursive: true })
-  fs.writeFileSync(path.join(config, 'projects', 'p', 's1.jsonl'), records.map(r => JSON.stringify(r)).join('\n') + '\n')
+  fs.writeFileSync(
+    path.join(config, 'projects', 'p', 's1.jsonl'),
+    records.map(r => JSON.stringify(r)).join('\n') + '\n',
+  )
   return config
 }
 
@@ -29,7 +32,7 @@ function transcript(records) {
 
 const user = text => ({ type: 'user', message: { role: 'user', content: text } })
 
-test('the carried block and system lines are not read back as the person\'s messages', () => {
+test("the carried block and system lines are not read back as the person's messages", () => {
   const carried = `${PERSON_MARK}\n--- message ---\nkeep the parser strict`
   const found = transcript([
     user('first ask'),
@@ -43,7 +46,7 @@ test('the carried block and system lines are not read back as the person\'s mess
   assert.deepStrictEqual(found, ['now fix the tests'])
 })
 
-test('prompts the mods submit and the lines they attach are not the person\'s words', () => {
+test("prompts the mods submit and the lines they attach are not the person's words", () => {
   const found = transcript([
     user('[ci-watch] #12: all 3 checks settled with no failure. Verify it is mergeable.'),
     user('[usage-guard] Plan usage limit nearly reached (automatic wrap-up).'),
@@ -56,7 +59,7 @@ test('prompts the mods submit and the lines they attach are not the person\'s wo
   assert.deepStrictEqual(found, ['keep the parser strict', '[link](https://example.com) is the spec to follow'])
 })
 
-test('no transcript for the session is a failure, so the hook falls back to the compaction\'s list', () => {
+test("no transcript for the session is a failure, so the hook falls back to the compaction's list", () => {
   const run = spawnSync(process.execPath, [HELPER, 'persons', 'other-session'], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: configWith([user('first ask')]) },
     encoding: 'utf8',
@@ -70,12 +73,26 @@ test('the helper and the hooks module carry the same mark and the same injected-
   const mark = /export const PERSON_MARK = "([^"]+)"/.exec(source)
   assert.ok(mark, 'PERSON_MARK found in register.ts')
   assert.strictEqual(mark[1], PERSON_MARK)
-  const injected = /export const INJECTED_LINE = \/(.+)\/\s*$/m.exec(source)
-  assert.ok(injected, 'INJECTED_LINE found in register.ts')
-  assert.strictEqual(injected[1], INJECTED_LINE.source)
+  // The same tag list, and the same pattern built from it.
+  const tags = /export const MOD_TAGS = \[([^\]]+)\]/.exec(source)
+  assert.ok(tags, 'MOD_TAGS found in register.ts')
+  assert.deepStrictEqual(
+    [...tags[1].matchAll(/'([^']+)'/g)].map(m => m[1]),
+    MOD_TAGS,
+  )
+  const helperSource = fs.readFileSync(HELPER, 'utf8')
+  const built = /INJECTED_LINE = (new RegExp\(.+\))\s*$/m
+  assert.strictEqual(built.exec(source)?.[1], built.exec(helperSource)?.[1])
   // And both read the same fixture the same way.
-  const hooksLine = new RegExp(injected[1])
-  for (const line of ['[tasks] Open: #1', '[ci-watch] #12: all checks settled', '[link](https://example.com)', '[x] done', '[wip] refactor the parser', 'plain words']) {
+  const hooksLine = new RegExp(INJECTED_LINE.source)
+  for (const line of [
+    '[tasks] Open: #1',
+    '[ci-watch] #12: all checks settled',
+    '[link](https://example.com)',
+    '[x] done',
+    '[wip] refactor the parser',
+    'plain words',
+  ]) {
     assert.strictEqual(hooksLine.test(line), INJECTED_LINE.test(line), line)
   }
   assert.ok(INJECTED_LINE.test('[tasks] Open: #1') && INJECTED_LINE.test('[ci-watch] #12: all checks settled'))

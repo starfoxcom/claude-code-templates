@@ -65,8 +65,7 @@ export function classify(command: string, light: RegExp[], heavy: RegExp[]): 'he
 // executable path cut to the file name, at most 32 characters.
 export function labelFor(command: string, light: RegExp[], heavy: RegExp[]): string {
   const parts = segments(command.replace(MARKER, ''))
-  const pick =
-    parts.find(seg => !light.some(r => r.test(seg)) && heavy.some(r => r.test(seg))) ?? parts[0] ?? command
+  const pick = parts.find(seg => !light.some(r => r.test(seg)) && heavy.some(r => r.test(seg))) ?? parts[0] ?? command
   const [word = '', ...rest] = pick.split(/\s+(?=-|[^\\/:]*$)/)
   const short = [word.split(/[\\/]/).pop() ?? word, ...rest].join(' ')
   return short.length > 32 ? `${short.slice(0, 31)}…` : short

@@ -15,24 +15,21 @@ import { checkAddedLines, checkBranch, checkText, describe } from './policy'
 const LOG_CAP = 256 * 1024
 const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false }
 
+// Makes the data folder and records when, and in which mode, the mod loaded.
+const MARK_LOADED = [
+  'const fs=require("fs")',
+  'fs.mkdirSync(process.argv[1],{recursive:true})',
+  'const at=new Date().toISOString()',
+  'fs.writeFileSync(process.argv[1]+"/loaded.json",JSON.stringify({at,mode:process.argv[2]}))',
+].join(';')
+
 async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
   live.dir = `${(configured ?? `${live.home}/.claude`).replace(/\\/g, '/')}/mods-data/guards`
   // The engine's fs writes no missing folders; node makes it once per session.
-  await $.process
-    .run(
-      [
-        'node',
-        '-e',
-        'const fs=require("fs");fs.mkdirSync(process.argv[1],{recursive:true});fs.writeFileSync(process.argv[1]+"/loaded.json",JSON.stringify({at:new Date().toISOString(),mode:process.argv[2]}))',
-        live.dir,
-        live.mode,
-      ],
-      { timeoutMs: 10_000 },
-    )
-    .catch(() => undefined)
+  await $.process.run(['node', '-e', MARK_LOADED, live.dir, live.mode], { timeoutMs: 10_000 }).catch(() => undefined)
 }
 
 // Bash on Windows writes /c/Users/...; the engine's fs takes C:/Users/... Only on Windows: elsewhere
@@ -92,7 +89,11 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
     if (v) return describe(v, `the new branch name "${branch}" (it lands in merge commit titles)`)
   }
   if (plan.diff) {
-    const diff = await git($, cwd, plan.diff === 'all' ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color'])
+    const diff = await git(
+      $,
+      cwd,
+      plan.diff === 'all' ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color'],
+    )
     const hit = checkAddedLines(diff)
     if (hit) return `AI credit line added to ${hit.file}: "${hit.line}". Remove it before committing.`
   }
@@ -153,7 +154,8 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   }
   if (live.mode === 'enforce' && reason) return { deny: `BLOCKED (guards): ${reason}` }
   const result = await run()
-  const scripts = result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined)
+  const scripts =
+    result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined)
   await count($, Boolean(reason), Boolean(scripts))
   if (reason || scripts || plan.unread.length > 0) {
     await log($, {

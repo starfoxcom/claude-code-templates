@@ -6,7 +6,7 @@ const NOON_UTC = Date.UTC(2026, 9, 2, 16, 0, 0)
 
 const BREAKDOWN = { rawMaxTokens: 500_000, autoCompactThreshold: 467_000 } as never
 
-test('every prompt carries the local time, the context fill against the compaction window and plan usage', async ($, on) => {
+test('every prompt carries the local time, the context fill to compaction and plan usage', async ($, on) => {
   mock.clock(on, { now: NOON_UTC })
   const order: string[] = []
   on('process.run', ($, e) => {

@@ -12,13 +12,19 @@ function fakeHost(on: any, waitOutput: string) {
   on('session.root', () => ({ value: ROOT }))
   on('process.run', (_$: unknown, e: { argv: readonly string[] }) => {
     calls.push([...e.argv])
-    const stdout = e.argv[1] === '-e'
-      ? '360 America/Mexico_City\n'
-      : e.argv.includes('where')
-      ? JSON.stringify({ dir: `${DATA}/shared-pc`, aliveMs: 45_000, lingerMs: 60_000 })
-      : e.argv.includes('claim')
-      ? JSON.stringify({ granted: false, mine: 'line', position: 1, seat: { session: 'other', kind: 'work', since: 0, label: 'build' } })
-      : JSON.stringify({ seat: null, line: [], nextUp: null, requests: [] })
+    const stdout =
+      e.argv[1] === '-e'
+        ? '360 America/Mexico_City\n'
+        : e.argv.includes('where')
+          ? JSON.stringify({ dir: `${DATA}/shared-pc`, aliveMs: 45_000, lingerMs: 60_000 })
+          : e.argv.includes('claim')
+            ? JSON.stringify({
+                granted: false,
+                mine: 'line',
+                position: 1,
+                seat: { session: 'other', kind: 'work', since: 0, label: 'build' },
+              })
+            : JSON.stringify({ seat: null, line: [], nextUp: null, requests: [] })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('process.spawn', async function* () {
@@ -28,7 +34,8 @@ function fakeHost(on: any, waitOutput: string) {
   on('fs.read', (_$: unknown, e: { path?: string }) => {
     const path = String(e.path ?? '').replace(/\\/g, '/')
     if (path.endsWith('usage-guard/pause.json')) throw new Error('ENOENT')
-    if (path.endsWith('state.json')) return { value: JSON.stringify({ seat: null, line: [], nextUp: null, requests: [] }) }
+    if (path.endsWith('state.json'))
+      return { value: JSON.stringify({ seat: null, line: [], nextUp: null, requests: [] }) }
     return { value: JSON.stringify({ id: 'other', name: 'app·othe', lastBeat: 0 }) }
   })
   on('fs.write', () => ({ value: undefined }))
@@ -43,7 +50,10 @@ test('a heavy command waits in line, then runs once the seat is granted', async 
   mock.clock(on, { now: Date.UTC(2026, 9, 2, 17, 0, 0) })
   const calls = fakeHost(on, '{"granted":true,"mine":"seat"}\n')
   await $.session.start({ source: 'startup', cwd: ROOT } as never)
-  const ran = (await $.tool.call({ tool: 'Bash', command: 'flutter test' } as never)) as { result?: unknown; deny?: string }
+  const ran = (await $.tool.call({ tool: 'Bash', command: 'flutter test' } as never)) as {
+    result?: unknown
+    deny?: string
+  }
   expect(ran.deny).toBeUndefined()
   expect(ran.result).toBe('ran')
   expect(calls.some(argv => argv.includes('leave'))).toBe(false)
@@ -53,7 +63,11 @@ test('a wait that ends without the seat leaves the line and runs nothing', async
   mock.clock(on, { now: Date.UTC(2026, 9, 2, 17, 0, 0) })
   const calls = fakeHost(on, '{"granted":false,"mine":"none"}\n')
   await $.session.start({ source: 'startup', cwd: ROOT } as never)
-  const ran = (await $.tool.call({ tool: 'Bash', command: 'flutter test' } as never)) as { deny?: string; isError?: boolean; text?: string }
+  const ran = (await $.tool.call({ tool: 'Bash', command: 'flutter test' } as never)) as {
+    deny?: string
+    isError?: boolean
+    text?: string
+  }
   expect(ran.deny ?? ran.text ?? '').toContain('left the line')
   expect(calls.some(argv => argv.includes('leave'))).toBe(true)
 })

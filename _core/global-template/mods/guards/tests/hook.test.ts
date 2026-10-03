@@ -66,7 +66,10 @@ test('a body file the same command writes is read from the command text', async 
 
 test('a relative body file under a folder built at run time is named unread, never refused', async ($, on) => {
   const seen = world(on)
-  for (const command of ['cd "$REPO" && gh pr create --title t --body-file body.md', 'git -C "$ROOT" commit -F msg.txt']) {
+  for (const command of [
+    'cd "$REPO" && gh pr create --title t --body-file body.md',
+    'git -C "$ROOT" commit -F msg.txt',
+  ]) {
     await bash($, command)
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
     expect(entry.mod).toBeNull()
