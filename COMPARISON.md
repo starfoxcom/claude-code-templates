@@ -18,7 +18,7 @@ Use this when you can't decide between two bundles. Everything in **bold** is a 
 | **Session-close ritual** | Standard + DoD | + Push branch, no auto-merge | + **Billable handoff summary** | + **Team handoff notes** |
 | **Memory system** | Rich, personal | Personal per dev (not in repo) | **NDA-aware** (no client secrets) | **NDA-aware + role-scoped** |
 | **Global ~/.claude additions** | Tokensave-first | Tokensave-first | + **Per-client isolation namespace** | + Per-client isolation |
-| **GitHub workflow: routine review** | ✅ Sonnet, binary verdict | ✅ Sonnet, **stricter labels** | ✅ Sonnet | ✅ Sonnet, **CODEOWNERS-routed** |
+| **GitHub workflow: routine review** | ✅ Binary verdict | ✅ **Stricter labels** | ✅ | ✅ **CODEOWNERS-routed** |
 | **GitHub workflow: deep review** | Opt-in via `@claude` | **Auto-fire on trigger list** | Opt-in via `@claude` | **Auto-fire + mandatory before merge** |
 | **Auto-merge on paths-ignore PRs** | ✅ | ❌ | Per-client | ❌ |
 | **`CONTRIBUTING.md`** | — | ✅ **public-facing** | — | ✅ **internal team** |
