@@ -505,8 +505,9 @@ async function gate($: Engine, command: string, run: () => Promise<any>, signal:
     try {
       reply = JSON.parse(out.trim().split('\n').pop() || '{}')
     } catch {}
+    // An Esc can land after the waiter took the seat: giving up frees that seat too, not just the line.
     if (signal.aborted || !reply.granted) {
-      await change($, ['leave', ctx.me])
+      await change($, ['abandon', ctx.me])
       return { deny: 'shared-pc: left the line for the PC before getting the seat. Nothing ran.' }
     }
     waited = `[shared-pc] waited ${duration((await $.clock.now()) - startedAt)} for the PC behind ${behind}.`
@@ -525,7 +526,7 @@ async function gate($: Engine, command: string, run: () => Promise<any>, signal:
 // The helper's `wait` child prints nothing until this session gets the seat or is out of line, so
 // an abort (Esc) cannot wait for its next piece: each pull races the signal, and an abort ends the
 // wait at once and closes the child, whatever the engine does with the stream. The caller then
-// leaves the line.
+// gives up its place (`abandon`).
 async function waitInLine($: Engine, signal: AbortSignal): Promise<string> {
   let onAbort = () => {}
   const aborted = new Promise<'aborted'>(resolve => {
