@@ -223,12 +223,13 @@ async function save($: EngineInterface): Promise<void> {
     await ensureDir($, path.slice(0, path.lastIndexOf('/')))
     await $.fs.write(path, JSON.stringify({ watches: live.watches }))
     live.isUnsaved = false
-    await publish($)
   } catch {
     // Memory stays the truth (the file may lack a new watch or still hold stopped ones), and the next
     // poll saves again.
     live.isUnsaved = true
   }
+  // The band shows memory, so it stays current while the file cannot be written.
+  await publish($)
 }
 
 async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {
@@ -250,7 +251,6 @@ async function stopOne($: EngineInterface, key: string): Promise<void> {
   live.watches = live.watches.filter(w => keyOf(w) !== key)
   live.generation++
   await save($)
-  await publish($)
 }
 
 // True when the saved file already records this watch as settled: another instance woke the session.
@@ -470,6 +470,9 @@ export const register: Register = (on, options) => {
 
   on('ui.press', async ($, e, next) => {
     if (e.plugin !== 'ci-watch' || !e.element.startsWith(STOP_PREFIX)) return next(e)
+    // As in tool.call: load the watches first, and leave the press to the live instance after a reload.
+    await startPolling($)
+    if (await isRetired($)) return next(e)
     await stopOne($, e.element.slice(STOP_PREFIX.length))
     return { element: e.element }
   })
