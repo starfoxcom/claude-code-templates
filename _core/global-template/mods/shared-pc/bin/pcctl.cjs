@@ -391,10 +391,16 @@ const OPS = {
     }
     return view(normalize(s, all), all, id)
   },
+  // Done with the seat: frees it, and gives up a reservation for it too (an approved request or a
+  // `next`), so an idle machine is not held for a session that has nothing to run.
   release(s, all, id, args, t) {
     if (s.seat && s.seat.session === id) {
       log({ op: 'seat-freed', session: id, reason: 'released', heldMs: t - s.seat.since })
       s.seat = null
+    }
+    if (s.nextUp && s.nextUp.session === id) {
+      log({ op: 'reservation-released', session: id })
+      s.nextUp = null
     }
     return view(normalize(s, all), all, id)
   },
