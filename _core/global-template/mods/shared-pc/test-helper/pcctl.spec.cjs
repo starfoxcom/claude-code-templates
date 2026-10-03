@@ -16,7 +16,8 @@ function sandbox(env = {}) {
   const fullEnv = { ...process.env, SHARED_PC_DIR: dir, SHARED_PC_POLL_MS: '50', ...env }
   const register = (id, name = id, lastBeat = Date.now()) =>
     fs.writeFileSync(path.join(dir, 'sessions', `${id}.json`), JSON.stringify({ id, name, project: 'p', lastBeat }))
-  const run = (...args) => JSON.parse(execFileSync(process.execPath, [PCCTL, ...args], { env: fullEnv, encoding: 'utf8' }))
+  const run = (...args) =>
+    JSON.parse(execFileSync(process.execPath, [PCCTL, ...args], { env: fullEnv, encoding: 'utf8' }))
   const runAsync = (...args) =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [PCCTL, ...args], { env: fullEnv })
@@ -51,7 +52,10 @@ test('release hands the seat to the front of the line', () => {
   sb.run('release', 'a')
   const s = sb.state()
   assert.strictEqual(s.seat.session, 'b')
-  assert.deepStrictEqual(s.line.map(e => e.session), ['c'])
+  assert.deepStrictEqual(
+    s.line.map(e => e.session),
+    ['c'],
+  )
 })
 
 test('a dead holder loses the seat and dead waiters leave the line', () => {
@@ -119,7 +123,10 @@ test('a jump moves a waiting session to the front, behind the holder', () => {
   sb.run('next', 'name-d')
   const s = sb.state()
   assert.strictEqual(s.seat.session, 'a')
-  assert.deepStrictEqual(s.line.map(e => e.session), ['d', 'b', 'c'])
+  assert.deepStrictEqual(
+    s.line.map(e => e.session),
+    ['d', 'b', 'c'],
+  )
 })
 
 test('a jump for a session not waiting yet reserves the next seat for it', () => {
@@ -132,7 +139,10 @@ test('a jump for a session not waiting yet reserves the next seat for it', () =>
   sb.run('release', 'a')
   assert.strictEqual(sb.state().seat, null, 'b does not take the seat while c holds the reservation')
   assert.ok(sb.run('claim', 'c', 'x').granted)
-  assert.deepStrictEqual(sb.state().line.map(e => e.session), ['b'])
+  assert.deepStrictEqual(
+    sb.state().line.map(e => e.session),
+    ['b'],
+  )
 })
 
 test('a hold blocks other sessions until it ends', () => {
@@ -175,10 +185,16 @@ test('a skip request is shared, answered from another session, and cleared on ac
   sb.run('claim', 'c', 'x')
   sb.run('ask', 'c', 'window', 'closing')
   const asked = sb.run('status', 'b').requests
-  assert.deepStrictEqual(asked.map(r => [r.session, r.name, r.reason, r.answer]), [['c', 'name-c', 'window closing', null]])
+  assert.deepStrictEqual(
+    asked.map(r => [r.session, r.name, r.reason, r.answer]),
+    [['c', 'name-c', 'window closing', null]],
+  )
   sb.run('answer', 'c', 'approve')
   const s = sb.state()
-  assert.deepStrictEqual(s.line.map(e => e.session), ['c', 'b'])
+  assert.deepStrictEqual(
+    s.line.map(e => e.session),
+    ['c', 'b'],
+  )
   assert.strictEqual(s.requests[0].answer, 'approved')
   assert.ok(sb.run('answer', 'c', 'decline').error, 'an answered request cannot be answered again')
   sb.run('ack', 'c')
@@ -193,7 +209,10 @@ test('a declined request keeps the line as it was', () => {
   sb.run('claim', 'c', 'x')
   sb.run('ask', 'c', 'please')
   sb.run('answer', 'c', 'decline')
-  assert.deepStrictEqual(sb.state().line.map(e => e.session), ['b', 'c'])
+  assert.deepStrictEqual(
+    sb.state().line.map(e => e.session),
+    ['b', 'c'],
+  )
   assert.strictEqual(sb.state().requests[0].answer, 'declined')
 })
 
@@ -235,7 +254,7 @@ function writer(dir) {
   }
 }
 
-test('a writer whose stale mutex was broken never removes the next writer\'s mutex', () => {
+test("a writer whose stale mutex was broken never removes the next writer's mutex", () => {
   const sb = sandbox()
   const a = writer(sb.dir)
   const b = writer(sb.dir)

@@ -12,12 +12,22 @@ function said(text: string): SessionMessage {
 const CONVERSATION: SessionMessage[] = [
   said('Lock the far rings at 2/1/1/1, the load chip was too slow.'),
   { role: 'assistant', text: 'Locked.', toolUses: [] },
-  { role: 'user', text: 'file contents', toolUses: [], toolResults: [{ tool_use_id: 't1', text: 'x', isError: false, result: 'x' }] },
+  {
+    role: 'user',
+    text: 'file contents',
+    toolUses: [],
+    toolResults: [{ tool_use_id: 't1', text: 'x', isError: false, result: 'x' }],
+  },
   said('<system-reminder>not the person</system-reminder>'),
-  said('Keep cloud shadows ON from frame one.\n[session-facts] 2026-10-02 10:00 | ctx 40%\n[tasks] Open: #1 Bake the rings.'),
+  said(
+    'Keep cloud shadows ON from frame one.\n[session-facts] 2026-10-02 10:00 | ctx 40%\n[tasks] Open: #1 Bake the ' +
+      'rings.',
+  ),
   // Prompts the other mods submit are not the person's words either.
   said('[ci-watch] #12: all 3 checks settled with no failure. Verify it is mergeable.'),
-  said('[usage-guard] Plan usage limit nearly reached (automatic wrap-up).\n[session-facts] 2026-10-02 10:05 | ctx 41%'),
+  said(
+    '[usage-guard] Plan usage limit nearly reached (automatic wrap-up).\n[session-facts] 2026-10-02 10:05 | ctx 41%',
+  ),
 ]
 
 type World = {
@@ -68,71 +78,95 @@ async function start($: Engine) {
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
 }
 
-test('on: the hand-off instructions reach the summarizer and the person is kept word for word', { options: { mode: 'on' } }, async ($, on) => {
-  const seen = world(on)
-  let instructions: string | undefined
-  on('session.compact', ($, e) => {
-    instructions = e.instructions
-    return { messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }, said('kept tail')] }
-  })
-  await start($)
-  const result = await $.session.compact({ trigger: 'manual', instructions: 'stress the rings', messages: CONVERSATION } as never)
+test(
+  'on: the hand-off instructions reach the summarizer and the person is kept word for word',
+  { options: { mode: 'on' } },
+  async ($, on) => {
+    const seen = world(on)
+    let instructions: string | undefined
+    on('session.compact', ($, e) => {
+      instructions = e.instructions
+      return { messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }, said('kept tail')] }
+    })
+    await start($)
+    const result = await $.session.compact({
+      trigger: 'manual',
+      instructions: 'stress the rings',
+      messages: CONVERSATION,
+    } as never)
 
-  expect(instructions).toContain('## Read next')
-  expect(instructions).toContain('about 12500 tokens')
-  expect(instructions).toContain('stress the rings')
-  const texts = (result.messages ?? []).map(m => m.text)
-  expect(texts[0]).toBe('SUMMARY')
-  expect(texts[1]).toContain(PERSON_MARK)
-  expect(texts[1]).toContain('Lock the far rings at 2/1/1/1')
-  expect(texts[1]).toContain('Keep cloud shadows ON from frame one.')
-  expect(texts[1]).not.toContain('[session-facts]')
-  expect(texts[1]).not.toContain('[tasks]')
-  expect(texts[1]).not.toContain('[ci-watch]')
-  expect(texts[1]).not.toContain('[usage-guard]')
-  expect(texts[1]).not.toContain('automatic wrap-up')
-  expect(texts[1]).not.toContain('system-reminder')
-  expect(texts[1]).not.toContain('file contents')
-  expect(texts[2]).toBe('kept tail')
-  expect(seen.writes.at(-1)?.path.replaceAll('\\', '/')).toBe('C:/Users/me/.claude/mods-data/compact-handoff/sess-1.md')
-  // The engine's fs makes no folders: the data folder is made through node first.
-  expect(seen.runs.filter(argv => argv[2] === MKDIR_SCRIPT)).toEqual([['node', '-e', MKDIR_SCRIPT, 'C:/Users/me/.claude/mods-data/compact-handoff']])
-})
+    expect(instructions).toContain('## Read next')
+    expect(instructions).toContain('about 12500 tokens')
+    expect(instructions).toContain('stress the rings')
+    const texts = (result.messages ?? []).map(m => m.text)
+    expect(texts[0]).toBe('SUMMARY')
+    expect(texts[1]).toContain(PERSON_MARK)
+    expect(texts[1]).toContain('Lock the far rings at 2/1/1/1')
+    expect(texts[1]).toContain('Keep cloud shadows ON from frame one.')
+    expect(texts[1]).not.toContain('[session-facts]')
+    expect(texts[1]).not.toContain('[tasks]')
+    expect(texts[1]).not.toContain('[ci-watch]')
+    expect(texts[1]).not.toContain('[usage-guard]')
+    expect(texts[1]).not.toContain('automatic wrap-up')
+    expect(texts[1]).not.toContain('system-reminder')
+    expect(texts[1]).not.toContain('file contents')
+    expect(texts[2]).toBe('kept tail')
+    expect(seen.writes.at(-1)?.path.replaceAll('\\', '/')).toBe(
+      'C:/Users/me/.claude/mods-data/compact-handoff/sess-1.md',
+    )
+    // The engine's fs makes no folders: the data folder is made through node first.
+    expect(seen.runs.filter(argv => argv[2] === MKDIR_SCRIPT)).toEqual([
+      ['node', '-e', MKDIR_SCRIPT, 'C:/Users/me/.claude/mods-data/compact-handoff'],
+    ])
+  },
+)
 
-test('on: an ahead-of-time summary gets the same hand-off brief, so the real compaction can reuse it', { options: { mode: 'on' } }, async ($, on) => {
-  const seen = world(on)
-  let instructions: string | undefined
-  on('session.compact', ($, e) => {
-    instructions = e.instructions
-    return { messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }] }
-  })
-  await start($)
-  await $.session.compact({ trigger: 'precompute', messages: CONVERSATION } as never)
+test(
+  'on: an ahead-of-time summary gets the same hand-off brief, so the real compaction can reuse it',
+  { options: { mode: 'on' } },
+  async ($, on) => {
+    const seen = world(on)
+    let instructions: string | undefined
+    on('session.compact', ($, e) => {
+      instructions = e.instructions
+      return { messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }] }
+    })
+    await start($)
+    await $.session.compact({ trigger: 'precompute', messages: CONVERSATION } as never)
 
-  expect(instructions).toContain('## Read next')
-  expect(seen.writes.at(-1)?.path.replaceAll('\\', '/')).toBe('C:/Users/me/.claude/mods-data/compact-handoff/sess-1-precompute.md')
-})
+    expect(instructions).toContain('## Read next')
+    expect(seen.writes.at(-1)?.path.replaceAll('\\', '/')).toBe(
+      'C:/Users/me/.claude/mods-data/compact-handoff/sess-1-precompute.md',
+    )
+  },
+)
 
-test('shadow: the stock compaction stands and the hand-off is recorded beside it', { options: { mode: 'shadow' } }, async ($, on) => {
-  const seen = world(on)
-  let instructions: string | undefined = 'unset'
-  on('session.compact', ($, e) => {
-    instructions = e.instructions
-    return { messages: [{ role: 'user', text: 'STOCK SUMMARY', toolUses: [] }] }
-  })
-  await start($)
-  const result = await $.session.compact({ trigger: 'auto', messages: CONVERSATION } as never)
+test(
+  'shadow: the stock compaction stands and the hand-off is recorded beside it',
+  { options: { mode: 'shadow' } },
+  async ($, on) => {
+    const seen = world(on)
+    let instructions: string | undefined = 'unset'
+    on('session.compact', ($, e) => {
+      instructions = e.instructions
+      return { messages: [{ role: 'user', text: 'STOCK SUMMARY', toolUses: [] }] }
+    })
+    await start($)
+    const result = await $.session.compact({ trigger: 'auto', messages: CONVERSATION } as never)
 
-  expect(instructions).toBeUndefined()
-  expect(result.messages?.[0]?.text).toBe('STOCK SUMMARY')
-  expect(result.messages?.length).toBe(1)
-  expect(seen.forks[0]).toContain('## Owed to the person')
-  const file = seen.writes.at(-1)
-  expect(file?.path.replaceAll('\\', '/')).toContain('/mods-data/compact-handoff/sess-1-2026-10-02T17-00-00-000Z-shadow.md')
-  expect(file?.text).toContain('STOCK SUMMARY')
-  expect(file?.text).toContain('shadow hand-off')
-  expect(file?.text).toContain('Lock the far rings')
-})
+    expect(instructions).toBeUndefined()
+    expect(result.messages?.[0]?.text).toBe('STOCK SUMMARY')
+    expect(result.messages?.length).toBe(1)
+    expect(seen.forks[0]).toContain('## Owed to the person')
+    const file = seen.writes.at(-1)
+    expect(file?.path.replaceAll('\\', '/')).toContain(
+      '/mods-data/compact-handoff/sess-1-2026-10-02T17-00-00-000Z-shadow.md',
+    )
+    expect(file?.text).toContain('STOCK SUMMARY')
+    expect(file?.text).toContain('shadow hand-off')
+    expect(file?.text).toContain('Lock the far rings')
+  },
+)
 
 test('the recall tool searches the transcript through the helper', { options: { mode: 'on' } }, async ($, on) => {
   const seen = world(on)
@@ -206,8 +240,11 @@ test('over budget, the oldest words become an index and later compactions carry 
   expect(second.indexOf(b ?? '')).toBeLessThan(second.indexOf(d ?? ''))
 })
 
-test('a bracket tag the person types is their words; only the mods\' tags are dropped', async () => {
-  const words = personWords([said('[x] done with the parser'), said('[wip] split the loader\n[tasks] Open: #3'), said('[tasks] Open: #4')], 10_000)
+test("a bracket tag the person types is their words; only the mods' tags are dropped", async () => {
+  const words = personWords(
+    [said('[x] done with the parser'), said('[wip] split the loader\n[tasks] Open: #3'), said('[tasks] Open: #4')],
+    10_000,
+  )
   expect(words).toContain('[x] done with the parser')
   expect(words).toContain('[wip] split the loader')
   expect(words).not.toContain('[tasks]')

@@ -56,7 +56,11 @@ async function recall(sessionId, maxChars, query) {
   for await (const line of lines) {
     lineNo++
     let record
-    try { record = JSON.parse(line) } catch { continue }
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
     for (const text of textsOf(record)) {
       const lower = text.toLowerCase()
       if (!terms.every(term => lower.includes(term))) continue
@@ -71,7 +75,10 @@ async function recall(sessionId, maxChars, query) {
   // Newest first: the latest mention is usually the one still in force.
   let out = `${hits.length} match(es), newest first:\n`
   for (const hit of hits.reverse()) {
-    if (out.length + hit.length + 2 > maxChars) { out += '[more matches cut; narrow the query]'; break }
+    if (out.length + hit.length + 2 > maxChars) {
+      out += '[more matches cut; narrow the query]'
+      break
+    }
     out += `${hit}\n\n`
   }
   console.log(out)
@@ -80,7 +87,8 @@ async function recall(sessionId, maxChars, query) {
 function sweep(dir, keepNewest, maxAgeDays) {
   if (!fs.existsSync(dir)) return
   const cutoff = Date.now() - maxAgeDays * 86400000
-  const files = fs.readdirSync(dir)
+  const files = fs
+    .readdirSync(dir)
     .map(name => ({ name, mtime: fs.statSync(path.join(dir, name)).mtimeMs }))
     .sort((a, b) => b.mtime - a.mtime)
   files.forEach((file, index) => {
@@ -96,10 +104,26 @@ const PERSON_MARK = "[compact-handoff] The person's messages, word for word"
 // Lines the mods attach to a prompt, and whole prompts they submit, start with
 // the mod's tag. The same pattern as INJECTED_LINE in hooks/register.ts (the
 // spec keeps the two equal).
-const INJECTED_LINE = /^\[(?:session-facts|time|task-tracking|tasks|ci-watch|shared-pc|skill-check|usage-guard|compact-handoff|guards)\](?: |$)/
+const MOD_TAGS = [
+  'session-facts',
+  'time',
+  'task-tracking',
+  'tasks',
+  'ci-watch',
+  'shared-pc',
+  'skill-check',
+  'usage-guard',
+  'compact-handoff',
+  'guards',
+]
+const INJECTED_LINE = new RegExp(`^\\[(?:${MOD_TAGS.join('|')})\\](?: |$)`)
 
 function stripInjected(text) {
-  return text.split('\n').filter(line => !INJECTED_LINE.test(line.trim())).join('\n').trim()
+  return text
+    .split('\n')
+    .filter(line => !INJECTED_LINE.test(line.trim()))
+    .join('\n')
+    .trim()
 }
 
 // The same filter as isPersonMessage in hooks/register.ts, for the transcript's records.
@@ -129,17 +153,32 @@ async function persons(sessionId) {
   const lines = readline.createInterface({ input: fs.createReadStream(file, 'utf8'), crlfDelay: Infinity })
   for await (const line of lines) {
     let record
-    try { record = JSON.parse(line) } catch { continue }
-    if (record.subtype === 'compact_boundary') { found = []; continue }
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (record.subtype === 'compact_boundary') {
+      found = []
+      continue
+    }
     let text = ''
-    if (record.type === 'attachment' && record.attachment && record.attachment.type === 'queued_command' &&
-        record.attachment.origin && record.attachment.origin.kind === 'human') {
+    if (
+      record.type === 'attachment' &&
+      record.attachment &&
+      record.attachment.type === 'queued_command' &&
+      record.attachment.origin &&
+      record.attachment.origin.kind === 'human'
+    ) {
       text = String(record.attachment.prompt || '')
     } else if (record.type === 'user' && !record.isMeta && !record.isCompactSummary && record.message) {
       const content = record.message.content
       if (typeof content === 'string') text = content
       else if (Array.isArray(content) && !content.some(block => block.type === 'tool_result')) {
-        text = content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+        text = content
+          .filter(block => block.type === 'text')
+          .map(block => block.text)
+          .join('\n')
       }
     }
     text = text.trim()
@@ -150,12 +189,15 @@ async function persons(sessionId) {
   console.log(JSON.stringify(found))
 }
 
-module.exports = { PERSON_MARK, INJECTED_LINE, isPersonText }
+module.exports = { PERSON_MARK, MOD_TAGS, INJECTED_LINE, isPersonText }
 
 if (require.main === module) {
   const [command, ...args] = process.argv.slice(2)
   if (command === 'recall') recall(args[0], Number(args[1]), args.slice(2).join(' '))
   else if (command === 'persons') persons(args[0])
   else if (command === 'sweep') sweep(args[0], Number(args[1]), Number(args[2]))
-  else { console.error('usage: recall|persons|sweep'); process.exit(2) }
+  else {
+    console.error('usage: recall|persons|sweep')
+    process.exit(2)
+  }
 }

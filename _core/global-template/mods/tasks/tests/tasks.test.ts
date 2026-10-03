@@ -30,7 +30,13 @@ function world(on: On): World {
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
   })
-  on('process.run', ($, e) => (seen.runs.push([...(e as never as { argv: string[] }).argv]), { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on(
+    'process.run',
+    ($, e) => (
+      seen.runs.push([...(e as never as { argv: string[] }).argv]),
+      { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    ),
+  )
   on('session.id', () => ({ value: 'sess-a' }))
   on('session.root', () => ({ value: 'C:/Repos/x' }))
   on('fs.list', ($, e) => {
@@ -118,25 +124,44 @@ test('a task on hold keeps its reason and is not counted as in progress', async 
   await create($, 'one')
   await create($, 'two')
   await update($, '1', 'in_progress')
-  await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'pending', metadata: { hold: 'owner picks the effort' } } as never)
+  await $.tool.call({
+    tool: 'TaskUpdate',
+    taskId: '2',
+    status: 'pending',
+    metadata: { hold: 'owner picks the effort' },
+  } as never)
   expect(mirror(seen).tasks.find(task => task.id === '2')?.hold).toBe('owner picks the effort')
   await update($, '2', 'in_progress')
   expect(mirror(seen).tasks.find(task => task.id === '2')?.hold).toBe(undefined)
 })
 
-test('the mod answers the task tools itself, in the engine tools\' shapes', async ($, on) => {
+test("the mod answers the task tools itself, in the engine tools' shapes", async ($, on) => {
   const seen = world(on)
   on('tool.call', { tool: 'TaskGet' }, () => ({ result: { task: null } }) as never)
   await turn($)
-  const made = (await $.tool.call({ tool: 'TaskCreate', subject: 'one', description: 'first' } as never)) as never as { result: unknown }
+  const made = (await $.tool.call({ tool: 'TaskCreate', subject: 'one', description: 'first' } as never)) as never as {
+    result: unknown
+  }
   expect(made.result).toEqual({ task: { id: '1', subject: 'one' } })
   await create($, 'two')
   // The engine's fakes never run: ids come from the mod.
   expect(seen.nextId).toBe(1)
-  const linked = (await $.tool.call({ tool: 'TaskUpdate', taskId: '2', addBlockedBy: ['1'], status: 'in_progress' } as never)) as never as { result: unknown }
-  expect(linked.result).toEqual({ success: true, taskId: '2', updatedFields: ['blockedBy', 'status'], statusChange: { from: 'pending', to: 'in_progress' } })
+  const linked = (await $.tool.call({
+    tool: 'TaskUpdate',
+    taskId: '2',
+    addBlockedBy: ['1'],
+    status: 'in_progress',
+  } as never)) as never as { result: unknown }
+  expect(linked.result).toEqual({
+    success: true,
+    taskId: '2',
+    updatedFields: ['blockedBy', 'status'],
+    statusChange: { from: 'pending', to: 'in_progress' },
+  })
   const got = (await $.tool.call({ tool: 'TaskGet', taskId: '1' } as never)) as never as { result: unknown }
-  expect(got.result).toEqual({ task: { id: '1', subject: 'one', description: 'first', status: 'pending', blocks: ['2'], blockedBy: [] } })
+  expect(got.result).toEqual({
+    task: { id: '1', subject: 'one', description: 'first', status: 'pending', blocks: ['2'], blockedBy: [] },
+  })
   await update($, '1', 'completed')
   const listed = (await $.tool.call({ tool: 'TaskList' } as never)) as never as { result: unknown }
   expect(listed.result).toEqual({
@@ -145,7 +170,9 @@ test('the mod answers the task tools itself, in the engine tools\' shapes', asyn
       { id: '2', subject: 'two', status: 'in_progress', owner: undefined, blockedBy: [] },
     ],
   })
-  const missing = (await $.tool.call({ tool: 'TaskUpdate', taskId: '9', status: 'completed' } as never)) as never as { result: unknown }
+  const missing = (await $.tool.call({ tool: 'TaskUpdate', taskId: '9', status: 'completed' } as never)) as never as {
+    result: unknown
+  }
   expect(missing.result).toEqual({ success: false, taskId: '9', updatedFields: [], error: 'Task not found' })
 })
 
@@ -176,11 +203,19 @@ test('the generic task reminder names the open tasks, or goes away', async ($, o
   world(on)
   on('prompt.attachment', ($, e) => ({ text: e.text }))
   await turn($)
-  const empty = await $.prompt.attachment({ type: 'task_reminder', text: 'generic', origin: { kind: 'engine' } } as never)
+  const empty = await $.prompt.attachment({
+    type: 'task_reminder',
+    text: 'generic',
+    origin: { kind: 'engine' },
+  } as never)
   expect(empty.text).toBe(null)
   await create($, 'one')
   await update($, '1', 'in_progress')
-  const named = await $.prompt.attachment({ type: 'task_reminder', text: 'generic', origin: { kind: 'engine' } } as never)
+  const named = await $.prompt.attachment({
+    type: 'task_reminder',
+    text: 'generic',
+    origin: { kind: 'engine' },
+  } as never)
   expect(named.text).toContain('in progress #1 "one"')
 })
 
@@ -211,14 +246,20 @@ test('a task deleted unfinished stays in the list as dropped', async ($, on) => 
 
 test("a new session sees the previous session's unfinished tasks once", async ($, on) => {
   const seen = world(on)
-  seen.files.set('C:/Users/me/.claude/mods-data/tasks/old.json', JSON.stringify({
-    session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9,
-    tasks: [
-      { id: '7', subject: 'keep going', status: 'in_progress', createdTurn: 1 },
-      { id: '8', subject: 'wait', status: 'pending', createdTurn: 1, hold: 'a decision' },
-      { id: '9', subject: 'finished', status: 'completed', createdTurn: 1 },
-    ],
-  }))
+  seen.files.set(
+    'C:/Users/me/.claude/mods-data/tasks/old.json',
+    JSON.stringify({
+      session: 'old',
+      root: 'c:/repos/x',
+      updatedAt: 5,
+      turn: 9,
+      tasks: [
+        { id: '7', subject: 'keep going', status: 'in_progress', createdTurn: 1 },
+        { id: '8', subject: 'wait', status: 'pending', createdTurn: 1, hold: 'a decision' },
+        { id: '9', subject: 'finished', status: 'completed', createdTurn: 1 },
+      ],
+    }),
+  )
   await $.session.start({ cwd: 'C:/Repos/x' } as never)
   expect(mirror(seen).carried?.map(task => task.id)).toEqual(['7', '8'])
   const first = (await $.prompt.submit({ text: 'hi' } as never)) as never as { context?: string[] }
@@ -230,11 +271,27 @@ test("a new session sees the previous session's unfinished tasks once", async ($
 test("the engine's leftover task files are imported, then deleted", async ($, on) => {
   const seen = world(on)
   const engine = 'C:/Users/me/.claude/tasks/sess-a'
-  seen.files.set(`${engine}/4.json`, JSON.stringify({ id: '4', subject: 'old work', description: 'd', status: 'in_progress', blocks: [], blockedBy: [], metadata: { hold: 'a reply' } }))
+  seen.files.set(
+    `${engine}/4.json`,
+    JSON.stringify({
+      id: '4',
+      subject: 'old work',
+      description: 'd',
+      status: 'in_progress',
+      blocks: [],
+      blockedBy: [],
+      metadata: { hold: 'a reply' },
+    }),
+  )
   seen.files.set(`${engine}/.highwatermark`, '4')
   await $.session.start({ cwd: 'C:/Repos/x' } as never)
   const task = mirror(seen).tasks.find(item => item.id === '4')
-  expect([task?.subject, task?.status, task?.hold, task?.description]).toEqual(['old work', 'in_progress', 'a reply', 'd'])
+  expect([task?.subject, task?.status, task?.hold, task?.description]).toEqual([
+    'old work',
+    'in_progress',
+    'a reply',
+    'd',
+  ])
   expect(mirror(seen).nextId).toBe(5)
   const unlink = seen.runs.find(run => run.includes(engine))
   expect(unlink?.slice(-2)).toEqual([engine, '4.json'])
@@ -255,7 +312,15 @@ test("the engine's task files stay when the mirror holding their copy cannot be 
 test("after a reload the engine's store is left alone, even a subagent task matching a mirror task", async ($, on) => {
   const seen = world(on)
   const engine = 'C:/Users/me/.claude/tasks/sess-a'
-  seen.files.set(MIRROR_FILE, JSON.stringify({ session: 'sess-a', updatedAt: 1, turn: 1, tasks: [{ id: '1', subject: 'run the tests', status: 'pending', createdTurn: 1 }] }))
+  seen.files.set(
+    MIRROR_FILE,
+    JSON.stringify({
+      session: 'sess-a',
+      updatedAt: 1,
+      turn: 1,
+      tasks: [{ id: '1', subject: 'run the tests', status: 'pending', createdTurn: 1 }],
+    }),
+  )
   // A live subagent's first task: the engine numbers it 1, and the step was delegated word for word.
   seen.files.set(`${engine}/1.json`, JSON.stringify({ id: '1', subject: 'run the tests', status: 'in_progress' }))
   seen.files.set(`${engine}/2.json`, JSON.stringify({ id: '2', subject: 'a subagent step', status: 'pending' }))

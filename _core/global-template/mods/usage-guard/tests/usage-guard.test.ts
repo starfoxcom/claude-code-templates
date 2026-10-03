@@ -151,11 +151,16 @@ test('crossing the line wraps up, stops background work and resumes after the re
   expect(pauseOf(seen)?.status).toBe('done')
 })
 
-test('another session sees the shared pause, wraps up once and leaves the stop commands to the first', async ($, on) => {
+test('another session sees the shared pause, wraps up once, leaves the stop commands to the first', async ($, on) => {
   const seen = world(on)
   await start($)
   const other: Pause = {
-    status: 'active', kinds: ['seven_day'], percentUsed: 92, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b',
+    status: 'active',
+    kinds: ['seven_day'],
+    percentUsed: 92,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(other))
   await doWork($)
@@ -171,7 +176,12 @@ test('another session sees the shared pause, wraps up once and leaves the stop c
 test('a session opened during a pause only waits, then resumes', async ($, on) => {
   const seen = world(on)
   const pause: Pause = {
-    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b',
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   await start($)
@@ -185,7 +195,12 @@ test('a session opened during a pause only waits, then resumes', async ($, on) =
 test('a session opened after the reset is told to resume by hand', async ($, on) => {
   const seen = world(on)
   const pause: Pause = {
-    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: NOW - 1, triggeredBy: 'sess-b',
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt: RESET,
+    wakeAt: NOW - 1,
+    triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   await start($)
@@ -279,7 +294,11 @@ test('the resume replaces the pause card', async ($, on) => {
   await endTurn($)
   await seen.clock.advance(WAKE - NOW)
 
-  expect(cardOf(seen)).toEqual({ id: `reset:${RESET}`, text: 'Plan limits have reset. Sessions are resuming their saved work.', dismissed: false })
+  expect(cardOf(seen)).toEqual({
+    id: `reset:${RESET}`,
+    text: 'Plan limits have reset. Sessions are resuming their saved work.',
+    dismissed: false,
+  })
 })
 
 test('a session whose entry in the shared pause was overwritten does not wrap up twice', async ($, on) => {
@@ -321,7 +340,14 @@ test('a session that loses the pause claim honours a cancel written since the wi
   // Its pause lands, already cancelled, while this session makes its claim.
   seen.duringClaim = name => {
     if (name !== `pause-${KEY}`) return
-    const cancelled = { status: 'cancelled', kinds: ['five_hour'], percentUsed: 91, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-b' }
+    const cancelled = {
+      status: 'cancelled',
+      kinds: ['five_hour'],
+      percentUsed: 91,
+      resetsAt: RESET,
+      wakeAt: WAKE,
+      triggeredBy: 'sess-b',
+    }
     seen.files.set(PAUSE_FILE, JSON.stringify(cancelled))
   }
   await endTurn($)
@@ -337,7 +363,13 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
   const seen = world(on)
   // This session wrapped up before the reload; the reload dropped its timer and skipped session.start.
   const pause = {
-    status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-a', handled: ['sess-a'],
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-a',
+    handled: ['sess-a'],
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   seen.claims.add(`${KEY}-sess-a`)
@@ -348,10 +380,16 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
   expect(seen.commands).toEqual([{ command: 'session-start', args: '' }])
 })
 
-test('a session resumes once per reset, even with an instance from before a hot reload still running', async ($, on) => {
+test('a session resumes once per reset, even beside an instance left by a hot reload', async ($, on) => {
   const seen = world(on)
   const pause = {
-    status: 'done', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE, triggeredBy: 'sess-a', handled: ['sess-a'],
+    status: 'done',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-a',
+    handled: ['sess-a'],
   }
   seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'active' }))
   seen.claims.add(`${KEY}-sess-a`)

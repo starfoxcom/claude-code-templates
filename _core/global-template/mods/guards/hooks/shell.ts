@@ -219,7 +219,7 @@ export function parse(command: string, powershell: boolean): Statement[] {
         continue
       }
       if (c === '&' && word && /[<>]$/.test((word as Word).text)) {
-        (word as Word).text += c
+        ;(word as Word).text += c
         i++
         continue
       }
@@ -308,16 +308,29 @@ export function parse(command: string, powershell: boolean): Statement[] {
 
 // Words that run the command after them: shell keywords (`then git commit ...` in an `if`, `do gh ...`
 // in a loop) and wrappers, with the options of each that take a value.
-const WRAPPERS = new Map<string, RegExp | null>(Object.entries({
-  if: null, then: null, elif: null, else: null, while: null, until: null, do: null, '!': null, '{': null,
-  time: null, nohup: null, builtin: null, command: null,
-  exec: /^-a$/,
-  sudo: /^-[ugpCDhrtTU]$|^--(user|group|prompt|chdir|host|role|type|other-user|close-from)$/,
-  env: /^-[uCS]$|^--(unset|chdir|split-string)$/,
-  nice: /^-n$|^--adjustment$/,
-  timeout: /^-[sk]$|^--(signal|kill-after)$/,
-  xargs: /^-[IiLlnPdEsa]$|^--(replace|max-lines|max-args|max-procs|delimiter|eof|max-chars|arg-file)$/,
-}))
+const WRAPPERS = new Map<string, RegExp | null>(
+  Object.entries({
+    if: null,
+    then: null,
+    elif: null,
+    else: null,
+    while: null,
+    until: null,
+    do: null,
+    '!': null,
+    '{': null,
+    time: null,
+    nohup: null,
+    builtin: null,
+    command: null,
+    exec: /^-a$/,
+    sudo: /^-[ugpCDhrtTU]$|^--(user|group|prompt|chdir|host|role|type|other-user|close-from)$/,
+    env: /^-[uCS]$|^--(unset|chdir|split-string)$/,
+    nice: /^-n$|^--adjustment$/,
+    timeout: /^-[sk]$|^--(signal|kill-after)$/,
+    xargs: /^-[IiLlnPdEsa]$|^--(replace|max-lines|max-args|max-procs|delimiter|eof|max-chars|arg-file)$/,
+  }),
+)
 
 /**
  * The program a statement runs: its first word past `VAR=x` assignments, shell keywords and wrappers

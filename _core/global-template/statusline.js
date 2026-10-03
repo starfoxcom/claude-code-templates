@@ -61,7 +61,11 @@ function writeJson(file, value) {
 
 function git(cwd, args) {
   try {
-    return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return execFileSync('git', ['-C', cwd, ...args], {
+      encoding: 'utf8',
+      timeout: 1500,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
   } catch {
     return ''
   }
@@ -99,7 +103,8 @@ function contextPart(input) {
   const tokens = input.context_window?.total_input_tokens
   if (!tokens) return color.dim('ctx --')
   const facts = readJson(path.join(DATA_DIR, 'session-facts', `${input.session_id}.json`))
-  const configured = Number(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || settingsValue('autoCompactWindow')) || Infinity
+  const configured =
+    Number(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || settingsValue('autoCompactWindow')) || Infinity
   const size = facts?.size || Math.min(configured, input.context_window?.context_window_size || Infinity)
   if (!Number.isFinite(size)) return color.dim('ctx --')
   const percent = Math.round((tokens / size) * 100)
