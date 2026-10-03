@@ -153,6 +153,24 @@ function isPersonText(text) {
   )
 }
 
+// What a transcript record says in the person's place: a queued prompt they typed, or a typed record's
+// text. Anything else (tool results, summaries, meta lines) says nothing.
+function recordText(record) {
+  const { attachment, message } = record
+  if (record.type === 'attachment' && attachment && attachment.type === 'queued_command') {
+    return attachment.origin && attachment.origin.kind === 'human' ? String(attachment.prompt || '').trim() : ''
+  }
+  if (record.type !== 'user' || record.isMeta || record.isCompactSummary || !message) return ''
+  const content = message.content
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content) || content.some(block => block.type === 'tool_result')) return ''
+  return content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('\n')
+    .trim()
+}
+
 // The person's own messages since the last compaction, oldest first: typed
 // prompts plus those typed while a turn ran (stored as queued_command
 // attachments, which the compaction's message list does not show as typed).
@@ -182,28 +200,9 @@ async function persons(sessionId) {
       isLastQueued = false
       continue
     }
-    let text = ''
     const isQueued =
       record.type === 'attachment' && Boolean(record.attachment) && record.attachment.type === 'queued_command'
-    if (
-      record.type === 'attachment' &&
-      record.attachment &&
-      record.attachment.type === 'queued_command' &&
-      record.attachment.origin &&
-      record.attachment.origin.kind === 'human'
-    ) {
-      text = String(record.attachment.prompt || '')
-    } else if (record.type === 'user' && !record.isMeta && !record.isCompactSummary && record.message) {
-      const content = record.message.content
-      if (typeof content === 'string') text = content
-      else if (Array.isArray(content) && !content.some(block => block.type === 'tool_result')) {
-        text = content
-          .filter(block => block.type === 'text')
-          .map(block => block.text)
-          .join('\n')
-      }
-    }
-    text = text.trim()
+    let text = recordText(record)
     if (!isPersonText(text)) {
       // Anything else the person or the model did in between makes a later same text a new message.
       if (record.type === 'user' || record.type === 'assistant') isLastQueued = false
