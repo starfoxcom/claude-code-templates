@@ -2,7 +2,7 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
 import type { Budgets } from '../types'
-import { registerBudgetsView } from './budgets'
+import { contextText, registerBudgetsView } from './budgets'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 // The hooks run in a sandbox with no time zone of its own, so the host's
@@ -53,16 +53,9 @@ function formatLocal(nowMs: number, zone: Zone): string {
   return `${local.toISOString().slice(0, 19).replace('T', ' ')} ${zone.name}`
 }
 
-function thousands(tokens: number): string {
-  return `${Math.round(tokens / 1000)}k`
-}
-
 function contextPart(tokens: number | undefined, fullWindow: number, window: Window | undefined): string {
-  if (tokens === undefined) return 'ctx unknown until the first response of this window'
-  const size = window?.size ?? fullWindow
-  const percent = Math.round((tokens / size) * 100)
-  const compacts = window?.compactsAt ? `; auto-compacts at ${thousands(window.compactsAt)}` : ''
-  return `ctx ${percent}% (${thousands(tokens)} of ${thousands(size)}${compacts})`
+  const text = contextText(tokens, window?.size ?? fullWindow, window?.compactsAt)
+  return tokens === undefined ? `${text} (unknown until the first response of this window)` : text
 }
 
 // Every figure in a compaction's summary is from before it ran, so the lines
@@ -70,7 +63,7 @@ function contextPart(tokens: number | undefined, fullWindow: number, window: Win
 // the compaction's size afterwards stands in.
 function compactedPart(compaction: Compaction, fill: number | undefined, fullWindow: number): string {
   const mark = `, just compacted at ${formatLocal(compaction.at, live.zone).slice(11, 16)}`
-  return fill === undefined ? `ctx unknown${mark}` : `${contextPart(fill, fullWindow, live.window)}${mark}`
+  return `${contextText(fill, live.window?.size ?? fullWindow, live.window?.compactsAt)}${mark}`
 }
 
 function planPart(limits: readonly SessionRateLimit[]): string {
