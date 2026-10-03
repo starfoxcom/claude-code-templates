@@ -1,0 +1,18 @@
+{
+  "_note": "Copy to ~/.claude/skill-contracts.json. Keys are a project folder name (lowercase) or \"*\" for every project; a project key replaces \"*\" for that skill. Each step's \"match\" is a case-insensitive regex tested against a successful tool call's input (as JSON); \"tools\" limits which tools count. Remove any step whose feature you turned off at bind time (the hand-off file, the code-research count).",
+  "*": {
+    "session-start": [
+      { "step": "reading the last hand-off file (<PROJECT>-CONTEXT_<date>.md)", "match": "[A-Z0-9-]+-CONTEXT_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}\\.md", "tools": ["Read", "Bash", "PowerShell"] },
+      { "step": "git status", "match": "git status", "tools": ["Bash", "PowerShell"] },
+      { "step": "the recent history (git log --oneline)", "match": "git log --oneline", "tools": ["Bash", "PowerShell"] },
+      { "step": "how far behind the dev branch is (git rev-list --count HEAD..origin/<dev>)", "match": "git rev-list --count HEAD\\.\\.origin/", "tools": ["Bash", "PowerShell"] },
+      { "step": "the open PRs (gh pr list)", "match": "gh pr list", "tools": ["Bash", "PowerShell"] }
+    ],
+    "session-close": [
+      { "step": "the new hand-off file written (<PROJECT>-CONTEXT_<date>_<time>.md)", "match": "[A-Z0-9-]+-CONTEXT_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}\\.md", "tools": ["Write"] },
+      { "step": "the previous hand-off file removed (git rm)", "match": "git (rm|mv)[^\\n]*-CONTEXT_", "tools": ["Bash", "PowerShell"] },
+      { "step": "the code-research count (research-adherence.py)", "match": "research-adherence\\.py", "tools": ["Bash", "PowerShell"] },
+      { "step": "a commit", "match": "git commit", "tools": ["Bash", "PowerShell"] }
+    ]
+  }
+}

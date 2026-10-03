@@ -1,0 +1,20 @@
+{
+  "name": "guards",
+  "version": "0.1.0",
+  "description": "Keeps AI credit out of commits, PRs, issues, comments and releases, and stops the streaming CI log watcher, by reading each command instead of scanning its raw text.",
+  "userConfig": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "shadow: never blocks, logs what it would block (and what the guard scripts blocked) to mods-data/guards/decisions.jsonl. enforce: blocks.",
+      "options": ["shadow", "enforce"],
+      "default": "shadow"
+    },
+    "mentionRepos": {
+      "type": "string",
+      "title": "Repos that may name the product",
+      "description": "Comma-separated repo folder names (case-insensitive, e.g. \"my-cli-plugin, docs-site\") whose subject is Claude Code itself, so commit, PR and branch text there may name the product. \"*\" (the default) allows the plain product name everywhere, as the toolkit's attribution rule does (no credit, mentions are fine); a list narrows it to those repos; empty blocks it in every repo. AI credit lines stay blocked everywhere.",
+      "default": "*"
+    }
+  }
+}
