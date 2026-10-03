@@ -139,6 +139,25 @@ test('a push starts a watch and the session is woken once when it passes', async
   expect(seen.prompts.length).toBe(1)
 })
 
+const OWNER = 'C:/Users/me/.claude/mods-data/ci-watch/s1.owner'
+
+test('an instance a newer load has replaced stops polling and never wakes the session', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.isReadable = true
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  expect(seen.files.get(OWNER)).toBeTruthy()
+  // A hot reload: the newer instance names itself in the owner file.
+  seen.files.set(OWNER, 'a-newer-instance')
+  seen.bucket = 'fail'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(60_000)
+  expect(seen.prompts).toEqual([])
+  // Its hooks pass through too: a push starts no watch here.
+  const before = seen.files.get(STATE)
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/y' } as never)
+  expect(seen.files.get(STATE)).toBe(before)
+})
+
 test('a watch whose save failed is kept from memory and still wakes the session', async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true
@@ -156,10 +175,8 @@ test('the data folder is made before the first save, and a failed save never fai
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
-  expect(seen.order.slice(0, 2)).toEqual([
-    'mkdir C:/Users/me/.claude/mods-data/ci-watch',
-    'write C:/Users/me/.claude/mods-data/ci-watch/s1.json',
-  ])
+  expect(seen.order[0]).toBe('mkdir C:/Users/me/.claude/mods-data/ci-watch')
+  expect(seen.order.slice(1)).toContain('write C:/Users/me/.claude/mods-data/ci-watch/s1.json')
 
   seen.isWriteDown = true
   const pushed = await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)

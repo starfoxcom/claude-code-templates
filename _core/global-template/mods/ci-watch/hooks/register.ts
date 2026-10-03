@@ -132,6 +132,35 @@ async function statePath($: EngineInterface): Promise<string> {
 }
 
 // A failed write never rejects a hook: the push it follows has already run.
+// A hot reload loads this module again but leaves the earlier instance's timer (and old code)
+// running beside the new one. The instance that starts polling last names itself in the session's
+// owner file; one that finds another name there is retired: it stops polling and its hooks pass
+// through. A file, not a global, because instances do not share one. An unreadable file retires none.
+const INSTANCE = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+async function ownerPath($: EngineInterface): Promise<string> {
+  return (await statePath($)).replace(/\.json$/, '.owner')
+}
+
+async function claimOwner($: EngineInterface): Promise<void> {
+  try {
+    const path = await ownerPath($)
+    await ensureDir($, path.slice(0, path.lastIndexOf('/')))
+    await $.fs.write(path, INSTANCE)
+  } catch {
+    // No owner file: every instance stays active, as before.
+  }
+}
+
+export async function isRetired($: EngineInterface): Promise<boolean> {
+  try {
+    const owner = String(await $.fs.read(await ownerPath($))).trim()
+    return owner !== '' && owner !== INSTANCE
+  } catch {
+    return false
+  }
+}
+
 async function save($: EngineInterface): Promise<void> {
   try {
     const path = await statePath($)
@@ -309,8 +338,12 @@ async function poll($: EngineInterface): Promise<void> {
 async function startPolling($: EngineInterface): Promise<void> {
   if (live.isPolling) return
   live.isPolling = true
+  await claimOwner($)
   await load($)
-  $.clock.every(live.pollMs, () => void poll($).catch(() => undefined))
+  const tick = $.clock.every(live.pollMs, async () => {
+    if (await isRetired($)) return void tick.cancel()
+    await poll($).catch(() => undefined)
+  })
 }
 
 export const register: Register = (on, options) => {
@@ -339,6 +372,7 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // startPolling first: a freshly loaded instance claims the owner file before any check.
   on('turn.start', async ($, e, next) => {
     await startPolling($)
     return next(e)
@@ -346,6 +380,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     await startPolling($)
+    if (await isRetired($)) return next(e)
     const result = await next(e)
     const command = String((e as { command?: unknown }).command ?? '')
     if (result.deny !== undefined || result.isError) return result
@@ -377,7 +412,9 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  on('tool.call', { tool: 'mcp__ci-watch__watch' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__ci-watch__watch' }, async ($, e, next) => {
+    await startPolling($)
+    if (await isRetired($)) return next(e)
     const input = e as { pr?: unknown; repo?: unknown }
     const number = Number(input.pr)
     const repo = typeof input.repo === 'string' && input.repo ? input.repo : (await prOfBranch($))?.repo
@@ -387,7 +424,9 @@ export const register: Register = (on, options) => {
     return { result: `Watching ${repo}#${number}; you will be woken once its checks settle.` }
   })
 
-  on('command.run', { command: 'ci-watch' }, async ($, e) => {
+  on('command.run', { command: 'ci-watch' }, async ($, e, next) => {
+    await startPolling($)
+    if (await isRetired($)) return next(e)
     if (e.args.trim() === 'stop') {
       live.watches = []
       await save($)
