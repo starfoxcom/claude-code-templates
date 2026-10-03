@@ -242,8 +242,11 @@ async function refresh($: EngineInterface): Promise<void> {
   await update($, band, () => (shown ? { card: shown, canCancel: isPaused } : null))
 }
 
+// A cancel here also drops this session's own armed wake: the person at this session asked for no
+// automatic resume. An arm in another session is that session's own explicit request and stays.
 async function cancelPause($: EngineInterface, pause: Pause): Promise<void> {
   live.wakeTimer?.cancel()
+  await disarm($)
   await writePause($, { ...pause, status: 'cancelled' })
   setStatus($, undefined)
   await showCard(
@@ -584,23 +587,26 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  on('command.run', { command: 'usage-guard' }, async ($, e) => {
-    const [verb = '', which = ''] = e.args.trim().split(/\s+/)
-    if (verb === 'settings') {
-      await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
-      return { text: 'Opened the usage-guard settings.' }
-    }
-    if (verb === 'arm') return { text: await armByHand($, which) }
-    if (verb === 'disarm') return { text: await disarm($) }
-    const arm = await read($, armedWake)
-    const armedText = arm ? ` Armed to resume at ${localTime(arm.wakeAt)}.` : ''
-    const pause = await readPause($)
-    if (!pause || pause.status !== 'active')
-      return { text: `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}` }
-    if (verb === 'cancel') {
-      await cancelPause($, pause)
-      return { text: 'Usage pause cancelled: no automatic resume.' }
-    }
-    return { text: `Paused: ${limitName(pause)} at ${pause.percentUsed}%. Resumes at ${localTime(pause.wakeAt)}.` }
-  })
+  on('command.run', { command: 'usage-guard' }, async ($, e) => ({ text: await runCommand($, e.args) }))
+}
+
+// `/usage-guard [settings | arm 5h|week | disarm | cancel]`; with no argument, the status.
+async function runCommand($: EngineInterface, args: string): Promise<string> {
+  const [verb = '', which = ''] = args.trim().split(/\s+/)
+  if (verb === 'settings') {
+    await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
+    return 'Opened the usage-guard settings.'
+  }
+  if (verb === 'arm') return armByHand($, which)
+  if (verb === 'disarm') return disarm($)
+  const arm = await read($, armedWake)
+  const armedText = arm ? ` Armed to resume at ${localTime(arm.wakeAt)}.` : ''
+  const pause = await readPause($)
+  if (!pause || pause.status !== 'active')
+    return `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}`
+  if (verb === 'cancel') {
+    await cancelPause($, pause)
+    return 'Usage pause cancelled: no automatic resume.'
+  }
+  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. Resumes at ${localTime(pause.wakeAt)}.`
 }

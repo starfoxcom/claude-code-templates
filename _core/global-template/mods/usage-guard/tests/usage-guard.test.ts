@@ -654,3 +654,32 @@ test('an armed wake another instance of this module already fired does not resum
   await seen.clock.advance(WAKE - NOW)
   expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
 })
+
+test('a cancel in this session also drops its armed wake', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  await $.command.run({ command: 'usage-guard', args: 'cancel' } as never)
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+})
+
+test("another session's cancel leaves this session's own arm in place", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  // Session B paused for the same reset and cancelled it; this session never crossed the line.
+  const cancelled: Pause = {
+    status: 'cancelled',
+    kinds: ['five_hour'],
+    percentUsed: 92,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(cancelled))
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+})
