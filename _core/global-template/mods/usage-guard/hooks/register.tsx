@@ -226,8 +226,13 @@ async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
   return commands.some(command => command.name === name)
 }
 
-async function stopBackground($: EngineInterface): Promise<void> {
-  for (const argv of stopCommandsFor(await $.session.root())) {
+// Every session stops its own project's background work, once per project per reset: sessions in two
+// projects each stop their own, and of two sessions in one project only the first runs the commands.
+async function stopBackground($: EngineInterface, pause: Pause): Promise<void> {
+  const root = await $.session.root()
+  const folder = (root.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? '').toLowerCase()
+  if (!(await claim($, `stop-${resetKey(pause)}-${folder}`))) return
+  for (const argv of stopCommandsFor(root)) {
     await $.process.run(argv, { timeoutMs: 60_000 }).catch(() => undefined)
   }
 }
@@ -320,6 +325,7 @@ async function armWake($: EngineInterface, pause: Pause): Promise<void> {
 async function act($: EngineInterface, pause: Pause): Promise<void> {
   if (await claim($, `${resetKey(pause)}-${await $.session.id()}`)) {
     await armWake($, pause)
+    await stopBackground($, pause)
     await wrapUp($, pause)
   } else if (!live.wakeTimer) await armWake($, pause)
 }
@@ -339,12 +345,11 @@ async function check($: EngineInterface): Promise<void> {
     // same high reading.
     if (pause?.resetsAt === planned.resetsAt) return
     pause = planned
-    // Of several sessions crossing the line together, one writes the pause and
-    // stops its project's background work. The others write the same pause only
-    // if the winner has not yet, so a cancel written in between is not undone.
+    // Of several sessions crossing the line together, one writes the pause. The
+    // others write the same pause only if the winner has not yet, so a cancel
+    // written in between is not undone.
     if (await claim($, `pause-${resetKey(planned)}`)) {
       await writePause($, pause)
-      await stopBackground($)
     } else {
       // The loser acts on the shared file, never on its own plan: a cancel written
       // since the winner's pause stands.
