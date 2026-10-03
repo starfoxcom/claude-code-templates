@@ -7,17 +7,28 @@ const SURFACES = ['terminal', 'desktop'] as const
 const DIRTY = '## develop...origin/develop [ahead 2, behind 1]\n M a.ts\n M b.ts\n?? c.ts\n'
 
 function world(on: On, status = DIRTY) {
-  const seen = { gitCalls: 0, status }
-  mock.clock(on, { now: 0 })
-  on('session.model', () => ({ value: 'claude-opus-5-5[1m]' }))
+  const seen = {
+    gitCalls: 0,
+    status,
+    isModelDown: false,
+    clock: mock.clock(on, { now: 0 }),
+    /** A git read waits on this, answering with the status it saw when it started. */
+    gate: undefined as Promise<void> | undefined,
+  }
+  on('session.model', () => {
+    if (seen.isModelDown) throw new Error('no model yet')
+    return { value: 'claude-opus-5-5[1m]' }
+  })
   on('session.root', () => ({ value: 'C:\\Repos\\GameProject' }))
-  on('process.run', ($, e) => {
+  on('process.run', async ($, e) => {
     if (e.argv[0] === 'git') seen.gitCalls += 1
-    const isGit = e.argv[0] === 'git' && seen.status !== ''
+    const status = seen.status
+    await seen.gate
+    const isGit = e.argv[0] === 'git' && status !== ''
     return {
       value: {
         exitCode: isGit ? 0 : 128,
-        stdout: isGit ? seen.status : '',
+        stdout: isGit ? status : '',
         stderr: '',
         isStdoutTruncated: false,
         isStderrTruncated: false,
@@ -109,4 +120,34 @@ test('outside a repository the row keeps model and project only', async ($, on) 
   const ui = await mount($, 'terminal')
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · GameProject/ })).toBeDefined()
   expect(await ui.find({ key: 'session-info-changes' })).toBeUndefined()
+})
+
+test('a failed first read still starts the timer that fills the row', async ($, on) => {
+  const seen = world(on)
+  seen.isModelDown = true
+  await start($, 'terminal')
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /GameProject/ })).toBeUndefined()
+  seen.isModelDown = false
+  await seen.clock.advance(30_000)
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 · GameProject/ })).toBeDefined()
+})
+
+test('one git read at a time: a slow read never lands over a checkout made while it ran', async ($, on) => {
+  const seen = world(on)
+  await start($, 'terminal')
+  let release = () => {}
+  seen.gate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const checkout = { tool: 'Bash', input: { command: 'git checkout main' } } as never
+  await $.tool.call(checkout)
+  seen.status = '## main...origin/main\n'
+  for (let i = 0; i < 3; i++) await $.tool.call(checkout)
+  seen.gate = undefined
+  release()
+  await seen.clock.advance(1)
+  // The start, the slow read, and one read for the three requests made while it ran.
+  expect(seen.gitCalls).toBe(3)
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /main/ })).toBeDefined()
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /develop/ })).toBeUndefined()
 })

@@ -77,7 +77,32 @@ for (const surface of SURFACES) {
     for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
     expect(seen.prompts).toEqual([])
   })
+
+  test(`${surface}: the row follows the watches while the state file cannot be written`, async ($, on) => {
+    const { seen } = world(on)
+    seen.isWriteDown = true
+    await pushed($, surface)
+    const ui = await $.ui.mount({ plugin: 'ci-watch', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /PR 7/ })).toBeDefined()
+    await $.command.run({ command: 'ci-watch', args: 'stop' } as never)
+    expect(await ui.find({ type: 'Text', text: /PR 7/ })).toBeUndefined()
+  })
 }
+
+const STATE = 'C:/Users/me/.claude/mods-data/ci-watch/s1.json'
+const OWNER = 'C:/Users/me/.claude/mods-data/ci-watch/s1.owner'
+
+test('a stop pressed in an instance a newer load replaced is left to the newer one', async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  await pushed($, 'terminal')
+  const ui = await $.ui.mount({ plugin: 'ci-watch', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  // A hot reload: the newer instance names itself in the owner file and keeps the saved watches.
+  seen.files.set(OWNER, 'a-newer-instance')
+  const before = seen.files.get(STATE)
+  await ui.press({ key: 'ci-watch-stop-o/r#7' })
+  expect(seen.files.get(STATE)).toBe(before)
+})
 
 test('with nothing watched the band draws nothing of its own', async ($, on) => {
   world(on)
