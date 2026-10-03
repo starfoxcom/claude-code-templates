@@ -470,6 +470,9 @@ export const register: Register = (on, options) => {
 
   on('ui.press', async ($, e, next) => {
     if (e.plugin !== 'ci-watch' || !e.element.startsWith(STOP_PREFIX)) return next(e)
+    // As in tool.call: load the watches first, and leave the press to the live instance after a reload.
+    await startPolling($)
+    if (await isRetired($)) return next(e)
     await stopOne($, e.element.slice(STOP_PREFIX.length))
     return { element: e.element }
   })
