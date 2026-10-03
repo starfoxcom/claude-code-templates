@@ -468,11 +468,23 @@ function gitBranch(rest: Word[], plan: Plan) {
   else if (!flags.some(f => BRANCH_NOT_CREATE.test(f))) plan.branches.push(...names.slice(0, 1))
 }
 
+// `-a` in a bundle counts only before the first letter that takes a value: in `-Sabc` or `-uall` it is
+// part of that value, read the same way `walk` reads the bundle.
+function isCommitAll(text: string): boolean {
+  if (text === '--all') return true
+  if (!/^-[A-Za-z]/.test(text)) return false
+  for (const letter of text.slice(1)) {
+    if (letter === 'a') return true
+    if (!/[A-Za-z]/.test(letter) || COMMIT[`-${letter}`]) return false
+  }
+  return false
+}
+
 function gitCommit(st: Statement, rest: Word[], r: Reading): string {
   const { plan } = r
   const where = write(plan, st, 'the commit message')
   const positional = walk(rest, COMMIT, r, where)
-  const all = rest.some(a => a.text === '--all' || (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(a.text) && !a.text.startsWith('--')))
+  const all = rest.some(a => isCommitAll(a.text))
   plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
   return where
 }
