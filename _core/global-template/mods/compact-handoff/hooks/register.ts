@@ -118,6 +118,15 @@ function carriedForward(messages: readonly SessionMessage[]): { kept: string[]; 
   return { kept, index }
 }
 
+// How many of `texts`' first messages repeat the end of `carried`, in order: the tail the engine kept.
+function keptTail(carried: readonly string[], texts: readonly string[]): number {
+  for (let k = Math.min(carried.length, texts.length); k > 0; k--) {
+    const end = carried.slice(carried.length - k)
+    if (end.every((text, i) => text === texts[i])) return k
+  }
+  return 0
+}
+
 // `typed` is the transcript's own list (see transcriptWords); without it the
 // compaction's message list is used, which misses prompts typed mid-turn.
 export function personWords(
@@ -127,9 +136,11 @@ export function personWords(
 ): string {
   const previous = carriedForward(messages)
   const source = typed ?? messages.filter(isPersonMessage).map(message => message.text)
-  // A message the last compaction kept in the context beside its summary is still in the list now:
-  // it is carried once, from the block. (A word-for-word repeat of a carried message is folded too.)
-  const fresh = source.map(stripInjected).filter(text => text && !previous.kept.includes(text))
+  // The messages the last compaction kept beside its summary open the list again: they are carried once,
+  // from the block. Only that leading run is folded, so a "yes" typed again later is kept. The
+  // transcript's list starts after the compaction and has no such run.
+  const texts = source.map(stripInjected).filter(Boolean)
+  const fresh = typed ? texts : texts.slice(keptTail(previous.kept, texts))
   const all = [...previous.kept, ...fresh]
 
   const kept: string[] = []

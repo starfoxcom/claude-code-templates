@@ -273,3 +273,12 @@ test('a message the last compaction kept beside its summary is carried once', as
   expect(second.split('bake the shadows').length - 1).toBe(1)
   expect(second.indexOf('bake the shadows')).toBeLessThan(second.indexOf('ship it'))
 })
+
+test('a short answer the person gives again after a compaction is kept both times', async () => {
+  const first = personWords([said('lock the rings?'), said('yes')], 10_000)
+  const second = personWords([said(first), said('bake the shadows too?'), said('yes')], 10_000)
+  expect(second.split('\nyes').length - 1).toBe(2)
+  // From the transcript's list nothing is folded either.
+  const typed = personWords([said(first)], 10_000, ['yes'])
+  expect(typed.split('\nyes').length - 1).toBe(2)
+})
