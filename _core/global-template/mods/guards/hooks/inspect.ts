@@ -203,55 +203,64 @@ export function inspect(command: string, powershell: boolean): Plan {
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 
+const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'sl'])
+
 function read(statements: Statement[], r: Reading) {
+  statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r))
+}
+
+function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
   const { plan } = r
-  statements.forEach((st, idx) => {
-    read(st.inner, r)
-    plan.written.push(...st.writes)
-    for (const path of st.writes) r.writers.set(norm(path), { st, ps: r.ps })
-    const { name, args } = programOf(st)
-    if (assign(st, name, args, r)) return
-    if (
-      (name === 'cd' || name === 'set-location' || name === 'pushd' || name === 'sl') &&
-      !plan.cwd &&
-      !plan.isCwdUnknown
-    ) {
-      setCwd(
-        plan,
-        args.find(a => !a.text.startsWith('-')),
-      )
-      return
-    }
-    const inner = script(name, args)
-    if (inner) {
-      const ps = r.ps
-      const writes = r.writes
-      r.ps = inner.ps
-      read(inner.statements, r)
-      r.ps = ps
-      if (inner.dynamic && r.writes > writes) plan.unread.push(`a ${name} script built at run time`)
-      return
-    }
-    const stdin = r.stdin
-    const where = name === 'git' ? git(st, args, r) : name === 'gh' ? gh(st, args, r) : web(name, st, args, r)
-    if (!where) return
-    r.writes++
-    // PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed.
-    for (const a of args) {
-      const splat = r.ps ? /^@(\w+)$/.exec(a.text) : null
-      if (!splat) continue
-      const v = r.vars.get((splat[1] ?? '').toLowerCase())
-      if (v) plan.texts.push({ where, text: v.text, creditOnly: true })
-      plan.unread.push(where)
-    }
-    // A message read from stdin with no here-doc on the statement: a `< file`, or the statement piped in.
-    if (r.stdin > stdin && st.heredocs.length === 0) {
-      const prev = statements[idx - 1]
-      if (st.reads.length > 0) for (const path of st.reads) plan.files.push({ where, path })
-      else if (st.pipeIn && prev) feed(prev, r, where)
-      else plan.unread.push(where)
-    }
-  })
+  read(st.inner, r)
+  plan.written.push(...st.writes)
+  for (const path of st.writes) r.writers.set(norm(path), { st, ps: r.ps })
+  const { name, args } = programOf(st)
+  if (assign(st, name, args, r)) return
+  if (CD_NAMES.has(name) && !plan.cwd && !plan.isCwdUnknown) {
+    setCwd(
+      plan,
+      args.find(a => !a.text.startsWith('-')),
+    )
+    return
+  }
+  if (readScript(name, args, r)) return
+  const stdin = r.stdin
+  const where = name === 'git' ? git(st, args, r) : name === 'gh' ? gh(st, args, r) : web(name, st, args, r)
+  if (!where) return
+  r.writes++
+  readSplats(args, r, where)
+  // A message read from stdin with no here-doc on the statement: a `< file`, or the statement piped in.
+  if (r.stdin > stdin && st.heredocs.length === 0) readStdin(st, prev, r, where)
+}
+
+// `bash -c '...'` and the like: the script is read as commands of its own. True when it was one.
+function readScript(name: string, args: Word[], r: Reading): boolean {
+  const inner = script(name, args)
+  if (!inner) return false
+  const ps = r.ps
+  const writes = r.writes
+  r.ps = inner.ps
+  read(inner.statements, r)
+  r.ps = ps
+  if (inner.dynamic && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
+  return true
+}
+
+// PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed.
+function readSplats(args: Word[], r: Reading, where: string) {
+  for (const a of args) {
+    const splat = r.ps ? /^@(\w+)$/.exec(a.text) : null
+    if (!splat) continue
+    const v = r.vars.get((splat[1] ?? '').toLowerCase())
+    if (v) r.plan.texts.push({ where, text: v.text, creditOnly: true })
+    r.plan.unread.push(where)
+  }
+}
+
+function readStdin(st: Statement, prev: Statement | undefined, r: Reading, where: string) {
+  if (st.reads.length > 0) for (const path of st.reads) r.plan.files.push({ where, path })
+  else if (st.pipeIn && prev) feed(prev, r, where)
+  else r.plan.unread.push(where)
 }
 
 // What a statement prints, read as message text for `where`: the input of a pipe, or a file it writes.
@@ -369,8 +378,8 @@ const BRANCH_NOT_CREATE = new RegExp(
     ')',
 )
 
-function git(st: Statement, args: Word[], r: Reading): string | undefined {
-  const { plan } = r
+// The index of git's subcommand, past its global options; `-C <dir>` sets the folder.
+function gitSubcommand(args: Word[], plan: Plan): number {
   let k = 0
   while (k < args.length) {
     const t = args[k]?.text ?? ''
@@ -381,18 +390,34 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
     else if (t.startsWith('-')) k++
     else break
   }
+  return k
+}
+
+// `git branch <name>` creates one (a rename or copy names the new one last); listing flags create none.
+function gitBranch(rest: Word[], plan: Plan) {
+  const flags = rest.filter(a => a.text.startsWith('-')).map(a => a.text)
+  const names = rest.filter(a => !a.text.startsWith('-')).map(a => a.text)
+  if (flags.some(f => /^-(m|M|c|C)$|^--(move|copy)$/.test(f))) plan.branches.push(...names.slice(-1))
+  else if (!flags.some(f => BRANCH_NOT_CREATE.test(f))) plan.branches.push(...names.slice(0, 1))
+}
+
+function gitCommit(st: Statement, rest: Word[], r: Reading): string {
+  const { plan } = r
+  const where = write(plan, st, 'the commit message')
+  const positional = walk(rest, COMMIT, r, where)
+  const all = rest.some(a => a.text === '--all' || (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(a.text) && !a.text.startsWith('--')))
+  plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
+  return where
+}
+
+function git(st: Statement, args: Word[], r: Reading): string | undefined {
+  const { plan } = r
+  const k = gitSubcommand(args, plan)
   const sub = args[k]?.text ?? ''
   const rest = args.slice(k + 1)
   switch (sub) {
-    case 'commit': {
-      const where = write(plan, st, 'the commit message')
-      const positional = walk(rest, COMMIT, r, where)
-      const all = rest.some(
-        a => a.text === '--all' || (/^-[a-zA-Z]*a[a-zA-Z]*$/.test(a.text) && !a.text.startsWith('--')),
-      )
-      plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
-      return where
-    }
+    case 'commit':
+      return gitCommit(st, rest, r)
     case 'tag':
     case 'merge':
     case 'commit-tree': {
@@ -414,20 +439,15 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
     case 'worktree':
       if (rest[0]?.text === 'add') walk(rest.slice(1), { '-b': 'branch', '-B': 'branch' }, r, '')
       return undefined
-    case 'branch': {
-      const flags = rest.filter(a => a.text.startsWith('-')).map(a => a.text)
-      const names = rest.filter(a => !a.text.startsWith('-')).map(a => a.text)
-      if (flags.some(f => /^-(m|M|c|C)$|^--(move|copy)$/.test(f))) plan.branches.push(...names.slice(-1))
-      else if (!flags.some(f => BRANCH_NOT_CREATE.test(f))) plan.branches.push(...names.slice(0, 1))
+    case 'branch':
+      gitBranch(rest, plan)
       return undefined
-    }
   }
   return undefined
 }
 
-function gh(st: Statement, args: Word[], r: Reading): string | undefined {
-  const { plan } = r
-  // The subcommand words, past global options: `gh -R owner/name pr comment ...`.
+// The positions of gh's two subcommand words, past global options: `gh -R owner/name pr comment ...`.
+function ghWords(args: Word[], r: Reading): { gi: number; ai: number } {
   let gi = -1
   let ai = -1
   for (let i = 0; i < args.length && ai === -1; i++) {
@@ -440,6 +460,31 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     else if (gi === -1) gi = i
     else ai = i
   }
+  return { gi, ai }
+}
+
+// `gh api`: a write when it sends fields or names a writing method; a GET never is.
+function ghApi(st: Statement, args: Word[], r: Reading): string | undefined {
+  const { plan } = r
+  const before = plan.files.length + plan.texts.length + r.stdin
+  r.method = undefined
+  walk(args, GH_API, r, 'the GitHub API call')
+  const hasFields = plan.files.length + plan.texts.length + r.stdin > before
+  if (r.method === 'GET' || (!hasFields && !/^(POST|PATCH|PUT)$/.test(r.method ?? ''))) return undefined
+  return write(plan, st, 'the GitHub API call')
+}
+
+function ghSpec(group: string, action: string): Spec {
+  if (group === 'release') return GH_RELEASE
+  if (group === 'gist' || group === 'repo') return GH_DESC
+  if (group === 'pr' && action === 'review') return GH_REVIEW
+  if (group === 'pr' && action === 'merge') return GH_MERGE
+  return action === 'close' || action === 'reopen' ? GH_CLOSE : GH_BODY
+}
+
+function gh(st: Statement, args: Word[], r: Reading): string | undefined {
+  const { plan } = r
+  const { gi, ai } = ghWords(args, r)
   const group = args[gi]?.text ?? ''
   const action = args[ai]?.text ?? ''
   const rest = args.filter((_, i) => i !== gi && i !== ai)
@@ -449,38 +494,14 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
       'push), or the Monitor tool when that mod is not loaded.'
     return undefined
   }
-  if (group === 'api') {
-    const before = plan.files.length + plan.texts.length + r.stdin
-    r.method = undefined
-    // The endpoint is a positional; keep it out of the field walk.
-    walk(
-      args.filter((_, i) => i !== gi),
-      GH_API,
-      r,
-      'the GitHub API call',
-    )
-    const hasFields = plan.files.length + plan.texts.length + r.stdin > before
-    if (r.method === 'GET' || (!hasFields && !/^(POST|PATCH|PUT)$/.test(r.method ?? ''))) return undefined
-    return write(plan, st, 'the GitHub API call')
-  }
+  // The endpoint is a positional; keep it out of the field walk.
+  if (group === 'api') return ghApi(st, args.filter((_, i) => i !== gi), r)
   if (!GH_WRITES[group]?.includes(action)) {
     walk(rest, { '-R': 'repo', '--repo': 'repo' }, r, '')
     return undefined
   }
   const where = write(plan, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
-  const spec =
-    group === 'release'
-      ? GH_RELEASE
-      : group === 'gist' || group === 'repo'
-        ? GH_DESC
-        : group === 'pr' && action === 'review'
-          ? GH_REVIEW
-          : group === 'pr' && action === 'merge'
-            ? GH_MERGE
-            : action === 'close' || action === 'reopen'
-              ? GH_CLOSE
-              : GH_BODY
-  walk(rest, spec, r, where)
+  walk(rest, ghSpec(group, action), r, where)
   return where
 }
 
