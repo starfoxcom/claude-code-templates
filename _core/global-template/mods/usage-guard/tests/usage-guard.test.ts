@@ -620,6 +620,29 @@ test('arming names a known reset, or says why it cannot', () => {
   const past = Date.parse(RESET)
   expect(planArm(limits, '5h', 2, past)).toBe('No 5-hour reset is known yet, so there is nothing to arm.')
   expect(planArm(limits, '5h', 2, past - 1)).toEqual({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE })
+  // A reset time that does not read as a date is no reset either.
+  const unreadable: SessionRateLimit[] = [{ kind: 'five_hour', percentUsed: 40, resetsAt: 'soon' }]
+  expect(planArm(unreadable, '5h', 2, NOW)).toBe('No 5-hour reset is known yet, so there is nothing to arm.')
+})
+
+test('an arm resumes the session once when a pause for its reset began after the last check', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  await seen.clock.advance(WAKE - NOW - 30_000)
+  // Another session paused for the same reset after this session's last check.
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 92,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  await seen.clock.advance(30_000)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(pauseOf(seen)?.status).toBe('done')
 })
 
 test('an armed wake that comes due during a pause leaves the resume to the pause', async ($, on) => {
