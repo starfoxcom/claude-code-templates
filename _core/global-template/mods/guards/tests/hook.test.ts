@@ -64,6 +64,20 @@ test('a body file the same command writes is read from the command text', async 
   expect(next.unread).toEqual(['the PR edit (file /tmp/c.md)'])
 })
 
+test('a relative body file under a folder built at run time is named unread, never refused', async ($, on) => {
+  const seen = world(on)
+  for (const command of ['cd "$REPO" && gh pr create --title t --body-file body.md', 'git -C "$ROOT" commit -F msg.txt']) {
+    await bash($, command)
+    const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+    expect(entry.mod).toBeNull()
+    expect(entry.unread?.length).toBe(1)
+  }
+  // A literal folder still refuses a file that is not there.
+  await bash($, 'cd C:/Repos/other && gh pr create --title t --body-file body.md')
+  const literal = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+  expect(literal.mod).toContain('could not read the body file')
+})
+
 test('a commit looks at the lines it adds', async ($, on) => {
   const seen = world(on, {}, `+++ b/src/a.ts\n@@ -0,0 +1 @@\n+// ${AI_TRAILER}\n`)
   await bash($, "git commit -m 'feat: x'")
