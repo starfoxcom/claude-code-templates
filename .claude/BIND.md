@@ -103,7 +103,7 @@ Bundle 2 now defaults `precommit_hooks_scaffold` to `true`; this repo keeps it `
 | `CODEOWNERS` | `codeowners: false` (solo-maintained) |
 | `~/.claude/hooks/tokensave-first.py` (project copy) | Hook is installed **globally**, not project-local — per CLAUDE.md's note about the tokensave template-inheritance bug that makes per-project installation unsafe. As of the v1.3-unreleased agnostification, the hook is rendered from `_core/global-template/hooks/code-research-first.py.template` + `code-research-profiles.json` → tokensave profile; the rendered filename remains `tokensave-first.py` for this bind because `tools.code_research = "tokensave"`. |
 | Devlog scaffolding (`devlog/posts/0000-template/`) | `dod_devlog_step: false` (no devlog tradition for this project — release notes live in `CHANGELOG.md` and GitHub Releases). |
-| `.claude/rules/git.md` Pre-commit hooks section + a repo-root precommit config | `precommit_hooks_scaffold: false` — new toggle ([Unreleased]); this repo resolves it OFF (overriding the bundle-2 ON default) because it has no build/lint/test tooling to gate on. Mirrors `architecture_rules_scaffold: none` — over-scaffolding would be cargo-culting. |
+| `.claude/rules/git.md` Pre-commit hooks section + a repo-root precommit config | `precommit_hooks_scaffold: false` — new toggle ([Unreleased]); this repo resolves it OFF (overriding the bundle-2 ON default). Re-decided 2026-10-03: the repo now has engine, Python-twin, hook and mod tests, but the required `Engine and hook tests` check already runs them on every PR, and a local gate would add about 40 seconds to every commit, docs-only ones included. |
 
 ## Self-bind deviations
 
