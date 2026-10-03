@@ -45,7 +45,12 @@ Take the first row that matches:
 |---|---|
 | Branch goal not finished | Commit the work. No PR. |
 <!-- TOGGLE:context_refresh_files START -->
+<!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
 | Only the hand-off file changed | Commit and open the PR; it takes the docs-only path in `token-efficiency.md`. |
+<!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
+<!-- TOGGLE:github_actions_paths_ignore_auto_merge:off START -->
+| Only the hand-off file changed | Commit and open the PR, watch its checks per `token-efficiency.md`, and merge per `git.md` § Merging. |
+<!-- TOGGLE:github_actions_paths_ignore_auto_merge:off END -->
 <!-- TOGGLE:context_refresh_files END -->
 <!-- TOGGLE:branching_model_gitflow START -->
 | `hotfix/*` finished | PR to `{{MAIN_BRANCH}}`. After it merges, open the cascade PR into `{{DEV_BRANCH}}` (`git.md` § Cascade). Done only when the cascade merges. |
