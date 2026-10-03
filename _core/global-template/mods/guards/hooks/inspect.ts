@@ -576,9 +576,11 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
       else missing(kind, r, where)
       continue
     }
-    // A word built at run time is still a flag when its first letter is one: `-m"$MSG"` carries its value
-    // attached, and `take` names a value it cannot read as unread.
-    if (t.startsWith('-') && t.length > 1 && (!w.dynamic || spec[`-${t[1]}`] !== undefined)) {
+    // A word built at run time is still a flag when a letter before its first expansion is one: `-m"$MSG"`
+    // and `-am"$MSG"` carry their value attached, and `take` names a value it cannot read as unread.
+    const lead = /^-([A-Za-z]+)/.exec(t)?.[1] ?? ''
+    const isFlag = !w.dynamic || [...lead].some(letter => spec[`-${letter}`] !== undefined)
+    if (t.startsWith('-') && t.length > 1 && isFlag) {
       if (spec[t] === 'attached') continue
       if (spec[t]) {
         const value = args[++i]
@@ -633,6 +635,8 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       return
     case 'field': {
       const eq = value.text.indexOf('=')
+      // A whole field built at run time (`-f "$KV"`): its value cannot be read.
+      if (eq === -1 && value.dynamic) return void (where && plan.unread.push(where))
       const v = eq === -1 ? '' : value.text.slice(eq + 1)
       if (v === '@-') return void r.stdin++
       if (v.startsWith('@')) return void plan.files.push({ where, path: v.slice(1) })
