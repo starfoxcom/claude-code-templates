@@ -274,29 +274,31 @@ test('a message the last compaction kept beside its summary is carried once', as
   expect(second.indexOf('bake the shadows')).toBeLessThan(second.indexOf('ship it'))
 })
 
-test('a kept tail the budget cut into the index is carried once, in order', async () => {
+test('a kept tail the budget cut into the index is carried again, never lost', async () => {
   const [a, b] = ['A', 'B'].map(letter => letter.repeat(150))
   const first = personWords([said(a ?? ''), said(b ?? '')], 200)
   expect(first).not.toContain(a ?? '')
-  // The engine kept both as the tail; only B was carried in full.
+  // The engine kept both as the tail; only B was carried in full. A cannot be told from a new message,
+  // so it is carried again: B may show twice, A keeps its index line too, nothing goes missing.
   const second = personWords([said(first), said(a ?? ''), said(b ?? ''), said('ship it')], 10_000)
-  expect(second.split(b ?? '').length - 1).toBe(1)
-  // A is carried again in full, in its place, and leaves the index.
-  expect(second.split(a ?? '').length - 1).toBe(1)
-  expect(second).not.toContain(`- ${'A'.repeat(100)}...`)
-  expect(second.indexOf(a ?? '')).toBeLessThan(second.indexOf(b ?? ''))
-  expect(second.indexOf(b ?? '')).toBeLessThan(second.indexOf('ship it'))
+  expect(second).toContain(`- ${'A'.repeat(100)}...`)
+  expect(second).toContain(a ?? '')
+  expect(second).toContain(b ?? '')
+  expect(second.lastIndexOf(b ?? '')).toBeLessThan(second.indexOf('ship it'))
 })
 
-test('a new message that starts like an indexed one is never dropped', async () => {
+test('a new message that starts like an indexed one is never dropped, nor the one it resembles', async () => {
   const x = 'X'.repeat(150)
   const first = personWords([said(x), said('yes')], 100)
   expect(first).not.toContain(x)
   // A new paste with the same start, then a "yes" like the carried one: no tail was kept.
   const changed = `${x} with one change`
   const second = personWords([said(first), said(changed), said('yes'), said('ship')], 10_000)
+  expect(second).toContain(`- ${'X'.repeat(100)}...`)
   expect(second).toContain(changed)
-  expect(second).toContain('ship')
+  expect(second.split('\nyes').length - 1).toBe(2)
+  expect(second.indexOf('\nyes')).toBeLessThan(second.indexOf(changed))
+  expect(second.indexOf(changed)).toBeLessThan(second.indexOf('ship'))
 })
 
 test('a short answer the person gives again after a compaction is kept both times', async () => {
