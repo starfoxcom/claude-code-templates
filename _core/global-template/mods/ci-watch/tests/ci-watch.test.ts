@@ -55,6 +55,8 @@ type Seen = {
   isReadable: boolean
   /** Runs inside each `gh pr checks` call: another instance acting while this one waits on gh. */
   duringChecks?: () => unknown
+  /** Runs inside a read of the state file, after the text was read. */
+  duringStateRead?: () => unknown
   /** `gh pr checks` fails (network, auth) with nothing on stdout. */
   isChecksDown?: boolean
   /** Folder makes and file writes, in order. */
@@ -87,9 +89,12 @@ function world(on: On) {
     seen.order.push(`write ${e.path.replaceAll('\\', '/')}`)
     return { value: undefined }
   })
-  on('fs.read', ($, e) => {
-    const text = seen.isReadable ? seen.files.get(e.path.replaceAll('\\', '/')) : undefined
+  on('fs.read', async ($, e) => {
+    const path = e.path.replaceAll('\\', '/')
+    const text = seen.isReadable ? seen.files.get(path) : undefined
     if (text === undefined) throw new Error('ENOENT')
+    // The read already holds the old text when the change lands.
+    if (path.endsWith('.json')) await seen.duringStateRead?.()
     return { value: text }
   })
   on('process.run', async ($, e) => {
@@ -221,6 +226,20 @@ test('a stop made while a poll waits on gh is not undone by that poll', async ($
   for (let i = 0; i < 4; i++) await clock.advance(60_000)
   expect(seen.prompts).toEqual([])
   expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches).toEqual([])
+})
+
+test('a watch started while a poll reads the saved file is kept by that poll', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.duringStateRead = () => {
+    seen.duringStateRead = undefined
+    return $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 8, repo: 'o/r' } as never)
+  }
+  await clock.advance(60_000)
+  const saved = JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }
+  expect(saved.watches.map(w => w.number).sort()).toEqual([7, 8])
 })
 
 test('a watch started while a poll waits on gh is kept by that poll', async ($, on) => {

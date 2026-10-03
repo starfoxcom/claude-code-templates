@@ -284,10 +284,11 @@ async function startWatch($: EngineInterface, repo: string, number: number, head
 async function poll($: EngineInterface): Promise<void> {
   // Start from the saved state: a hot reload can leave an earlier instance's timer running beside
   // this one, and reading the file keeps a watch the other already settled from waking twice. With
-  // no saved file yet, or after a failed save, the watches in memory stand.
-  const start = live.isUnsaved ? undefined : await readSaved($)
-  if (start) live.watches = start
+  // no saved file yet, or after a failed save, the watches in memory stand. So do they when a push or a
+  // stop landed during the read: the file it read is older than memory.
   const generation = live.generation
+  const start = live.isUnsaved ? undefined : await readSaved($)
+  if (start && live.generation === generation) live.watches = start
   const now = await $.clock.now()
   let changed = false
   const kept: Watch[] = []
