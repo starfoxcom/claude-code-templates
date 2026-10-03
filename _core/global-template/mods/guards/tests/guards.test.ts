@@ -125,12 +125,25 @@ test('body files are found in every spelling, and text built at run time is name
   expect(files("gh issue create --template 'Bug report'")).toEqual([])
   expect(inspect('git commit -m "$MSG"', false).unread).toEqual(['the commit message'])
   // The same, with the value built at run time attached to its flag.
-  for (const attached of ['git commit -m"$MSG"', 'git commit -m$MSG', 'git commit -F"$FILE"']) {
+  for (const attached of [
+    'git commit -m"$MSG"',
+    'git commit -m$MSG',
+    'git commit -F"$FILE"',
+    // Bundled behind boolean flags.
+    'git commit -am"$MSG"',
+    'git commit -sm"$MSG"',
+  ]) {
     const plan = inspect(attached, false)
     expect(plan.unread.length).toBe(1)
     expect(plan.diff).toBe('cached')
   }
   expect(inspect('gh pr comment 5 -b"$BODY"', false).unread.length).toBe(1)
+  // A whole gh api field built at run time.
+  for (const field of ['-f "$KV"', '--field "$KV"', '-f$KV']) {
+    expect(inspect(`gh api repos/o/r/issues/1/comments ${field}`, false).unread.length).toBe(1)
+  }
+  // A positional built at run time is not taken for a flag.
+  expect(inspect('git commit -m "fix: x" -- -$FILES', false).unread).toEqual([])
   expect(inspect(`git commit -m "$(cat <<'EOF'\nfix: x\nEOF\n)"`, false).unread).toEqual([])
   const written = inspect("cat > /tmp/b.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md", false)
   expect(written.written).toEqual(['/tmp/b.md'])
