@@ -1,5 +1,4 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { MKDIR_SCRIPT } from '../hooks/register'
 
 // 2026-10-02 16:00:00 UTC, which is 09:00 at a UTC-7 host.
 const NOON_UTC = Date.UTC(2026, 9, 2, 16, 0, 0)
@@ -8,19 +7,15 @@ const BREAKDOWN = { rawMaxTokens: 500_000, autoCompactThreshold: 467_000 } as ne
 
 test('every prompt carries the local time, the context fill to compaction and plan usage', async ($, on) => {
   mock.clock(on, { now: NOON_UTC })
-  const order: string[] = []
-  on('process.run', ($, e) => {
-    order.push(e.argv.join(' '))
-    return {
-      value: {
-        exitCode: 0,
-        stdout: '420 America/Phoenix\n',
-        stderr: '',
-        isStdoutTruncated: false,
-        isStderrTruncated: false,
-      },
-    }
-  })
+  on('process.run', () => ({
+    value: {
+      exitCode: 0,
+      stdout: '420 America/Phoenix\n',
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
   on('session.usage', ($, e) => ({
     value: {
       startedAt: 0,
@@ -32,11 +27,9 @@ test('every prompt carries the local time, the context fill to compaction and pl
     },
   }))
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
-  on('session.id', () => ({ value: 'sess-1' }))
-  const writes: { path: string; text: string }[] = []
+  const writes: string[] = []
   on('fs.write', ($, e) => {
-    writes.push({ path: e.path.replaceAll('\\', '/'), text: e.text })
-    order.push(`write ${e.path.replaceAll('\\', '/')}`)
+    writes.push(e.path)
     return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -50,14 +43,8 @@ test('every prompt carries the local time, the context fill to compaction and pl
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.prompt.submit({ text: 'hello' } as never)
 
-  expect(writes[0]).toEqual({
-    path: 'C:/Users/me/.claude/mods-data/session-facts/sess-1.json',
-    text: JSON.stringify({ size: 500_000, compactsAt: 467_000 }),
-  })
-  // The data folder is made before the first write: the engine's fs makes no folders.
-  const made = order.indexOf(`node -e ${MKDIR_SCRIPT} C:/Users/me/.claude/mods-data/session-facts`)
-  expect(made).toBeGreaterThanOrEqual(0)
-  expect(made).toBeLessThan(order.indexOf('write C:/Users/me/.claude/mods-data/session-facts/sess-1.json'))
+  // The facts go to the model and the budgets row only; nothing is written to disk.
+  expect(writes).toEqual([])
   expect(seen.length).toBe(1)
   expect(seen[0]).toContain('2026-10-02 09:00:00 America/Phoenix')
   expect(seen[0]).toContain('ctx 57% (287k of 500k; auto-compacts at 467k)')

@@ -344,18 +344,7 @@ On `apply`:
    - **Do NOT** add the hook entry to project-local `settings.local.json` or the project's `.claude/settings.json`. Even for tools that don't have tokensave's template-inheritance bug, project-local hook installation is forbidden by convention so users can switch projects without per-project hook surgery.
    - **Do NOT** add `python:*` to project-local permissions allowlist (hook runs globally with the `py` launcher).
 
-7b. **Install the status line** (only if `statusline_config` is ON):
-   - Copy `claude-code-templates/_core/global-template/statusline-command.sh.template` → `~/.claude/statusline-command.sh` (drop the `.template` suffix). If the file already exists, ask before overwriting.
-   - Make it executable: `chmod +x ~/.claude/statusline-command.sh` (no-op on Windows).
-   - Merge this block into `~/.claude/settings.json`:
-     ```json
-     "statusLine": {
-       "type": "command",
-       "command": "bash \"~/.claude/statusline-command.sh\""
-     }
-     ```
-   - On Windows, swap the path to absolute: `bash "C:/Users/<name>/.claude/statusline-command.sh"`.
-   - Verify by starting a Claude Code session — the status line should show `<model> | <last2dirs> | <branch> | ctx:N%`.
+7b. **No status line.** The templates ship none: the Desktop app does not draw a command status line, so the mods draw the same facts as rows above the prompt, in the terminal and in Desktop alike (see `_core/global-template/mods/README.md`). Leave any `statusLine` block already in `~/.claude/settings.json` alone unless the user asks to remove it.
 
 7c. **Install the push guard GLOBALLY** (hook location "home", or on request; it protects every project on the machine):
    - **Skip 7c and 7d when the project ships its guards.** If the bind wrote `.claude/hooks/push-guard.py` (hook location "repo", the default), the committed `.claude/settings.json` already runs the guards through `.claude/hooks/run-hook.sh`, for teammates and cloud sessions too. Run 7c and 7d only when the bind used hook location "home" (no `.claude/hooks/` folder), or when the user also wants the guards in projects not set up with these templates. Both can coexist: the launcher steps aside for a guard registered in `~/.claude/settings.json`, so one never runs twice.
