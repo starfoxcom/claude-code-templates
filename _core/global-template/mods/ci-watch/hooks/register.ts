@@ -241,10 +241,12 @@ export function claimWake(watch: Watch): boolean {
   return true
 }
 
-// The folder a push or `gh pr create` ran in: `git -C <dir>` or a `cd <dir>` / `Set-Location <dir>`
-// before it. Undefined means the session's folder.
+// The folder a push or `gh pr create` ran in: `git -C <dir>` or the `cd <dir>` / `Set-Location <dir>`
+// steps before it, on the same line or the lines above. Undefined means the session's folder.
 const GIT_C = /\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)/
-const CD = /(?:^|[;&|]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/
+const CD = /(?:^|[;&|\n]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/g
+const PUSH_AT = /\bgit\b[^;&|\n]*\bpush\b|\bgh\s+pr\s+create\b/
+const ABSOLUTE = /^(?:[a-zA-Z]:|[/\\~])/
 
 export function targetFolder(command: string, isWindows: boolean): string | undefined {
   // Git Bash paths (/c/Users/...) mean nothing to a Windows process: turn them into C:/Users/...
@@ -253,8 +255,16 @@ export function targetFolder(command: string, isWindows: boolean): string | unde
     const bare = raw.replace(/^["']|["']$/g, '')
     return isWindows ? bare.replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:') : bare
   }
-  const found = GIT_C.exec(command) ?? CD.exec(command)
-  return found ? unquote(found[1]!) : undefined
+  const gitC = GIT_C.exec(command)
+  if (gitC) return unquote(gitC[1]!)
+  // Each `cd` before the push moves on from the one before it, unless it names a whole path.
+  const pushAt = PUSH_AT.exec(command)?.index ?? command.length
+  let folder: string | undefined
+  for (const step of command.slice(0, pushAt).matchAll(CD)) {
+    const next = unquote(step[1]!)
+    folder = folder === undefined || ABSOLUTE.test(next) ? next : `${folder}/${next}`
+  }
+  return folder
 }
 
 async function gh($: EngineInterface, args: readonly string[], cwd?: string): Promise<string> {
