@@ -4,7 +4,7 @@ A mod is a small Claude Code plugin made of **function hooks**: a TypeScript mod
 
 **Requirements:** Claude Code **2.1.287 or newer** (the function-hook API is early access; older builds ignore these folders), and `node` on `PATH` (several mods run a small Node helper for file work the hook sandbox cannot do). The mods run in the terminal CLI and in the Code tab of the Claude Desktop app; both load them the same way (see [Install](#install)).
 
-Every mod is optional and independent, with one exception noted in the table (shared-pc and usage-guard cooperate when both are on). `statusline.js` in the folder above reads what several mods write; see [Status line](#status-line).
+Every mod is optional and independent, with one exception noted in the table (shared-pc and usage-guard cooperate when both are on). The rows above the prompt replace a status line; see [Rows in place of a status line](#rows-in-place-of-a-status-line).
 
 ---
 
@@ -12,7 +12,7 @@ Every mod is optional and independent, with one exception noted in the table (sh
 
 | Mod | What it does | Default |
 |---|---|---|
-| `session-facts` | Adds one line to every prompt, for the model only: the exact local time, how full the context is measured against the **compaction** window, and plan usage per window. Also draws the budgets row above the prompt: context fill to compaction, plan usage per window with the reset time once a window passes the warning level (red at `usage-guard`'s wrap-up level), the `usage-guard` pause, and the prompt-cache countdown in its last minutes. Still writes the facts per session for the status line. Replaces the older `[time]` hook snippet. | **Recommended on** |
+| `session-facts` | Adds one line to every prompt, for the model only: the exact local time, how full the context is measured against the **compaction** window, and plan usage per window. Also draws the budgets row above the prompt: context fill to compaction, plan usage per window with the reset time once a window passes the warning level (red at `usage-guard`'s wrap-up level), the `usage-guard` pause, and the prompt-cache countdown in its last minutes. Replaces the older `[time]` hook snippet. | **Recommended on** |
 | `compact-handoff` | Turns compaction into a focused hand-off: your own messages kept word for word (within a budget), a structured hand-off written by the summarizer (doing, where we are, decided, dead ends, read next, reference, live state, owed), and a `recall` tool that searches the full transcript afterwards. | Opt-in; mode `on` |
 | `ci-watch` | After a `git push` or `gh pr create`, or when the model calls its `watch` tool, watches that PR's checks locally with `gh` (no plan usage while waiting) and wakes the session **once**, only after every check and workflow has finished (a fix pushed mid-run would restart the rest): all passed, failed, or stuck past the time limit. Draws one row per watched PR above the prompt: its progress, a link to it, a button that lists each check, and a stop button. `/ci-watch` lists watches, `/ci-watch stop` clears them. | Opt-in |
 | `guards` | Reads each Bash and PowerShell command (quotes, here-docs, body files, `gh api` fields) and checks only the text that reaches history: commit, tag and merge messages, PR/issue/release text, new branch names, and lines a commit adds. Blocks AI credit lines everywhere (and, if you narrow `mentionRepos`, the plain product name outside the repos you list), and the streaming `gh run watch`. | Opt-in; starts in `shadow` mode |
@@ -82,7 +82,7 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
    On Windows the separator is `;` (verified). On macOS and Linux it is `:` (`~/.claude/mods/session-facts:~/.claude/mods/ci-watch`), per the CLI's plugin reference; not yet verified on those systems.
 3. **Fully restart** Claude Code. The variable is read at start, so a new entry needs a restart. Editing a mod that is already loaded reloads it in running terminal sessions when one of its files is saved.
 4. **Desktop app:** it reads the same `~/.claude/settings.json` and its `env` block, so steps 1 to 3 cover it. Keep the variables in that file: on Windows the app also inherits user and system environment variables but never reads a PowerShell profile. The mods run only in **local** Desktop sessions; plugins are not loaded in WSL or cloud sessions. Desktop sessions are not interactive terminal sessions, and the CLI watches mod folders by default only in those, so in Desktop an edited mod loads at the next session start. To reload on save there too, add `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"` to the same `env` block; it is optional and only matters while you edit mods. An older Desktop build that places no panes leaves the `tasks` list pane unopened; its band still draws.
-5. Optional: copy `skill-check/skill-contracts.example.json` to `~/.claude/skill-contracts.json`, and `../statusline.config.example.json` to `~/.claude/statusline.config.json`.
+5. Optional: copy `skill-check/skill-contracts.example.json` to `~/.claude/skill-contracts.json`.
 
 Load each mod once. A folder enabled for hot reload elsewhere (a development copy) loads again on restart, so remove a development copy once the mod is installed.
 
@@ -92,7 +92,6 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 
 | Mod | Files |
 |---|---|
-| `session-facts` | `<session>.json` per session (the status line sweeps files older than three days) |
 | `compact-handoff` | hand-off files: one per session in `on` mode, plus `<session>-precompute.md` when the engine writes a summary ahead of time; newest 20, at most 14 days, in `shadow` mode |
 | `ci-watch` | `<session>.json` (the watches) and `<session>.owner` (which loaded copy of the mod polls); a settled watch is dropped after an hour, or at once when the PR is merged or closed; both files are swept two days after their session last wrote them |
 | `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json` |
@@ -100,18 +99,10 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
 | `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days) |
 | `runners` | `runners.json` (optional): your own runner list, read at session start; the last reading lives in the session |
-| status line | `statusline/runners.json` (runner check cache), `statusline/swept.json` |
 
-## Status line
+## Rows in place of a status line
 
-`../statusline.js` is a Node status line that reads what the mods write. It draws up to four lines, leaving out any with nothing to show:
-
-1. the session: model and effort, project, git branch (`*` when dirty);
-2. CI: this session's watched PRs and their checks, from `ci-watch`;
-3. runners: local CI runners on or off, only when `statusline.config.json` lists them (machine-wide, checked once a minute); The `runners` mod draws the same as a band row, with more detail and Start/Stop buttons, in the terminal and in Desktop; use one or the other.
-4. budgets: context fill and tokens left before compaction (exact with `session-facts`; without it the threshold is left out), plan usage per window (or the `usage-guard` pause), and the prompt-cache countdown in its last minutes.
-
-Mods that draw their own band above the prompt (`shared-pc`, `tasks`) get no status-line piece. Install it with `"statusLine": { "type": "command", "command": "node \"<home>/.claude/statusline.js\"", "refreshInterval": 15 }` in `~/.claude/settings.json`. `refreshInterval` re-runs the command every 15 seconds on top of the usual events, so the CI and runner lines keep updating while the session is idle; without it they change only when something happens in the session. Use it in place of the simpler `statusline-command.sh.template` (one line, bash only); Claude Code runs a single status line command. Whether the Desktop app draws a command status line is not yet confirmed; until it is, treat the CI, runner and budget lines as terminal-only. The bands (`shared-pc`, `tasks`, the `usage-guard` card) draw in both.
+Four mods each draw one row above the prompt: `session-info` (the session), `ci-watch` (CI), `runners` (local runners) and `session-facts` (budgets). Together they show what a command status line would, with buttons and details a status line cannot have, and they draw in the terminal and in the Desktop app alike; the Desktop app does not draw a command status line. These templates ship no status line any more. If `~/.claude/settings.json` still has a `statusLine` block from an older setup, remove it once the rows are installed, so the terminal does not show the same facts twice. The older `statusline.js` left files under `~/.claude/mods-data/statusline/` and `~/.claude/mods-data/session-facts/`; both folders can be deleted.
 
 ---
 
