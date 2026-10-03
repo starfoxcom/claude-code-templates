@@ -27,7 +27,6 @@
       "Bash(which:*)",
       "Bash(python -m http.server:*)"
     ],
-    "deny": [],
-    "defaultMode": "default"
+    "deny": []
   }
 }
