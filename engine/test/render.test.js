@@ -56,6 +56,12 @@ test("GitHub Actions expressions are left alone", () => {
   assert.equal(fillPlaceholders("${{ github.sha }}", {}), "${{ github.sha }}");
 });
 
-test("render normalises line endings and collapses blank runs", () => {
-  assert.equal(renderTemplate("a\r\n\r\n\r\n\r\nb", { values: {} }), "a\n\nb");
+test("render normalises line endings and collapses the gap a removed block leaves", () => {
+  const text = `a\r\n\r\n${block("x", "b")}\r\n\r\nc`;
+  assert.equal(renderTemplate(text, { flags: { x: false }, values: {} }), "a\n\nc");
+});
+
+test("render keeps the blank lines of a file with no blocks", () => {
+  const python = "import re\r\n\r\n\r\ndef a():\r\n    pass\r\n\r\n\r\ndef b():\r\n    pass\r\n";
+  assert.equal(renderTemplate(python, { values: {} }), python.replace(/\r\n/g, "\n"));
 });
