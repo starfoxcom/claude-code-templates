@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register } from 'claude-code'
+import type { EngineInterface as Engine, Register, RenderChildren } from 'claude-code'
 
 import type { CardTone, SharedPcBand } from '../types'
 import { classify, compile, labelFor } from './classify'
@@ -138,124 +138,134 @@ export const register: Register = on => {
     // What core and the other mods draw here (usage-guard's card among them) stays, above the band.
     const inner = await next(e)
     if (e.props.hasSurvey) return inner
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
     const cardWidth = Math.max(30, Math.min(64, e.props.bodyColumns - 2))
-    if (ctx.offReason) {
-      if (ctx.isOffDismissed) return inner
-      return (
-        <Box flexDirection="column">
-          {inner}
-          <Box
-            alignSelf="flex-end"
-            width={cardWidth}
-            flexDirection="column"
-            borderStyle="double"
-            borderColor="red"
-            backgroundColor="black"
-            paddingX={1}
-          >
-            <Text bold color="black" backgroundColor="red">
-              {' SHARED PC OFF '}
-            </Text>
-            <Text bold color="red" wrap="wrap">
-              Turn-taking is off in this session: {ctx.offReason}
-            </Text>
-            <Button
-              key="off-dismiss"
-              label="Dismiss"
-              variant="primary"
-              onPress={() => void (ctx.isOffDismissed = true)}
-            />
-          </Box>
-        </Box>
-      )
-    }
+    if (ctx.offReason) return ctx.isOffDismissed ? inner : offCard(ui, cardWidth, inner)
     const shown = await read($, band)
     if (!shown) return inner
-    const seat = shown.holder
-    // A band saved by an older version of the mod lacks newer fields (cards, a card's tone) until the next refresh.
-    const cards = shown.cards ?? []
-    // The mod's own toast: a bordered card at the band's right edge, drawn in every session; a request's
-    // card stays until someone answers it, from any session. Claude Code's toast takes no color or
-    // border, OS notifications may be off, and a card drawn outside the band (position absolute) is
-    // clipped by the band's slot, so it stays inside the band's own rows.
-    const card = cards[0]
-    const cardBox = card && (
+    return (
+      <ui.Box flexDirection="column">
+        {inner}
+        {cardBox(ui, $, shown, cardWidth)}
+        {seatLine(ui, $, shown)}
+      </ui.Box>
+    )
+  })
+}
+
+type Ui = ReturnType<Engine['ui']['resolve']>
+
+// Shown instead of the band when the mod could not start in this session.
+function offCard(ui: Ui, width: number, inner: RenderChildren) {
+  const { Box, Button, Text } = ui
+  return (
+    <Box flexDirection="column">
+      {inner}
       <Box
         alignSelf="flex-end"
-        width={cardWidth}
+        width={width}
         flexDirection="column"
         borderStyle="double"
-        borderColor={card.tone ?? 'yellow'}
+        borderColor="red"
         backgroundColor="black"
         paddingX={1}
       >
-        <Text bold color="black" backgroundColor={card.tone ?? 'yellow'}>
-          {' SHARED PC '}
-          {cards.length > 1 ? `(+${cards.length - 1}) ` : ''}
+        <Text bold color="black" backgroundColor="red">
+          {' SHARED PC OFF '}
         </Text>
-        <Text bold color={card.tone ?? 'yellow'} wrap="wrap">
-          {card.body}
+        <Text bold color="red" wrap="wrap">
+          Turn-taking is off in this session: {ctx.offReason}
         </Text>
-        {card.requestSession && (
-          <Box>
-            <Button
-              key="card-approve"
-              label="Approve"
-              variant="primary"
-              onPress={() => change($, ['answer', card.requestSession!, 'approve'])}
-            />
-            <Button
-              key="card-decline"
-              label="Decline"
-              onPress={() => change($, ['answer', card.requestSession!, 'decline'])}
-            />
-          </Box>
-        )}
-        {!card.requestSession && card.tone === 'red' && (
-          <Button key="card-dismiss" label="Dismiss" variant="primary" onPress={() => dismissNotice($, card.key)} />
-        )}
+        <Button key="off-dismiss" label="Dismiss" variant="primary" onPress={() => void (ctx.isOffDismissed = true)} />
       </Box>
-    )
-    let line
-    if (shown.mine === 'seat' && seat) {
-      line = (
+    </Box>
+  )
+}
+
+// The mod's own toast: a bordered card at the band's right edge, drawn in every session; a request's
+// card stays until someone answers it, from any session. Claude Code's toast takes no color or
+// border, OS notifications may be off, and a card drawn outside the band (position absolute) is
+// clipped by the band's slot, so it stays inside the band's own rows.
+function cardBox(ui: Ui, $: Engine, shown: SharedPcBand, width: number) {
+  const { Box, Button, Text } = ui
+  // A band saved by an older version of the mod lacks newer fields (cards, a card's tone) until the next refresh.
+  const cards = shown.cards ?? []
+  const card = cards[0]
+  if (!card) return null
+  const tone = card.tone ?? 'yellow'
+  const asker = card.requestSession
+  return (
+    <Box
+      alignSelf="flex-end"
+      width={width}
+      flexDirection="column"
+      borderStyle="double"
+      borderColor={tone}
+      backgroundColor="black"
+      paddingX={1}
+    >
+      <Text bold color="black" backgroundColor={tone}>
+        {' SHARED PC '}
+        {cards.length > 1 ? `(+${cards.length - 1}) ` : ''}
+      </Text>
+      <Text bold color={tone} wrap="wrap">
+        {card.body}
+      </Text>
+      {asker && (
         <Box>
-          <Text color={seat.isLong ? 'yellow' : 'green'}>
-            PC · yours · {seat.label} · {seat.kind === 'hold' ? `${seat.left} left` : seat.heldFor}
-            {shown.waiting > 0 ? ` · ${shown.waiting} waiting` : ''}{' '}
-          </Text>
-          <Button key="release" label="Release" onPress={() => change($, ['release', ctx.me])} />
+          <Button
+            key="card-approve"
+            label="Approve"
+            variant="primary"
+            onPress={() => change($, ['answer', asker, 'approve'])}
+          />
+          <Button key="card-decline" label="Decline" onPress={() => change($, ['answer', asker, 'decline'])} />
         </Box>
-      )
-    } else if (shown.mine === 'line' && seat) {
-      line = (
-        <Box>
-          <Text color="cyan">
-            PC · #{shown.position} in line · {seat.name} has it ({seat.label}, {seat.heldFor}){' '}
-          </Text>
-          {shown.position > 1 && <Button key="next" label="Go next" onPress={() => change($, ['next', ctx.me])} />}
-        </Box>
-      )
-    } else if (seat) {
-      line = (
-        <Text color="yellow">
-          PC ·{' '}
-          {seat.kind === 'hold'
-            ? `held by ${seat.name} · ${seat.label} · ${seat.left} left`
-            : `${seat.name} has it · ${seat.label} · ${seat.heldFor}`}
-          {shown.waiting > 0 ? ` · ${shown.waiting} waiting` : ''}
-        </Text>
-      )
-    } else line = <Text color="green">PC · free</Text>
+      )}
+      {!asker && card.tone === 'red' && (
+        <Button key="card-dismiss" label="Dismiss" variant="primary" onPress={() => dismissNotice($, card.key)} />
+      )}
+    </Box>
+  )
+}
+
+// The band's line: who has the PC, this session's place in line, or free.
+function seatLine(ui: Ui, $: Engine, shown: SharedPcBand) {
+  const { Box, Button, Text } = ui
+  const seat = shown.holder
+  if (!seat) return <Text color="green">PC · free</Text>
+  const waiting = shown.waiting > 0 ? ` · ${shown.waiting} waiting` : ''
+  if (shown.mine === 'seat') {
     return (
-      <Box flexDirection="column">
-        {inner}
-        {cardBox}
-        {line}
+      <Box>
+        <Text color={seat.isLong ? 'yellow' : 'green'}>
+          PC · yours · {seat.label} · {seat.kind === 'hold' ? `${seat.left} left` : seat.heldFor}
+          {waiting}{' '}
+        </Text>
+        <Button key="release" label="Release" onPress={() => change($, ['release', ctx.me])} />
       </Box>
     )
-  })
+  }
+  if (shown.mine === 'line') {
+    return (
+      <Box>
+        <Text color="cyan">
+          PC · #{shown.position} in line · {seat.name} has it ({seat.label}, {seat.heldFor}){' '}
+        </Text>
+        {shown.position > 1 && <Button key="next" label="Go next" onPress={() => change($, ['next', ctx.me])} />}
+      </Box>
+    )
+  }
+  const what =
+    seat.kind === 'hold'
+      ? `held by ${seat.name} · ${seat.label} · ${seat.left} left`
+      : `${seat.name} has it · ${seat.label} · ${seat.heldFor}`
+  return (
+    <Text color="yellow">
+      PC · {what}
+      {waiting}
+    </Text>
+  )
 }
 
 async function setUp($: Engine) {
