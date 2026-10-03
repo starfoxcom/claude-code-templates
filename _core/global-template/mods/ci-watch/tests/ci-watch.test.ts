@@ -454,6 +454,11 @@ test('a push in another folder is looked up there', () => {
   expect(targetFolder("Set-Location 'D:/wt'; git push", true)).toBe('D:/wt')
   expect(targetFolder('git -C /c/Users/me/wt push -q', true)).toBe('c:/Users/me/wt')
   expect(targetFolder('git push -u origin feature/x', true)).toBeUndefined()
+  // A `cd` on a line of its own, and every `cd` before the push, in order; none after it.
+  expect(targetFolder('cd ../wt-ci\ngit push -u origin feature/x', true)).toBe('../wt-ci')
+  expect(targetFolder('cd a; cd b; git push', true)).toBe('a/b')
+  expect(targetFolder('cd a\ncd /c/wt\ngit push', true)).toBe('c:/wt')
+  expect(targetFolder('git push && cd ../other', true)).toBeUndefined()
   // Elsewhere a one-letter top folder is real.
   expect(targetFolder('git -C /u/me/wt push -q', false)).toBe('/u/me/wt')
 })
