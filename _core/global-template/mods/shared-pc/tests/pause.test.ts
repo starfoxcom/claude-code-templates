@@ -6,16 +6,20 @@ import { expect, mock, test } from 'claude-code/testing'
 const ROOT = 'C:/Repos/app'
 const DATA = 'C:/fake/mods-data'
 
-function fakeHost(on: Parameters<Parameters<typeof test>[1] & ((...a: never[]) => unknown)>[1] | any, pause: object | null) {
+function fakeHost(
+  on: Parameters<Parameters<typeof test>[1] & ((...a: never[]) => unknown)>[1] | any,
+  pause: object | null,
+) {
   on('session.id', () => ({ value: 'me-session-id' }))
   on('session.root', () => ({ value: ROOT }))
   on('process.run', (_$: unknown, e: { argv: readonly string[] }) => {
     // The host's time zone probe (node -e): six hours behind UTC.
-    const stdout = e.argv[1] === '-e'
-      ? '360 America/Mexico_City\n'
-      : e.argv.includes('where')
-      ? JSON.stringify({ dir: `${DATA}/shared-pc`, aliveMs: 45_000, lingerMs: 60_000 })
-      : JSON.stringify({ seat: null, line: [], nextUp: null, requests: [], granted: true, mine: 'seat' })
+    const stdout =
+      e.argv[1] === '-e'
+        ? '360 America/Mexico_City\n'
+        : e.argv.includes('where')
+          ? JSON.stringify({ dir: `${DATA}/shared-pc`, aliveMs: 45_000, lingerMs: 60_000 })
+          : JSON.stringify({ seat: null, line: [], nextUp: null, requests: [], granted: true, mine: 'seat' })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', (_$: unknown, e: { path?: string }) => {
@@ -24,7 +28,8 @@ function fakeHost(on: Parameters<Parameters<typeof test>[1] & ((...a: never[]) =
       if (!pause) throw new Error('ENOENT')
       return { value: JSON.stringify(pause) }
     }
-    if (path.endsWith('state.json')) return { value: JSON.stringify({ seat: null, line: [], nextUp: null, requests: [] }) }
+    if (path.endsWith('state.json'))
+      return { value: JSON.stringify({ seat: null, line: [], nextUp: null, requests: [] }) }
     return { value: JSON.stringify({ id: 'me-session-id', name: 'x', lastBeat: Date.now() }) }
   })
   on('fs.write', () => ({ value: undefined }))

@@ -32,7 +32,10 @@ export function markSeen(run: Run, tool: string, input: string): void {
 
 export function followUpText(run: Run): string {
   const steps = missingSteps(run).map(step => step.step)
-  return `[skill-check] /${run.skill} is not finished: no sign of ${steps.join('; ')}. Do these now, or say plainly why each one does not apply this time.`
+  return (
+    `[skill-check] /${run.skill} is not finished: no sign of ${steps.join('; ')}. Do these now, or say ` +
+    `plainly why each one does not apply this time.`
+  )
 }
 
 async function contractsFor($: EngineInterface, skill: string): Promise<Step[] | undefined> {
@@ -41,7 +44,9 @@ async function contractsFor($: EngineInterface, skill: string): Promise<Step[] |
   try {
     const path = `${configured ?? `${home}/.claude`}/skill-contracts.json`.replaceAll('\\', '/')
     const all = JSON.parse(String(await $.fs.read(path))) as Contracts
-    const folder = ((await $.session.root()).replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? '').toLowerCase()
+    const folder = (
+      (await $.session.root()).replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? ''
+    ).toLowerCase()
     return all[folder]?.[skill] ?? all['*']?.[skill]
   } catch {
     return undefined

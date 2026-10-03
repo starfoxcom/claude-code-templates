@@ -249,7 +249,14 @@ function grant(s, entry) {
   const t = now()
   s.seat =
     entry.kind === 'hold'
-      ? { session: entry.session, kind: 'hold', since: t, until: t + entry.minutes * 60_000, reason: entry.reason, label: entry.label }
+      ? {
+          session: entry.session,
+          kind: 'hold',
+          since: t,
+          until: t + entry.minutes * 60_000,
+          reason: entry.reason,
+          label: entry.label,
+        }
       : { session: entry.session, kind: 'work', since: t, running: 0, tasks: [], lastHeavyEnd: t, label: entry.label }
   if (s.nextUp && s.nextUp.session === entry.session) s.nextUp = null
   log({ op: 'seat-granted', session: entry.session, kind: s.seat.kind, waitedMs: entry.since ? t - entry.since : 0 })
@@ -276,7 +283,11 @@ function view(s, all, id) {
     requests: s.requests,
     mine: s.seat && s.seat.session === id ? 'seat' : position >= 0 ? 'line' : 'none',
     position: position >= 0 ? position + 1 : 0,
-    names: Object.fromEntries(Object.values(all).filter(x => isAlive(all, x.id)).map(x => [x.id, x.name])),
+    names: Object.fromEntries(
+      Object.values(all)
+        .filter(x => isAlive(all, x.id))
+        .map(x => [x.id, x.name]),
+    ),
   }
 }
 

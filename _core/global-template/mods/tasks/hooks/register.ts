@@ -132,7 +132,12 @@ export function importEngineTasks(mirror: Mirror, found: readonly EngineTask[], 
     if (item.owner) task.owner = item.owner
     if (item.blocks?.length) task.blocks = item.blocks.map(String)
     if (item.blockedBy?.length) task.blockedBy = item.blockedBy.map(String)
-    applyUpdate(mirror, { taskId: id, status: item.status, metadata: item.metadata as UpdateArgs['metadata'] }, turn, now)
+    applyUpdate(
+      mirror,
+      { taskId: id, status: item.status, metadata: item.metadata as UpdateArgs['metadata'] },
+      turn,
+      now,
+    )
     isChanged = true
   }
   if (isChanged) {
@@ -150,7 +155,13 @@ function inProgress(mirror: Mirror): MirrorTask[] {
   return mirror.tasks.filter(task => task.status === 'in_progress' && !task.hold && !task.droppedAt)
 }
 
-export function applyCreate(mirror: Mirror, id: string, subject: string, activeForm: string | undefined, turn: number): void {
+export function applyCreate(
+  mirror: Mirror,
+  id: string,
+  subject: string,
+  activeForm: string | undefined,
+  turn: number,
+): void {
   mirror.tasks = mirror.tasks.filter(task => task.id !== id)
   mirror.tasks.push({ id, subject, activeForm, status: 'pending', createdTurn: turn })
 }
@@ -213,7 +224,12 @@ function findTask(mirror: Mirror, id: string): MirrorTask | undefined {
   return mirror.tasks.find(task => task.id === id && !task.droppedAt)
 }
 
-function link(mirror: Mirror, from: MirrorTask, ids: readonly unknown[] | undefined, side: 'blocks' | 'blockedBy'): boolean {
+function link(
+  mirror: Mirror,
+  from: MirrorTask,
+  ids: readonly unknown[] | undefined,
+  side: 'blocks' | 'blockedBy',
+): boolean {
   let isChanged = false
   for (const raw of ids ?? []) {
     const other = findTask(mirror, String(raw))
@@ -245,7 +261,16 @@ export function answerTool(mirror: Mirror, tool: string, args: TaskArgs, turn: n
     const task = findTask(mirror, String(args.taskId ?? ''))
     if (!task) return { task: null }
     const { id, subject, status } = task
-    return { task: { id, subject, description: task.description ?? '', status, blocks: task.blocks ?? [], blockedBy: task.blockedBy ?? [] } }
+    return {
+      task: {
+        id,
+        subject,
+        description: task.description ?? '',
+        status,
+        blocks: task.blocks ?? [],
+        blockedBy: task.blockedBy ?? [],
+      },
+    }
   }
   if (tool === 'TaskList') {
     const done = new Set(mirror.tasks.filter(task => task.status === 'completed').map(task => task.id))
@@ -285,7 +310,12 @@ export function answerTool(mirror: Mirror, tool: string, args: TaskArgs, turn: n
   const isStatusChange = args.status !== undefined && args.status !== from
   if (isStatusChange) fields.push('status')
   applyUpdate(mirror, args, turn, now)
-  return { success: true, taskId: id, updatedFields: fields, statusChange: isStatusChange ? { from, to: args.status } : undefined }
+  return {
+    success: true,
+    taskId: id,
+    updatedFields: fields,
+    statusChange: isStatusChange ? { from, to: args.status } : undefined,
+  }
 }
 
 function label(task: MirrorTask): string {
@@ -308,13 +338,19 @@ export function openListText(mirror: Mirror, turn: number): string | null {
 export function staleText(mirror: Mirror, turn: number): string | undefined {
   const stale = inProgress(mirror).filter(task => (task.startedTurn ?? turn) <= turn)
   if (stale.length === 0) return undefined
-  return `[tasks] Still in progress from an earlier turn: ${stale.map(label).join(', ')}. If finished, mark completed before new work.`
+  return (
+    `[tasks] Still in progress from an earlier turn: ${stale.map(label).join(', ')}. If finished, mark ` +
+    `completed before new work.`
+  )
 }
 
 export function overlapText(mirror: Mirror): string | undefined {
   const running = inProgress(mirror)
   if (running.length < 2) return undefined
-  return `[tasks] ${running.map(label).join(' and ')} are all in progress. Work one at a time: mark the finished one completed, or set the others back to pending.`
+  return (
+    `[tasks] ${running.map(label).join(' and ')} are all in progress. Work one at a time: mark the finished ` +
+    `one completed, or set the others back to pending.`
+  )
 }
 
 export function carriedText(carried: readonly MirrorTask[]): string {
@@ -333,7 +369,10 @@ export function pickPredecessor(mirrors: readonly Mirror[], root: string, sessio
 }
 
 export function nudgeText(tools: number): string {
-  return `[tasks] This turn ran ${tools} tool calls with no task list. If the work has 3+ steps, create the tasks now (TaskCreate) and keep their status current.`
+  return (
+    `[tasks] This turn ran ${tools} tool calls with no task list. If the work has 3+ steps, create the tasks ` +
+    `now (TaskCreate) and keep their status current.`
+  )
 }
 
 // The engine's fs makes no missing folders, so the data folder is made through node, once per load.
@@ -455,7 +494,9 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     const dir = await dataDir($)
-    void $.process.run(['node', '-e', SWEEP_SCRIPT, dir, String(SWEEP_DAYS)], { timeoutMs: 20_000 }).catch(() => undefined)
+    void $.process
+      .run(['node', '-e', SWEEP_SCRIPT, dir, String(SWEEP_DAYS)], { timeoutMs: 20_000 })
+      .catch(() => undefined)
     await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)
     return result
@@ -528,7 +569,8 @@ export const register: Register = (on, options) => {
         if (overlap) return withContext(result, overlap)
       }
       live.toolsThisTurn += 1
-      if (live.nudgeAfter <= 0 || live.isNudged || live.sawTaskTool || live.toolsThisTurn < live.nudgeAfter) return result
+      if (live.nudgeAfter <= 0 || live.isNudged || live.sawTaskTool || live.toolsThisTurn < live.nudgeAfter)
+        return result
       if (openTasks(await mirrorOf($)).length > 0) return result
       live.isNudged = true
       return withContext(result, nudgeText(live.toolsThisTurn))

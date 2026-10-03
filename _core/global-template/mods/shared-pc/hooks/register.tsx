@@ -45,7 +45,13 @@ type State = {
   requests: Ask[]
   updatedAt: number
 }
-type Reply = { error?: string; granted?: boolean; mine?: 'seat' | 'line' | 'none'; position?: number; note?: string } & Partial<State>
+type Reply = {
+  error?: string
+  granted?: boolean
+  mine?: 'seat' | 'line' | 'none'
+  position?: number
+  note?: string
+} & Partial<State>
 
 const EMPTY: State = { seat: null, line: [], nextUp: null, requests: [], updatedAt: 0 }
 
@@ -115,7 +121,8 @@ export const register: Register = on => {
   on('session.append', async ($, e, next) => {
     if (ownTasks().length > 0 && e.door !== 'response') {
       const content = e.message.content
-      const text = typeof content === 'string' ? content : content.map(b => ('text' in b ? String(b.text) : '')).join('\n')
+      const text =
+        typeof content === 'string' ? content : content.map(b => ('text' in b ? String(b.text) : '')).join('\n')
       if (text.includes('task-notification') || text.includes('<status>')) await settleTasks($, text)
     }
     return next(e)
@@ -153,7 +160,12 @@ export const register: Register = on => {
             <Text bold color="red" wrap="wrap">
               Turn-taking is off in this session: {ctx.offReason}
             </Text>
-            <Button key="off-dismiss" label="Dismiss" variant="primary" onPress={() => void (ctx.isOffDismissed = true)} />
+            <Button
+              key="off-dismiss"
+              label="Dismiss"
+              variant="primary"
+              onPress={() => void (ctx.isOffDismissed = true)}
+            />
           </Box>
         </Box>
       )
@@ -228,7 +240,10 @@ export const register: Register = on => {
     } else if (seat) {
       line = (
         <Text color="yellow">
-          PC · {seat.kind === 'hold' ? `held by ${seat.name} · ${seat.label} · ${seat.left} left` : `${seat.name} has it · ${seat.label} · ${seat.heldFor}`}
+          PC ·{' '}
+          {seat.kind === 'hold'
+            ? `held by ${seat.name} · ${seat.label} · ${seat.left} left`
+            : `${seat.name} has it · ${seat.label} · ${seat.heldFor}`}
           {shown.waiting > 0 ? ` · ${shown.waiting} waiting` : ''}
         </Text>
       )
@@ -347,7 +362,9 @@ async function refresh($: Engine) {
     const isGone = !holder || now - holder.lastBeat > ctx.aliveMs
     const isHoldOver = s.seat.kind === 'hold' && now > (s.seat.until ?? 0)
     const isLingerOver =
-      s.seat.kind === 'work' && s.seat.running === 0 && (s.seat.tasks ?? []).length === 0 &&
+      s.seat.kind === 'work' &&
+      s.seat.running === 0 &&
+      (s.seat.tasks ?? []).length === 0 &&
       now - (s.seat.lastHeavyEnd ?? 0) > ctx.lingerMs
     if (isGone || isHoldOver || isLingerOver) {
       await pcctl($, ['status', ctx.me])
@@ -371,8 +388,10 @@ async function handleRequests($: Engine, s: State) {
       ctx.delivered.add(key)
       const text =
         ask.answer === 'approved'
-          ? '[shared-pc] The person approved your request: this session goes next on the PC. Go ahead with the heavy work you asked for.'
-          : '[shared-pc] The person declined your request to go next. Carry on: heavy commands still run, waiting their normal turn in line.'
+          ? '[shared-pc] The person approved your request: this session goes next on the PC. Go ahead with the ' +
+            'heavy work you asked for.'
+          : '[shared-pc] The person declined your request to go next. Carry on: heavy commands still run, waiting ' +
+            'their normal turn in line.'
       await pcctl($, ['ack', ctx.me])
       // A session that asked may be waiting on the answer, so an idle one is woken.
       if (ctx.isWorking) await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
@@ -587,7 +606,10 @@ async function toolAction($: Engine, input: ToolInput): Promise<string> {
       // Shared, so every session toasts it and shows the box; a toast cannot stay until answered.
       const reply = await change($, ['ask', ctx.me, reason])
       if (reply.error) return `Request failed: ${reply.error}`
-      return 'Request shown to the person in every session. Their answer arrives as a note; keep to light work meanwhile.'
+      return (
+        'Request shown to the person in every session. Their answer arrives as a note; keep to light work ' +
+        'meanwhile.'
+      )
     }
     default:
       return describe(await pcctl($, ['status', ctx.me]))
@@ -604,9 +626,7 @@ async function commandAction($: Engine, args: string): Promise<string> {
     case 'next': {
       // Typed in a session with its own open request, `/pc next` is the person approving it.
       const isOwnOpen = !rest[0] && ctx.last.requests.some(r => r.session === ctx.me && !r.answer)
-      reply = isOwnOpen
-        ? await change($, ['answer', ctx.me, 'approve'])
-        : await change($, ['next', rest[0] ?? ctx.me])
+      reply = isOwnOpen ? await change($, ['answer', ctx.me, 'approve']) : await change($, ['next', rest[0] ?? ctx.me])
       break
     }
     case 'leave':

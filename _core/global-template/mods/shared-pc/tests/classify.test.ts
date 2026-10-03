@@ -54,14 +54,22 @@ test('markers win over every list', () => {
 
 test('a project entry: its own lists come first, by folder name or root, and stay out of other projects', () => {
   RULES.projects['my-game'] = {
-    heavy: [String.raw`^ctest\b`, String.raw`tools[\\/]perf[\\/]`, String.raw`start-runners\.cmd`, String.raw`My Engine`],
+    heavy: [
+      String.raw`^ctest\b`,
+      String.raw`tools[\\/]perf[\\/]`,
+      String.raw`start-runners\.cmd`,
+      String.raw`My Engine`,
+    ],
     light: [String.raw`^ctest\b.*(\s-R\s|--tests-regex)`, String.raw`\bwsl(\.exe)?\s+--shutdown\b`],
   }
   try {
     const { light, heavy } = rulesFor('my-game')
     const is = (c: string) => classify(c, light, heavy)
     expect(
-      is('& "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot\\godot.windows.opt.tools.64.exe" --headless --path game'),
+      is(
+        '& "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Godot\\godot.windows.opt.tools.64.exe" --headless ' +
+          '--path game',
+      ),
     ).toBe('heavy')
     expect(is('& "$env:LOCALAPPDATA\\Programs\\My Engine\\editor.exe" --headless')).toBe('heavy')
     expect(is('& "C:\\tools\\godot.windows.opt.tools.64.exe" --version')).toBe('light')

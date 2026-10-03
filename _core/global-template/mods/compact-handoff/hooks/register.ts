@@ -28,7 +28,19 @@ const MAX_AGE_DAYS = 14
 // types, such as "[x] done" or "[wip] ...", is kept. A new mod that writes into
 // prompts adds its tag here. scripts/helper.cjs carries the same pattern
 // (test-helper/helper.spec.cjs keeps the two equal).
-export const INJECTED_LINE = /^\[(?:session-facts|time|task-tracking|tasks|ci-watch|shared-pc|skill-check|usage-guard|compact-handoff|guards)\](?: |$)/
+export const MOD_TAGS = [
+  'session-facts',
+  'time',
+  'task-tracking',
+  'tasks',
+  'ci-watch',
+  'shared-pc',
+  'skill-check',
+  'usage-guard',
+  'compact-handoff',
+  'guards',
+]
+export const INJECTED_LINE = new RegExp(`^\\[(?:${MOD_TAGS.join('|')})\\](?: |$)`)
 
 type Mode = 'off' | 'shadow' | 'on'
 
@@ -48,7 +60,7 @@ export function handoffPrompt(limitTokens: number): string {
     '## Read next: exact file paths (and line ranges) to open first, each with its reason. Nothing else.',
     '## Reference: the facts the next steps lean on that would otherwise mean reopening a file:',
     'API calls and their shapes, signatures, formats, commands. Compact, exact.',
-    "## Don't re-read: files whose needed content is fully covered above. Never \"already absorbed\".",
+    '## Don\'t re-read: files whose needed content is fully covered above. Never "already absorbed".',
     '## Live state: branch, uncommitted work, running jobs and monitors, other sessions and what they own or hold.',
     '## Owed to the person: open questions, promises, anything waiting on their answer.',
     'State only what the conversation shows; mark anything not confirmed as unconfirmed.',
@@ -85,15 +97,17 @@ function carriedForward(messages: readonly SessionMessage[]): { kept: string[]; 
   const block = messages.find(message => message.text.startsWith(PERSON_MARK))
   if (!block) return { kept: [], index: [] }
   const [head = '', ...kept] = block.text.split(MESSAGE_SPLIT)
-  const index = head
-    .split('\n')
-    .filter(line => line.startsWith('- '))
+  const index = head.split('\n').filter(line => line.startsWith('- '))
   return { kept, index }
 }
 
 // `typed` is the transcript's own list (see transcriptWords); without it the
 // compaction's message list is used, which misses prompts typed mid-turn.
-export function personWords(messages: readonly SessionMessage[], budgetChars: number, typed?: readonly string[]): string {
+export function personWords(
+  messages: readonly SessionMessage[],
+  budgetChars: number,
+  typed?: readonly string[],
+): string {
   const previous = carriedForward(messages)
   const source = typed ?? messages.filter(isPersonMessage).map(message => message.text)
   // A message the last compaction kept in the context beside its summary is still in the list now:
@@ -172,7 +186,9 @@ function summaryText(result: SessionCompactResult): string {
 
 async function record($: EngineInterface, name: string, sections: Record<string, string>): Promise<void> {
   try {
-    const body = Object.entries(sections).map(([title, text]) => `## ${title}\n\n${text}`).join('\n\n')
+    const body = Object.entries(sections)
+      .map(([title, text]) => `## ${title}\n\n${text}`)
+      .join('\n\n')
     const dir = await dataDir($)
     await ensureDir($, dir)
     await $.fs.write(`${dir}/${name}.md`, `${body}\n`)
@@ -181,7 +197,11 @@ async function record($: EngineInterface, name: string, sections: Record<string,
   }
 }
 
-async function shadow($: EngineInterface, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>) {
+async function shadow(
+  $: EngineInterface,
+  e: SessionCompactInput,
+  next: (e: SessionCompactInput) => Promise<SessionCompactResult>,
+) {
   const budget = await budgetTokens($)
   const typed = await transcriptWords($)
   const [result, fork] = await Promise.all([
@@ -194,8 +214,9 @@ async function shadow($: EngineInterface, e: SessionCompactInput, next: (e: Sess
   ])
   const sessionId = await $.session.id()
   const stamp = new Date(await $.clock.now()).toISOString().replace(/[:.]/g, '-')
+  const outcome = result.messages ? 'stock compaction stood' : `skipped: ${result.skip}`
   await record($, `${sessionId}-${stamp}-shadow`, {
-    Trigger: `${e.trigger}, budget ${budget} tokens, ${result.messages ? 'stock compaction stood' : `skipped: ${result.skip}`}`,
+    Trigger: `${e.trigger}, budget ${budget} tokens, ${outcome}`,
     'Stock summary (what the session kept)': result.messages ? summaryText(result) : '(none)',
     'Hand-off (shadow, not used)': fork.isAnswered ? fork.text : `(no hand-off: ${fork.reason})`,
     "The person's messages": personWords(e.messages, budget * PERSON_SHARE * CHARS_PER_TOKEN, typed),
@@ -210,13 +231,21 @@ async function handoffInstructions($: EngineInterface, e: SessionCompactInput, b
 
 // An ahead-of-time summary written to the stock brief would be thrown away
 // when the real compaction asks for the hand-off: write it to the same brief.
-async function precompute($: EngineInterface, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>) {
+async function precompute(
+  $: EngineInterface,
+  e: SessionCompactInput,
+  next: (e: SessionCompactInput) => Promise<SessionCompactResult>,
+) {
   const stamp = new Date(await $.clock.now()).toISOString()
   await record($, `${await $.session.id()}-precompute`, { 'Ran at': stamp })
   return next({ ...e, instructions: await handoffInstructions($, e, await budgetTokens($)) })
 }
 
-async function replace($: EngineInterface, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>) {
+async function replace(
+  $: EngineInterface,
+  e: SessionCompactInput,
+  next: (e: SessionCompactInput) => Promise<SessionCompactResult>,
+) {
   const budget = await budgetTokens($)
   // Read before the compaction runs: the boundary it writes to the transcript
   // would otherwise hide this cycle's messages from the helper.
@@ -241,7 +270,8 @@ export const register: Register = (on, options) => {
       name: 'recall',
       description:
         'Search the full transcript of this session, including everything before compaction, for exact earlier ' +
-        'details (decisions, numbers, paths, wording). All words in the query must appear. Returns capped snippets, newest first.',
+        'details (decisions, numbers, paths, wording). All words in the query must appear. Returns capped ' +
+        'snippets, newest first.',
       inputSchema: {
         type: 'object',
         properties: { query: { type: 'string', description: 'Words that must all appear in the passage.' } },

@@ -66,7 +66,15 @@ type Seen = {
 }
 
 function world(on: On) {
-  const seen: Seen = { prompts: [], files: new Map(), bucket: 'pending', rows: [], isReadable: false, order: [], prState: 'OPEN' }
+  const seen: Seen = {
+    prompts: [],
+    files: new Map(),
+    bucket: 'pending',
+    rows: [],
+    isReadable: false,
+    order: [],
+    prState: 'OPEN',
+  }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   on('session.id', () => ({ value: 's1' }))
@@ -89,7 +97,15 @@ function world(on: On) {
     if (e.argv[2] === MKDIR_SCRIPT) seen.order.push(`mkdir ${e.argv[3]}`)
     if (args.includes('pr checks')) seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {
-      return { value: { exitCode: 1, stdout: '', stderr: 'error connecting to api.github.com', isStdoutTruncated: false, isStderrTruncated: false } }
+      return {
+        value: {
+          exitCode: 1,
+          stdout: '',
+          stderr: 'error connecting to api.github.com',
+          isStdoutTruncated: false,
+          isStderrTruncated: false,
+        },
+      }
     }
     const stdout = args.includes('pr checks')
       ? JSON.stringify([{ name: 'build', bucket: seen.bucket }, ...seen.rows])
@@ -140,7 +156,10 @@ test('the data folder is made before the first save, and a failed save never fai
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
-  expect(seen.order.slice(0, 2)).toEqual(['mkdir C:/Users/me/.claude/mods-data/ci-watch', 'write C:/Users/me/.claude/mods-data/ci-watch/s1.json'])
+  expect(seen.order.slice(0, 2)).toEqual([
+    'mkdir C:/Users/me/.claude/mods-data/ci-watch',
+    'write C:/Users/me/.claude/mods-data/ci-watch/s1.json',
+  ])
 
   seen.isWriteDown = true
   const pushed = await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
@@ -155,7 +174,7 @@ function otherInstanceRecords(seen: Seen, change: Partial<Watch>) {
   seen.files.set(STATE, JSON.stringify({ watches: saved.watches.map(w => ({ ...w, ...change })) }))
 }
 
-test('a settlement another instance already woke the session for during the gh calls is not sent again', async ($, on) => {
+test('a settlement another instance woke the session for during the gh calls is not sent again', async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })

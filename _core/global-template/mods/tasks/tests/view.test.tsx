@@ -9,7 +9,14 @@ import type { TaskRow } from '../types'
 const NOW = Date.UTC(2026, 9, 2, 19, 0, 0)
 const MIRROR = 'C:/Users/me/.claude/mods-data/tasks/sess-a.json'
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
-const PANE_PROPS = { title: 'Tasks', isFocused: true, bodyColumns: 80, placement: 'inline', scroll: { top: 0 }, view: {} } as never
+const PANE_PROPS = {
+  title: 'Tasks',
+  isFocused: true,
+  bodyColumns: 80,
+  placement: 'inline',
+  scroll: { top: 0 },
+  view: {},
+} as never
 
 function world(on: On, tasks: TaskRow[], updatedAt = NOW, carried: TaskRow[] = []) {
   const opened: string[] = []
@@ -19,7 +26,9 @@ function world(on: On, tasks: TaskRow[], updatedAt = NOW, carried: TaskRow[] = [
   on('session.root', () => ({ value: 'C:/Repos/x' }))
   on('fs.read', ($, e) => {
     if (e.path.replaceAll('\\', '/') !== MIRROR) throw new Error('ENOENT')
-    return { value: JSON.stringify({ session: 'sess-a', updatedAt: NOW, changedAt: updatedAt, turn: 3, tasks, carried }) }
+    return {
+      value: JSON.stringify({ session: 'sess-a', updatedAt: NOW, changedAt: updatedAt, turn: 3, tasks, carried }),
+    }
   })
   on('fs.write', () => ({ value: undefined }))
   on('fs.list', () => ({ value: [] }) as never)
@@ -54,7 +63,13 @@ test('the band names the task in progress and opens the full list', async ($, on
 test('the pane lists every task, finished ones included', async ($, on) => {
   world(on, LIST)
   await start($)
-  const ui = await $.ui.mount({ plugin: 'tasks', surface: 'terminal', component: 'Pane', requestId: PANE, props: PANE_PROPS } as never)
+  const ui = await $.ui.mount({
+    plugin: 'tasks',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: PANE,
+    props: PANE_PROPS,
+  } as never)
   expect(await ui.find({ key: 'task-1' })).toBeDefined()
   expect(await ui.find({ key: 'task-2' })).toBeDefined()
   expect(await ui.find({ key: 'task-3' })).toBeDefined()
@@ -78,13 +93,19 @@ test('open tasks come first, finished ones newest first', () => {
   expect(ordered(rows).map(t => t.id)).toEqual(['3', '4', '2', '1'])
 })
 
-test('a new session shows the last session\'s unfinished tasks as carried over', async ($, on) => {
+test("a new session shows the last session's unfinished tasks as carried over", async ($, on) => {
   const opened = world(on, [], NOW, [{ id: '7', subject: 'Port the mods', status: 'pending', hold: 'design review' }])
   await start($)
   const band = await $.ui.mount({ plugin: 'tasks', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   expect(await band.find({ type: 'Text', text: /1 carried over/ })).toBeDefined()
   await band.press({ key: 'tasks-list' })
   expect(opened).toEqual([PANE])
-  const pane = await $.ui.mount({ plugin: 'tasks', surface: 'terminal', component: 'Pane', requestId: PANE, props: PANE_PROPS } as never)
+  const pane = await $.ui.mount({
+    plugin: 'tasks',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: PANE,
+    props: PANE_PROPS,
+  } as never)
   expect(await pane.find({ key: 'carried-7' })).toBeDefined()
 })
