@@ -3,6 +3,7 @@ import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-
 
 import type { UsageCard } from '../types'
 import { stopCommandsFor } from './rules'
+import { register as settings, SETTINGS_PANE } from './settings'
 
 // One shared file tells every session on the machine that a pause is on, so
 // a session that never crossed the line itself still wraps up. Which sessions
@@ -431,6 +432,7 @@ function cardTone(id: string): 'green' | 'blue' | 'yellow' {
 export const register: Register = (on, options) => {
   live.wrapUpAt = Number(options.wrapUpAt ?? 90)
   live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
+  settings(on, options)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -439,7 +441,7 @@ export const register: Register = (on, options) => {
     if (pause?.status === 'active') await meetPause($, pause)
     await $.command.register({
       name: 'usage-guard',
-      description: 'Show the usage pause, or cancel it: /usage-guard cancel',
+      description: 'Show the usage pause; /usage-guard cancel cancels it, /usage-guard settings opens the settings',
     })
 
     await startTimers($)
@@ -509,6 +511,10 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'usage-guard' }, async ($, e) => {
+    if (e.args.trim() === 'settings') {
+      await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
+      return { text: 'Opened the usage-guard settings.' }
+    }
     const pause = await readPause($)
     if (!pause || pause.status !== 'active')
       return { text: `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.` }
