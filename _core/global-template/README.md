@@ -8,9 +8,6 @@ These files live OUTSIDE your project repo, in your home Claude config. They app
 global-template/
 ├── README.md                              # (this file)
 ├── CLAUDE.md.additions                    # Append to ~/.claude/CLAUDE.md
-├── statusline-command.sh.template         # One-line bash status line
-├── statusline.js                          # Node status line that reads what the mods write (see mods/README.md)
-├── statusline.config.example.json         # Optional local-runner list for statusline.js
 ├── memory-template/
 │   ├── README.md                          # How the memory system works
 │   └── MEMORY.md                          # Empty index — copy to the per-project memory dir
@@ -176,7 +173,7 @@ By default a bind ships both guards inside the project instead (`.claude/hooks/`
 
 ## 4d. Mods (optional, Claude Code 2.1.287+)
 
-`mods/` holds eight function-hook plugins that run inside Claude Code: session facts on every prompt, a compaction hand-off, a local CI watcher, an in-process guard, a shared-machine work queue, skill step checks, task-list upkeep and a plan-usage pause. Each is optional; `session-facts` is the one recommended for everyone, and it supersedes the time-injection hook from § 4. They install globally through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` and keep their data under `~/.claude/mods-data/<mod>/`. `statusline.js` (with `statusline.config.example.json`) is the status line that shows what they track.
+`mods/` holds ten function-hook plugins that run inside Claude Code: session facts on every prompt, a session row (model, project, branch), a compaction hand-off, a local CI watcher, an in-process guard, a shared-machine work queue, skill step checks, task-list upkeep, a plan-usage pause and a local CI runner row. Each is optional; `session-facts` is the one recommended for everyone, and it supersedes the time-injection hook from § 4. They install globally through `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` and keep their data under `~/.claude/mods-data/<mod>/`. Four of them draw rows above the prompt that take the place of a status line, in the terminal and in the Desktop app (see `mods/README.md`).
 
 See [`mods/README.md`](mods/README.md) for what each mod does, its default and options, how to install, test and validate it, and notes for writing your own.
 
