@@ -18,6 +18,7 @@ const READ_ZONE = [
 
 type Zone = { offsetMinutes: number; name: string }
 type Window = { size: number; compactsAt?: number }
+type Compaction = { at: number; tokensAfter?: number }
 
 const UTC: Zone = { offsetMinutes: 0, name: 'UTC (host zone unread)' }
 
@@ -64,17 +65,30 @@ function contextPart(tokens: number | undefined, fullWindow: number, window: Win
   return `ctx ${percent}% (${thousands(tokens)} of ${thousands(size)}${compacts})`
 }
 
+// Every figure in a compaction's summary is from before it ran, so the lines
+// after one say so. Until the next response the engine has no fill of its own;
+// the compaction's size afterwards stands in.
+function compactedPart(compaction: Compaction, fill: number | undefined, fullWindow: number): string {
+  const mark = `, just compacted at ${formatLocal(compaction.at, live.zone).slice(11, 16)}`
+  return fill === undefined ? `ctx unknown${mark}` : `${contextPart(fill, fullWindow, live.window)}${mark}`
+}
+
 function planPart(limits: readonly SessionRateLimit[]): string {
   if (limits.length === 0) return ''
   const parts = limits.map(limit => `${LIMIT_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')} ${limit.percentUsed}%`)
   return ` | plan used: ${parts.join(', ')}`
 }
 
-async function factsLine($: EngineInterface, zone: Zone, window: Window | undefined): Promise<string> {
-  const time = formatLocal(await $.clock.now(), zone)
+// While the compaction is still finishing, the engine's fill can be the one from before it.
+async function factsLine($: EngineInterface, compaction?: Compaction, isCompacting = false): Promise<string> {
+  const time = formatLocal(await $.clock.now(), live.zone)
   try {
     const { context, rateLimits } = await $.session.usage()
-    return `${time} | ${contextPart(context.tokens, context.window, window)}${planPart(rateLimits)}`
+    const fill = isCompacting ? compaction?.tokensAfter : (context.tokens ?? compaction?.tokensAfter)
+    const ctx = compaction
+      ? compactedPart(compaction, fill, context.window)
+      : contextPart(context.tokens, context.window, live.window)
+    return `${time} | ${ctx}${planPart(rateLimits)}`
   } catch {
     return `${time} | ctx unreadable`
   }
@@ -91,6 +105,8 @@ const live: {
   window?: Window
   isSetUp: boolean
   lastResponseAt?: number
+  // The last compaction, until the next prompt's line has named it.
+  compaction?: Compaction
   planWarnAt: number
   cacheWarnMinutes: number
   cacheTtlMs: number
@@ -204,9 +220,25 @@ export const register: Register = (on, options) => {
       live.window = read ?? live.window
     })
     void refreshBudgets($)
+    const compaction = live.compaction
+    live.compaction = undefined
     const fact =
-      `[session-facts] ${await factsLine($, live.zone, live.window)} | ` +
+      `[session-facts] ${await factsLine($, compaction)} | ` +
       'base every time-of-day reference and every State line figure on THIS line'
     return next({ ...e, context: [...(e.context ?? []), fact] })
+  })
+
+  // The turn that compacts goes on with no prompt and so no facts line, so one
+  // follows the summary; the next prompt's line names the compaction again.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId !== undefined || e.trigger === 'precompute') return result
+    if (result.skip !== undefined || result.messages.length === 0) return result
+    live.compaction = { at: await $.clock.now(), tokensAfter: result.tokensAfter }
+    const fact =
+      `[session-facts] ${await factsLine($, live.compaction, true)} | ` +
+      'every figure in the summary above is from before the compaction; base the State line on THIS line'
+    const [summary, rest] = [result.messages.slice(0, 1), result.messages.slice(1)]
+    return { ...result, messages: [...summary, { role: 'user', text: fact, toolUses: [] }, ...rest] }
   })
 }
