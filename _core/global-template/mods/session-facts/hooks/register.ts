@@ -233,6 +233,8 @@ export const register: Register = (on, options) => {
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId !== undefined || e.trigger === 'precompute') return result
+    // `skip` tells the two result shapes apart: past it, the result is a compaction that
+    // stands, whose `messages` and `tokensAfter` the types guarantee.
     if (result.skip !== undefined || result.messages.length === 0) return result
     live.compaction = { at: await $.clock.now(), tokensAfter: result.tokensAfter }
     const fact =
