@@ -187,8 +187,16 @@ export async function startView($: Engine): Promise<void> {
 
 export const register: Register = on => {
   // register.ts hooks session.start without a matcher; a plugin may hook an event twice only when one
-  // of them narrows it, so the view starts on interactive sessions, the only ones that draw a band.
+  // of them narrows it, so the view starts here on interactive (terminal) sessions.
   on('session.start', { isInteractive: true }, async ($, e, next) => {
+    const result = await next(e)
+    await startView($)
+    return result
+  })
+
+  // A Desktop session starts like an SDK one, not interactive and drawing nowhere, and its surface
+  // joins afterwards: the view starts when it does, so the band is there before the first tool call.
+  on('session.attach', async ($, e, next) => {
     const result = await next(e)
     await startView($)
     return result
