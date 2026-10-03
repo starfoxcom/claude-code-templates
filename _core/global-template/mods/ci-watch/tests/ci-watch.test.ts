@@ -61,10 +61,12 @@ type Seen = {
   order: string[]
   /** Every write fails (a folder that cannot be made). */
   isWriteDown?: boolean
+  /** What `gh pr view --json state` reports. */
+  prState: string
 }
 
 function world(on: On) {
-  const seen: Seen = { prompts: [], files: new Map(), bucket: 'pending', rows: [], isReadable: false, order: [] }
+  const seen: Seen = { prompts: [], files: new Map(), bucket: 'pending', rows: [], isReadable: false, order: [], prState: 'OPEN' }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   on('session.id', () => ({ value: 's1' }))
@@ -91,7 +93,7 @@ function world(on: On) {
     }
     const stdout = args.includes('pr checks')
       ? JSON.stringify([{ name: 'build', bucket: seen.bucket }, ...seen.rows])
-      : JSON.stringify({ number: 7, url: 'https://github.com/o/r/pull/7', headRefOid: 'a1' })
+      : JSON.stringify({ number: 7, url: 'https://github.com/o/r/pull/7', headRefOid: 'a1', state: seen.prState })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('prompt.submit', ($, e) => {
@@ -196,6 +198,22 @@ test('each settled watch is claimed for one wake per process', () => {
   expect(claimWake({ ...watch })).toBe(false)
   expect(claimWake({ ...watch, headSha: 'b2' })).toBe(true)
   expect(claimWake({ ...watch, id: 'claim-test-restarted' })).toBe(true)
+})
+
+test('a merge drops the watch only once GitHub says the PR is merged', async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  const watched = () => (JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }).watches.map(w => w.number)
+
+  // `--auto` only queues the merge: the PR is still open, so the watch still wakes the session.
+  await $.tool.call({ tool: 'Bash', command: 'gh pr merge 7 --auto --merge' } as never)
+  expect(watched()).toEqual([7])
+
+  seen.prState = 'MERGED'
+  await $.tool.call({ tool: 'Bash', command: 'gh pr merge 7 --merge' } as never)
+  expect(watched()).toEqual([])
 })
 
 test('a merge names its PR, or 0 for the branch PR; other commands are not merges', () => {
