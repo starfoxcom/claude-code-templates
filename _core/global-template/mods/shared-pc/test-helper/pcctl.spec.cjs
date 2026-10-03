@@ -92,6 +92,23 @@ test('release hands the seat to the front of the line', () => {
   )
 })
 
+test('release also gives up a reservation, so the free seat goes to whoever claims it', () => {
+  const sb = sandbox()
+  ;['b', 'c'].forEach(id => sb.register(id))
+  // An approved request on an idle machine reserves the next seat for the requester.
+  sb.run('ask', 'b', 'GPU window')
+  sb.run('answer', 'b', 'approve')
+  assert.strictEqual(sb.state().nextUp.session, 'b')
+  sb.run('release', 'b')
+  assert.strictEqual(sb.state().nextUp, null)
+  assert.ok(sb.run('claim', 'c', 'build').granted)
+  // Another session's release leaves a reservation alone.
+  sb.run('done', 'c')
+  sb.run('next', 'b')
+  sb.run('release', 'c')
+  assert.strictEqual(sb.state().nextUp.session, 'b')
+})
+
 test('a dead holder loses the seat and dead waiters leave the line', () => {
   const sb = sandbox()
   sb.register('a')
