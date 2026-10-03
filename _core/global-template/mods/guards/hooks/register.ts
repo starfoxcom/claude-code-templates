@@ -13,10 +13,11 @@ import { checkAddedLines, checkBranch, checkText, describe } from './policy'
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
 
 const LOG_CAP = 256 * 1024
-const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '' }
+const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false }
 
 async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
   live.dir = `${(configured ?? `${live.home}/.claude`).replace(/\\/g, '/')}/mods-data/guards`
   // The engine's fs writes no missing folders; node makes it once per session.
@@ -34,11 +35,12 @@ async function setUp($: Engine) {
     .catch(() => undefined)
 }
 
-// Bash on Windows writes /c/Users/...; the engine's fs takes C:/Users/...
+// Bash on Windows writes /c/Users/...; the engine's fs takes C:/Users/... Only on Windows: elsewhere
+// `/u/me` is a real one-letter folder.
 function osPath(path: string, cwd: string): string {
   let p = path.replace(/\\/g, '/')
   if (p.startsWith('~/')) p = live.home + p.slice(1)
-  const drive = /^\/([a-zA-Z])\//.exec(p)
+  const drive = live.isWindows ? /^\/([a-zA-Z])\//.exec(p) : null
   if (drive) p = `${drive[1]?.toUpperCase()}:/${p.slice(3)}`
   if (!/^[a-zA-Z]:\//.test(p) && !p.startsWith('/')) p = `${cwd.replace(/\\/g, '/').replace(/\/$/, '')}/${p}`
   return p

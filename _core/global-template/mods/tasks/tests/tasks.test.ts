@@ -6,7 +6,14 @@ import { MKDIR_SCRIPT } from '../hooks/register'
 
 const MIRROR_FILE = 'C:/Users/me/.claude/mods-data/tasks/sess-a.json'
 
-type World = { files: Map<string, string>; nextId: number; listed: { id: string; subject: string; status: string }[]; runs: string[][] }
+type World = {
+  files: Map<string, string>
+  nextId: number
+  listed: { id: string; subject: string; status: string }[]
+  runs: string[][]
+  /** Writes to the mods-data folder fail (a folder that cannot be written). */
+  isDataDown?: boolean
+}
 
 function world(on: On): World {
   const seen: World = { files: new Map(), nextId: 1, listed: [], runs: [] }
@@ -19,6 +26,7 @@ function world(on: On): World {
     return { value: text }
   })
   on('fs.write', ($, e) => {
+    if (seen.isDataDown && key(e.path).includes('/mods-data/')) throw new Error('EPERM')
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
   })
@@ -232,6 +240,16 @@ test("the engine's leftover task files are imported, then deleted", async ($, on
   expect(unlink?.slice(-2)).toEqual([engine, '4.json'])
   await create($, 'next')
   expect(mirror(seen).tasks.map(item => item.id)).toEqual(['4', '5'])
+})
+
+test("the engine's task files stay when the mirror holding their copy cannot be written", async ($, on) => {
+  const seen = world(on)
+  seen.isDataDown = true
+  const engine = 'C:/Users/me/.claude/tasks/sess-a'
+  const task = { id: '4', subject: 'old work', description: 'd', status: 'pending', blocks: [], blockedBy: [] }
+  seen.files.set(`${engine}/4.json`, JSON.stringify(task))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  expect(seen.runs.find(run => run.includes(engine))).toBeUndefined()
 })
 
 test("after a reload the engine's store is left alone, even a subagent task matching a mirror task", async ($, on) => {

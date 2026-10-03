@@ -212,6 +212,8 @@ function main(raw) {
   } catch {
     // Draw what can be drawn without input.
   }
+  // `null`, a number or a list parse fine but are not the input object.
+  if (!input || typeof input !== 'object' || Array.isArray(input)) input = {}
   const cwd = input.workspace?.current_dir || input.cwd || process.cwd()
   const project = path.basename(input.workspace?.project_dir || cwd)
   const lines = [

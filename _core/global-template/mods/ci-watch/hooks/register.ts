@@ -29,11 +29,13 @@ const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 const KEEP_SETTLED_MS = 60 * 60_000
 
-const live: { pollMs: number; timeoutMs: number; watches: Watch[]; isPolling: boolean } = {
+const live: { pollMs: number; timeoutMs: number; watches: Watch[]; isPolling: boolean; isUnsaved: boolean } = {
   pollMs: 60_000,
   timeoutMs: 60 * 60_000,
   watches: [],
   isPolling: false,
+  /** The last save failed: memory holds watches the file may lack. */
+  isUnsaved: false,
 }
 
 export function settle(watch: Watch, checks: Record<string, string>, now: number, timeoutMs: number, quietMs: number): Watch {
@@ -117,9 +119,18 @@ async function save($: EngineInterface): Promise<void> {
     const path = await statePath($)
     await ensureDir($, path.slice(0, path.lastIndexOf('/')))
     await $.fs.write(path, JSON.stringify({ watches: live.watches }))
+    live.isUnsaved = false
   } catch {
-    // The watches stay in memory; the next save tries again.
+    // The watches stay in memory, and the next poll keeps the ones the file lacks.
+    live.isUnsaved = true
   }
+}
+
+// The saved watches, plus, after a failed save, the ones only memory holds.
+function mergeSaved(saved: Watch[]): Watch[] {
+  if (!live.isUnsaved) return saved
+  const same = (a: Watch, b: Watch) => a.repo === b.repo && a.number === b.number
+  return [...saved, ...live.watches.filter(w => !saved.some(s => same(s, w)))]
 }
 
 async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {
@@ -154,13 +165,18 @@ export function claimWake(watch: Watch): boolean {
 
 // The folder a push or `gh pr create` ran in: `git -C <dir>` or a `cd <dir>` / `Set-Location <dir>`
 // before it. Undefined means the session's folder.
-export function targetFolder(command: string): string | undefined {
+const GIT_C = /\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)/
+const CD = /(?:^|[;&|]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/
+
+export function targetFolder(command: string, isWindows: boolean): string | undefined {
   // Git Bash paths (/c/Users/...) mean nothing to a Windows process: turn them into C:/Users/...
-  const unquote = (raw: string) => raw.replace(/^["']|["']$/g, '').replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:')
-  const gitC = /\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)/.exec(command)
-  if (gitC) return unquote(gitC[1]!)
-  const cd = /(?:^|[;&|]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/.exec(command)
-  return cd ? unquote(cd[1]!) : undefined
+  // Only on Windows: elsewhere `/u/me` is a real one-letter folder.
+  const unquote = (raw: string) => {
+    const bare = raw.replace(/^["']|["']$/g, '')
+    return isWindows ? bare.replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:') : bare
+  }
+  const found = GIT_C.exec(command) ?? CD.exec(command)
+  return found ? unquote(found[1]!) : undefined
 }
 
 async function gh($: EngineInterface, args: readonly string[], cwd?: string): Promise<string> {
@@ -215,7 +231,7 @@ async function poll($: EngineInterface): Promise<void> {
   // this one, and reading the file keeps a watch the other already settled from waking twice. With
   // no saved file yet, the watches in memory stand.
   const start = await readSaved($)
-  if (start) live.watches = start
+  if (start) live.watches = mergeSaved(start)
   const now = await $.clock.now()
   let changed = false
   const kept: Watch[] = []
@@ -326,7 +342,8 @@ export const register: Register = (on, options) => {
       await startWatch($, repo!, Number(number), await headOf($, repo!, Number(number)))
       return result
     }
-    const pr = (await prOfBranch($, targetFolder(command))) ?? (await prOfBranch($))
+    const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT')
+    const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
     if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
     return result
   })
