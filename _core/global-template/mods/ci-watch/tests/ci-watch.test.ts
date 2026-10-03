@@ -171,6 +171,21 @@ test('a watch whose save failed is kept from memory and still wakes the session'
   expect(seen.prompts[0]).toContain('o/r#7: all 1 checks settled')
 })
 
+test('watches stopped while saving fails stay stopped, and the save is tried again', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.isWriteDown = true
+  await $.command.run({ command: 'ci-watch', args: 'stop' } as never)
+  seen.bucket = 'fail'
+  for (let i = 0; i < 4; i++) await clock.advance(60_000)
+  expect(seen.prompts).toEqual([])
+  seen.isWriteDown = false
+  await clock.advance(60_000)
+  expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches).toEqual([])
+})
+
 test('the data folder is made before the first save, and a failed save never fails the push', async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
