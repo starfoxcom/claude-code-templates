@@ -82,22 +82,45 @@ const DOUBLE_QUOTED = {
   powershell: '"(?:[^"`]|`[\\s\\S])*"',
 }
 
-export function commandWords(command: string, isPowerShell = false): string {
-  const lines = command.split('\n')
-  const kept: string[] = []
+// Which lines are here-doc bodies (and their end lines): they hold text, never commands.
+function hereDocLines(lines: readonly string[]): Set<number> {
+  const body = new Set<number>()
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? ''
-    kept.push(line)
     // `<<` alone: `<<<` feeds one word, not the lines after it. Found on the line with its quoted text
     // blanked (a delimiter's own quotes kept), so a `<<EOF` inside a message opens nothing.
-    const unquoted = line.replace(/(?<!<<-?\s*)(?:'[^']*'|"(?:[^"\\`]|[\\`].)*")/g, '""')
+    const unquoted = (lines[i] ?? '').replace(/(?<!<<-?\s*)(?:'[^']*'|"(?:[^"\\`]|[\\`].)*")/g, '""')
     const doc = /(?<!<)<<(?!<)-?\s*(["']?)([A-Za-z_][\w.-]*)\1/.exec(unquoted)
     if (!doc) continue
-    while (i + 1 < lines.length && (lines[i + 1] ?? '').trim() !== doc[2]) i++
-    i++
+    while (i + 1 < lines.length && (lines[i + 1] ?? '').trim() !== doc[2]) body.add(++i)
+    if (i + 1 < lines.length) body.add(++i)
   }
-  const quoted = isPowerShell ? DOUBLE_QUOTED.powershell : DOUBLE_QUOTED.bash
-  return kept.join('\n').replace(new RegExp(String.raw`@'[\s\S]*?'@|@"[\s\S]*?"@|'[^']*'|${quoted}`, 'g'), '""')
+  return body
+}
+
+const quotedSpans = (isPowerShell: boolean) =>
+  new RegExp(
+    String.raw`@'[\s\S]*?'@|@"[\s\S]*?"@|'[^']*'|${isPowerShell ? DOUBLE_QUOTED.powershell : DOUBLE_QUOTED.bash}`,
+    'g',
+  )
+
+export function commandWords(command: string, isPowerShell = false): string {
+  const lines = command.split('\n')
+  const body = hereDocLines(lines)
+  return lines
+    .filter((_, i) => !body.has(i))
+    .join('\n')
+    .replace(quotedSpans(isPowerShell), '""')
+}
+
+// The command at full length, with here-doc bodies blanked and the inside of each quoted string filled
+// with `_`: a match on it sits at the same place in the command, and message text matches nothing.
+function maskedCommand(command: string, isPowerShell: boolean): string {
+  const lines = command.split('\n')
+  const body = hereDocLines(lines)
+  return lines
+    .map((line, i) => (body.has(i) ? ' '.repeat(line.length) : line))
+    .join('\n')
+    .replace(quotedSpans(isPowerShell), span => span[0] + '_'.repeat(span.length - 2) + span[span.length - 1])
 }
 
 export function isPushOrPr(command: string, isPowerShell = false): boolean {
@@ -248,20 +271,25 @@ const CD = /(?:^|[;&|\n]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s
 const PUSH_AT = /\bgit\b[^;&|\n]*\bpush\b|\bgh\s+pr\s+create\b/
 const ABSOLUTE = /^(?:[a-zA-Z]:|[/\\~])/
 
-export function targetFolder(command: string, isWindows: boolean): string | undefined {
+// The patterns run on the masked command, so text inside quotes or here-docs steers nothing; each path
+// is then read from the command at the same place.
+export function targetFolder(command: string, isWindows: boolean, isPowerShell = false): string | undefined {
   // Git Bash paths (/c/Users/...) mean nothing to a Windows process: turn them into C:/Users/...
   // Only on Windows: elsewhere `/u/me` is a real one-letter folder.
-  const unquote = (raw: string) => {
-    const bare = raw.replace(/^["']|["']$/g, '')
+  const masked = maskedCommand(command, isPowerShell)
+  const pathAt = (match: RegExpExecArray | RegExpMatchArray, offset = 0) => {
+    const at = offset + (match.index ?? 0) + match[0].length - match[1]!.length
+    const bare = command.slice(at, at + match[1]!.length).replace(/^["']|["']$/g, '')
     return isWindows ? bare.replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:') : bare
   }
-  const gitC = GIT_C.exec(command)
-  if (gitC) return unquote(gitC[1]!)
+  const push = PUSH_AT.exec(masked)
+  // `git -C <dir>` on the push itself wins.
+  const gitC = push ? GIT_C.exec(push[0]) : null
+  if (push && gitC) return pathAt(gitC, push.index)
   // Each `cd` before the push moves on from the one before it, unless it names a whole path.
-  const pushAt = PUSH_AT.exec(command)?.index ?? command.length
   let folder: string | undefined
-  for (const step of command.slice(0, pushAt).matchAll(CD)) {
-    const next = unquote(step[1]!)
+  for (const step of masked.slice(0, push?.index ?? masked.length).matchAll(CD)) {
+    const next = pathAt(step)
     folder = folder === undefined || ABSOLUTE.test(next) ? next : `${folder}/${next}`
   }
   return folder
@@ -489,7 +517,7 @@ export const register: Register = (on, options) => {
       await startWatch($, repo!, Number(number), await headOf($, repo!, Number(number)))
       return result
     }
-    const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT')
+    const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
     const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
     if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
     return result
