@@ -1,0 +1,14 @@
+{
+  "name": "runners",
+  "version": "0.1.0",
+  "description": "Shows the machine's local CI runners above the prompt: on or off, queued runs and the next scheduled run, with Start and Stop buttons.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "checkSeconds": {
+      "type": "number",
+      "title": "Check every (seconds)",
+      "description": "How often the runners' processes, the queued runs and the schedules are read.",
+      "default": 60
+    }
+  }
+}
