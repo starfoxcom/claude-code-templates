@@ -294,3 +294,11 @@ test('a short answer the person gives again after a compaction is kept both time
   const typed = personWords([said(first)], 10_000, ['yes'])
   expect(typed.split('\nyes').length - 1).toBe(2)
 })
+
+test('answers that repeat the carried pair after the kept tail are kept', async () => {
+  const first = personWords([said('do it'), said('yes')], 10_000)
+  // The engine kept "yes"; the person then answers two new questions the same way.
+  const second = personWords([said(first), said('yes'), said('do it'), said('yes'), said('ship')], 10_000)
+  expect(second.split('\ndo it').length - 1).toBe(2)
+  expect(second.split('\nyes').length - 1).toBe(2)
+})

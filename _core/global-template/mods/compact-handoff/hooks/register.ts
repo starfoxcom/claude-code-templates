@@ -121,25 +121,18 @@ function carriedForward(messages: readonly SessionMessage[]): { kept: string[]; 
 const indexLine = (text: string) => `- ${text.replace(/\s+/g, ' ').slice(0, INDEX_LINE_CHARS)}...`
 
 // How many of `texts`' first messages are the tail the engine kept: a run that repeats the end of the
-// carried block, after only messages the block already holds (older tail members the budget moved to
-// the index). The longest run wins, then the earliest, so a "yes" typed again after the tail is kept.
-// A message the block does not hold ends the search: words are carried twice rather than lost.
+// carried block, after only older tail members the budget moved to the index. The first such run is
+// taken, so a "yes" typed again after the tail is kept. A message outside the index ends the search:
+// words are carried twice rather than lost.
 function keptTail(previous: { kept: string[]; index: string[] }, texts: readonly string[]): number {
   const { kept, index } = previous
-  const isHeld = (text: string) => kept.includes(text) || index.includes(indexLine(text))
-  let tail = 0
-  let run = 0
-  for (let end = 0; end < texts.length; end++) {
-    for (let k = Math.min(kept.length, end + 1); k > run; k--) {
-      if (kept.slice(-k).every((text, i) => text === texts[end - k + 1 + i])) {
-        tail = end + 1
-        run = k
-        break
-      }
+  for (let start = 0; start < texts.length; start++) {
+    for (let k = Math.min(kept.length, texts.length - start); k > 0; k--) {
+      if (kept.slice(-k).every((text, i) => text === texts[start + i])) return start + k
     }
-    if (!isHeld(texts[end] ?? '')) break
+    if (!index.includes(indexLine(texts[start] ?? ''))) return 0
   }
-  return tail
+  return 0
 }
 
 // `typed` is the transcript's own list (see transcriptWords); without it the
