@@ -71,7 +71,8 @@ export function planArm(
   const kind = ARM_KINDS[which]
   if (!kind) return 'Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.'
   const resetsAt = limits.find(limit => limit.kind === kind)?.resetsAt
-  if (!resetsAt || Date.parse(resetsAt) <= now)
+  // Written as "not later" so a reset time that does not parse (NaN) is refused too.
+  if (!resetsAt || !(Date.parse(resetsAt) > now))
     return `No ${LIMIT_NAMES[kind]} reset is known yet, so there is nothing to arm.`
   return { kind, resetsAt, wakeAt: Date.parse(resetsAt) + delayMinutes * 60_000 }
 }
@@ -385,7 +386,8 @@ async function scheduleArm($: EngineInterface, arm: ArmedWake): Promise<void> {
 // pause owns the resume. A pause still on (another session may have extended it past this reset)
 // would be worked through, so the arm moves to the pause's own wake: there it stands down if the
 // pause resumes the session, and still fires if another session cancelled the pause meanwhile. A
-// pause for this same reset has resumed or will resume the session already.
+// pause for this same reset resumes through the pause path: its claim makes that a no-op when this
+// session's own pause wake already resumed it, and still resumes a session that never saw the pause.
 async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   const current = await read($, armedWake)
   if (current?.resetsAt !== arm.resetsAt || current.kind !== arm.kind) return
@@ -399,7 +401,8 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   // An instance left by a hot reload may fire the same arm beside this one: one wins the claim.
   if (!(await claim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`))) return
   await update($, armedWake, () => null)
-  if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled') return
+  if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled')
+    return resume($, pause.resetsAt)
   await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
 }
 
