@@ -120,19 +120,15 @@ function carriedForward(messages: readonly SessionMessage[]): { kept: string[]; 
 
 const indexLine = (text: string) => `- ${text.replace(/\s+/g, ' ').slice(0, INDEX_LINE_CHARS)}...`
 
-// Where in `texts` the tail the engine kept sits: a run that repeats the end of the carried block, after
-// only messages whose index line the block holds (older tail members the budget moved to the index).
-// The first such run is taken, so a "yes" typed again after the tail is kept. Only the run is folded:
-// a message stepped over is carried again, never dropped, since an index line is only its start.
-function keptTail(previous: { kept: string[]; index: string[] }, texts: readonly string[]) {
-  const { kept, index } = previous
-  for (let start = 0; start < texts.length; start++) {
-    for (let k = Math.min(kept.length, texts.length - start); k > 0; k--) {
-      if (kept.slice(-k).every((text, i) => text === texts[start + i])) return { start, end: start + k }
-    }
-    if (!index.includes(indexLine(texts[start] ?? ''))) break
+// How many of `texts`' first messages repeat the end of `carried`, in order: the tail the engine kept.
+// Only a run at the very start counts. A message cannot be told from a new one by its text, so when the
+// budget moved older tail members to the index, they are carried again rather than guessed at: a
+// message may then show twice, never go missing.
+function keptTail(carried: readonly string[], texts: readonly string[]): number {
+  for (let k = Math.min(carried.length, texts.length); k > 0; k--) {
+    if (carried.slice(-k).every((text, i) => text === texts[i])) return k
   }
-  return { start: 0, end: 0 }
+  return 0
 }
 
 // `typed` is the transcript's own list (see transcriptWords); without it the
@@ -148,11 +144,8 @@ export function personWords(
   // from the block. Only that leading run is folded, so a "yes" typed again later is kept. The
   // transcript's list starts after the compaction and has no such run.
   const texts = source.map(stripInjected).filter(Boolean)
-  const { start, end } = typed ? { start: 0, end: 0 } : keptTail(previous, texts)
-  // Messages stepped over are older than the carried ones; carried in full again, their index line goes.
-  const before = texts.slice(0, start)
-  const listed = new Set(before.map(indexLine))
-  const all = [...before, ...previous.kept, ...texts.slice(end)]
+  const fresh = typed ? texts : texts.slice(keptTail(previous.kept, texts))
+  const all = [...previous.kept, ...fresh]
 
   const kept: string[] = []
   let used = 0
@@ -165,7 +158,7 @@ export function personWords(
     cut = i
   }
   const overflow = all.slice(0, cut).map(indexLine)
-  const index = [...previous.index.filter(line => !listed.has(line)), ...overflow].slice(-INDEX_MAX_LINES)
+  const index = [...previous.index, ...overflow].slice(-INDEX_MAX_LINES)
 
   const head = index.length > 0 ? `${PERSON_MARK}\n${INDEX_HEAD}\n${index.join('\n')}` : PERSON_MARK
   return [head, ...kept].join(MESSAGE_SPLIT)
