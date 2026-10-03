@@ -10,14 +10,19 @@ import type { Runner } from './rules'
 // busy, queued runs and the next scheduled run, with Start and Stop. Every value is read in a timer,
 // never while drawing; the row only shows the last reading.
 
-const SCHEDULE_TTL_MS = 60 * 60_000
+const HOUR_MS = 60 * 60_000
 // GitHub reports a freshly started runner offline for about a minute: no warning before this.
 const START_GRACE_MS = 2 * 60_000
+// The hooks run in a sandbox with no time zone of its own (its clock reads UTC), so the host's UTC
+// offset is read through node at start and every hour, as shared-pc and usage-guard do.
+const READ_ZONE = ['node', '-e', 'console.log(new Date().getTimezoneOffset())']
 const view = atom({ plugin: 'runners', key: 'view' } as const, null)
 const live = {
   checkMs: 60_000,
   isStarted: false,
   isWindows: false,
+  /** Minutes behind UTC, as getTimezoneOffset gives it; null until read. */
+  zoneOffset: null as number | null,
   schedules: new Map<string, { at: number; texts: string[] }>(),
 }
 
@@ -43,34 +48,39 @@ async function online($: Engine, repo: string): Promise<{ online: number; busy: 
   return { online: count, busy }
 }
 
+// The count from the API's total, not a listing, which stops at 20.
 async function queued($: Engine, repo: string): Promise<number | null> {
-  const argv = ['gh', 'run', 'list', '-R', repo, '--status', 'queued', '--json', 'databaseId', '--jq', 'length']
-  const out = await run($, argv)
-  return out === null ? null : Number(out.trim())
+  const runs = `repos/${repo}/actions/runs?status=queued&per_page=1`
+  const out = await run($, ['gh', 'api', runs, '--jq', '.total_count'])
+  const count = out === null ? NaN : Number(out.trim())
+  return Number.isInteger(count) ? count : null
 }
 
-// The default branch's workflow files, read once an hour: cron runs that branch's copies.
+// The default branch's workflow files, read once an hour: cron runs that branch's copies. A failed
+// read is not kept, so a network or rate-limit hiccup is retried on the next check instead of hiding
+// the schedule for an hour.
 async function workflowTexts($: Engine, repo: string, now: number): Promise<string[]> {
   const cached = live.schedules.get(repo)
-  if (cached && now - cached.at < SCHEDULE_TTL_MS) return cached.texts
+  if (cached && now - cached.at < HOUR_MS) return cached.texts
   const branchArgv = ['gh', 'repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name']
   const branch = (await run($, branchArgv))?.trim()
   if (!branch) return cached?.texts ?? []
   const folder = `repos/${repo}/contents/.github/workflows`
   const names = await run($, ['gh', 'api', `${folder}?ref=${branch}`, '--jq', '.[].name'])
+  if (names === null) return cached?.texts ?? []
   const texts: string[] = []
-  for (const name of (names ?? '').split('\n').filter(n => /\.ya?ml$/.test(n))) {
+  for (const name of names.split('\n').filter(n => /\.ya?ml$/.test(n))) {
     const raw = ['gh', 'api', '-H', 'Accept: application/vnd.github.raw']
     const text = await run($, [...raw, `${folder}/${name}?ref=${branch}`])
-    if (text !== null) texts.push(text)
+    if (text === null) return cached?.texts ?? []
+    texts.push(text)
   }
   live.schedules.set(repo, { at: now, texts })
   return texts
 }
 
-async function readRunner($: Engine, runner: Runner, now: number, before?: RunnerView): Promise<RunnerView> {
-  const row: RunnerView = { label: runner.label, isOn: await isUp($, runner), startedAt: before?.startedAt }
-  row.isConfirming = before?.isConfirming && row.isOn
+async function readRunner($: Engine, runner: Runner, now: number): Promise<RunnerView> {
+  const row: RunnerView = { label: runner.label, isOn: await isUp($, runner) }
   if (!runner.repo) return row
   const counts = await online($, runner.repo)
   if (counts) Object.assign(row, counts)
@@ -79,20 +89,36 @@ async function readRunner($: Engine, runner: Runner, now: number, before?: Runne
   return row
 }
 
+// A reading takes seconds of `gh` calls. What the buttons set meanwhile (Start's grace, Stop's
+// question) comes from the row as it is now, not as it was when the reading began.
+export function mergeReading(reading: RunnerView[], shown: RunnerView[] | undefined): RunnerView[] {
+  return reading.map((row, i) => ({
+    ...row,
+    startedAt: shown?.[i]?.startedAt,
+    isConfirming: Boolean(shown?.[i]?.isConfirming) && row.isOn,
+  }))
+}
+
 async function check($: Engine): Promise<void> {
   const now = await $.clock.now()
-  const before = (await read($, view))?.rows ?? []
-  const rows: RunnerView[] = []
-  for (const [i, runner] of RUNNERS.entries()) rows.push(await readRunner($, runner, now, before[i]))
-  await update($, view, () => ({ rows }))
+  const reading: RunnerView[] = []
+  for (const runner of RUNNERS) reading.push(await readRunner($, runner, now))
+  await update($, view, shown => ({ rows: mergeReading(reading, shown?.rows) }))
+}
+
+async function readZone($: Engine): Promise<void> {
+  const offset = Number((await run($, READ_ZONE))?.trim() ?? NaN)
+  if (Number.isInteger(offset)) live.zoneOffset = offset
 }
 
 async function start($: Engine): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
+  await readZone($)
   await check($).catch(() => undefined)
   $.clock.every(live.checkMs, () => void check($).catch(() => undefined))
+  $.clock.every(HOUR_MS, () => void readZone($).catch(() => undefined))
 }
 
 async function setRow($: Engine, index: number, change: Partial<RunnerView>): Promise<void> {
@@ -130,9 +156,10 @@ export function rowText(row: RunnerView, now: number, zoneTime: (ms: number) => 
   return parts.join(' · ')
 }
 
-function localTime(ms: number): string {
-  const d = new Date(ms)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+// Hours and minutes in the host's zone; without a zone reading the time is UTC and says so.
+export function clockTime(ms: number, offsetMinutes: number | null): string {
+  const hhmm = new Date(ms - (offsetMinutes ?? 0) * 60_000).toISOString().slice(11, 16)
+  return offsetMinutes === null ? `${hhmm} UTC` : hhmm
 }
 
 export const register: Register = (on, options) => {
@@ -167,7 +194,7 @@ export const register: Register = (on, options) => {
         {rows.map((row, i) => (
           <Box key={`runner-${i}`}>
             <Text color={row.isOn ? 'green' : undefined} dimColor={!row.isOn} wrap="truncate-end">
-              ⚙ {rowText(row, now, localTime)}{' '}
+              ⚙ {rowText(row, now, ms => clockTime(ms, live.zoneOffset))}{' '}
             </Text>
             {!row.isOn && RUNNERS[i]?.start ? (
               <Button key={`runner-start-${i}`} label="Start" onPress={() => void pressStart($, i)} />
