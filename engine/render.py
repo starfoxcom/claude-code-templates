@@ -81,4 +81,8 @@ def render_template(text, ctx, file):
     lf = text.replace("\r\n", "\n")
     resolved = resolve_blocks(lf, ctx, file)
     filled = fill_placeholders(resolved, ctx.get("values") or {}, ctx.get("deferred", frozenset()), file)
+    # Only a template with toggle blocks has gaps from removed blocks to close; any other file keeps
+    # its own blank lines (Python's two between functions, for one).
+    if "<!-- TOGGLE:" not in lf:
+        return filled
     return re.sub(r"\n{3,}", "\n\n", filled)
