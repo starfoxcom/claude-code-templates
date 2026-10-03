@@ -459,6 +459,13 @@ test('a push in another folder is looked up there', () => {
   expect(targetFolder('cd a; cd b; git push', true)).toBe('a/b')
   expect(targetFolder('cd a\ncd /c/wt\ngit push', true)).toBe('c:/wt')
   expect(targetFolder('git push && cd ../other', true)).toBeUndefined()
+  // Words inside a message or a here-doc steer nothing; a `-C` on another statement is not the push's.
+  expect(targetFolder('git commit -m "fix: git push hook"\ncd ../wt\ngit push', true)).toBe('../wt')
+  expect(targetFolder('git commit -m "see git -C x"\ncd ../wt\ngit push', true)).toBe('../wt')
+  expect(targetFolder('git -C other status; cd wt; git push', true)).toBe('wt')
+  expect(targetFolder('git commit -m "fix; cd foo" && git push', true)).toBeUndefined()
+  expect(targetFolder("git commit -F - <<'EOF'\ncd elsewhere\nEOF\ngit push", true)).toBeUndefined()
+  expect(targetFolder("Set-Location 'D:/a b'; git push", true, true)).toBe('D:/a b')
   // Elsewhere a one-letter top folder is real.
   expect(targetFolder('git -C /u/me/wt push -q', false)).toBe('/u/me/wt')
 })
