@@ -31,13 +31,23 @@ const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 const KEEP_SETTLED_MS = 60 * 60_000
 
-const live: { pollMs: number; timeoutMs: number; watches: Watch[]; isPolling: boolean; isUnsaved: boolean } = {
+const live = {
   pollMs: 60_000,
   timeoutMs: 60 * 60_000,
-  watches: [],
+  watches: [] as Watch[],
   isPolling: false,
   /** The last save failed: memory holds watches the file may lack. */
   isUnsaved: false,
+  /** Counts the changes made outside a poll (a new watch, a stop, a merge), so a poll can tell. */
+  generation: 0,
+}
+
+// The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
+// stopped or dropped meanwhile stays gone.
+function reconcile(current: Watch[], polled: Watch[]): Watch[] {
+  const same = (a: Watch, b: Watch) =>
+    a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
+  return current.map(w => polled.find(p => same(p, w)) ?? w)
 }
 
 export function settle(
@@ -266,6 +276,7 @@ async function startWatch($: EngineInterface, repo: string, number: number, head
   const id = `${startedAt}-${Math.random().toString(36).slice(2)}`
   const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id }
   live.watches = [...live.watches.filter(w => !(w.repo === repo && w.number === number)), fresh]
+  live.generation++
   await save($)
   return fresh
 }
@@ -276,6 +287,7 @@ async function poll($: EngineInterface): Promise<void> {
   // no saved file yet, or after a failed save, the watches in memory stand.
   const start = live.isUnsaved ? undefined : await readSaved($)
   if (start) live.watches = start
+  const generation = live.generation
   const now = await $.clock.now()
   let changed = false
   const kept: Watch[] = []
@@ -315,13 +327,15 @@ async function poll($: EngineInterface): Promise<void> {
     changed = true
     if (next.outcome) settled.push(next)
   }
-  live.watches = kept
+  // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
+  live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
+  const toWake = settled.filter(w => live.watches.includes(w))
   // The two instances poll on their own phases and spend seconds in gh, so the file is read again
   // right before waking: a settlement it already records was sent by the other instance. This
   // instance's record is written before its prompt goes out.
-  const recorded = settled.length > 0 ? await readSaved($) : undefined
+  const recorded = toWake.length > 0 ? await readSaved($) : undefined
   if (changed || live.isUnsaved) await save($)
-  for (const watch of settled) {
+  for (const watch of toWake) {
     if (!isRecorded(recorded, watch) && claimWake(watch))
       void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
   }
@@ -388,6 +402,7 @@ export const register: Register = (on, options) => {
       for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
       if (gone.length > 0) {
         live.watches = live.watches.filter(w => !gone.includes(w))
+        live.generation++
         await save($)
       }
       return result
@@ -423,6 +438,7 @@ export const register: Register = (on, options) => {
     if (await isRetired($)) return next(e)
     if (e.args.trim() === 'stop') {
       live.watches = []
+      live.generation++
       await save($)
       return { text: 'Stopped watching every PR in this session.' }
     }

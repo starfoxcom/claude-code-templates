@@ -54,7 +54,7 @@ type Seen = {
   /** Reads see the written files (default: no file can be read). */
   isReadable: boolean
   /** Runs inside each `gh pr checks` call: another instance acting while this one waits on gh. */
-  duringChecks?: () => void
+  duringChecks?: () => unknown
   /** `gh pr checks` fails (network, auth) with nothing on stdout. */
   isChecksDown?: boolean
   /** Folder makes and file writes, in order. */
@@ -92,10 +92,10 @@ function world(on: On) {
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
-  on('process.run', ($, e) => {
+  on('process.run', async ($, e) => {
     const args = e.argv.join(' ')
     if (e.argv[2] === MKDIR_SCRIPT) seen.order.push(`mkdir ${e.argv[3]}`)
-    if (args.includes('pr checks')) seen.duringChecks?.()
+    if (args.includes('pr checks')) await seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {
       return {
         value: {
@@ -205,6 +205,37 @@ function otherInstanceRecords(seen: Seen, change: Partial<Watch>) {
   const saved = JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }
   seen.files.set(STATE, JSON.stringify({ watches: saved.watches.map(w => ({ ...w, ...change })) }))
 }
+
+test('a stop made while a poll waits on gh is not undone by that poll', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'fail'
+  // The stop finishes while the poll's gh call is still out.
+  seen.duringChecks = () => {
+    seen.duringChecks = undefined
+    return $.command.run({ command: 'ci-watch', args: 'stop' } as never)
+  }
+  await clock.advance(60_000)
+  for (let i = 0; i < 4; i++) await clock.advance(60_000)
+  expect(seen.prompts).toEqual([])
+  expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches).toEqual([])
+})
+
+test('a watch started while a poll waits on gh is kept by that poll', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.duringChecks = () => {
+    seen.duringChecks = undefined
+    return $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 8, repo: 'o/r' } as never)
+  }
+  await clock.advance(60_000)
+  const saved = JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }
+  expect(saved.watches.map(w => w.number).sort()).toEqual([7, 8])
+})
 
 test('a settlement another instance woke the session for during the gh calls is not sent again', async ($, on) => {
   const { seen, clock } = world(on)
