@@ -1,0 +1,14 @@
+{
+  "name": "tasks",
+  "version": "0.1.0",
+  "description": "Keeps the task list honest: one task in progress at a time, finished work marked done, a list that survives compaction and completion, and reminders that name the stale task.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "nudgeAfterTools": {
+      "type": "number",
+      "title": "Ask for a task list after (tool calls)",
+      "description": "When a turn has run this many tool calls with no task list open, the model is asked to create one. 0 turns the nudge off.",
+      "default": 3
+    }
+  }
+}
