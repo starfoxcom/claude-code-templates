@@ -60,17 +60,9 @@ async function git($: Engine, cwd: string, args: string[]): Promise<string> {
   return (await gitRun($, cwd, args)).out
 }
 
-// The first reason to block, or undefined.
-async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | undefined> {
-  if (plan.block) return plan.block
-  const cwd = osPath(plan.cwd ?? (await $.session.cwd()), await $.session.cwd(), isBash)
-  const top = (await git($, cwd, ['rev-parse', '--show-toplevel'])).trim()
-  const repo = (plan.repo ?? top.split(/[\\/]/).pop() ?? '').toLowerCase()
-  const mayName = live.mentionRepos.includes('*') || live.mentionRepos.includes(repo)
-  for (const { where, text, creditOnly } of plan.texts) {
-    const v = checkText(text, mayName || Boolean(creditOnly))
-    if (v) return describe(v, where)
-  }
+// The body files the command reads: the first reason to block, or undefined. Files that cannot be read
+// for a known cause are named unread instead.
+async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, isBash: boolean) {
   const written = new Set(plan.written.map(p => osPath(p, cwd, isBash).toLowerCase()))
   for (const { where, path, written: fromCommand } of plan.files) {
     const full = osPath(path, cwd, isBash)
@@ -99,6 +91,22 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
     const v = checkText(text, mayName)
     if (v) return describe(v, `${where} (file ${path})`)
   }
+  return undefined
+}
+
+// The first reason to block, or undefined.
+async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | undefined> {
+  if (plan.block) return plan.block
+  const cwd = osPath(plan.cwd ?? (await $.session.cwd()), await $.session.cwd(), isBash)
+  const top = (await git($, cwd, ['rev-parse', '--show-toplevel'])).trim()
+  const repo = (plan.repo ?? top.split(/[\\/]/).pop() ?? '').toLowerCase()
+  const mayName = live.mentionRepos.includes('*') || live.mentionRepos.includes(repo)
+  for (const { where, text, creditOnly } of plan.texts) {
+    const v = checkText(text, mayName || Boolean(creditOnly))
+    if (v) return describe(v, where)
+  }
+  const fileReason = await checkFiles($, plan, cwd, mayName, isBash)
+  if (fileReason) return fileReason
   for (const branch of plan.branches) {
     const v = checkBranch(branch, mayName)
     if (v) return describe(v, `the new branch name "${branch}" (it lands in merge commit titles)`)
