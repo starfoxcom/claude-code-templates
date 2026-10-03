@@ -390,6 +390,10 @@ jobs:
               # templates once they are de-versioned. Registered here so the
               # canonical placeholder scan recognizes the tokens.
               'REVIEW_DEEP_MODEL', 'REVIEW_ROUTINE_MODEL',
+              # Each tier's --effort and the backup reviewer both tiers fall
+              # back to (model and effort). Defaults in SETUP.md Phase 3 step 2.
+              'REVIEW_DEEP_EFFORT', 'REVIEW_ROUTINE_EFFORT',
+              'REVIEW_BACKUP_MODEL', 'REVIEW_BACKUP_EFFORT',
               # Pre-existing placeholder in _core/.../settings.local.json.template;
               # registered so it doesn't trip UNKNOWN_PLACEHOLDER in a scanned diff.
               'STACK_COMMANDS_ALLOWLIST',
