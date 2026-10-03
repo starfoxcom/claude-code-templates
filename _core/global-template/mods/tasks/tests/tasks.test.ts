@@ -13,10 +13,12 @@ type World = {
   runs: string[][]
   /** Writes to the mods-data folder fail (a folder that cannot be written). */
   isDataDown?: boolean
+  /** Files past the sweep's age limit. */
+  old: string[]
 }
 
 function world(on: On): World {
-  const seen: World = { files: new Map(), nextId: 1, listed: [], runs: [] }
+  const seen: World = { files: new Map(), nextId: 1, listed: [], runs: [], old: [] }
   mock.clock(on, { now: Date.UTC(2026, 9, 2, 19, 0, 0) })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
@@ -30,13 +32,15 @@ function world(on: On): World {
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
   })
-  on(
-    'process.run',
-    ($, e) => (
-      seen.runs.push([...(e as never as { argv: string[] }).argv]),
-      { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-    ),
-  )
+  on('process.run', ($, e) => {
+    const argv = [...(e as never as { argv: string[] }).argv]
+    seen.runs.push(argv)
+    // The sweep removes the files marked old, all but the one it is told to keep.
+    if (argv[2]?.includes('mtimeMs<cut')) {
+      for (const path of seen.old) if (path !== `${argv[3]}/${argv[5]}.json`) seen.files.delete(path)
+    }
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('session.id', () => ({ value: 'sess-a' }))
   on('session.root', () => ({ value: 'C:/Repos/x' }))
   on('fs.list', ($, e) => {
@@ -76,6 +80,26 @@ async function create($: Engine, subject: string): Promise<void> {
 async function update($: Engine, taskId: string, status: string): Promise<{ context?: string[] }> {
   return (await $.tool.call({ tool: 'TaskUpdate', taskId, status } as never)) as never
 }
+
+test("a session resumed after the sweep's age limit keeps its own list", async ($, on) => {
+  const seen = world(on)
+  const old: Mirror = {
+    session: 'sess-a',
+    updatedAt: 1,
+    turn: 4,
+    tasks: [{ id: '1', subject: 'Port the mods', status: 'in_progress' }],
+  } as never
+  seen.files.set(MIRROR_FILE, JSON.stringify(old))
+  seen.files.set('C:/Users/me/.claude/mods-data/tasks/sess-old.json', JSON.stringify({ ...old, session: 'sess-old' }))
+  seen.old = [MIRROR_FILE, 'C:/Users/me/.claude/mods-data/tasks/sess-old.json']
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+
+  expect(seen.files.has('C:/Users/me/.claude/mods-data/tasks/sess-old.json')).toBe(false)
+  expect(mirror(seen).tasks.map(t => t.subject)).toEqual(['Port the mods'])
+  await turn($)
+  await create($, 'Next step')
+  expect(mirror(seen).tasks.map(t => t.subject)).toEqual(['Port the mods', 'Next step'])
+})
 
 test('the mirror keeps every task, finished ones too', async ($, on) => {
   const seen = world(on)

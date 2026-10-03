@@ -74,10 +74,12 @@ const UNCOUNTED_TOOLS = new Set([...TASK_TOOLS, 'ToolSearch', 'TaskStop', 'TaskO
 const UNLINK_SCRIPT =
   'const fs=require("fs"),p=require("path");const [d,...names]=process.argv.slice(1);' +
   'for(const n of names){try{fs.unlinkSync(p.join(d,n))}catch{}}'
-const SWEEP_SCRIPT =
-  'const fs=require("fs"),p=require("path");const [d,days]=process.argv.slice(1);' +
+// `<folder> <days> <this session's id>`: a session resumed after SWEEP_DAYS keeps its own list.
+export const SWEEP_SCRIPT =
+  'const fs=require("fs"),p=require("path");const [d,days,keep]=process.argv.slice(1);' +
   'if(fs.existsSync(d)){const cut=Date.now()-days*864e5;' +
-  'for(const n of fs.readdirSync(d)){const f=p.join(d,n);if(fs.statSync(f).mtimeMs<cut)fs.unlinkSync(f)}}'
+  'for(const n of fs.readdirSync(d)){if(n===keep+".json")continue;' +
+  'const f=p.join(d,n);if(fs.statSync(f).mtimeMs<cut)fs.unlinkSync(f)}}'
 
 const live: {
   mirror?: Mirror
@@ -510,8 +512,9 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     const dir = await dataDir($)
-    void $.process
-      .run(['node', '-e', SWEEP_SCRIPT, dir, String(SWEEP_DAYS)], { timeoutMs: 20_000 })
+    // Done before this session's list is read, so the two never race.
+    await $.process
+      .run(['node', '-e', SWEEP_SCRIPT, dir, String(SWEEP_DAYS), await $.session.id()], { timeoutMs: 20_000 })
       .catch(() => undefined)
     await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)
