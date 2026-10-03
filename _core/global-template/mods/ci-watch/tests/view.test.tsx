@@ -77,6 +77,16 @@ for (const surface of SURFACES) {
     for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
     expect(seen.prompts).toEqual([])
   })
+
+  test(`${surface}: the row follows the watches while the state file cannot be written`, async ($, on) => {
+    const { seen } = world(on)
+    seen.isWriteDown = true
+    await pushed($, surface)
+    const ui = await $.ui.mount({ plugin: 'ci-watch', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /PR 7/ })).toBeDefined()
+    await $.command.run({ command: 'ci-watch', args: 'stop' } as never)
+    expect(await ui.find({ type: 'Text', text: /PR 7/ })).toBeUndefined()
+  })
 }
 
 test('with nothing watched the band draws nothing of its own', async ($, on) => {
