@@ -68,5 +68,8 @@ export function renderTemplate(text, ctx, file) {
   const lf = text.replace(/\r\n/g, "\n");
   const resolved = resolveBlocks(lf, ctx, file);
   const filled = fillPlaceholders(resolved, ctx.values || {}, ctx.deferred, file);
+  // Only a template with toggle blocks has gaps from removed blocks to close; any other file keeps
+  // its own blank lines (Python's two between functions, for one).
+  if (!lf.includes("<!-- TOGGLE:")) return filled;
   return filled.replace(/\n{3,}/g, "\n\n");
 }
