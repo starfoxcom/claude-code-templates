@@ -100,13 +100,11 @@ function world(on: On, pause?: object) {
       ],
     },
   }))
-  on('session.id', () => ({ value: 'sess-1' }))
   on('settings.read', () => ({ value: { pluginConfigs: { 'usage-guard': { options: { wrapUpAt: 80 } } } } }) as never)
   on('fs.read', ($, e) => {
     if (!pause || !e.path.replaceAll('\\', '/').endsWith('usage-guard/pause.json')) throw new Error('ENOENT')
     return { value: JSON.stringify(pause) }
   })
-  on('fs.write', () => ({ value: undefined }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   on('session.attach', ($, e) => ({ clientId: e.clientId }))

@@ -8,8 +8,7 @@ import { register as settings, SETTINGS_PANE } from './settings'
 // The hooks run in a sandbox with no time zone of its own, so the host's
 // UTC offset and zone name are read once per load and again every hour
 // (travel, a DST change). The compaction window is read live from the engine
-// at each prompt and shared with the status line through a small per-session
-// file, since the status line's own input does not carry it.
+// at each prompt.
 const HOUR_MS = 60 * 60 * 1000
 const READ_ZONE = [
   'node',
@@ -45,28 +44,6 @@ async function readWindow($: EngineInterface): Promise<Window | undefined> {
     return { size: breakdown.rawMaxTokens, compactsAt: breakdown.autoCompactThreshold }
   } catch {
     return undefined
-  }
-}
-
-// The engine's fs makes no missing folders, so the data folder is made through node, once per load.
-export const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
-const madeDirs = new Set<string>()
-async function ensureDir($: EngineInterface, dir: string): Promise<void> {
-  if (madeDirs.has(dir)) return
-  const { exitCode } = await $.process.run(['node', '-e', MKDIR_SCRIPT, dir], { timeoutMs: 10_000 })
-  if (exitCode === 0) madeDirs.add(dir)
-}
-
-async function shareWindow($: EngineInterface, window: Window | undefined): Promise<void> {
-  if (!window) return
-  try {
-    const configured = await $.env.get('CLAUDE_CONFIG_DIR')
-    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
-    const dir = `${configured ?? `${home}/.claude`}/mods-data/session-facts`.replaceAll('\\', '/')
-    await ensureDir($, dir)
-    await $.fs.write(`${dir}/${await $.session.id()}.json`, JSON.stringify(window))
-  } catch {
-    // The status line falls back to settings when the file is missing.
   }
 }
 
@@ -176,7 +153,6 @@ async function setUp($: EngineInterface): Promise<void> {
   live.isSetUp = true
   live.zone = await readZone($)
   live.window = await readWindow($)
-  await shareWindow($, live.window)
   await refreshBudgets($)
   $.clock.every(HOUR_MS, () => {
     void readZone($).then(read => {
@@ -224,9 +200,8 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (!live.isSetUp) await setUp($)
     // Settings can change mid-session; the fresh reading lands next prompt.
-    void readWindow($).then(async read => {
+    void readWindow($).then(read => {
       live.window = read ?? live.window
-      await shareWindow($, live.window)
     })
     void refreshBudgets($)
     const fact =
