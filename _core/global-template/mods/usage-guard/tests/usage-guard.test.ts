@@ -169,6 +169,22 @@ test('another session in the same project wraps up once and leaves the stop comm
   expect(pauseOf(seen)).toEqual(other)
 })
 
+test("a session opened during a pause in another project stops that project's work", async ($, on) => {
+  const seen = world(on, 'C:/Repos/web-app')
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  seen.claims.add(`stop-${KEY}-my-game`)
+  await start($)
+  expect(seen.claims.has(`stop-${KEY}-web-app`)).toBe(true)
+})
+
 test('a session opened during a pause only waits, then resumes', async ($, on) => {
   const seen = world(on)
   const pause: Pause = {

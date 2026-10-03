@@ -386,6 +386,8 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   }
   await claim($, `${resetKey(pause)}-${await $.session.id()}`)
   await armWake($, pause)
+  // A project no session had open when the pause began still has its background work stopped.
+  await stopBackground($, pause)
   setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
   await notice(
