@@ -15,9 +15,14 @@ const SEARCH_DAYS = 366
 
 type Field = { values: Set<number>; isAny: boolean }
 
+// Each list element is `*` or `n` or `n-m`, optionally with `/step`. Anything with a number missing
+// (`/5`, `-5`, `0,,5`) is refused, as GitHub refuses it: such a workflow never runs.
+const ELEMENT = /^(\*|\d+(-\d+)?)(\/\d+)?$/
+
 function parseField(text: string, min: number, max: number): Field | null {
   const values = new Set<number>()
   for (const part of text.split(',')) {
+    if (!ELEMENT.test(part)) return null
     const [range = '', stepText] = part.split('/')
     const step = stepText === undefined ? 1 : Number(stepText)
     let [lo, hi] = range === '*' ? [min, max] : range.split('-').map(Number)
