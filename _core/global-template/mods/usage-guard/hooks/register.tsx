@@ -287,13 +287,14 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   await startWrapUp($, pause)
 }
 
-// The wrap-up a turn that ended owed, unless the pause was cancelled or ended meanwhile.
+// The wrap-up a turn that ended owed, unless the pause was cancelled or ended meanwhile. Another
+// session may have extended it to a later reset: the same episode still owes this wrap-up.
 async function runPendingWrapUp($: EngineInterface): Promise<void> {
   const pending = live.pendingWrapUp
   if (!pending) return
   live.pendingWrapUp = undefined
   const pause = await readPause($)
-  if (pause?.status !== 'active' || pause.resetsAt !== pending.resetsAt) return
+  if (pause?.status !== 'active' || resetKey(pause) !== resetKey(pending)) return
   await startWrapUp($, pause)
 }
 

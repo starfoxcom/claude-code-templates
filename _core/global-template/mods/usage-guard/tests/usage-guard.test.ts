@@ -517,6 +517,24 @@ test('crossing the line mid-turn waits for the turn to end before the wrap-up ru
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
 
+test('a wrap-up owed by a running turn still runs when another session extends the pause', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.turn.start({ turnId: 't1' } as never)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+  // Before the turn ends, another session crosses the weekly line and extends the pause in place.
+  const WEEKLY = '2026-10-03T19:00:00.000Z'
+  const wakeAt = Date.parse(WEEKLY) + 120_000
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pauseOf(seen), resetsAt: WEEKLY, wakeAt, episode: RESET }))
+  await endTurn($)
+
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+  await seen.clock.advance(60_000)
+  expect(seen.commands).toHaveLength(1)
+})
+
 test('a wrap-up owed by a running turn is dropped when the pause is cancelled before it ends', async ($, on) => {
   const seen = world(on)
   await start($)
