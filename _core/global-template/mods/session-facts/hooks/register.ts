@@ -1,4 +1,9 @@
+import { atom, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
+
+import type { Budgets } from '../types'
+import { registerBudgetsView } from './budgets'
+import { register as settings, SETTINGS_PANE } from './settings'
 
 // The hooks run in a sandbox with no time zone of its own, so the host's
 // UTC offset and zone name are read once per load and again every hour
@@ -98,7 +103,72 @@ async function factsLine($: EngineInterface, zone: Zone, window: Window | undefi
   }
 }
 
-const live: { zone: Zone; window?: Window; isSetUp: boolean } = { zone: UTC, isSetUp: false }
+const BUDGETS_EVERY_MS = 30_000
+const DEFAULT_WRAP_UP_AT = 90
+
+// The budgets row (budgets.tsx) reads this; each file names the state with its own literal reference.
+const budgets = atom({ plugin: 'session-facts', key: 'budgets' } as const, null)
+
+const live: {
+  zone: Zone
+  window?: Window
+  isSetUp: boolean
+  lastResponseAt?: number
+  planWarnAt: number
+  cacheWarnMinutes: number
+  cacheTtlMs: number
+} = { zone: UTC, isSetUp: false, planWarnAt: 75, cacheWarnMinutes: 10, cacheTtlMs: 60 * 60_000 }
+
+// usage-guard's own threshold, so the row turns red where the guard steps in.
+async function readWrapUpAt($: EngineInterface): Promise<number> {
+  try {
+    const configs = (await $.settings.read()).pluginConfigs as Record<string, { options?: { wrapUpAt?: unknown } }>
+    return Number(configs?.['usage-guard']?.options?.wrapUpAt) || DEFAULT_WRAP_UP_AT
+  } catch {
+    return DEFAULT_WRAP_UP_AT
+  }
+}
+
+async function readPausedUntil($: EngineInterface): Promise<number | undefined> {
+  try {
+    const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+    const file = `${configured ?? `${home}/.claude`}/mods-data/usage-guard/pause.json`.replaceAll('\\', '/')
+    const pause = JSON.parse(String(await $.fs.read(file))) as { status?: string; wakeAt?: number }
+    return pause.status === 'active' ? pause.wakeAt : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function refreshBudgets($: EngineInterface): Promise<void> {
+  try {
+    const [{ context, rateLimits }, wrapUpAt, pausedUntil] = await Promise.all([
+      $.session.usage(),
+      readWrapUpAt($),
+      readPausedUntil($),
+    ])
+    const next: Budgets = {
+      tokens: context.tokens,
+      size: live.window?.size ?? context.window,
+      compactsAt: live.window?.compactsAt,
+      limits: rateLimits.map(limit => ({
+        kind: limit.kind,
+        percentUsed: limit.percentUsed,
+        resetsAt: limit.resetsAt ? Date.parse(limit.resetsAt) : undefined,
+      })),
+      cacheExpiresAt: live.lastResponseAt === undefined ? undefined : live.lastResponseAt + live.cacheTtlMs,
+      pausedUntil,
+      offsetMinutes: live.zone.offsetMinutes,
+      planWarnAt: live.planWarnAt,
+      wrapUpAt,
+      cacheWarnMinutes: live.cacheWarnMinutes,
+    }
+    await update($, budgets, () => next)
+  } catch {
+    // The row keeps its last reading.
+  }
+}
 
 // A hot reload starts the module over without a new session.start, so the
 // first prompt after one sets up too.
@@ -107,17 +177,48 @@ async function setUp($: EngineInterface): Promise<void> {
   live.zone = await readZone($)
   live.window = await readWindow($)
   await shareWindow($, live.window)
+  await refreshBudgets($)
   $.clock.every(HOUR_MS, () => {
     void readZone($).then(read => {
       live.zone = read
     })
   })
+  $.clock.every(BUDGETS_EVERY_MS, () => void refreshBudgets($))
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  live.planWarnAt = Number(options.planWarnAt ?? 75)
+  live.cacheWarnMinutes = Number(options.cacheWarnMinutes ?? 10)
+  live.cacheTtlMs = Number(options.cacheTtlMinutes ?? 60) * 60_000
+  registerBudgetsView(on)
+  settings(on, options)
+
   on('session.start', async ($, e, next) => {
+    const description = 'Budgets row: /session-facts settings opens its settings'
+    await $.command.register({ name: 'session-facts', description })
     await setUp($)
     return next(e)
+  })
+
+  on('command.run', { command: 'session-facts' }, async ($, e, next) => {
+    if (e.args.trim() !== 'settings') return next(e)
+    await $.ui.open({ id: SETTINGS_PANE, title: 'Session facts settings', focus: true })
+    return { text: 'Opened the session-facts settings.' }
+  })
+
+  // A Desktop session starts with no surface; the row fills in once the app attaches.
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    if (!live.isSetUp) await setUp($)
+    else await refreshBudgets($)
+    return result
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    live.lastResponseAt = await $.clock.now()
+    await refreshBudgets($)
+    return result
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -127,6 +228,7 @@ export const register: Register = on => {
       live.window = read ?? live.window
       await shareWindow($, live.window)
     })
+    void refreshBudgets($)
     const fact =
       `[session-facts] ${await factsLine($, live.zone, live.window)} | ` +
       'base every time-of-day reference and every State line figure on THIS line'
