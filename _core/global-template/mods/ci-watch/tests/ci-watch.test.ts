@@ -154,6 +154,23 @@ test('a push starts a watch and the session is woken once when it passes', async
   expect(seen.prompts.length).toBe(1)
 })
 
+test('a push that moves no commit keeps the settled watch: no second wake', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  expect(seen.prompts.length).toBe(1)
+  // "Everything up-to-date": the head is the same commit.
+  await $.tool.call({ tool: 'Bash', command: 'git push --tags' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  expect(seen.prompts.length).toBe(1)
+  // Asked by name, the same head is watched again.
+  await $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 7, repo: 'o/r' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  expect(seen.prompts.length).toBe(2)
+})
+
 const OWNER = 'C:/Users/me/.claude/mods-data/ci-watch/s1.owner'
 
 test('an instance a newer load has replaced stops polling and never wakes the session', async ($, on) => {
