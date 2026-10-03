@@ -444,6 +444,27 @@ test('a session that loses the pause claim honours a cancel written since the wi
   expect(seen.commands).toEqual([])
 })
 
+test('a cancel of an extended pause holds against a session still reading the earlier reset', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  expect(seen.commands).toHaveLength(1)
+  // Another session extended the pause to the weekly reset, then the person cancelled it.
+  const WEEKLY = '2026-10-03T19:00:00.000Z'
+  const wakeAt = Date.parse(WEEKLY) + 120_000
+  const extended = { ...pauseOf(seen), resetsAt: WEEKLY, wakeAt, episode: RESET }
+  seen.files.set(PAUSE_FILE, JSON.stringify(extended))
+  await $.command.run({ command: 'usage-guard', args: 'cancel' } as never)
+  // This idle session's reading still names the 5-hour reset.
+  await seen.clock.advance(WAKE - NOW + 60_000)
+
+  expect(pauseOf(seen)?.status).toBe('cancelled')
+  expect(pauseOf(seen)?.resetsAt).toBe(WEEKLY)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+})
+
 test('after a hot reload during a pause, the first turn arms the wake timer again', async ($, on) => {
   const seen = world(on)
   // This session wrapped up before the reload; the reload dropped its timer and skipped session.start.
