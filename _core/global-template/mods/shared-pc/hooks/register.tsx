@@ -357,7 +357,10 @@ async function beat($: Engine) {
   if (!ctx.dir) return
   const lastBeat = await $.clock.now()
   await $.fs
-    .write(`${ctx.dir}/sessions/${ctx.me}.json`, JSON.stringify({ id: ctx.me, name: ctx.name, root: ctx.root, lastBeat }))
+    .write(
+      `${ctx.dir}/sessions/${ctx.me}.json`,
+      JSON.stringify({ id: ctx.me, name: ctx.name, root: ctx.root, lastBeat }),
+    )
     .catch(() => undefined)
 }
 
