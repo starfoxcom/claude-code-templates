@@ -27,13 +27,20 @@ function bar(ratio: number): string {
   return '▰'.repeat(filled) + '▱'.repeat(BAR_CELLS - filled)
 }
 
-/** Context fill against the compaction point, the figure the app's context meter shows. */
+/**
+ * Context fill against the compaction point, the figure the app's context meter shows. The facts
+ * line carries the same text, so the State line reads like the row.
+ */
+export function contextText(tokens: number | undefined, size: number, compactsAt?: number): string {
+  if (tokens === undefined) return 'ctx --'
+  const left = compactsAt ? ` · ${thousands(Math.max(0, compactsAt - tokens))} to compact` : ''
+  return `ctx ${bar(tokens / (compactsAt ?? size))} ${Math.round((tokens / size) * 100)}%${left}`
+}
+
 export function contextChip(b: Budgets): Chip {
-  if (b.tokens === undefined) return { text: 'ctx --' }
-  const limit = b.compactsAt ?? b.size
-  const ratio = b.tokens / limit
-  const left = b.compactsAt ? ` · ${thousands(Math.max(0, b.compactsAt - b.tokens))} to compact` : ''
-  const text = `ctx ${bar(ratio)} ${Math.round((b.tokens / b.size) * 100)}%${left}`
+  const text = contextText(b.tokens, b.size, b.compactsAt)
+  if (b.tokens === undefined) return { text }
+  const ratio = b.tokens / (b.compactsAt ?? b.size)
   return { text, color: ratio >= 0.9 ? 'red' : ratio >= 0.75 ? 'yellow' : undefined }
 }
 
