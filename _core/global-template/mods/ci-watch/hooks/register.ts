@@ -75,7 +75,14 @@ export function settle(
 
 // The command with quoted strings emptied and here-doc bodies dropped, so message text never reads as
 // a command. Folders come from the raw command (`targetFolder`).
-export function commandWords(command: string): string {
+// Each shell's own escape inside double quotes: a backslash in Bash (where a backtick runs a command and
+// escapes nothing), a backtick in PowerShell (where a backslash is a plain character).
+const DOUBLE_QUOTED = {
+  bash: String.raw`"(?:[^"\\]|\\[\s\S])*"`,
+  powershell: '"(?:[^"`]|`[\\s\\S])*"',
+}
+
+export function commandWords(command: string, isPowerShell = false): string {
   const lines = command.split('\n')
   const kept: string[] = []
   for (let i = 0; i < lines.length; i++) {
@@ -86,17 +93,18 @@ export function commandWords(command: string): string {
     while (i + 1 < lines.length && (lines[i + 1] ?? '').trim() !== doc[2]) i++
     i++
   }
-  return kept.join('\n').replace(/@'[\s\S]*?'@|@"[\s\S]*?"@|'[^']*'|"(?:[^"\\`]|[\\`][\s\S])*"/g, '""')
+  const quoted = isPowerShell ? DOUBLE_QUOTED.powershell : DOUBLE_QUOTED.bash
+  return kept.join('\n').replace(new RegExp(String.raw`@'[\s\S]*?'@|@"[\s\S]*?"@|'[^']*'|${quoted}`, 'g'), '""')
 }
 
-export function isPushOrPr(command: string): boolean {
-  return PUSH_OR_PR.test(commandWords(command))
+export function isPushOrPr(command: string, isPowerShell = false): boolean {
+  return PUSH_OR_PR.test(commandWords(command, isPowerShell))
 }
 
 // A merged PR's watch is noise: the chat already says it merged. Returns the
 // PR number a `gh pr merge` names, 0 when it names none (the branch's PR).
-export function mergedNumber(command: string): number | undefined {
-  const merge = PR_MERGE.exec(commandWords(command))
+export function mergedNumber(command: string, isPowerShell = false): number | undefined {
+  const merge = PR_MERGE.exec(commandWords(command, isPowerShell))
   if (!merge) return undefined
   const named = /(?:^|\s)#?(\d+)(?=\s|$)/.exec(merge[1] ?? '')
   return named ? Number(named[1]) : 0
@@ -392,8 +400,9 @@ export const register: Register = (on, options) => {
     if (await isRetired($)) return next(e)
     const result = await next(e)
     const command = String((e as { command?: unknown }).command ?? '')
+    const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
     if (result.deny !== undefined || result.isError) return result
-    const merged = mergedNumber(command)
+    const merged = mergedNumber(command, isPowerShell)
     if (merged !== undefined) {
       // No number: the branch's PR, so every finished watch is a candidate. A watch is dropped only once
       // GitHub says its PR is merged or closed: `--auto` only queues the merge, and a refused merge
@@ -408,7 +417,7 @@ export const register: Register = (on, options) => {
       }
       return result
     }
-    if (!isPushOrPr(command)) return result
+    if (!isPushOrPr(command, isPowerShell)) return result
     // `gh pr create` prints the new PR's URL; otherwise ask about the branch in the folder the command ran in.
     const created = PR_URL.exec(JSON.stringify(result.result ?? ''))
     if (created) {
