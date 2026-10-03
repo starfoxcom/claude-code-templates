@@ -26,8 +26,12 @@ The templates do not yet ship a `.claude/BIND.md` writer — this is a v1.x impr
 | `{{GITFLOW_OR_TRUNK}}` | `Gitflow` | from CLAUDE.md "Git workflow" + CONTRIBUTING.md "Branch from develop" |
 | `{{CONVERSATION_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
 | `{{CODE_LANGUAGE}}` | English | from CLAUDE.md "Project conventions" |
-| `{{REVIEW_DEEP_MODEL}}` | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high | what `.github/workflows/claude.yml` runs today (the 2026-05 pin was `claude-opus-4-8`). The canonical table cell holds one model; this bind names the backup too (see "Self-bind deviations"). |
-| `{{REVIEW_ROUTINE_MODEL}}` | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high | what `.github/workflows/claude-code-review.yml` runs today (the 2026-05 pin was `claude-sonnet-4-6`). Same treatment as the deep row. |
+| `{{REVIEW_DEEP_MODEL}}` | `claude-fable-5-1` | what `.github/workflows/claude.yml` runs today (the 2026-05 pin was `claude-opus-4-8`) |
+| `{{REVIEW_ROUTINE_MODEL}}` | `claude-fable-5-1` | what `.github/workflows/claude-code-review.yml` runs today (the 2026-05 pin was `claude-sonnet-4-6`) |
+| `{{REVIEW_DEEP_EFFORT}}` | `low` | the deep tier's `--effort` in `.github/workflows/claude.yml` |
+| `{{REVIEW_ROUTINE_EFFORT}}` | `low` | the routine tier's `--effort` in `.github/workflows/claude-code-review.yml` |
+| `{{REVIEW_BACKUP_MODEL}}` | `claude-opus-5-5` | the backup reviewer both live workflows fall back to |
+| `{{REVIEW_BACKUP_EFFORT}}` | `high` | the backup reviewer's `--effort` in both live workflows |
 | `{{TOOLS_CODE_RESEARCH_NAME}}` | `tokensave` | `code_research: tokensave` |
 | `{{TOOLS_CODE_RESEARCH_URL}}` | `https://github.com/aovestdipaperino/tokensave` | `engine/model.js` `CODE_RESEARCH_TOOLS.tokensave` |
 | `{{TOOLS_CODE_RESEARCH_BYPASS_MARKER}}` | `TOKENSAVE_BYPASS:` | same |
@@ -111,7 +115,6 @@ Places where this repo's bound text differs on purpose from what the renderer pr
 
 | File | Deviation | Reason |
 |---|---|---|
-| `.claude/rules/review-tiers.md` | The Model column names the backup model and both efforts. | The live workflows run two models per tier; one model name would misstate them. |
 | `.claude/rules/collaboration.md` | "Who reviews" replaces "ask the owner of the touched directory" and "every PR needs an approval from someone other than its author" with: zero required approvals, the AI routine verdict (plus the deep verdict when raised) is the gate, the maintainer merges on 🟢, and an external contributor's PR also needs the maintainer's read of the whole diff. | Maintainer decision 2026-10-02. This is a solo-maintainer repo (`codeowners: false`); its branch protection requires zero approvals because an author cannot approve their own PR, so the canonical approval line could never be met. Root `CLAUDE.md` "Review discipline" states the same external-contributor rule. |
 | `.claude/rules/token-efficiency.md` | "Watching CI" opens with the ci-watch mod as the default watcher; the canonical Monitor-tool watcher and the background `gh pr checks` loop stay as the fallbacks, in that order. | Maintainer decision 2026-10-02. The maintainer's global setup loads a `ci-watch` mod that watches PR checks after a push or PR creation and wakes the session once they settle; a second watcher on the same PR would duplicate it. Root `CLAUDE.md`'s CI bullets say the same. |
 | `.claude/skills/session-close/SKILL.md` | The "only the hand-off file changed" row points at the docs-only note in `review-tiers.md` instead of "the docs-only path in `token-efficiency.md`". | That path sits inside the `github_actions_paths_ignore_auto_merge` block, which this bind strips (the toggle is off), so the canonical pointer would dangle. |

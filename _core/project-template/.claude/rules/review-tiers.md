@@ -4,8 +4,8 @@ Every PR gets an AI review with a pass or block verdict, run by `.github/workflo
 
 | Tier | Starts when | Model | Gate check |
 |---|---|---|---|
-| Routine | Every PR (`claude-code-review.yml`) | `{{REVIEW_ROUTINE_MODEL}}` | `Evaluate review outcome` |
-| Deep | A comment starting with `@claude review this PR` (`claude.yml`) | `{{REVIEW_DEEP_MODEL}}` | `Claude On-Demand` |
+| Routine | Every PR (`claude-code-review.yml`) | `{{REVIEW_ROUTINE_MODEL}}` at {{REVIEW_ROUTINE_EFFORT}} effort; backup `{{REVIEW_BACKUP_MODEL}}` at {{REVIEW_BACKUP_EFFORT}} | `Evaluate review outcome` |
+| Deep | A comment starting with `@claude review this PR` (`claude.yml`) | `{{REVIEW_DEEP_MODEL}}` at {{REVIEW_DEEP_EFFORT}} effort; backup `{{REVIEW_BACKUP_MODEL}}` at {{REVIEW_BACKUP_EFFORT}} | `Claude On-Demand` |
 
 Both checks are required on protected branches, and branch protection has no bypass actors. With a single maintainer, require zero approvals so the two checks alone decide, since authors cannot approve their own PRs. With more people, also require one approval from someone other than the author. Docs-only and other non-reviewable diffs pass both automatically in about 30 seconds. Model pins change only after a side-by-side comparison of candidate models on the same saved PRs, never just because a newer model exists.
 
