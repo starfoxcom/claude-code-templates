@@ -7,9 +7,11 @@ const SURFACES = ['terminal', 'desktop'] as const
 const DIRTY = '## develop...origin/develop [ahead 2, behind 1]\n M a.ts\n M b.ts\n?? c.ts\n'
 
 function world(on: On, status = DIRTY) {
-  const seen = { gitCalls: 0, status }
-  mock.clock(on, { now: 0 })
-  on('session.model', () => ({ value: 'claude-opus-5-5[1m]' }))
+  const seen = { gitCalls: 0, status, isModelDown: false, clock: mock.clock(on, { now: 0 }) }
+  on('session.model', () => {
+    if (seen.isModelDown) throw new Error('no model yet')
+    return { value: 'claude-opus-5-5[1m]' }
+  })
   on('session.root', () => ({ value: 'C:\\Repos\\Emberholm' }))
   on('process.run', ($, e) => {
     if (e.argv[0] === 'git') seen.gitCalls += 1
@@ -109,4 +111,14 @@ test('outside a repository the row keeps model and project only', async ($, on) 
   const ui = await mount($, 'terminal')
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · Emberholm/ })).toBeDefined()
   expect(await ui.find({ key: 'session-info-changes' })).toBeUndefined()
+})
+
+test('a failed first read still starts the timer that fills the row', async ($, on) => {
+  const seen = world(on)
+  seen.isModelDown = true
+  await start($, 'terminal')
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Emberholm/ })).toBeUndefined()
+  seen.isModelDown = false
+  await seen.clock.advance(30_000)
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 · Emberholm/ })).toBeDefined()
 })
