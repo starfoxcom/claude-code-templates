@@ -1,7 +1,8 @@
 {
   "name": "ci-watch",
   "version": "0.1.0",
-  "description": "Watches a pushed PR's checks locally, shows progress on the status line, and wakes the session once when they settle.",
+  "description": "Watches a pushed PR's checks locally, shows each PR's progress above the prompt, and wakes the session once when they settle.",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "pollSeconds": {
       "type": "number",

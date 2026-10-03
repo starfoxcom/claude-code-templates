@@ -1,0 +1,87 @@
+import type { Engine } from 'claude-code/testing'
+import { expect, test } from 'claude-code/testing'
+
+import { summary } from '../hooks/view'
+import type { Watch } from '../types'
+import { world } from './world'
+
+const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
+const SURFACES = ['terminal', 'desktop'] as const
+const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
+
+const SUMMARY_CASES: { name: string; watch: Partial<Watch>; text: string; color: string }[] = [
+  {
+    name: 'running',
+    watch: { checks: { a: 'pass', b: 'pending' } },
+    text: 'PR 7 · 1/2 done',
+    color: 'yellow',
+  },
+  {
+    name: 'passed',
+    watch: { checks: { a: 'pass', b: 'skipping' }, outcome: 'passed' },
+    text: 'PR 7 · all 2 passed',
+    color: 'green',
+  },
+  {
+    name: 'failed',
+    watch: { checks: { a: 'fail', b: 'cancel', c: 'pass' } },
+    text: 'PR 7 · failed: a, b',
+    color: 'red',
+  },
+  {
+    name: 'timed out',
+    watch: { checks: { a: 'pending' }, outcome: 'timeout' },
+    text: 'PR 7 · stuck pending',
+    color: 'yellow',
+  },
+  { name: 'no checks yet', watch: {}, text: 'PR 7 · 0/0 done', color: 'yellow' },
+]
+
+for (const { name, watch, text, color } of SUMMARY_CASES) {
+  test(`summary: ${name}`, () => {
+    expect(summary({ ...BASE, ...watch })).toEqual({ text, color })
+  })
+}
+
+async function pushed($: Engine, surface: 'terminal' | 'desktop'): Promise<void> {
+  if (surface === 'terminal') await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  else await $.session.start({ cwd: 'C:/repo', surface: null, isInteractive: false } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+}
+
+for (const surface of SURFACES) {
+  test(`${surface}: a watched PR shows its row, its checks and a link to it`, async ($, on) => {
+    const { seen, clock } = world(on)
+    seen.rows = [{ name: 'review', bucket: 'fail' }]
+    await pushed($, surface)
+    await clock.advance(60_000)
+    const ui = await $.ui.mount({ plugin: 'ci-watch', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /PR 7 · failed: review/ })).toBeDefined()
+    expect(await ui.find({ type: 'Link', href: 'https://github.com/o/r/pull/7' } as never)).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /✗ review/ })).toBeUndefined()
+    await ui.press({ key: 'ci-watch-checks-o/r#7' })
+    expect(await ui.find({ type: 'Text', text: /✗ review/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /… build/ })).toBeDefined()
+  })
+
+  test(`${surface}: stop forgets the watch, so the session is never woken for it`, async ($, on) => {
+    const { seen, clock } = world(on)
+    await pushed($, surface)
+    const ui = await $.ui.mount({ plugin: 'ci-watch', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /PR 7/ })).toBeDefined()
+    await ui.press({ key: 'ci-watch-stop-o/r#7' })
+    expect(await ui.find({ type: 'Text', text: /PR 7/ })).toBeUndefined()
+    const saved = JSON.parse(seen.files.get('C:/Users/me/.claude/mods-data/ci-watch/s1.json') ?? '{}')
+    expect(saved.watches).toEqual([])
+    seen.bucket = 'pass'
+    for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+    expect(seen.prompts).toEqual([])
+  })
+}
+
+test('with nothing watched the band draws nothing of its own', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ plugin: 'ci-watch', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  expect(await ui.find({ type: 'Text', text: /PR / })).toBeUndefined()
+})

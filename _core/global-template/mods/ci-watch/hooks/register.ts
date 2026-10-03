@@ -1,20 +1,10 @@
+import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-// One watched PR. The status line reads these from the session's state file.
-export type Watch = {
-  repo: string
-  number: number
-  headSha: string
-  startedAt: number
-  checks: Record<string, string>
-  stablePolls: number
-  // When the checks last went quiet; unset while any runs.
-  quietSince?: number
-  outcome?: 'passed' | 'failed' | 'timeout'
-  settledAt?: number
-  /** Set when the watch starts; names its wake claim (see `claimWake`). */
-  id?: string
-}
+import type { Watch } from '../types'
+import { register as settings, SETTINGS_PANE } from './settings'
+import { keyOf, registerView, STOP_PREFIX } from './view'
+
 
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
 // Matched on the command with its quoted text and here-doc bodies blanked (see `commandWords`), and on
@@ -220,12 +210,20 @@ export async function isRetired($: EngineInterface): Promise<boolean> {
 }
 
 // A failed write never rejects a hook: the push it follows has already run.
+// The band (view.tsx) reads the watches from session state; every save and load hands it a copy.
+const shown = atom({ plugin: 'ci-watch', key: 'watches' } as const, [])
+
+async function publish($: EngineInterface): Promise<void> {
+  await update($, shown, () => live.watches.map(w => ({ ...w })))
+}
+
 async function save($: EngineInterface): Promise<void> {
   try {
     const path = await statePath($)
     await ensureDir($, path.slice(0, path.lastIndexOf('/')))
     await $.fs.write(path, JSON.stringify({ watches: live.watches }))
     live.isUnsaved = false
+    await publish($)
   } catch {
     // Memory stays the truth (the file may lack a new watch or still hold stopped ones), and the next
     // poll saves again.
@@ -244,6 +242,15 @@ async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {
 
 async function load($: EngineInterface): Promise<void> {
   live.watches = (await readSaved($)) ?? []
+  await publish($)
+}
+
+// The band's stop button: forget one watch, as `/ci-watch stop` forgets them all.
+async function stopOne($: EngineInterface, key: string): Promise<void> {
+  live.watches = live.watches.filter(w => keyOf(w) !== key)
+  live.generation++
+  await save($)
+  await publish($)
 }
 
 // True when the saved file already records this watch as settled: another instance woke the session.
@@ -458,6 +465,14 @@ async function startPolling($: EngineInterface): Promise<void> {
 export const register: Register = (on, options) => {
   live.pollMs = Number(options.pollSeconds ?? 60) * 1000
   live.timeoutMs = Number(options.timeoutMinutes ?? 60) * 60_000
+  registerView(on)
+  settings(on, options)
+
+  on('ui.press', async ($, e, next) => {
+    if (e.plugin !== 'ci-watch' || !e.element.startsWith(STOP_PREFIX)) return next(e)
+    await stopOne($, e.element.slice(STOP_PREFIX.length))
+    return { element: e.element }
+  })
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -477,7 +492,8 @@ export const register: Register = (on, options) => {
         required: ['pr'],
       },
     })
-    await $.command.register({ name: 'ci-watch', description: 'Show watched PRs, or stop: /ci-watch stop' })
+    const description = 'Show watched PRs; /ci-watch stop stops them, /ci-watch settings opens the settings'
+    await $.command.register({ name: 'ci-watch', description })
     return result
   })
 
@@ -536,6 +552,10 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'ci-watch' }, async ($, e, next) => {
+    if (e.args.trim() === 'settings') {
+      await $.ui.open({ id: SETTINGS_PANE, title: 'CI watch settings', focus: true })
+      return { text: 'Opened the ci-watch settings.' }
+    }
     await startPolling($)
     if (await isRetired($)) return next(e)
     if (e.args.trim() === 'stop') {
