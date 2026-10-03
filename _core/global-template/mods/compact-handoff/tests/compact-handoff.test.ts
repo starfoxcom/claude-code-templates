@@ -281,9 +281,22 @@ test('a kept tail the budget cut into the index is carried once, in order', asyn
   // The engine kept both as the tail; only B was carried in full.
   const second = personWords([said(first), said(a ?? ''), said(b ?? ''), said('ship it')], 10_000)
   expect(second.split(b ?? '').length - 1).toBe(1)
-  expect(second).not.toContain(a ?? '')
-  expect(second).toContain(`- ${'A'.repeat(100)}...`)
+  // A is carried again in full, in its place, and leaves the index.
+  expect(second.split(a ?? '').length - 1).toBe(1)
+  expect(second).not.toContain(`- ${'A'.repeat(100)}...`)
+  expect(second.indexOf(a ?? '')).toBeLessThan(second.indexOf(b ?? ''))
   expect(second.indexOf(b ?? '')).toBeLessThan(second.indexOf('ship it'))
+})
+
+test('a new message that starts like an indexed one is never dropped', async () => {
+  const x = 'X'.repeat(150)
+  const first = personWords([said(x), said('yes')], 100)
+  expect(first).not.toContain(x)
+  // A new paste with the same start, then a "yes" like the carried one: no tail was kept.
+  const changed = `${x} with one change`
+  const second = personWords([said(first), said(changed), said('yes'), said('ship')], 10_000)
+  expect(second).toContain(changed)
+  expect(second).toContain('ship')
 })
 
 test('a short answer the person gives again after a compaction is kept both times', async () => {
