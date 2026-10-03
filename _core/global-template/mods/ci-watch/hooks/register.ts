@@ -229,8 +229,9 @@ function isRecorded(saved: readonly Watch[] | undefined, watch: Watch): boolean 
   return there?.outcome !== undefined
 }
 
-// Instances left beside each other by a hot reload share one process, so a claim on the global
-// object, checked and set with no await in between, lets exactly one of them send each wake.
+// A last guard against a second wake from the same instance (two of its polls settling one watch). A
+// hot reload's instances may not share this global (see the owner file above), so across instances the
+// owner file and `isRecorded` are what keep a wake to one.
 export function claimWake(watch: Watch): boolean {
   const shared = globalThis as { __ciWatchWoken?: Set<string> }
   const woken = (shared.__ciWatchWoken ??= new Set())
@@ -357,6 +358,9 @@ async function poll($: EngineInterface): Promise<void> {
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
   const toWake = settled.filter(w => live.watches.includes(w))
+  // A newer load took over while this poll waited on gh: it settles the watches on its own next poll,
+  // so this instance neither saves nor wakes.
+  if (await isRetired($)) return
   // The two instances poll on their own phases and spend seconds in gh, so the file is read again
   // right before waking: a settlement it already records was sent by the other instance. This
   // instance's record is written before its prompt goes out.
