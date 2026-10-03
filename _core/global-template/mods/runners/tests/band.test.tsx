@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { clockTime, mergeReading, rowText } from '../hooks/register'
+import { clockTime, isListed, mergeReading, pgrepPattern, rowText } from '../hooks/register'
 import type { RunnerView } from '../types'
 
 // The shipped runner list is empty and the mod under test loads its own copy of rules.ts, so the row
@@ -39,6 +39,27 @@ test('a reading keeps a Start or Stop pressed while it was being taken', () => {
   const off: RunnerView[] = [{ label: 'runners', isOn: false }]
   expect(mergeReading(off, pressed)).toEqual([{ ...off[0], startedAt: NOW, isConfirming: false }])
   expect(mergeReading(reading, undefined)).toEqual([{ ...reading[0], startedAt: undefined, isConfirming: false }])
+})
+
+test('a process counts as running only under its own full name', () => {
+  const tasklist = [
+    '"vmmemWSL","4120","Services","0","1,024 K"',
+    '"Runner.Listener.exe","8812","Console","1","90 K"',
+  ].join('\r\n')
+  expect(isListed(tasklist, 'vmmemWSL')).toBe(true)
+  expect(isListed(tasklist, 'VMMEMWSL')).toBe(true)
+  expect(isListed(tasklist, 'Runner.Listener')).toBe(true)
+  expect(isListed(tasklist, 'Runner.Listener.exe')).toBe(true)
+  expect(isListed(tasklist, 'vmmem')).toBe(false)
+  expect(isListed(tasklist, 'Runner')).toBe(false)
+  expect(isListed('', 'vmmemWSL')).toBe(false)
+})
+
+test('the pgrep pattern cannot match another pgrep looking for the same runner', () => {
+  // The bracketed first letter still matches the runner, but not the pattern's own text.
+  expect(pgrepPattern('Runner.Listener')).toBe('[R]unner.Listener')
+  expect(new RegExp(pgrepPattern('Runner.Listener')).test('./bin/Runner.Listener run')).toBe(true)
+  expect(new RegExp(pgrepPattern('Runner.Listener')).test('pgrep -f [R]unner.Listener')).toBe(false)
 })
 
 for (const surface of ['terminal', 'desktop'] as const) {
