@@ -385,6 +385,8 @@ async function scheduleArm($: EngineInterface, arm: ArmedWake): Promise<void> {
 async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   const current = await read($, armedWake)
   if (current?.resetsAt !== arm.resetsAt || current.kind !== arm.kind) return
+  // An instance left by a hot reload may fire the same arm beside this one: one wins the claim.
+  if (!(await claim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`))) return
   await update($, armedWake, () => null)
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) return
