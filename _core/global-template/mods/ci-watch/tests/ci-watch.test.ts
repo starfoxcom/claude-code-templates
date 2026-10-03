@@ -74,6 +74,8 @@ type Seen = {
   isWriteDown?: boolean
   /** What `gh pr view --json state` reports. */
   prState: string
+  /** The head commit `gh pr view` reports (default `a1`). */
+  head?: string
 }
 
 function world(on: On) {
@@ -124,7 +126,12 @@ function world(on: On) {
     }
     const stdout = args.includes('pr checks')
       ? JSON.stringify([{ name: 'build', bucket: seen.bucket }, ...seen.rows])
-      : JSON.stringify({ number: 7, url: 'https://github.com/o/r/pull/7', headRefOid: 'a1', state: seen.prState })
+      : JSON.stringify({
+          number: 7,
+          url: 'https://github.com/o/r/pull/7',
+          headRefOid: seen.head ?? 'a1',
+          state: seen.prState,
+        })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('prompt.submit', ($, e) => {
@@ -169,6 +176,26 @@ test('a push that moves no commit keeps the settled watch: no second wake', asyn
   await $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 7, repo: 'o/r' } as never)
   for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
   expect(seen.prompts.length).toBe(2)
+})
+
+test('a push GitHub has not seen yet restarts the settled watch once the new head shows', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'fail'
+  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  expect(seen.prompts.length).toBe(1)
+  // The fix is pushed, but GitHub still names the old commit when the push asks.
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.head = 'b2'
+  seen.bucket = 'pending'
+  await clock.advance(60_000)
+  const saved = JSON.parse(seen.files.get(STATE) ?? '{}')
+  expect(saved.watches?.[0]?.headSha).toBe('b2')
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  expect(seen.prompts.length).toBe(2)
+  expect(seen.prompts[1]).toContain('with no failure')
 })
 
 const OWNER = 'C:/Users/me/.claude/mods-data/ci-watch/s1.owner'

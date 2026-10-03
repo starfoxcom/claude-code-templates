@@ -318,6 +318,26 @@ async function startWatch(
   return fresh
 }
 
+// A settled watch is kept an hour so a second instance does not wake for it again. A merge made outside
+// this session (the web page) drops it. A head that moved restarts it: right after a push GitHub can
+// still name the old commit, so the push found the settled watch, and its new commit is caught here.
+async function recheckSettled($: EngineInterface, watch: Watch, now: number): Promise<Watch | undefined> {
+  if (now - (watch.settledAt ?? now) >= KEEP_SETTLED_MS) return undefined
+  let view: { state?: string; headRefOid?: string } = {}
+  try {
+    view = JSON.parse(
+      await gh($, ['pr', 'view', String(watch.number), '--repo', watch.repo, '--json', 'state,headRefOid']),
+    )
+  } catch {
+    // Unknown: kept as it is until the next poll.
+  }
+  if (view.state === 'MERGED' || view.state === 'CLOSED') return undefined
+  const head = String(view.headRefOid ?? '')
+  if (!head || head === watch.headSha) return watch
+  const id = `${now}-${Math.random().toString(36).slice(2)}`
+  return { repo: watch.repo, number: watch.number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
+}
+
 async function poll($: EngineInterface): Promise<void> {
   // Start from the saved state: a hot reload can leave an earlier instance's timer running beside
   // this one, and reading the file keeps a watch the other already settled from waking twice. With
@@ -330,13 +350,14 @@ async function poll($: EngineInterface): Promise<void> {
   let changed = false
   const kept: Watch[] = []
   const settled: Watch[] = []
-  for (const current of live.watches) {
+  for (const watched of live.watches) {
+    let current = watched
     if (current.outcome) {
-      // A merge made outside this session (the web page) clears it here.
-      if (now - (current.settledAt ?? now) < KEEP_SETTLED_MS && !(await isClosed($, current.repo, current.number)))
-        kept.push(current)
-      else changed = true
-      continue
+      const rechecked = await recheckSettled($, current, now)
+      if (rechecked !== current) changed = true
+      if (rechecked?.outcome) kept.push(rechecked)
+      if (!rechecked || rechecked.outcome) continue
+      current = rechecked
     }
     const head = await headOf($, current.repo, current.number)
     const base =
