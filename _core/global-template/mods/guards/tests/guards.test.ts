@@ -150,6 +150,10 @@ test('the whole command text of a write is checked for credit, whatever spelling
     `git commit -Sabc -m '${AI_TRAILER}'`,
     `git -c user.name=Bot -c user.email=noreply@anthro${'pic.com'} commit -m fix`,
     `GIT_AUTHOR_EMAIL=noreply@anthro${'pic.com'} git commit -m fix`,
+    // Writes the reading does not see as writes: in backticks, or fed to a shell on stdin.
+    `OUT=\`git commit -m '${AI_TRAILER}'\``,
+    `bash <<'EOF'\ngit commit -m '${AI_TRAILER}'\nEOF`,
+    `echo "git commit -m '${AI_TRAILER}'" | bash`,
   ]) {
     expect(verdict(command, true)).toBe('credit')
   }
@@ -158,6 +162,10 @@ test('the whole command text of a write is checked for credit, whatever spelling
   expect(
     verdict('git commit -F C:/Users/me/AppData/Local/Temp/session_01V8SAUxUZBbVPekZUHDL9FZ/m.txt', true),
   ).toBeUndefined()
+  // A path inside the message itself is masked the same way.
+  expect(verdict('git commit -m "chore: drop the stray /tmp/session_01v8sauxuzbbvpekzuhdl9fz folder"', true)).toBe(
+    undefined,
+  )
 })
 
 test('an attached-only flag value never swallows the next word', () => {

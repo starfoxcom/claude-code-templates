@@ -69,7 +69,9 @@ export function stripPaths(text: string): string {
 
 /** Checks message text. `mayName`: this repo's subject is Claude Code, so the plain name passes. */
 export function checkText(text: string, mayName: boolean): Verdict {
-  const credit = CREDIT.exec(text)
+  // Paths are masked first, as the shipped hook does: a folder named after a session is not a session
+  // link. URLs survive the mask, so a real session link is still caught.
+  const credit = CREDIT.exec(stripPaths(text))
   if (credit) return { rule: 'credit', match: credit[0] }
   if (mayName) return undefined
   // A URL is checked for credit above (session links); a repo URL naming the word is not a mention.
