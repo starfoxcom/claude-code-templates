@@ -88,8 +88,10 @@ export function commandWords(command: string, isPowerShell = false): string {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? ''
     kept.push(line)
-    // `<<` alone: `<<<` feeds one word, not the lines after it.
-    const doc = /(?<!<)<<(?!<)-?\s*(["']?)([A-Za-z_][\w.-]*)\1/.exec(line)
+    // `<<` alone: `<<<` feeds one word, not the lines after it. Found on the line with its quoted text
+    // blanked (a delimiter's own quotes kept), so a `<<EOF` inside a message opens nothing.
+    const unquoted = line.replace(/(?<!<<-?\s*)(?:'[^']*'|"(?:[^"\\`]|[\\`].)*")/g, '""')
+    const doc = /(?<!<)<<(?!<)-?\s*(["']?)([A-Za-z_][\w.-]*)\1/.exec(unquoted)
     if (!doc) continue
     while (i + 1 < lines.length && (lines[i + 1] ?? '').trim() !== doc[2]) i++
     i++
