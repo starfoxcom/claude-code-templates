@@ -123,6 +123,19 @@ test('a push starts a watch and the session is woken once when it passes', async
   expect(seen.prompts.length).toBe(1)
 })
 
+test('a watch whose save failed is kept from memory and still wakes the session', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  seen.files.set('C:/Users/me/.claude/mods-data/ci-watch/s1.json', JSON.stringify({ watches: [] }))
+  seen.isWriteDown = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  for (let i = 0; i < 4; i++) await clock.advance(60_000)
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.prompts[0]).toContain('o/r#7: all 1 checks settled')
+})
+
 test('the data folder is made before the first save, and a failed save never fails the push', async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
@@ -240,9 +253,11 @@ test('a push or a new PR is the subcommand, never words inside a message', () =>
 })
 
 test('a push in another folder is looked up there', () => {
-  expect(targetFolder('git -C "C:/repo wt" push -u origin feature/x')).toBe('C:/repo wt')
-  expect(targetFolder('cd ../wt-ci && git push')).toBe('../wt-ci')
-  expect(targetFolder("Set-Location 'D:/wt'; git push")).toBe('D:/wt')
-  expect(targetFolder('git -C /c/Users/me/wt push -q')).toBe('c:/Users/me/wt')
-  expect(targetFolder('git push -u origin feature/x')).toBeUndefined()
+  expect(targetFolder('git -C "C:/repo wt" push -u origin feature/x', true)).toBe('C:/repo wt')
+  expect(targetFolder('cd ../wt-ci && git push', true)).toBe('../wt-ci')
+  expect(targetFolder("Set-Location 'D:/wt'; git push", true)).toBe('D:/wt')
+  expect(targetFolder('git -C /c/Users/me/wt push -q', true)).toBe('c:/Users/me/wt')
+  expect(targetFolder('git push -u origin feature/x', true)).toBeUndefined()
+  // Elsewhere a one-letter top folder is real.
+  expect(targetFolder('git -C /u/me/wt push -q', false)).toBe('/u/me/wt')
 })
