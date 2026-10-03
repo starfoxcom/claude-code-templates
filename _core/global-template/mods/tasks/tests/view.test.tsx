@@ -93,6 +93,13 @@ test('open tasks come first, finished ones newest first', () => {
   expect(ordered(rows).map(t => t.id)).toEqual(['3', '4', '2', '1'])
 })
 
+test('the carried-over line stays until this session makes a list, however long that takes', async ($, on) => {
+  world(on, [], NOW - 10 * 60_000, [{ id: '7', subject: 'Port the mods', status: 'pending' }])
+  await start($)
+  const band = await $.ui.mount({ plugin: 'tasks', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  expect(await band.find({ type: 'Text', text: /1 carried over/ })).toBeDefined()
+})
+
 test("a new session shows the last session's unfinished tasks as carried over", async ($, on) => {
   const opened = world(on, [], NOW, [{ id: '7', subject: 'Port the mods', status: 'pending', hold: 'design review' }])
   await start($)
