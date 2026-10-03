@@ -49,6 +49,23 @@ test("the carried block and system lines are not read back as the person's messa
   assert.deepStrictEqual(found, ['now fix the tests', '<details> renders empty on mobile, fix it'])
 })
 
+const queued = prompt => ({
+  type: 'attachment',
+  attachment: { type: 'queued_command', prompt, origin: { kind: 'human' } },
+})
+const answer = text => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
+
+test('the same answer given twice is kept twice; a queued prompt recorded again is one message', () => {
+  const found = transcript([
+    user('yes'),
+    answer('And the shadows too?'),
+    user('yes'),
+    queued('ship it'),
+    user('ship it'),
+  ])
+  assert.deepStrictEqual(found, ['yes', 'yes', 'ship it'])
+})
+
 test("prompts the mods submit and the lines they attach are not the person's words", () => {
   const found = transcript([
     user('[ci-watch] #12: all 3 checks settled with no failure. Verify it is mergeable.'),
