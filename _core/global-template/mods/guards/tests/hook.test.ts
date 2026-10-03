@@ -69,12 +69,13 @@ test('writes the reading misses are still refused in enforce mode', { options: {
     `bash <<'EOF'\ngit commit -m '${AI_TRAILER}'\nEOF`,
     `echo "git commit -m '${AI_TRAILER}'" | bash`,
     `git push -o "merge_request.description=${AI_TRAILER}"`,
+    `OUT=\`gh api repos/o/r/issues/1/comments -fbody='${AI_TRAILER}'\``,
   ]) {
     const result = await bash($, command)
     expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
   }
   expect(seen.ran).toEqual([])
-  expect((seen.files.get(LOG) ?? '').trim().split('\n')).toHaveLength(4)
+  expect((seen.files.get(LOG) ?? '').trim().split('\n')).toHaveLength(5)
 })
 
 test('a body file is read, and a credit inside it is found', async ($, on) => {
