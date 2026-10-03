@@ -124,6 +124,17 @@ test('body files are found in every spelling, and text built at run time is name
   expect(files('gh api repos/o/r/issues/5/comments -F body=@-')).toEqual([])
   expect(files("gh issue create --template 'Bug report'")).toEqual([])
   expect(inspect('git commit -m "$MSG"', false).unread).toEqual(['the commit message'])
+  // A body fed on stdin that the shell fills in at run time.
+  for (const fed of [
+    'git commit -F - <<< "$MSG"',
+    'gh pr create --title t --body-file - <<< "$BODY"',
+    'git commit -F - <<EOF\n$MSG\nEOF',
+    'gh pr create --title t --body-file - <<EOF\n## What\n$(cat notes.md)\nEOF',
+  ]) {
+    expect(inspect(fed, false).unread.length).toBe(1)
+  }
+  // A quoted delimiter keeps the body literal: it is read, nothing is unread.
+  expect(inspect("git commit -F - <<'EOF'\nfix: costs $5\nEOF", false).unread).toEqual([])
   // The same, with the value built at run time attached to its flag.
   for (const attached of [
     'git commit -m"$MSG"',

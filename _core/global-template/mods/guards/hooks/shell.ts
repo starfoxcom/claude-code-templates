@@ -27,6 +27,8 @@ export type Statement = {
   pipeIn: boolean
   /** Commands run inside a `$(...)` of its words (`PR=$(gh pr create ...)`); they run before it. */
   inner: Statement[]
+  /** A body holds an expansion the shell fills in at run time (`<<< "$MSG"`, an unquoted `<<EOF`). */
+  hasDynamicBody?: boolean
 }
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
@@ -34,9 +36,12 @@ const REDIRECT_ATTACHED = /^\d*(>>?|<)(?!&)(.+)$/
 
 const HEREDOC = /^<<(-?)[ \t]*(["']?)([A-Za-z_][\w.-]*)\2/
 
-// A here-doc queued on the current line. `owner`: the here-doc list of the statement that opened it; a
-// line can go on past it (`<<'EOF' && git push`).
-type Pending = { delim: string; strip: boolean; owner?: string[] }
+// A here-doc queued on the current line. `owner`: the statement that opened it; a line can go on past
+// it (`<<'EOF' && git push`). `isQuoted`: its delimiter was quoted, so the body is literal.
+type Pending = { delim: string; strip: boolean; owner?: Statement; isQuoted?: boolean }
+
+// An expansion in an unquoted here-doc body: `$NAME`, `${...}`, `$(...)` or a backtick.
+const BODY_EXPANSION = /\$[A-Za-z_{(]|`/
 
 const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
 
@@ -80,7 +85,10 @@ class Reader {
     if (this.redirectNext) {
       if (this.redirectNext === 'write') this.st.writes.push(w.text)
       if (this.redirectNext === 'read') this.st.reads.push(w.text)
-      if (this.redirectNext === 'text') this.st.heredocs.push(w.text)
+      if (this.redirectNext === 'text') {
+        this.st.heredocs.push(w.text)
+        if (w.dynamic) this.st.hasDynamicBody = true
+      }
       this.redirectNext = null
       return
     }
@@ -107,7 +115,7 @@ class Reader {
 
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
   private readBodies(into: string[]) {
-    for (const { delim, strip, owner } of this.pending) {
+    for (const { delim, strip, owner, isQuoted } of this.pending) {
       const lines: string[] = []
       while (this.i < this.n) {
         const end = this.command.indexOf('\n', this.i)
@@ -117,7 +125,9 @@ class Reader {
         if (line.trim() === delim) break
         lines.push(line)
       }
-      ;(owner ?? into).push(lines.join('\n'))
+      const body = lines.join('\n')
+      ;(owner?.heredocs ?? into).push(body)
+      if (owner && !isQuoted && BODY_EXPANSION.test(body)) owner.hasDynamicBody = true
     }
     this.pending = []
   }
@@ -133,7 +143,7 @@ class Reader {
     const m = HEREDOC.exec(this.command.slice(this.i))
     if (!m) return false
     this.endWord()
-    this.pending.push({ delim: m[3] ?? '', strip: m[1] === '-', owner: this.st.heredocs })
+    this.pending.push({ delim: m[3] ?? '', strip: m[1] === '-', owner: this.st, isQuoted: m[2] !== '' })
     this.i += m[0].length
     return true
   }
