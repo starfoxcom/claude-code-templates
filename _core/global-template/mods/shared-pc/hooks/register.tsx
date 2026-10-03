@@ -82,7 +82,7 @@ const ctx = {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    await setUp($)
+    await setUp($).catch(() => undefined)
     return next(e)
   })
 
@@ -352,13 +352,13 @@ async function sessionInfo($: Engine, id: string): Promise<{ name: string; lastB
   }
 }
 
+// A failed write is retried by the next beat; it never stops the set-up that runs the first one.
 async function beat($: Engine) {
   if (!ctx.dir) return
   const lastBeat = await $.clock.now()
-  await $.fs.write(
-    `${ctx.dir}/sessions/${ctx.me}.json`,
-    JSON.stringify({ id: ctx.me, name: ctx.name, root: ctx.root, lastBeat }),
-  )
+  await $.fs
+    .write(`${ctx.dir}/sessions/${ctx.me}.json`, JSON.stringify({ id: ctx.me, name: ctx.name, root: ctx.root, lastBeat }))
+    .catch(() => undefined)
 }
 
 // Reads the shared state, asks the helper to tidy it when something has visibly expired, and updates the
