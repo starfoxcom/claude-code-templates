@@ -383,16 +383,22 @@ async function scheduleArm($: EngineInterface, arm: ArmedWake): Promise<void> {
 
 // An armed wake that came due: this session resumes, unless the arm was dropped or replaced, or a
 // pause owns the resume. A pause still on (another session may have extended it past this reset)
-// resumes every session when it ends, so resuming now would work through the pause and then resume
-// again; a pause for this same reset has resumed or will resume it already.
+// would be worked through, so the arm moves to the pause's own wake: there it stands down if the
+// pause resumes the session, and still fires if another session cancelled the pause meanwhile. A
+// pause for this same reset has resumed or will resume the session already.
 async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   const current = await read($, armedWake)
   if (current?.resetsAt !== arm.resetsAt || current.kind !== arm.kind) return
+  const pause = await readPause($)
+  if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) {
+    const later: ArmedWake = { kind: arm.kind, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
+    await update($, armedWake, () => later)
+    await scheduleArm($, later)
+    return
+  }
   // An instance left by a hot reload may fire the same arm beside this one: one wins the claim.
   if (!(await claim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`))) return
   await update($, armedWake, () => null)
-  const pause = await readPause($)
-  if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) return
   if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled') return
   await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
 }
@@ -608,5 +614,5 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
     await cancelPause($, pause)
     return 'Usage pause cancelled: no automatic resume.'
   }
-  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. Resumes at ${localTime(pause.wakeAt)}.`
+  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. Resumes at ${localTime(pause.wakeAt)}.${armedText}`
 }
