@@ -207,7 +207,9 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return inner
     const shown = await read($, view)
     if (!shown) return inner
-    const isAllDone = countOf(shown.tasks, 'done') === shown.tasks.length - countOf(shown.tasks, 'dropped')
+    // A view of carried-over tasks only is never "all done": its line shows until this session makes a list.
+    const isAllDone =
+      shown.tasks.length > 0 && countOf(shown.tasks, 'done') === shown.tasks.length - countOf(shown.tasks, 'dropped')
     if (isAllDone && (await $.clock.now()) - shown.updatedAt > LINGER_MS) return inner
     const ui = $.ui.resolve(e)
     const line =
