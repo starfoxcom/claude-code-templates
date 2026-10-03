@@ -204,14 +204,20 @@ export function inspect(command: string, powershell: boolean): Plan {
   return plan
 }
 
-// The shipped no-ai-attribution hook's write patterns, matched on the raw command text.
+// The shipped no-ai-attribution hook's write patterns, matched on the raw command text. `REST`: the rest
+// of the same command, up to a separator or a line end.
+const REST = String.raw`[^|;&\n]*?`
+const GIT_WRITES = 'commit|merge|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace'
+const GH_NOUNS = 'pr|issue|release|gist|repo'
+const GH_VERBS = 'create|edit|comment|review|merge|close|reopen'
+const API_WRITE = String.raw`(?:-X|--method)\s*(?:POST|PATCH|PUT)|(?<=\s)-[fF]\s|--field|--raw-field|--input`
 const RAW_WRITES = [
-  /\bgit\b[^|;&\n]*?\b(?:commit|merge|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace)\b/i,
-  /\bgh\b[^|;&\n]*?\b(?:pr|issue|release|gist|repo)\b[^|;&\n]*?\b(?:create|edit|comment|review|merge|close|reopen)\b/i,
-  /\bgh\b[^|;&\n]*?\bapi\b(?=[^|;&\n]*?(?:-X\s*(?:POST|PATCH|PUT)|--method\s*(?:POST|PATCH|PUT)|(?<=\s)-[fF]\s|--field|--raw-field|--input))/i,
-  /\bcurl\b[^|;&\n]*api\.github\.com/i,
-  /Invoke-(?:RestMethod|WebRequest)\b[^|;&\n]*api\.github\.com/i,
-]
+  String.raw`\bgit\b${REST}\b(?:${GIT_WRITES})\b`,
+  String.raw`\bgh\b${REST}\b(?:${GH_NOUNS})\b${REST}\b(?:${GH_VERBS})\b`,
+  String.raw`\bgh\b${REST}\bapi\b(?=${REST}(?:${API_WRITE}))`,
+  String.raw`\bcurl\b${REST}api\.github\.com`,
+  String.raw`Invoke-(?:RestMethod|WebRequest)\b${REST}api\.github\.com`,
+].map(source => new RegExp(source, 'i'))
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 

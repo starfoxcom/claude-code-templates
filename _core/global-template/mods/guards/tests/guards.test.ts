@@ -154,6 +154,8 @@ test('the whole command text of a write is checked for credit, whatever spelling
     `OUT=\`git commit -m '${AI_TRAILER}'\``,
     `bash <<'EOF'\ngit commit -m '${AI_TRAILER}'\nEOF`,
     `echo "git commit -m '${AI_TRAILER}'" | bash`,
+    `URL=\`gh pr create --title t --body '${AI_TRAILER}'\``,
+    `X=\`gh api repos/o/r/issues -f body='${AI_TRAILER}'\``,
   ]) {
     expect(verdict(command, true)).toBe('credit')
   }
