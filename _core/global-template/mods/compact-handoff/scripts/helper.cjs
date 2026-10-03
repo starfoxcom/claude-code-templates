@@ -117,6 +117,22 @@ const MOD_TAGS = [
   'guards',
 ]
 const INJECTED_LINE = new RegExp(`^\\[(?:${MOD_TAGS.join('|')})\\](?: |$)`)
+// The same list as ENGINE_TAG in hooks/register.ts: the engine's own tags, never any `<`.
+const ENGINE_TAGS = [
+  'system-reminder',
+  'command-name',
+  'command-message',
+  'command-args',
+  'local-command',
+  'ide_',
+  'user-prompt-submit-hook',
+  'task-notification',
+  'cross-session-message',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+]
+const ENGINE_TAG = new RegExp(`^<(?:${ENGINE_TAGS.join('|')})`)
 
 function stripInjected(text) {
   return text
@@ -129,7 +145,7 @@ function stripInjected(text) {
 // The same filter as isPersonMessage in hooks/register.ts, for the transcript's records.
 function isPersonText(text) {
   return (
-    !text.startsWith('<') &&
+    !ENGINE_TAG.test(text) &&
     !text.startsWith('[SYSTEM') &&
     !text.startsWith('This session is being continued') &&
     !text.startsWith(PERSON_MARK) &&
@@ -189,7 +205,7 @@ async function persons(sessionId) {
   console.log(JSON.stringify(found))
 }
 
-module.exports = { PERSON_MARK, MOD_TAGS, INJECTED_LINE, isPersonText }
+module.exports = { PERSON_MARK, MOD_TAGS, INJECTED_LINE, ENGINE_TAGS, ENGINE_TAG, isPersonText }
 
 if (require.main === module) {
   const [command, ...args] = process.argv.slice(2)

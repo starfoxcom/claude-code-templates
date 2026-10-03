@@ -9,7 +9,7 @@ const path = require('path')
 const { execFileSync, spawnSync } = require('child_process')
 
 const HELPER = path.join(__dirname, '..', 'scripts', 'helper.cjs')
-const { PERSON_MARK, MOD_TAGS, INJECTED_LINE } = require(HELPER)
+const { PERSON_MARK, MOD_TAGS, INJECTED_LINE, ENGINE_TAGS } = require(HELPER)
 
 // A config folder holding one session's transcript.
 function configWith(records) {
@@ -41,9 +41,12 @@ test("the carried block and system lines are not read back as the person's messa
     user(carried),
     user('[SYSTEM NOTIFICATION] a background task ended'),
     user('<command-name>/clear</command-name>'),
+    user('<system-reminder>context</system-reminder>'),
     user('now fix the tests'),
+    // A message the person types may start with a `<` of its own.
+    user('<details> renders empty on mobile, fix it'),
   ])
-  assert.deepStrictEqual(found, ['now fix the tests'])
+  assert.deepStrictEqual(found, ['now fix the tests', '<details> renders empty on mobile, fix it'])
 })
 
 test("prompts the mods submit and the lines they attach are not the person's words", () => {
@@ -83,6 +86,15 @@ test('the helper and the hooks module carry the same mark and the same injected-
   const helperSource = fs.readFileSync(HELPER, 'utf8')
   const built = /INJECTED_LINE = (new RegExp\(.+\))\s*$/m
   assert.strictEqual(built.exec(source)?.[1], built.exec(helperSource)?.[1])
+  // The engine's tags too.
+  const engineTags = /export const ENGINE_TAGS = \[([^\]]+)\]/.exec(source)
+  assert.ok(engineTags, 'ENGINE_TAGS found in register.ts')
+  assert.deepStrictEqual(
+    [...engineTags[1].matchAll(/'([^']+)'/g)].map(m => m[1]),
+    ENGINE_TAGS,
+  )
+  const engineBuilt = /ENGINE_TAG = (new RegExp\(.+\))\s*$/m
+  assert.strictEqual(engineBuilt.exec(source)?.[1], engineBuilt.exec(helperSource)?.[1])
   // And both read the same fixture the same way.
   const hooksLine = new RegExp(INJECTED_LINE.source)
   for (const line of [
