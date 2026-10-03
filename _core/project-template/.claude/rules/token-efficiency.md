@@ -9,7 +9,7 @@ Enable an MCP server only while the work needs it. Every enabled server adds its
 ## Shell commands
 
 - One command per call where you can. Permission rules match the whole command string, so `&&` chains prompt more and fail in confusing ways.
-- Never retry a timed-out command with the same timeout. Builds and installs start at 420 000 ms; each retry adds 180 000 ms (600 000, 780 000, then +120 000 per retry after that).
+- Never retry a timed-out command with the same timeout. Builds and installs start at 420 000 ms. The first two retries add 180 000 ms each (600 000, then 780 000); every later retry adds 120 000 ms.
 
 ## Watching CI
 
