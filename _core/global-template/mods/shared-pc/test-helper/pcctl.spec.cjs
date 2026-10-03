@@ -285,6 +285,65 @@ test("a writer whose stale mutex was broken never removes the next writer's mute
   assert.ok(!fs.existsSync(b.MUTEX))
 })
 
+// Runs `before` once, ahead of the first call of `fs[name]` that `match` accepts.
+function once(name, match, before) {
+  const real = fs[name]
+  fs[name] = (...args) => {
+    if (match(...args)) {
+      fs[name] = real
+      before()
+    }
+    return real(...args)
+  }
+  return () => (fs[name] = real)
+}
+
+test('a newcomer whose unstamped mutex a breaker moves aside takes it again', () => {
+  const sb = sandbox()
+  const b = writer(sb.dir)
+  const owner = path.join(b.MUTEX, 'owner')
+  // A breaker that judged an earlier holder stale renames the folder right after b made it.
+  const restore = once(
+    'writeFileSync',
+    file => file === owner,
+    () => fs.renameSync(b.MUTEX, `${b.MUTEX}.stale-${Date.now()}-1`),
+  )
+  try {
+    b.lock()
+  } finally {
+    restore()
+  }
+  assert.ok(b.owns(), 'b took the mutex again instead of failing')
+  b.unlock()
+})
+
+test("a breaker never hands back a newcomer's unstamped mutex", () => {
+  const sb = sandbox()
+  const a = writer(sb.dir)
+  const b = writer(sb.dir)
+  a.lock()
+  const old = (Date.now() - 10_000) / 1000
+  fs.utimesSync(path.join(a.MUTEX, 'owner'), old, old)
+  // Between b's stale judgment and its rename, a finishes and a newcomer makes the folder, unstamped.
+  const restore = once(
+    'renameSync',
+    (from, to) => from === b.MUTEX && String(to).includes('.stale-'),
+    () => {
+      fs.rmSync(a.MUTEX, { recursive: true, force: true })
+      fs.mkdirSync(a.MUTEX)
+    },
+  )
+  const started = Date.now()
+  try {
+    b.lock()
+  } finally {
+    restore()
+  }
+  assert.ok(Date.now() - started < 2_000, 'b did not wait out an orphaned folder')
+  assert.ok(b.owns())
+  b.unlock()
+})
+
 test('a fresh mutex is never broken', () => {
   const sb = sandbox()
   const a = writer(sb.dir)

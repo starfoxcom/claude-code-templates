@@ -68,7 +68,8 @@ function lock() {
       held = token
       return
     } catch (err) {
-      if (err.code !== 'EEXIST') throw err
+      // ENOENT on the stamp: a breaker moved the folder aside before it was stamped. Not ours: try again.
+      if (err.code !== 'EEXIST' && err.code !== 'ENOENT') throw err
     }
     breakStale()
     if (now() > deadline) throw new Error('mutex timeout')
@@ -78,8 +79,9 @@ function lock() {
 
 // A mutex stamped this long ago belongs to a writer that crashed or stalled. Rename is atomic, so one
 // breaker wins; it then checks that it moved the mutex it judged stale, and hands back one that was
-// released and taken again in between. Left out of reach: a third writer creating the folder in the
-// microseconds between that check and the hand-back.
+// released and taken again in between, once stamped: an unstamped one is a newcomer's, whose stamp then
+// fails and who takes the mutex again, so it is not handed back. Left out of reach: a third writer
+// creating the folder in the microseconds between that check and the hand-back.
 function breakStale() {
   const seen = ownerOf(MUTEX)
   if (!seen || now() - seen.at <= MUTEX_STALE_MS) return
@@ -90,7 +92,7 @@ function breakStale() {
     return
   }
   const moved = ownerOf(aside)
-  if (moved && moved.token !== seen.token) {
+  if (moved && moved.token && moved.token !== seen.token) {
     try {
       fs.renameSync(aside, MUTEX)
       return
