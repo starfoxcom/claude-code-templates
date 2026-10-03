@@ -26,7 +26,8 @@ export type Plan = {
   texts: { where: string; text: string; creditOnly?: boolean }[]
   /** Body files the command hands to git or gh, as written (relative to `cwd` when not absolute).
    * `written`: this same command writes the file, and what it writes was read from the command text. */
-  files: { where: string; path: string; written?: boolean }[]
+  /** `folder`: where a relative path resolves, as the command stands where the file is named. */
+  files: { where: string; path: string; written?: boolean; folder?: Folder }[]
   /** Files the command itself writes (`> file`). */
   written: string[]
   branches: string[]
@@ -44,9 +45,16 @@ export type Plan = {
   isWrite: boolean
 }
 
+/** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
+export type Folder = { path?: string; isUnknown: boolean }
+
 // The reading's working state while it walks one command.
 type Reading = {
   plan: Plan
+  /** The folder each `cd` so far leads to. */
+  folder: Folder
+  /** A `git -C <dir>` on the statement being read: its folder, for this statement only. */
+  statementDir?: Word
   ps: boolean
   /** Variables set earlier in the command, by lower-cased name; `literal` when their value is known. */
   vars: Map<string, { text: string; literal: boolean }>
@@ -186,7 +194,15 @@ const GH_WRITES: Record<string, string[]> = {
 
 export function inspect(command: string, powershell: boolean): Plan {
   const plan: Plan = { texts: [], files: [], written: [], branches: [], diff: null, unread: [], isWrite: false }
-  const r: Reading = { plan, ps: powershell, vars: new Map(), writers: new Map(), stdin: 0, writes: 0 }
+  const r: Reading = {
+    plan,
+    folder: { isUnknown: false },
+    ps: powershell,
+    vars: new Map(),
+    writers: new Map(),
+    stdin: 0,
+    writes: 0,
+  }
   read(parse(command, powershell), r)
   // A body file this same command writes is read from the statement that writes it.
   for (const f of [...plan.files]) {
@@ -239,14 +255,22 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
   for (const path of st.writes) r.writers.set(norm(path), { st, ps: r.ps })
   const { name, args } = programOf(st)
   if (assign(st, name, args, r)) return
-  if (CD_NAMES.has(name) && !plan.cwd && !plan.isCwdUnknown) {
-    setCwd(
-      plan,
-      args.find(a => !a.text.startsWith('-')),
-    )
+  if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
+    const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
+    if (!plan.cwd && !plan.isCwdUnknown && target) setCwd(plan, target)
+    r.folder = moveFolder(r.folder, target)
     return
   }
   if (readScript(name, args, r)) return
+  const before = plan.files.length
+  r.statementDir = undefined
+  readWrite(st, prev, name, args, r)
+  // Each body file keeps the folder in effect where it is named: `cd a && ... && cd b` moves it on.
+  const folder = r.statementDir ? moveFolder(r.folder, r.statementDir) : r.folder
+  for (const f of plan.files.slice(before)) f.folder ??= folder
+}
+
+function readWrite(st: Statement, prev: Statement | undefined, name: string, args: Word[], r: Reading) {
   const stdin = r.stdin
   const where = name === 'git' ? git(st, args, r) : name === 'gh' ? gh(st, args, r) : web(name, st, args, r)
   if (!where) return
@@ -254,6 +278,17 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
   readSplats(args, r, where)
   // A message read from stdin with no here-doc on the statement: a `< file`, or the statement piped in.
   if (r.stdin > stdin && st.heredocs.length === 0) readStdin(st, prev, r, where)
+}
+
+const POP_NAMES = new Set(['popd', 'pop-location'])
+
+// The folder after a `cd`: a literal target composes onto it, anything else (`$DIR`, `-`, `popd`, no
+// target) leaves it unknown.
+function moveFolder(folder: Folder, target: Word | undefined): Folder {
+  if (folder.isUnknown || !target || target.dynamic || target.text === '-') return { isUnknown: true }
+  const dir = target.text.replace(/\\/g, '/')
+  if (/^([a-zA-Z]:)?\/|^~/.test(dir) || folder.path === undefined) return { path: dir, isUnknown: false }
+  return { path: `${folder.path.replace(/\/$/, '')}/${dir}`, isUnknown: false }
 }
 
 // `bash -c '...'` and the like: the script is read as commands of its own. True when it was one.
@@ -409,12 +444,14 @@ const BRANCH_NOT_CREATE = new RegExp(
 )
 
 // The index of git's subcommand, past its global options; `-C <dir>` sets the folder.
-function gitSubcommand(args: Word[], plan: Plan): number {
+function gitSubcommand(args: Word[], r: Reading): number {
+  const { plan } = r
   let k = 0
   while (k < args.length) {
     const t = args[k]?.text ?? ''
     if (t === '-C') {
       if (!plan.cwd && !plan.isCwdUnknown) setCwd(plan, args[k + 1])
+      r.statementDir = args[k + 1]
       k += 2
     } else if (t === '-c' || t === '--git-dir' || t === '--work-tree' || t === '--namespace') k += 2
     else if (t.startsWith('-')) k++
@@ -442,7 +479,7 @@ function gitCommit(st: Statement, rest: Word[], r: Reading): string {
 
 function git(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
-  const k = gitSubcommand(args, plan)
+  const k = gitSubcommand(args, r)
   const sub = args[k]?.text ?? ''
   const rest = args.slice(k + 1)
   switch (sub) {

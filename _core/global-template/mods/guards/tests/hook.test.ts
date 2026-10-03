@@ -94,6 +94,31 @@ test(
   },
 )
 
+test(
+  'a relative body file is read from the folder in effect where it is named',
+  { options: { mode: 'enforce' } },
+  async ($, on) => {
+    const clean = '## What\n- clean\n'
+    const seen = world(on, {
+      'C:/Repos/my-game/repo/sub/m.txt': clean,
+      'C:/Repos/my-game/b.md': clean,
+    })
+    for (const command of [
+      'cd repo && cd sub && git commit -F m.txt',
+      'gh pr create --title t --body-file b.md && cd ../other && git pull',
+    ]) {
+      const result = await bash($, command)
+      expect((result as { deny?: string }).deny).toBeUndefined()
+    }
+    expect(seen.ran).toHaveLength(2)
+    // After `popd` the folder is not known: the file is named unread, never refused.
+    const popped = await bash($, 'pushd x; popd; git commit -F m.txt')
+    expect((popped as { deny?: string }).deny).toBeUndefined()
+    const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+    expect(entry.unread?.length).toBe(1)
+  },
+)
+
 test('a body file is read, and a credit inside it is found', async ($, on) => {
   const seen = world(on, { 'C:/tmp/body.md': `## What\n- x\n\n${AI_TRAILER}\n` })
   await bash($, 'gh pr create --title t --body-file /c/tmp/body.md')
