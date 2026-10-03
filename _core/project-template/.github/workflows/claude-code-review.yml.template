@@ -161,7 +161,7 @@ jobs:
         <!-- TOGGLE:attribution_guard START -->
         **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (AI-attribution scan).
         <!-- TOGGLE:attribution_guard END -->
-        Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
+        Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc` and `head` will be denied.
 
         ## Step 2 — Architectural review
 
