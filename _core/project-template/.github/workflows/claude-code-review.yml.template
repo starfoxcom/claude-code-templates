@@ -624,6 +624,7 @@ jobs:
       - name: Resolve routine verdict
         env:
           GH_TOKEN: ${{ github.token }}
+          REVIEWER: ${{ needs.claude-review.outputs.reviewer }}
         run: |
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
@@ -718,11 +719,13 @@ jobs:
           # finding must not false-block on the recap text.
           ROUTINE_VERDICT_LINE=$(printf '%s\n' "$ROUTINE_COMMENT" | grep -E "🔴|🟢" | tail -n 1)
           if [ -z "$ROUTINE_VERDICT_LINE" ]; then
-            echo "::error::Routine review comment has no 🔴/🟢 verdict line"
+            echo "::error::Routine review comment has no 🔴/🟢 verdict line (reviewer: $REVIEWER)"
             exit 1
           fi
           if echo "$ROUTINE_VERDICT_LINE" | grep -qF "🔴"; then
-            echo "::error::Routine review verdict: 🔴 Blocking — must fix"
+            echo "Routine review verdict: 🔴 Blocking, from $REVIEWER" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Routine review verdict: 🔴 Blocking — must fix (reviewer: $REVIEWER)"
             exit 1
           fi
-          echo "✅ Routine review verdict: 🟢 LGTM"
+          echo "Routine review verdict: 🟢 LGTM, from $REVIEWER" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::Routine review verdict: 🟢 LGTM (reviewer: $REVIEWER)"
