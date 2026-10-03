@@ -16,8 +16,13 @@ export type UsageGuardBand = {
   canCancel: boolean
 }
 
+/** The settings pane's own state: the last refusal per field, shown under that field. */
+export type SettingsView = {
+  errors: Record<string, string>
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'usage-guard': { band: UsageGuardBand | null }
+    'usage-guard': { band: UsageGuardBand | null; settings: SettingsView | null }
   }
 }
