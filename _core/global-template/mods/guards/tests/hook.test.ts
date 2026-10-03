@@ -50,6 +50,18 @@ test('in shadow mode a credit is logged, never blocked', async ($, on) => {
   expect(entry.scripts).toBeNull()
 })
 
+test('in enforce mode a block is refused, counted and logged', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  const result = await bash($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
+  expect(seen.ran).toEqual([])
+  expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
+  const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+  expect(entry.mod).toContain('AI credit')
+  expect(entry.enforced).toBe(true)
+  const stats = JSON.parse(seen.files.get('C:/Users/me/.claude/mods-data/guards/stats.json') ?? '{}')
+  expect(Object.values(stats)).toMatchObject([{ checked: 1, mod: 1, scripts: 0 }])
+})
+
 test('a body file is read, and a credit inside it is found', async ($, on) => {
   const seen = world(on, { 'C:/tmp/body.md': `## What\n- x\n\n${AI_TRAILER}\n` })
   await bash($, 'gh pr create --title t --body-file /c/tmp/body.md')
