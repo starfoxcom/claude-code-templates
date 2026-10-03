@@ -262,6 +262,24 @@ test('a watch started while a poll reads the saved file is kept by that poll', a
   expect(saved.watches.map(w => w.number).sort()).toEqual([7, 8])
 })
 
+test('a poll in flight when a newer load takes over neither saves nor wakes', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  await clock.advance(60_000)
+  const before = seen.files.get(STATE)
+  // The newer load claims the owner file while this poll waits on gh.
+  seen.duringChecks = () => {
+    seen.duringChecks = undefined
+    seen.files.set(OWNER, 'a-newer-instance')
+  }
+  await clock.advance(60_000)
+  expect(seen.prompts).toEqual([])
+  expect(seen.files.get(STATE)).toBe(before)
+})
+
 test('a watch started while a poll waits on gh is kept by that poll', async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true
