@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { ConfigRow, ConfigValue, EngineInterface as Engine, Register } from 'claude-code'
+import type { ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Register } from 'claude-code'
 
 // The mod's settings in a pane every surface draws (the CLI and the Desktop app alike): the /config
 // rows this plugin owns, each changed through $.config.set as the menu would, which reloads the mod
@@ -44,7 +44,9 @@ async function saveText($: Engine, row: ConfigRow, text: string): Promise<void> 
   return save($, row, parsed.value)
 }
 
-type Ui = ReturnType<Engine['ui']['resolve']>
+// The surfaces that draw fields. The mobile app has no Input or Select, so it is left to the engine's
+// own pane.
+type Ui = Elements['terminal'] | Elements['desktop'] | Elements['vscode']
 
 function control(ui: Ui, $: Engine, row: ConfigRow) {
   const key = `${PLUGIN}-set-${fieldOf(row)}`
@@ -59,15 +61,17 @@ function control(ui: Ui, $: Engine, row: ConfigRow) {
   }
   if (row.kind === 'choice') {
     const options = (row.options ?? []).map(option => ({ value: option }))
-    return <ui.Select key={key} options={options} value={String(row.value)} onSelect={v => void save($, row, v)} />
+    const pick = (value: string) => void save($, row, value)
+    return <ui.Select key={key} options={options} value={String(row.value)} onSelect={pick} />
   }
-  return <ui.Input key={key} value={String(row.value)} submitLabel="save" onSubmit={v => void saveText($, row, v)} />
+  const submit = (text: string) => void saveText($, row, text)
+  return <ui.Input key={key} value={String(row.value)} submitLabel="save" onSubmit={submit} />
 }
 
 export const register: Register = on => {
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
-    if (e.requestId !== SETTINGS_PANE) return next(e)
-    const ui = $.ui.resolve(e)
+    if (e.requestId !== SETTINGS_PANE || e.surface === 'mobile') return next(e)
+    const ui = $.ui.resolve(e) as Ui
     // Read on every draw: /config is the store, so a change made in the menu shows here too.
     const rows = (await $.config.list()).filter(row => row.key.startsWith(`${PLUGIN}.`))
     const errors = (await read($, view))?.errors ?? {}

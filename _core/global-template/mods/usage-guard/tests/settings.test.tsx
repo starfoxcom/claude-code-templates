@@ -1,5 +1,5 @@
 import type { ConfigRow, ConfigSetInput, On } from 'claude-code'
-import type { Engine } from 'claude-code/testing'
+import type { Engine, Mounted } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 
 import { parseNumber } from '../hooks/settings'
@@ -61,7 +61,8 @@ function world(on: On, deny?: string) {
   return { writes, opened }
 }
 
-const mountPane = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal') =>
+type Pane = Mounted<'terminal' | 'desktop', 'Pane'>
+const mountPane = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal'): Promise<Pane> =>
   $.ui.mount({ plugin: 'usage-guard', surface, component: 'Pane', requestId: PANE, props: PANE_PROPS } as never)
 
 for (const surface of ['terminal', 'desktop'] as const) {
