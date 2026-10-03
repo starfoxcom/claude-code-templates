@@ -152,7 +152,7 @@ export function rowText(row: RunnerView, now: number, zoneTime: (ms: number) => 
   if (row.online !== undefined) parts.push(isStarting && row.online === 0 ? 'starting' : `${row.online} online`)
   if (row.busy) parts.push(`${row.busy} busy`)
   if (row.queued) parts.push(`${row.queued} queued`)
-  if (row.nextRun !== undefined) parts.push(`scheduled ${zoneTime(row.nextRun)}`)
+  if (row.nextRun !== undefined) parts.push(`next ${zoneTime(row.nextRun)} (scheduled)`)
   return parts.join(' · ')
 }
 

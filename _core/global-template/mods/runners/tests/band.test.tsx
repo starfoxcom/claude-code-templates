@@ -10,7 +10,7 @@ const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16)
 const ON: RunnerView = { label: 'runners', isOn: true, online: 4, busy: 1, queued: 2, nextRun: NOW + 3_600_000 }
 
 test('the row names state, online and busy runners, queued runs and the scheduled time', () => {
-  expect(rowText(ON, NOW, hhmm)).toBe('runners on · 4 online · 1 busy · 2 queued · scheduled 18:00')
+  expect(rowText(ON, NOW, hhmm)).toBe('runners on · 4 online · 1 busy · 2 queued · next 18:00 (scheduled)')
   expect(rowText({ label: 'runners', isOn: false, online: 0 }, NOW, hhmm)).toBe('runners off · 0 online')
   expect(rowText({ label: 'local', isOn: true }, NOW, hhmm)).toBe('local on')
 })
