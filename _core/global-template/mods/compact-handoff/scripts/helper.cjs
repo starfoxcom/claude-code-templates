@@ -1,0 +1,229 @@
+// Host-side helper for the compact-handoff mod (the mod's sandbox has no fs
+// delete and caps reads at 4 MiB, so transcript search and cleanup run here).
+//   node helper.cjs recall <sessionId> <maxChars> <query...>
+//   node helper.cjs persons <sessionId>
+//   node helper.cjs sweep <dir> <keepNewest> <maxAgeDays>
+const fs = require('fs')
+const os = require('os')
+const path = require('path')
+const readline = require('readline')
+
+function configDir() {
+  return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+}
+
+function findTranscript(sessionId) {
+  const projects = path.join(configDir(), 'projects')
+  for (const dir of fs.readdirSync(projects)) {
+    const file = path.join(projects, dir, `${sessionId}.jsonl`)
+    if (fs.existsSync(file)) return file
+  }
+  return null
+}
+
+// The recall tool's own calls and answers would echo every past query back.
+const RECALL_TOOL = 'mcp__compact-handoff__recall'
+const recallCallIds = new Set()
+
+function textsOf(record) {
+  const content = record.message && record.message.content
+  if (typeof content === 'string') return [content]
+  if (!Array.isArray(content)) return []
+  const out = []
+  for (const block of content) {
+    if (block.type === 'text') out.push(block.text)
+    else if (block.type === 'tool_use') {
+      if (block.name === RECALL_TOOL) recallCallIds.add(block.id)
+      else out.push(`[${block.name}] ${JSON.stringify(block.input).slice(0, 400)}`)
+    } else if (block.type === 'tool_result') {
+      if (recallCallIds.has(block.tool_use_id)) continue
+      const inner = block.content
+      if (typeof inner === 'string') out.push(inner)
+      else if (Array.isArray(inner)) for (const part of inner) if (part.type === 'text') out.push(part.text)
+    }
+  }
+  return out
+}
+
+async function recall(sessionId, maxChars, query) {
+  const file = findTranscript(sessionId)
+  if (!file) return console.log(`No transcript found for session ${sessionId}.`)
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return console.log('Empty query.')
+  const hits = []
+  let lineNo = 0
+  const lines = readline.createInterface({ input: fs.createReadStream(file, 'utf8'), crlfDelay: Infinity })
+  for await (const line of lines) {
+    lineNo++
+    let record
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    for (const text of textsOf(record)) {
+      const lower = text.toLowerCase()
+      if (!terms.every(term => lower.includes(term))) continue
+      const at = lower.indexOf(terms[0])
+      const start = Math.max(0, at - 400)
+      const snippet = text.slice(start, at + 400).replace(/\s+/g, ' ')
+      const role = record.message ? record.message.role : record.type
+      hits.push(`[line ${lineNo} ${record.timestamp || ''} ${role}] ${start > 0 ? '...' : ''}${snippet}...`)
+    }
+  }
+  if (hits.length === 0) return console.log(`No match for "${query}" in the full transcript.`)
+  // Newest first: the latest mention is usually the one still in force.
+  let out = `${hits.length} match(es), newest first:\n`
+  for (const hit of hits.reverse()) {
+    if (out.length + hit.length + 2 > maxChars) {
+      out += '[more matches cut; narrow the query]'
+      break
+    }
+    out += `${hit}\n\n`
+  }
+  console.log(out)
+}
+
+function sweep(dir, keepNewest, maxAgeDays) {
+  if (!fs.existsSync(dir)) return
+  const cutoff = Date.now() - maxAgeDays * 86400000
+  const files = fs
+    .readdirSync(dir)
+    .map(name => ({ name, mtime: fs.statSync(path.join(dir, name)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime)
+  files.forEach((file, index) => {
+    if (index >= keepNewest || file.mtime < cutoff) fs.unlinkSync(path.join(dir, file.name))
+  })
+}
+
+// The block the mod carries through each compaction (PERSON_MARK in
+// hooks/register.ts; test-helper/helper.spec.cjs keeps the two equal). Read back
+// as a message, it would carry every earlier message forward a second time.
+const PERSON_MARK = "[compact-handoff] The person's messages, word for word"
+
+// Lines the mods attach to a prompt, and whole prompts they submit, start with
+// the mod's tag. The same pattern as INJECTED_LINE in hooks/register.ts (the
+// spec keeps the two equal).
+const MOD_TAGS = [
+  'session-facts',
+  'time',
+  'task-tracking',
+  'tasks',
+  'ci-watch',
+  'shared-pc',
+  'skill-check',
+  'usage-guard',
+  'compact-handoff',
+  'guards',
+]
+const INJECTED_LINE = new RegExp(`^\\[(?:${MOD_TAGS.join('|')})\\](?: |$)`)
+// The same list as ENGINE_TAG in hooks/register.ts: the engine's own tags, never any `<`.
+const ENGINE_TAGS = [
+  'system-reminder',
+  'command-name',
+  'command-message',
+  'command-args',
+  'local-command',
+  'ide_',
+  'user-prompt-submit-hook',
+  'task-notification',
+  'cross-session-message',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+]
+const ENGINE_TAG = new RegExp(`^<(?:${ENGINE_TAGS.join('|')})`)
+
+function stripInjected(text) {
+  return text
+    .split('\n')
+    .filter(line => !INJECTED_LINE.test(line.trim()))
+    .join('\n')
+    .trim()
+}
+
+// The same filter as isPersonMessage in hooks/register.ts, for the transcript's records.
+function isPersonText(text) {
+  return (
+    !ENGINE_TAG.test(text) &&
+    !text.startsWith('[SYSTEM') &&
+    !text.startsWith('This session is being continued') &&
+    !text.startsWith(PERSON_MARK) &&
+    stripInjected(text).length > 0
+  )
+}
+
+// What a transcript record says in the person's place: a queued prompt they typed, or a typed record's
+// text. Anything else (tool results, summaries, meta lines) says nothing.
+function recordText(record) {
+  const { attachment, message } = record
+  if (record.type === 'attachment' && attachment && attachment.type === 'queued_command') {
+    return attachment.origin && attachment.origin.kind === 'human' ? String(attachment.prompt || '').trim() : ''
+  }
+  if (record.type !== 'user' || record.isMeta || record.isCompactSummary || !message) return ''
+  const content = message.content
+  if (typeof content === 'string') return content.trim()
+  if (!Array.isArray(content) || content.some(block => block.type === 'tool_result')) return ''
+  return content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('\n')
+    .trim()
+}
+
+// The person's own messages since the last compaction, oldest first: typed
+// prompts plus those typed while a turn ran (stored as queued_command
+// attachments, which the compaction's message list does not show as typed).
+async function persons(sessionId) {
+  const file = findTranscript(sessionId)
+  // A failure, not an empty list: the hook then falls back to the compaction's
+  // own message list instead of carrying none of the person's words.
+  if (!file) {
+    console.error(`No transcript found for session ${sessionId}.`)
+    process.exitCode = 1
+    return
+  }
+  let found = []
+  // A prompt typed mid-turn is recorded as a queued attachment; should the same text follow straight
+  // after as a typed record, it is that one prompt. Any other repeat is the person saying it again.
+  let isLastQueued = false
+  const lines = readline.createInterface({ input: fs.createReadStream(file, 'utf8'), crlfDelay: Infinity })
+  for await (const line of lines) {
+    let record
+    try {
+      record = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (record.subtype === 'compact_boundary') {
+      found = []
+      isLastQueued = false
+      continue
+    }
+    const isQueued =
+      record.type === 'attachment' && Boolean(record.attachment) && record.attachment.type === 'queued_command'
+    let text = recordText(record)
+    if (!isPersonText(text)) {
+      // Anything else the person or the model did in between makes a later same text a new message.
+      if (record.type === 'user' || record.type === 'assistant') isLastQueued = false
+      continue
+    }
+    text = stripInjected(text)
+    if (!(isLastQueued && !isQueued && found[found.length - 1] === text)) found.push(text)
+    isLastQueued = isQueued
+  }
+  console.log(JSON.stringify(found))
+}
+
+module.exports = { PERSON_MARK, MOD_TAGS, INJECTED_LINE, ENGINE_TAGS, ENGINE_TAG, isPersonText }
+
+if (require.main === module) {
+  const [command, ...args] = process.argv.slice(2)
+  if (command === 'recall') recall(args[0], Number(args[1]), args.slice(2).join(' '))
+  else if (command === 'persons') persons(args[0])
+  else if (command === 'sweep') sweep(args[0], Number(args[1]), Number(args[2]))
+  else {
+    console.error('usage: recall|persons|sweep')
+    process.exit(2)
+  }
+}

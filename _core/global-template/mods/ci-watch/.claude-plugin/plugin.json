@@ -1,0 +1,19 @@
+{
+  "name": "ci-watch",
+  "version": "0.1.0",
+  "description": "Watches a pushed PR's checks locally, shows progress on the status line, and wakes the session once when they settle.",
+  "userConfig": {
+    "pollSeconds": {
+      "type": "number",
+      "title": "Poll every (seconds)",
+      "description": "How often the PR checks are read with gh. Local only: no plan usage.",
+      "default": 60
+    },
+    "timeoutMinutes": {
+      "type": "number",
+      "title": "Give up after (minutes)",
+      "description": "A watch still pending after this long wakes the session with what is stuck.",
+      "default": 60
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "shared-pc",
+  "version": "0.1.0",
+  "description": "One session at a time runs heavy work on this PC; the rest wait in a visible line.",
+  "types": "./types/index.d.ts"
+}
