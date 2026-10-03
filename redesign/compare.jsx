@@ -11,7 +11,7 @@ const FEATURE_ROWS = [
   ["Session-start ritual", "Standard", "+ collaborator activity (24h)", "+ client context isolation", "+ team handoff notes"],
   ["Session-close ritual", "Standard + DoD", "Push branch, no auto-merge", "+ billable handoff summary", "+ team handoff notes"],
   ["Memory system", "Rich, personal", "Personal per dev (not in repo)", "NDA-aware (no client secrets)", "NDA-aware + role-scoped"],
-  ["GH routine review workflow", "Sonnet · binary verdict", "Sonnet · stricter labels", "Sonnet", "Sonnet · CODEOWNERS-routed"],
+  ["GH routine review workflow", "Binary verdict", "Stricter labels", "✓", "CODEOWNERS-routed"],
   ["GH deep review workflow", "Opt-in via @claude", "Auto-fire on trigger list", "Opt-in via @claude", "Auto-fire + required before merge"],
   ["Auto-merge on paths-ignore", "✓", "—", "Per-client", "—"],
   ["CONTRIBUTING.md", "—", "Public-facing", "—", "Internal team"],

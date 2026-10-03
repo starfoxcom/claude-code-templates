@@ -86,7 +86,7 @@ const TOOL_SLOTS = [
     label: "AI reviewer",
     hint: "What runs the routine + deep PR review.",
     options: [
-      { name: "Claude", desc: "Claude Sonnet/Opus via .github/workflows/claude.yml — binary verdict + on-demand deep review.", url: "https://claude.com/claude-code" },
+      { name: "Claude", desc: "Claude via .github/workflows/claude.yml — binary verdict + on-demand deep review.", url: "https://claude.com/claude-code" },
       { name: "CodeRabbit", desc: "AI PR reviewer with line-level comments and auto-summaries.", url: "https://coderabbit.ai" },
       { name: "Bito", desc: "AI code review with team-tuned suggestions.", url: "https://bito.ai" },
       { name: "Sourcery", desc: "Refactoring-focused AI reviewer; suggests cleaner code patterns.", url: "https://sourcery.ai" },
@@ -122,7 +122,7 @@ const TOGGLE_GROUPS = [
     title: "CI / Reviews",
     blurb: "Routine + deep review workflows; verdict rule; auto-fire; branch protection posture.",
     toggles: [
-      { id: "github_actions_routine_review", short: "Routine PR review (Sonnet, binary verdict)", controls: ".github/workflows/claude-code-review.yml", blurb: "Auto-fires on every PR. Posts a 🔴/🟢 comment. Merge gate is real.", d: TG([ON, ON, ASK, ON]) },
+      { id: "github_actions_routine_review", short: "Routine PR review (binary verdict)", controls: ".github/workflows/claude-code-review.yml", blurb: "Auto-fires on every PR. Posts a 🔴/🟢 comment. Merge gate is real.", d: TG([ON, ON, ASK, ON]) },
       { id: "github_actions_deep_review", short: "On-demand deep review (Opus)", controls: ".github/workflows/claude.yml", blurb: "Fires when a PR comment starts with @claude review this PR.", d: TG([ON, ON, ASK, ON]) },
       { id: "github_actions_deep_review_auto_fire", short: "Auto-fire deep review on trigger surface", controls: "review-tiers.md", blurb: "Routine reviewer applies needs-deep-review label + posts @claude for risky diffs.", d: TG([OFF, ON, OFF, ON]) },
       { id: "github_actions_paths_ignore_auto_merge", short: "Auto-merge on paths-ignore PRs", controls: "token-efficiency.md + git.md", blurb: "Docs / rules / non-source PRs auto-merge after 90s grace via the gate's auto-pass.", d: TG([ON, OFF, OFF, OFF]) },
