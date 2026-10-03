@@ -250,6 +250,22 @@ test("a bracket tag the person types is their words; only the mods' tags are dro
   expect(words).not.toContain('[tasks]')
 })
 
+test("a message that starts with a `<` of the person's own is their words; the engine's tags are not", async () => {
+  const words = personWords(
+    [
+      said('<details> renders empty on mobile, fix it'),
+      said('<T> is inferred wrong here'),
+      said('<system-reminder>not the person</system-reminder>'),
+      said('<task-notification>a task ended</task-notification>'),
+    ],
+    10_000,
+  )
+  expect(words).toContain('<details> renders empty on mobile, fix it')
+  expect(words).toContain('<T> is inferred wrong here')
+  expect(words).not.toContain('not the person')
+  expect(words).not.toContain('a task ended')
+})
+
 test('a message the last compaction kept beside its summary is carried once', async () => {
   const first = personWords([said('lock the rings'), said('bake the shadows')], 10_000)
   // The engine kept "bake the shadows" as the tail, so it is in the next list as well as in the block.
