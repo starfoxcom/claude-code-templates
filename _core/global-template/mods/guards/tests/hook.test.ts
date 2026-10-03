@@ -78,12 +78,16 @@ test('writes the reading misses are still refused in enforce mode', { options: {
   expect((seen.files.get(LOG) ?? '').trim().split('\n')).toHaveLength(5)
 })
 
-test('a Bash body file under /tmp is read from the Windows temp folder', { options: { mode: 'enforce' } }, async ($, on) => {
-  const seen = world(on, { 'C:/Users/me/AppData/Local/Temp/body.md': '## What\n- clean\n' })
-  const result = await bash($, 'gh pr create --title t --body-file /tmp/body.md')
-  expect((result as { deny?: string }).deny).toBeUndefined()
-  expect(seen.ran).toHaveLength(1)
-})
+test(
+  'a Bash body file under /tmp is read from the Windows temp folder',
+  { options: { mode: 'enforce' } },
+  async ($, on) => {
+    const seen = world(on, { 'C:/Users/me/AppData/Local/Temp/body.md': '## What\n- clean\n' })
+    const result = await bash($, 'gh pr create --title t --body-file /tmp/body.md')
+    expect((result as { deny?: string }).deny).toBeUndefined()
+    expect(seen.ran).toHaveLength(1)
+  },
+)
 
 test('a body file is read, and a credit inside it is found', async ($, on) => {
   const seen = world(on, { 'C:/tmp/body.md': `## What\n- x\n\n${AI_TRAILER}\n` })
