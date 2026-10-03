@@ -87,7 +87,10 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
       // A body file this same command writes does not exist yet: what it writes was read from the
       // command text above. One written under another spelling of its path is named unread.
       if (fromCommand) continue
-      if (written.has(full.toLowerCase())) {
+      // A Bash /tmp path on Windows is mapped by a guess (Git Bash's mount of TEMP): when the guess
+      // misses, the file is named unread rather than refused.
+      const isTmpGuess = isBash && live.isWindows && /^\/tmp(?:\/|$)/.test(path.replace(/\\/g, '/'))
+      if (written.has(full.toLowerCase()) || isTmpGuess) {
         plan.unread.push(where)
         continue
       }
