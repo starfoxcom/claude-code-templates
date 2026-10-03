@@ -20,6 +20,7 @@ Every mod is optional and independent, with one exception noted in the table (sh
 | `skill-check` | Checks that a skill's run shows the steps its contract requires. When the turn that ran the skill ends with steps unseen, one follow-up turn names them, asking to do them or say why they do not apply. No contract, no effect. | Opt-in |
 | `tasks` | Keeps the task list honest: one task in progress at a time, finished work marked done, a list that survives compaction and completion, reminders that name the stale task, and a nudge to make a list after several tool calls with none. Draws its own list (a band and a pane) in place of the built-in panel for the main session. | Opt-in |
 | `usage-guard` | Near a plan usage limit, every session saves its work once (`/session-close`, local only), each project's background work is stopped once by your per-project stop commands, and sessions wait; after the limit resets, sessions resume with `/session-start`. A card above the prompt shows the pause, with "Cancel auto-resume". `/usage-guard cancel` cancels it. `/usage-guard arm 5h` (or `week`) has this session alone resume after that reset at any usage level, with no wrap-up and nothing shared; `/usage-guard disarm` drops it, and so does a cancel made in that session (a cancel from another session leaves it). An arm lasts for the session. | Opt-in |
+| `runners` | One row above the prompt per local CI runner set listed in `runners/hooks/rules.ts` or in `~/.claude/mods-data/runners/runners.json` (the same entries as JSON, kept through template updates): on or off (every listed process running), runners online and busy, queued runs and the next scheduled run on the repo's default branch in your local time (all through `gh`), with Start and Stop buttons running your own commands. Stop asks once more while a runner is busy. Draws nothing until you list a runner. | Opt-in |
 
 "Recommended on" means we suggest installing it with every setup; "opt-in" means install it only when you want what it does. Installing is manual for now (see Install below).
 
@@ -37,11 +38,13 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
 | `tasks` | `nudgeAfterTools` | `3` | Tool calls in one turn with no task list before the model is asked to make one. `0` turns the nudge off. |
 | `usage-guard` | `wrapUpAt` | `90` | Percentage of any plan window (5-hour, weekly) at which sessions wrap up. |
 | `usage-guard` | `wakeDelayMinutes` | `2` | How long after the reset sessions resume. |
+| `runners` | `checkSeconds` | `60` | How often processes, runners, queued runs and schedules are read (schedules at most once an hour). |
 
-`session-facts`, `shared-pc` and `skill-check` have no options. Two mods keep a user-editable list in code instead, because the entries are regular expressions and argv lists:
+`session-facts`, `shared-pc` and `skill-check` have no options. Three mods keep a user-editable list in code instead, because the entries are regular expressions and argv lists:
 
 - `shared-pc/hooks/rules.ts`: what counts as heavy work. Global light and heavy lists ship filled in; `projects` ships empty, with a commented example of a per-project entry.
 - `usage-guard/hooks/rules.ts`: `STOP_COMMANDS`, the commands that stop a project's background work at wrap-up. Ships empty, with a commented example.
+- `runners/hooks/rules.ts`: `RUNNERS`, each runner set's label, process names, repo, and Start and Stop commands. Ships empty, with a commented example.
 
 `skill-check` reads its contracts from `~/.claude/skill-contracts.json`. Start from `skill-check/skill-contracts.example.json`, which holds contracts for this toolkit's `/session-start` and `/session-close` skills; remove any step whose feature you turned off at bind time.
 
@@ -90,6 +93,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
 | `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days) |
+| `runners` | `runners.json` (optional): your own runner list, read at session start; the last reading lives in the session |
 | status line | `statusline/runners.json` (runner check cache), `statusline/swept.json` |
 
 ## Status line
@@ -98,7 +102,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 
 1. the session: model and effort, project, git branch (`*` when dirty);
 2. CI: this session's watched PRs and their checks, from `ci-watch`;
-3. runners: local CI runners on or off, only when `statusline.config.json` lists them (machine-wide, checked once a minute);
+3. runners: local CI runners on or off, only when `statusline.config.json` lists them (machine-wide, checked once a minute); The `runners` mod draws the same as a band row, with more detail and Start/Stop buttons, in the terminal and in Desktop; use one or the other.
 4. budgets: context fill and tokens left before compaction (exact with `session-facts`; without it the threshold is left out), plan usage per window (or the `usage-guard` pause), and the prompt-cache countdown in its last minutes.
 
 Mods that draw their own band above the prompt (`shared-pc`, `tasks`) get no status-line piece. Install it with `"statusLine": { "type": "command", "command": "node \"<home>/.claude/statusline.js\"", "refreshInterval": 15 }` in `~/.claude/settings.json`. `refreshInterval` re-runs the command every 15 seconds on top of the usual events, so the CI and runner lines keep updating while the session is idle; without it they change only when something happens in the session. Use it in place of the simpler `statusline-command.sh.template` (one line, bash only); Claude Code runs a single status line command. Whether the Desktop app draws a command status line is not yet confirmed; until it is, treat the CI, runner and budget lines as terminal-only. The bands (`shared-pc`, `tasks`, the `usage-guard` card) draw in both.
