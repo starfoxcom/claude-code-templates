@@ -43,13 +43,18 @@ function osPath(path: string, cwd: string): string {
   return p
 }
 
-async function git($: Engine, cwd: string, args: string[]): Promise<string> {
+// `isCut`: the output went past the engine's cap, so what came back is only its start.
+async function gitRun($: Engine, cwd: string, args: string[]): Promise<{ out: string; isCut: boolean }> {
   try {
     const run = await $.process.run(['git', '-C', cwd, ...args], { timeoutMs: 8_000 })
-    return run.exitCode === 0 ? run.stdout : ''
+    return run.exitCode === 0 ? { out: run.stdout, isCut: Boolean(run.isStdoutTruncated) } : { out: '', isCut: false }
   } catch {
-    return ''
+    return { out: '', isCut: false }
   }
+}
+
+async function git($: Engine, cwd: string, args: string[]): Promise<string> {
+  return (await gitRun($, cwd, args)).out
 }
 
 // The first reason to block, or undefined.
@@ -66,6 +71,12 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
   const written = new Set(plan.written.map(p => osPath(p, cwd).toLowerCase()))
   for (const { where, path, written: fromCommand } of plan.files) {
     const full = osPath(path, cwd)
+    // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a
+    // file of the same name in the session folder is a different file: it is never read.
+    if (plan.isCwdUnknown && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)) {
+      if (!fromCommand) plan.unread.push(where)
+      continue
+    }
     let text: string
     try {
       text = String(await $.fs.read(full))
@@ -73,9 +84,7 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
       // A body file this same command writes does not exist yet: what it writes was read from the
       // command text above. One written under another spelling of its path is named unread.
       if (fromCommand) continue
-      // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here.
-      const isRelative = !/^([a-zA-Z]:)?[\\/]|^~/.test(path)
-      if (written.has(full.toLowerCase()) || (plan.isCwdUnknown && isRelative)) {
+      if (written.has(full.toLowerCase())) {
         plan.unread.push(where)
         continue
       }
@@ -89,13 +98,15 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
     if (v) return describe(v, `the new branch name "${branch}" (it lands in merge commit titles)`)
   }
   if (plan.diff) {
-    const diff = await git(
+    const diff = await gitRun(
       $,
       cwd,
       plan.diff === 'all' ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color'],
     )
-    const hit = checkAddedLines(diff)
+    const hit = checkAddedLines(diff.out)
     if (hit) return `AI credit line added to ${hit.file}: "${hit.line}". Remove it before committing.`
+    // A diff past the output cap was read only in part: the rest is named unread, never passed as clean.
+    if (diff.isCut) plan.unread.push('the lines the commit adds past the first part of its diff')
   }
   return undefined
 }
