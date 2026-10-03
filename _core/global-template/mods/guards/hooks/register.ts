@@ -74,7 +74,9 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
       // A body file this same command writes does not exist yet: what it writes was read from the
       // command text above. One written under another spelling of its path is named unread.
       if (fromCommand) continue
-      if (written.has(full.toLowerCase())) {
+      // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here.
+      const isRelative = !/^([a-zA-Z]:)?[\\/]|^~/.test(path)
+      if (written.has(full.toLowerCase()) || (plan.isCwdUnknown && isRelative)) {
         plan.unread.push(where)
         continue
       }
