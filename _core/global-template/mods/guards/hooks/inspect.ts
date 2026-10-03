@@ -213,7 +213,10 @@ const REST = String.raw`[^|;&\n]*?`
 const GIT_WRITES = 'commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace'
 const GH_NOUNS = 'pr|issue|release|gist|repo'
 const GH_VERBS = 'create|edit|comment|review|merge|close|reopen'
-const API_WRITE = String.raw`(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)|(?<=\s)-[fF]\s|--field|--raw-field|--input`
+// A writing method, or a field: a field flag counts spaced (`-f body=x`) or attached (`-fbody=x`), as gh
+// reads both.
+const API_METHOD = String.raw`(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)`
+const API_WRITE = String.raw`${API_METHOD}|(?<=\s)-[fF](?:\s|\S*=)|--field|--raw-field|--input`
 const RAW_WRITES = [
   String.raw`\bgit\b${REST}\b(?:${GIT_WRITES})\b`,
   String.raw`\bgh\b${REST}\b(?:${GH_NOUNS})\b${REST}\b(?:${GH_VERBS})\b`,
@@ -573,7 +576,9 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
       else missing(kind, r, where)
       continue
     }
-    if (t.startsWith('-') && t.length > 1 && !w.dynamic) {
+    // A word built at run time is still a flag when its first letter is one: `-m"$MSG"` carries its value
+    // attached, and `take` names a value it cannot read as unread.
+    if (t.startsWith('-') && t.length > 1 && (!w.dynamic || spec[`-${t[1]}`] !== undefined)) {
       if (spec[t] === 'attached') continue
       if (spec[t]) {
         const value = args[++i]
