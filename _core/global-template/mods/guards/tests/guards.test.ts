@@ -146,7 +146,7 @@ test('body files are found in every spelling, and text built at run time is name
   ]) {
     const plan = inspect(attached, false)
     expect(plan.unread.length).toBe(1)
-    expect(plan.diff).toBe('cached')
+    expect(plan.diff).toBe(attached.includes('-am') ? 'all' : 'cached')
   }
   expect(inspect('gh pr comment 5 -b"$BODY"', false).unread.length).toBe(1)
   // A whole gh api field built at run time.
@@ -248,6 +248,12 @@ test('a commit checks the lines it adds for credit lines, not quoted rules', () 
   expect(checkAddedLines(diff(`const AI_TRAILER = 'Co-' + 'Authored-By: x'`))).toBeUndefined()
   expect(inspect("git commit -am 'x'", false).diff).toBe('all')
   expect(inspect("git commit -m 'x'", false).diff).toBe('cached')
+  // An `a` inside a signing key or an untracked-files mode is that flag's value, not `-a`.
+  for (const flag of ['-Sabc', '-S0xA1a', '-unormal', '-uall']) {
+    expect(inspect(`git commit ${flag} -m 'x'`, false).diff).toBe('cached')
+  }
+  expect(inspect("git commit -sam 'x'", false).diff).toBe('all')
+  expect(inspect("git commit --all -m 'x'", false).diff).toBe('all')
 })
 
 test('the shell reading keeps quoted separators and here-docs in their statement', () => {
