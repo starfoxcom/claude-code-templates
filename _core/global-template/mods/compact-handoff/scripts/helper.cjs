@@ -166,6 +166,9 @@ async function persons(sessionId) {
     return
   }
   let found = []
+  // A prompt typed mid-turn is recorded as a queued attachment; should the same text follow straight
+  // after as a typed record, it is that one prompt. Any other repeat is the person saying it again.
+  let isLastQueued = false
   const lines = readline.createInterface({ input: fs.createReadStream(file, 'utf8'), crlfDelay: Infinity })
   for await (const line of lines) {
     let record
@@ -176,9 +179,12 @@ async function persons(sessionId) {
     }
     if (record.subtype === 'compact_boundary') {
       found = []
+      isLastQueued = false
       continue
     }
     let text = ''
+    const isQueued =
+      record.type === 'attachment' && Boolean(record.attachment) && record.attachment.type === 'queued_command'
     if (
       record.type === 'attachment' &&
       record.attachment &&
@@ -198,9 +204,14 @@ async function persons(sessionId) {
       }
     }
     text = text.trim()
-    if (!isPersonText(text)) continue
+    if (!isPersonText(text)) {
+      // Anything else the person or the model did in between makes a later same text a new message.
+      if (record.type === 'user' || record.type === 'assistant') isLastQueued = false
+      continue
+    }
     text = stripInjected(text)
-    if (found[found.length - 1] !== text) found.push(text)
+    if (!(isLastQueued && !isQueued && found[found.length - 1] === text)) found.push(text)
+    isLastQueued = isQueued
   }
   console.log(JSON.stringify(found))
 }
