@@ -289,7 +289,7 @@ function readStdin(st: Statement, prev: Statement | undefined, r: Reading, where
 // What a statement prints, read as message text for `where`: the input of a pipe, or a file it writes.
 function feed(st: Statement, r: Reading, where: string) {
   const { plan } = r
-  for (const body of st.heredocs) plan.texts.push({ where, text: body })
+  pushBodies(plan, st, where)
   const { name, args } = programOf(st)
   if (/^(cat|type|get-content|gc)$/.test(name)) {
     const paths = args.filter(a => !a.text.startsWith('-'))
@@ -390,8 +390,15 @@ function setCwd(plan: Plan, word: Word | undefined) {
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
 function write(plan: Plan, st: Statement, where: string): string {
   plan.isWrite = true
-  for (const body of st.heredocs) plan.texts.push({ where, text: body })
+  pushBodies(plan, st, where)
   return where
+}
+
+// A statement's here-doc bodies as message text. A body the shell fills in at run time is checked as
+// written and also named unread: its expanded text cannot be known.
+function pushBodies(plan: Plan, st: Statement, where: string) {
+  for (const body of st.heredocs) plan.texts.push({ where, text: body })
+  if (st.hasDynamicBody && where && !plan.unread.includes(where)) plan.unread.push(where)
 }
 
 // `git branch` flags that list, delete or configure instead of creating a branch.
