@@ -369,6 +369,34 @@ async function startTimers($: EngineInterface): Promise<void> {
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
 }
 
+// A session that starts during a pause: it has nothing to save yet, so it only waits for the reset.
+// One that starts after the reset is told to resume by hand.
+async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
+  if (pause.wakeAt <= (await $.clock.now())) {
+    await writePause($, { ...pause, status: 'done' })
+    const text = 'Plan limits have reset since the last wrap-up. Run /session-start to resume the saved work.'
+    await showCard($, `missed:${pause.resetsAt}`, text)
+    await notice($, text)
+    return
+  }
+  await claim($, `${resetKey(pause)}-${await $.session.id()}`)
+  await armWake($, pause)
+  setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
+  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
+  await notice(
+    $,
+    `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes on its own ` +
+      `at ${localTime(pause.wakeAt)}; /session-start then picks up the saved work. To skip the automatic ` +
+      `resume, run /usage-guard cancel.`,
+  )
+}
+
+// yellow: the person may act (cancel the resume, run /session-start); blue: information; green: good news.
+function cardTone(id: string): 'green' | 'blue' | 'yellow' {
+  if (id.startsWith('reset:')) return 'green'
+  return id.startsWith('cancelled:') ? 'blue' : 'yellow'
+}
+
 export const register: Register = (on, options) => {
   live.wrapUpAt = Number(options.wrapUpAt ?? 90)
   live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
@@ -377,27 +405,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     await readZone($)
     const pause = await readPause($)
-    const now = await $.clock.now()
-    if (pause?.status === 'active') {
-      if (pause.wakeAt > now) {
-        // A new session has nothing to save yet: it only waits for the reset.
-        await claim($, `${resetKey(pause)}-${await $.session.id()}`)
-        await armWake($, pause)
-        setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
-        await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
-        await notice(
-          $,
-          `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes on its own ` +
-            `at ${localTime(pause.wakeAt)}; /session-start then picks up the saved work. To skip the automatic ` +
-            `resume, run /usage-guard cancel.`,
-        )
-      } else {
-        await writePause($, { ...pause, status: 'done' })
-        const text = 'Plan limits have reset since the last wrap-up. Run /session-start to resume the saved work.'
-        await showCard($, `missed:${pause.resetsAt}`, text)
-        await notice($, text)
-      }
-    }
+    if (pause?.status === 'active') await meetPause($, pause)
     await $.command.register({
       name: 'usage-guard',
       description: 'Show the usage pause, or cancel it: /usage-guard cancel',
@@ -414,12 +422,7 @@ export const register: Register = (on, options) => {
     if (e.props.hasSurvey) return inner
     const shown = await read($, band)
     if (!shown?.card) return inner
-    // yellow: the person may act (cancel the resume, run /session-start); blue: information; green: good news.
-    const tone = shown.card.id.startsWith('reset:')
-      ? 'green'
-      : shown.card.id.startsWith('cancelled:')
-        ? 'blue'
-        : 'yellow'
+    const tone = cardTone(shown.card.id)
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
