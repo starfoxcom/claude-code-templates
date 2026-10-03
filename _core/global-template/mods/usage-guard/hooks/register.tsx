@@ -390,7 +390,13 @@ async function scheduleArm($: EngineInterface, arm: ArmedWake): Promise<void> {
 // session's own pause wake already resumed it, and still resumes a session that never saw the pause.
 async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   const current = await read($, armedWake)
-  if (current?.resetsAt !== arm.resetsAt || current.kind !== arm.kind) return
+  if (current?.resetsAt !== arm.resetsAt || current.kind !== arm.kind) {
+    // The instance a hot reload left behind may have fired first and moved the arm, with the timer
+    // for the new wake in that instance only: this one takes it up (the arm claim keeps one resume).
+    // A command in this instance that re-armed or disarmed leaves a timer set or nothing to take.
+    if (current && !live.armTimer) await scheduleArm($, current)
+    return
+  }
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) {
     const later: ArmedWake = { kind: arm.kind, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
