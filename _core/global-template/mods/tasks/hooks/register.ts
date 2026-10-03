@@ -244,55 +244,41 @@ function link(
   return isChanged
 }
 
-// Answers one task tool call from the mirror, returning the record the engine's own tool returns
-// (core maps it to the model's text with that tool's mapper, so the model reads the usual results).
-export function answerTool(mirror: Mirror, tool: string, args: TaskArgs, turn: number, now: number): unknown {
-  if (tool === 'TaskCreate') {
-    const highest = Math.max(0, ...mirror.tasks.map(task => Number(task.id) || 0))
-    const id = String(Math.max(mirror.nextId ?? 1, highest + 1))
-    mirror.nextId = Number(id) + 1
-    applyCreate(mirror, id, String(args.subject ?? `Task #${id}`), args.activeForm, turn)
-    const task = findTask(mirror, id) as MirrorTask
-    if (args.description) task.description = String(args.description)
-    if (args.metadata !== undefined) applyUpdate(mirror, { taskId: id, metadata: args.metadata }, turn, now)
-    return { task: { id, subject: task.subject } }
+function createTask(mirror: Mirror, args: TaskArgs, turn: number, now: number): unknown {
+  const highest = Math.max(0, ...mirror.tasks.map(task => Number(task.id) || 0))
+  const id = String(Math.max(mirror.nextId ?? 1, highest + 1))
+  mirror.nextId = Number(id) + 1
+  applyCreate(mirror, id, String(args.subject ?? `Task #${id}`), args.activeForm, turn)
+  const task = findTask(mirror, id) as MirrorTask
+  if (args.description) task.description = String(args.description)
+  if (args.metadata !== undefined) applyUpdate(mirror, { taskId: id, metadata: args.metadata }, turn, now)
+  return { task: { id, subject: task.subject } }
+}
+
+function getTask(mirror: Mirror, args: TaskArgs): unknown {
+  const task = findTask(mirror, String(args.taskId ?? ''))
+  if (!task) return { task: null }
+  const { id, subject, status } = task
+  const description = task.description ?? ''
+  return { task: { id, subject, description, status, blocks: task.blocks ?? [], blockedBy: task.blockedBy ?? [] } }
+}
+
+function listTasks(mirror: Mirror): unknown {
+  const done = new Set(mirror.tasks.filter(task => task.status === 'completed').map(task => task.id))
+  const tasks = mirror.tasks.filter(task => !task.droppedAt)
+  return {
+    tasks: tasks.map(task => ({
+      id: task.id,
+      subject: task.subject,
+      status: task.status,
+      owner: task.owner,
+      blockedBy: (task.blockedBy ?? []).filter(id => !done.has(id)),
+    })),
   }
-  if (tool === 'TaskGet') {
-    const task = findTask(mirror, String(args.taskId ?? ''))
-    if (!task) return { task: null }
-    const { id, subject, status } = task
-    return {
-      task: {
-        id,
-        subject,
-        description: task.description ?? '',
-        status,
-        blocks: task.blocks ?? [],
-        blockedBy: task.blockedBy ?? [],
-      },
-    }
-  }
-  if (tool === 'TaskList') {
-    const done = new Set(mirror.tasks.filter(task => task.status === 'completed').map(task => task.id))
-    const tasks = mirror.tasks.filter(task => !task.droppedAt)
-    return {
-      tasks: tasks.map(task => ({
-        id: task.id,
-        subject: task.subject,
-        status: task.status,
-        owner: task.owner,
-        blockedBy: (task.blockedBy ?? []).filter(id => !done.has(id)),
-      })),
-    }
-  }
-  const id = String(args.taskId ?? '')
-  const task = findTask(mirror, id)
-  if (!task) return { success: false, taskId: id, updatedFields: [], error: 'Task not found' }
-  const from = task.status
-  if (args.status === 'deleted') {
-    applyUpdate(mirror, args, turn, now)
-    return { success: true, taskId: id, updatedFields: ['deleted'], statusChange: { from, to: 'deleted' } }
-  }
+}
+
+// The fields an update changes, as the engine's TaskUpdate names them; description and owner are set here.
+function changedFields(mirror: Mirror, task: MirrorTask, args: TaskArgs): string[] {
   const fields: string[] = []
   if (args.subject !== undefined && args.subject !== task.subject) fields.push('subject')
   if (args.description !== undefined && args.description !== task.description) {
@@ -307,6 +293,19 @@ export function answerTool(mirror: Mirror, tool: string, args: TaskArgs, turn: n
   if (args.metadata !== undefined) fields.push('metadata')
   if (link(mirror, task, args.addBlocks, 'blocks')) fields.push('blocks')
   if (link(mirror, task, args.addBlockedBy, 'blockedBy')) fields.push('blockedBy')
+  return fields
+}
+
+function updateTask(mirror: Mirror, args: TaskArgs, turn: number, now: number): unknown {
+  const id = String(args.taskId ?? '')
+  const task = findTask(mirror, id)
+  if (!task) return { success: false, taskId: id, updatedFields: [], error: 'Task not found' }
+  const from = task.status
+  if (args.status === 'deleted') {
+    applyUpdate(mirror, args, turn, now)
+    return { success: true, taskId: id, updatedFields: ['deleted'], statusChange: { from, to: 'deleted' } }
+  }
+  const fields = changedFields(mirror, task, args)
   const isStatusChange = args.status !== undefined && args.status !== from
   if (isStatusChange) fields.push('status')
   applyUpdate(mirror, args, turn, now)
@@ -316,6 +315,15 @@ export function answerTool(mirror: Mirror, tool: string, args: TaskArgs, turn: n
     updatedFields: fields,
     statusChange: isStatusChange ? { from, to: args.status } : undefined,
   }
+}
+
+// Answers one task tool call from the mirror, returning the record the engine's own tool returns
+// (core maps it to the model's text with that tool's mapper, so the model reads the usual results).
+export function answerTool(mirror: Mirror, tool: string, args: TaskArgs, turn: number, now: number): unknown {
+  if (tool === 'TaskCreate') return createTask(mirror, args, turn, now)
+  if (tool === 'TaskGet') return getTask(mirror, args)
+  if (tool === 'TaskList') return listTasks(mirror)
+  return updateTask(mirror, args, turn, now)
 }
 
 function label(task: MirrorTask): string {
