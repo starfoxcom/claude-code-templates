@@ -196,10 +196,22 @@ export function inspect(command: string, powershell: boolean): Plan {
     feed(writer.st, { ...r, ps: writer.ps }, `${f.where} (file ${f.path})`)
   }
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
-  // for credit lines, so a spelling the reading does not model still cannot carry one into history.
-  if (plan.isWrite) plan.texts.push({ where: 'the command text', text: stripPaths(command), creditOnly: true })
+  // for credit lines, so a spelling the reading does not model still cannot carry one into history. The
+  // hook's own raw-text patterns are the floor: a write hidden in backticks or fed to `bash` on stdin is
+  // missed by the reading, never by them.
+  if (plan.isWrite || RAW_WRITES.some(re => re.test(command)))
+    plan.texts.push({ where: 'the command text', text: stripPaths(command), creditOnly: true })
   return plan
 }
+
+// The shipped no-ai-attribution hook's write patterns, matched on the raw command text.
+const RAW_WRITES = [
+  /\bgit\b[^|;&\n]*?\b(?:commit|merge|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace)\b/i,
+  /\bgh\b[^|;&\n]*?\b(?:pr|issue|release|gist|repo)\b[^|;&\n]*?\b(?:create|edit|comment|review|merge|close|reopen)\b/i,
+  /\bgh\b[^|;&\n]*?\bapi\b(?=[^|;&\n]*?(?:-X\s*(?:POST|PATCH|PUT)|--method\s*(?:POST|PATCH|PUT)|(?<=\s)-[fF]\s|--field|--raw-field|--input))/i,
+  /\bcurl\b[^|;&\n]*api\.github\.com/i,
+  /Invoke-(?:RestMethod|WebRequest)\b[^|;&\n]*api\.github\.com/i,
+]
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 
@@ -495,7 +507,12 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     return undefined
   }
   // The endpoint is a positional; keep it out of the field walk.
-  if (group === 'api') return ghApi(st, args.filter((_, i) => i !== gi), r)
+  if (group === 'api')
+    return ghApi(
+      st,
+      args.filter((_, i) => i !== gi),
+      r,
+    )
   if (!GH_WRITES[group]?.includes(action)) {
     walk(rest, { '-R': 'repo', '--repo': 'repo' }, r, '')
     return undefined
