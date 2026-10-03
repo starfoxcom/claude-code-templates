@@ -27,8 +27,6 @@ type World = {
   /** The claim folders the helper made (`mkdir` wins once per name). */
   claims: Set<string>
   sessionId: string
-  /** Times the stop commands were looked up (the shipped list is empty, so none run). */
-  stopLookups: number
   /** Runs as a claim is made: another session acting meanwhile. */
   duringClaim?: (name: string) => void
 }
@@ -43,7 +41,6 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     limits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: RESET }],
     claims: new Set(),
     sessionId: 'sess-a',
-    stopLookups: 0,
   }
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
@@ -69,7 +66,6 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
   })
   on('session.id', () => ({ value: seen.sessionId }))
   on('session.root', () => {
-    seen.stopLookups++
     return { value: root }
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
@@ -140,8 +136,7 @@ test('crossing the line wraps up, stops background work and resumes after the re
   const pause = pauseOf(seen)
   expect(pause?.status).toBe('active')
   expect(pause?.wakeAt).toBe(WAKE)
-  expect(seen.claims).toEqual(new Set([`pause-${KEY}`, `${KEY}-sess-a`]))
-  expect(seen.stopLookups).toBe(1)
+  expect(seen.claims).toEqual(new Set([`pause-${KEY}`, `${KEY}-sess-a`, `stop-${KEY}-my-game`]))
   expect(stopsRun(seen)).toEqual([])
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
@@ -151,7 +146,7 @@ test('crossing the line wraps up, stops background work and resumes after the re
   expect(pauseOf(seen)?.status).toBe('done')
 })
 
-test('another session sees the shared pause, wraps up once, leaves the stop commands to the first', async ($, on) => {
+test('another session in the same project wraps up once and leaves the stop commands to the first', async ($, on) => {
   const seen = world(on)
   await start($)
   const other: Pause = {
@@ -163,13 +158,14 @@ test('another session sees the shared pause, wraps up once, leaves the stop comm
     triggeredBy: 'sess-b',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(other))
+  // The first session already stopped this project.
+  seen.claims.add(`stop-${KEY}-my-game`)
   await doWork($)
   await seen.clock.advance(60_000)
   await endTurn($)
 
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
-  expect(seen.stopLookups).toBe(0)
-  expect(seen.claims).toEqual(new Set([`${KEY}-sess-a`]))
+  expect(seen.claims).toEqual(new Set([`stop-${KEY}-my-game`, `${KEY}-sess-a`]))
   expect(pauseOf(seen)).toEqual(other)
 })
 
@@ -315,16 +311,17 @@ test('a session whose entry in the shared pause was overwritten does not wrap up
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
 
-test('of two sessions crossing the line together, only the claim winner stops background work', async ($, on) => {
+test('a session that loses the pause claim still stops its own project once', async ($, on) => {
   const seen = world(on)
   await start($)
   await doWork($)
-  // The other session won the pause claim and has not written the file yet.
+  // The other session, in another project, won the pause claim and has not written the file yet.
   seen.claims.add(`pause-${KEY}`)
+  seen.claims.add(`stop-${KEY}-other-project`)
   seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
   await endTurn($)
 
-  expect(seen.stopLookups).toBe(0)
+  expect(seen.claims.has(`stop-${KEY}-my-game`)).toBe(true)
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   await seen.clock.advance(WAKE - NOW)
   expect(seen.commands.at(-1)).toEqual({ command: 'session-start', args: '' })
