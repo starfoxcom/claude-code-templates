@@ -32,278 +32,329 @@ export type Statement = {
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
 const REDIRECT_ATTACHED = /^\d*(>>?|<)(?!&)(.+)$/
 
-export function parse(command: string, powershell: boolean): Statement[] {
-  const esc = powershell ? '`' : '\\'
-  const out: Statement[] = []
-  const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
-  let st = fresh()
-  let word: Word | null = null
-  // `owner`: the here-doc list of the statement that opened it; a line can go on past it (`<<'EOF' && git push`).
-  let pending: { delim: string; strip: boolean; owner?: string[] }[] = []
-  let redirectNext: 'write' | 'read' | 'text' | null = null
-  let i = 0
-  const n = command.length
+const HEREDOC = /^<<(-?)[ \t]*(["']?)([A-Za-z_][\w.-]*)\2/
 
-  const startWord = () => (word ??= { text: '', dynamic: false, bodies: [] })
-  const endWord = () => {
-    if (!word) return
-    const w = word
-    word = null
-    if (redirectNext) {
-      if (redirectNext === 'write') st.writes.push(w.text)
-      if (redirectNext === 'read') st.reads.push(w.text)
-      if (redirectNext === 'text') st.heredocs.push(w.text)
-      redirectNext = null
+// A here-doc queued on the current line. `owner`: the here-doc list of the statement that opened it; a
+// line can go on past it (`<<'EOF' && git push`).
+type Pending = { delim: string; strip: boolean; owner?: string[] }
+
+const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
+
+// One pass over the command text, a character at a time; each method reads one kind of thing.
+class Reader {
+  private readonly esc: string
+  private readonly n: number
+  private readonly out: Statement[] = []
+  private st: Statement = fresh()
+  private word: Word | null = null
+  private pending: Pending[] = []
+  private redirectNext: 'write' | 'read' | 'text' | null = null
+  private i = 0
+
+  constructor(
+    private readonly command: string,
+    private readonly powershell: boolean,
+  ) {
+    this.esc = powershell ? '`' : '\\'
+    this.n = command.length
+  }
+
+  run(): Statement[] {
+    while (this.i < this.n) this.step(this.command[this.i] ?? '')
+    this.endStatement()
+    return this.out
+  }
+
+  private at(offset: number): string {
+    return this.command[this.i + offset] ?? ''
+  }
+
+  private startWord(): Word {
+    return (this.word ??= { text: '', dynamic: false, bodies: [] })
+  }
+
+  private endWord() {
+    if (!this.word) return
+    const w = this.word
+    this.word = null
+    if (this.redirectNext) {
+      if (this.redirectNext === 'write') this.st.writes.push(w.text)
+      if (this.redirectNext === 'read') this.st.reads.push(w.text)
+      if (this.redirectNext === 'text') this.st.heredocs.push(w.text)
+      this.redirectNext = null
       return
     }
+    const isPlain = !w.dynamic && !w.literalStart
     const bare = REDIRECT.exec(w.text)
-    if (bare && !w.dynamic && !w.literalStart) {
-      if (!bare[3]) redirectNext = bare[2] === '<' ? 'read' : 'write'
+    if (bare && isPlain) {
+      if (!bare[3]) this.redirectNext = bare[2] === '<' ? 'read' : 'write'
       return
     }
     const attached = REDIRECT_ATTACHED.exec(w.text)
-    if (attached && !w.dynamic && !w.literalStart && /^[\d<>]/.test(w.text)) {
-      const target = attached[1] === '<' ? st.reads : st.writes
-      target.push(attached[2] ?? '')
+    if (attached && isPlain && /^[\d<>]/.test(w.text)) {
+      ;(attached[1] === '<' ? this.st.reads : this.st.writes).push(attached[2] ?? '')
       return
     }
-    st.words.push(w)
+    this.st.words.push(w)
   }
-  const endStatement = (pipeNext = false) => {
-    endWord()
-    redirectNext = null
-    if (st.words.length > 0 || st.heredocs.length > 0) out.push(st)
-    st = fresh(pipeNext)
+
+  private endStatement(pipeNext = false) {
+    this.endWord()
+    this.redirectNext = null
+    if (this.st.words.length > 0 || this.st.heredocs.length > 0) this.out.push(this.st)
+    this.st = fresh(pipeNext)
   }
+
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
-  const readBodies = (into: string[]) => {
-    for (const { delim, strip, owner } of pending) {
+  private readBodies(into: string[]) {
+    for (const { delim, strip, owner } of this.pending) {
       const lines: string[] = []
-      while (i < n) {
-        const end = command.indexOf('\n', i)
-        const raw = command.slice(i, end === -1 ? n : end).replace(/\r$/, '')
-        i = end === -1 ? n : end + 1
+      while (this.i < this.n) {
+        const end = this.command.indexOf('\n', this.i)
+        const raw = this.command.slice(this.i, end === -1 ? this.n : end).replace(/\r$/, '')
+        this.i = end === -1 ? this.n : end + 1
         const line = strip ? raw.replace(/^\t+/, '') : raw
         if (line.trim() === delim) break
         lines.push(line)
       }
       ;(owner ?? into).push(lines.join('\n'))
     }
-    pending = []
+    this.pending = []
   }
+
   // `<<` at `i`: queues a here-doc; `<<<` makes the next word a body.
-  const heredocStart = (): boolean => {
-    if (command.startsWith('<<<', i)) {
-      endWord()
-      redirectNext = 'text'
-      i += 3
+  private heredocStart(): boolean {
+    if (this.command.startsWith('<<<', this.i)) {
+      this.endWord()
+      this.redirectNext = 'text'
+      this.i += 3
       return true
     }
-    const m = /^<<(-?)[ \t]*(["']?)([A-Za-z_][\w.-]*)\2/.exec(command.slice(i))
+    const m = HEREDOC.exec(this.command.slice(this.i))
     if (!m) return false
-    endWord()
-    pending.push({ delim: m[3] ?? '', strip: m[1] === '-', owner: st.heredocs })
-    i += m[0].length
+    this.endWord()
+    this.pending.push({ delim: m[3] ?? '', strip: m[1] === '-', owner: this.st.heredocs })
+    this.i += m[0].length
     return true
   }
+
   // `$(` at `i` (PowerShell also `(`, `@(` and `@{`): the substitution read whole and kept raw, its own
   // here-doc bodies collected, and the commands inside it read as statements of their own.
-  const substitution = (w: Word, braces = false) => {
-    let depth = 0
-    let quote = ''
-    const start = i
-    let innerPending: { delim: string; strip: boolean }[] = []
-    while (i < n) {
-      const c = command[i]
-      if (quote) {
-        if (c === quote) quote = ''
-        else if (c === esc && quote === '"') i++
-        i++
-        continue
-      }
-      if (c === "'" || c === '"') quote = c
-      else if (c === '(' || (braces && c === '{')) depth++
-      else if (c === ')' || (braces && c === '}')) {
-        depth--
-        if (depth === 0) {
-          i++
-          break
-        }
-      } else if (c === '<' && command.startsWith('<<', i) && !command.startsWith('<<<', i)) {
-        const m = /^<<(-?)[ \t]*(["']?)([A-Za-z_][\w.-]*)\2/.exec(command.slice(i))
-        if (m) {
-          innerPending.push({ delim: m[3] ?? '', strip: m[1] === '-' })
-          i += m[0].length
-          continue
-        }
-      } else if (c === '\n' && innerPending.length > 0) {
-        i++
-        const saved = pending
-        pending = innerPending
-        readBodies(w.bodies)
-        pending = saved
-        innerPending = []
-        continue
-      }
-      i++
-    }
-    const raw = command.slice(start, i)
+  private substitution(w: Word, braces = false) {
+    const start = this.i
+    this.skipSubstitution(w, braces)
+    const raw = this.command.slice(start, this.i)
     w.text += raw
     w.dynamic = true
     const open = raw.indexOf(braces ? '{' : '(')
-    if (!braces && open !== -1 && raw.endsWith(')')) st.inner.push(...parse(raw.slice(open + 1, -1), powershell))
+    if (!braces && open !== -1 && raw.endsWith(')'))
+      this.st.inner.push(...parse(raw.slice(open + 1, -1), this.powershell))
   }
 
-  while (i < n) {
-    const c = command[i] ?? ''
-    // Line continuation.
-    if (c === esc && (command[i + 1] === '\n' || (command[i + 1] === '\r' && command[i + 2] === '\n'))) {
-      i += command[i + 1] === '\r' ? 3 : 2
-      continue
+  // Moves `i` past the closing bracket of the substitution at `i`, reading its here-doc bodies into `w`.
+  private skipSubstitution(w: Word, braces: boolean) {
+    let depth = 0
+    let quote = ''
+    let inner: Pending[] = []
+    while (this.i < this.n) {
+      const c = this.command[this.i]
+      if (quote) {
+        if (c === quote) quote = ''
+        else if (c === this.esc && quote === '"') this.i++
+        this.i++
+      } else if (c === "'" || c === '"') {
+        quote = c
+        this.i++
+      } else if (c === '(' || (braces && c === '{')) {
+        depth++
+        this.i++
+      } else if (c === ')' || (braces && c === '}')) {
+        depth--
+        this.i++
+        if (depth === 0) return
+      } else if (c === '\n' && inner.length > 0) {
+        this.i++
+        this.innerBodies(inner, w)
+        inner = []
+      } else if (!this.innerHeredoc(c, inner)) this.i++
     }
-    if (c === '\n') {
-      i++
+  }
+
+  // A here-doc opened inside a substitution: queued apart from the line's own. True when one was.
+  private innerHeredoc(c: string | undefined, inner: Pending[]): boolean {
+    if (c !== '<' || !this.command.startsWith('<<', this.i) || this.command.startsWith('<<<', this.i)) return false
+    const m = HEREDOC.exec(this.command.slice(this.i))
+    if (!m) return false
+    inner.push({ delim: m[3] ?? '', strip: m[1] === '-' })
+    this.i += m[0].length
+    return true
+  }
+
+  private innerBodies(inner: Pending[], w: Word) {
+    const saved = this.pending
+    this.pending = inner
+    this.readBodies(w.bodies)
+    this.pending = saved
+  }
+
+  private step(c: string) {
+    if (this.layout(c) || this.structure(c) || this.separator(c)) return
+    if (c === '<' && this.heredocStart()) return
+    if (this.hereString(c)) return
+    this.wordChar(c)
+  }
+
+  // Line continuations, newlines, blanks and comments. True when `c` was one.
+  private layout(c: string): boolean {
+    if (c === this.esc && (this.at(1) === '\n' || (this.at(1) === '\r' && this.at(2) === '\n'))) {
+      this.i += this.at(1) === '\r' ? 3 : 2
+    } else if (c === '\n') {
+      this.i++
       const bodies: string[] = []
-      readBodies(bodies)
-      st.heredocs.push(...bodies)
-      endStatement()
-      continue
-    }
-    if (c === ' ' || c === '\t' || c === '\r') {
-      endWord()
-      i++
-      continue
-    }
-    if (!word && c === '#') {
-      const end = command.indexOf('\n', i)
-      i = end === -1 ? n : end
-      continue
-    }
-    // Bash: `<(...)` and `>(...)` are process substitutions, a file name built at run time.
-    if (!powershell && (c === '<' || c === '>') && command[i + 1] === '(') {
-      const w = startWord()
+      this.readBodies(bodies)
+      this.st.heredocs.push(...bodies)
+      this.endStatement()
+    } else if (c === ' ' || c === '\t' || c === '\r') {
+      this.endWord()
+      this.i++
+    } else if (!this.word && c === '#') {
+      const end = this.command.indexOf('\n', this.i)
+      this.i = end === -1 ? this.n : end
+    } else return false
+    return true
+  }
+
+  // Subshells, process substitutions and PowerShell blocks. True when `c` opened or closed one.
+  private structure(c: string): boolean {
+    if (!this.powershell) return this.bashStructure(c)
+    if (this.word) return false
+    if (c === '(') this.substitution(this.startWord())
+    else if (c === '{' || c === '}') {
+      this.i++
+      this.endStatement()
+    } else if (c === '@' && (this.at(1) === '(' || this.at(1) === '{'))
+      this.substitution(this.startWord(), this.at(1) === '{')
+    else return false
+    return true
+  }
+
+  private bashStructure(c: string): boolean {
+    // `<(...)` and `>(...)` are process substitutions, a file name built at run time.
+    if ((c === '<' || c === '>') && this.at(1) === '(') {
+      const w = this.startWord()
       w.text += c
-      i++
-      substitution(w)
-      continue
+      this.i++
+      this.substitution(w)
+      return true
     }
-    // Bash: `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
-    if (!powershell && (c === '(' || c === ')')) {
-      i++
-      endStatement()
-      continue
+    // `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
+    if (c !== '(' && c !== ')') return false
+    this.i++
+    this.endStatement()
+    return true
+  }
+
+  // Pipes and statement separators. True when `c` was one, or a `&` that is not a separator.
+  private separator(c: string): boolean {
+    if (c === '|' && this.at(1) !== '|') {
+      this.i += this.at(1) === '&' ? 2 : 1
+      this.endStatement(true)
+      return true
     }
-    // PowerShell: `(...)` is a value built at run time, and `{` `}` hold script blocks (`foreach`, `if`).
-    if (powershell && !word && c === '(') {
-      substitution(startWord())
-      continue
+    if (c !== ';' && c !== '|' && c !== '&') return false
+    // PowerShell's call operator `& "path"` and a redirect's `>&` are not separators.
+    if (c === '&' && this.powershell && !this.word && this.st.words.length === 0) {
+      this.i++
+      return true
     }
-    if (powershell && !word && (c === '{' || c === '}')) {
-      i++
-      endStatement()
-      continue
+    if (c === '&' && this.word && /[<>]$/.test(this.word.text)) {
+      this.word.text += c
+      this.i++
+      return true
     }
-    if (powershell && !word && c === '@' && (command[i + 1] === '(' || command[i + 1] === '{')) {
-      substitution(startWord(), command[i + 1] === '{')
-      continue
-    }
-    if (c === '|' && command[i + 1] !== '|') {
-      i += command[i + 1] === '&' ? 2 : 1
-      endStatement(true)
-      continue
-    }
-    if (c === ';' || c === '|' || c === '&') {
-      // PowerShell's call operator `& "path"` and a redirect's `>&` are not separators.
-      if (c === '&' && powershell && !word && st.words.length === 0) {
-        i++
-        continue
-      }
-      if (c === '&' && word && /[<>]$/.test((word as Word).text)) {
-        ;(word as Word).text += c
-        i++
-        continue
-      }
-      i += command[i + 1] === c ? 2 : 1
-      endStatement()
-      continue
-    }
-    if (c === '<' && heredocStart()) continue
-    if (powershell && !word && c === '@' && (command[i + 1] === "'" || command[i + 1] === '"')) {
-      const q = command[i + 1]
-      const open = /^@['"][ \t]*\r?\n/.exec(command.slice(i))
-      if (open) {
-        const close = command.indexOf(`\n${q}@`, i + open[0].length - 1)
-        const end = close === -1 ? n : close
-        const body = command.slice(i + open[0].length, end).replace(/\r$/, '')
-        const w = startWord()
-        if (w.text === '') w.literalStart = true
-        w.text += body
-        if (q === '"' && /\$/.test(body)) w.dynamic = true
-        i = close === -1 ? n : close + 3
-        continue
-      }
-    }
-    const w = startWord()
-    if ((c === "'" || c === '"' || c === esc) && w.text === '') w.literalStart = true
-    if (c === "'") {
-      let j = i + 1
-      while (j < n) {
-        if (command[j] === "'") {
-          if (powershell && command[j + 1] === "'") {
-            w.text += "'"
-            j += 2
-            continue
-          }
-          break
-        }
-        w.text += command[j]
-        j++
-      }
-      i = j + 1
-      continue
-    }
-    if (c === '"') {
-      i++
-      while (i < n && command[i] !== '"') {
-        const d = command[i] ?? ''
-        if (d === esc && i + 1 < n) {
-          const nx = command[i + 1] ?? ''
-          // Bash keeps a backslash inside double quotes unless it escapes $ ` " \ or a newline (a
-          // continuation, dropped whole): "C:\Users\me" stays as typed.
-          if (powershell) w.text += ({ n: '\n', t: '\t', '`': '`' } as Record<string, string>)[nx] ?? nx
-          else if ('$`"\\'.includes(nx)) w.text += nx
-          else if (nx !== '\n') w.text += d + nx
-          i += 2
-          continue
-        }
-        if (d === '$' && command[i + 1] === '(') {
-          substitution(w)
-          continue
-        }
-        if (d === '$' && /[A-Za-z_{]/.test(command[i + 1] ?? '')) w.dynamic = true
-        if (d === '`' && !powershell) w.dynamic = true
-        w.text += d
-        i++
-      }
-      i++
-      continue
-    }
-    if (c === '$' && command[i + 1] === '(') {
-      substitution(w)
-      continue
-    }
-    if (c === '$' && /[A-Za-z_{]/.test(command[i + 1] ?? '')) w.dynamic = true
-    if (c === '`' && !powershell) w.dynamic = true
-    if (c === esc && i + 1 < n) {
-      w.text += command[i + 1]
-      i += 2
-      continue
+    this.i += this.at(1) === c ? 2 : 1
+    this.endStatement()
+    return true
+  }
+
+  // A PowerShell here-string, `@'...'@` or `@"..."@`, as one word. True when `c` opened one.
+  private hereString(c: string): boolean {
+    if (!this.powershell || this.word || c !== '@' || (this.at(1) !== "'" && this.at(1) !== '"')) return false
+    const q = this.at(1)
+    const open = /^@['"][ \t]*\r?\n/.exec(this.command.slice(this.i))
+    if (!open) return false
+    const close = this.command.indexOf(`\n${q}@`, this.i + open[0].length - 1)
+    const end = close === -1 ? this.n : close
+    const body = this.command.slice(this.i + open[0].length, end).replace(/\r$/, '')
+    const w = this.startWord()
+    if (w.text === '') w.literalStart = true
+    w.text += body
+    if (q === '"' && /\$/.test(body)) w.dynamic = true
+    this.i = close === -1 ? this.n : close + 3
+    return true
+  }
+
+  private wordChar(c: string) {
+    const w = this.startWord()
+    if ((c === "'" || c === '"' || c === this.esc) && w.text === '') w.literalStart = true
+    if (c === "'") return this.singleQuoted(w)
+    if (c === '"') return this.doubleQuoted(w)
+    if (c === '$' && this.at(1) === '(') return this.substitution(w)
+    if (c === '$' && /[A-Za-z_{]/.test(this.at(1))) w.dynamic = true
+    if (c === '`' && !this.powershell) w.dynamic = true
+    if (c === this.esc && this.i + 1 < this.n) {
+      w.text += this.at(1)
+      this.i += 2
+      return
     }
     w.text += c
-    i++
+    this.i++
   }
-  endStatement()
-  return out
+
+  private singleQuoted(w: Word) {
+    let j = this.i + 1
+    while (j < this.n) {
+      if (this.command[j] === "'") {
+        if (!this.powershell || this.command[j + 1] !== "'") break
+        w.text += "'"
+        j += 2
+        continue
+      }
+      w.text += this.command[j]
+      j++
+    }
+    this.i = j + 1
+  }
+
+  private doubleQuoted(w: Word) {
+    this.i++
+    while (this.i < this.n && this.command[this.i] !== '"') {
+      const d = this.command[this.i] ?? ''
+      if (d === this.esc && this.i + 1 < this.n) this.escapeInDouble(w, d)
+      else if (d === '$' && this.at(1) === '(') this.substitution(w)
+      else {
+        if (d === '$' && /[A-Za-z_{]/.test(this.at(1))) w.dynamic = true
+        if (d === '`' && !this.powershell) w.dynamic = true
+        w.text += d
+        this.i++
+      }
+    }
+    this.i++
+  }
+
+  // Bash keeps a backslash inside double quotes unless it escapes $ ` " \ or a newline (a continuation,
+  // dropped whole): "C:\Users\me" stays as typed.
+  private escapeInDouble(w: Word, d: string) {
+    const nx = this.at(1)
+    if (this.powershell) w.text += ({ n: '\n', t: '\t', '`': '`' } as Record<string, string>)[nx] ?? nx
+    else if ('$`"\\'.includes(nx)) w.text += nx
+    else if (nx !== '\n') w.text += d + nx
+    this.i += 2
+  }
+}
+
+export function parse(command: string, powershell: boolean): Statement[] {
+  return new Reader(command, powershell).run()
 }
 
 // Words that run the command after them: shell keywords (`then git commit ...` in an `if`, `do gh ...`
