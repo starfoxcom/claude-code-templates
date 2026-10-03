@@ -13,7 +13,7 @@ import { checkAddedLines, checkBranch, checkText, describe } from './policy'
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
 
 const LOG_CAP = 256 * 1024
-const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false }
+const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false, temp: '' }
 
 // Makes the data folder and records when, and in which mode, the mod loaded.
 const MARK_LOADED = [
@@ -27,16 +27,19 @@ async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
+  live.temp = ((await $.env.get('TEMP')) ?? (await $.env.get('TMP')) ?? '').replace(/\\/g, '/').replace(/\/$/, '')
   live.dir = `${(configured ?? `${live.home}/.claude`).replace(/\\/g, '/')}/mods-data/guards`
   // The engine's fs writes no missing folders; node makes it once per session.
   await $.process.run(['node', '-e', MARK_LOADED, live.dir, live.mode], { timeoutMs: 10_000 }).catch(() => undefined)
 }
 
 // Bash on Windows writes /c/Users/...; the engine's fs takes C:/Users/... Only on Windows: elsewhere
-// `/u/me` is a real one-letter folder.
-function osPath(path: string, cwd: string): string {
+// `/u/me` is a real one-letter folder. Git Bash also mounts the Windows temp folder at /tmp, so a body
+// file a Bash command names there is read from TEMP (PowerShell has no such mount).
+function osPath(path: string, cwd: string, isBash = false): string {
   let p = path.replace(/\\/g, '/')
   if (p.startsWith('~/')) p = live.home + p.slice(1)
+  if (isBash && live.isWindows && live.temp && /^\/tmp(?:\/|$)/.test(p)) p = live.temp + p.slice(4)
   const drive = live.isWindows ? /^\/([a-zA-Z])\//.exec(p) : null
   if (drive) p = `${drive[1]?.toUpperCase()}:/${p.slice(3)}`
   if (!/^[a-zA-Z]:\//.test(p) && !p.startsWith('/')) p = `${cwd.replace(/\\/g, '/').replace(/\/$/, '')}/${p}`
@@ -58,9 +61,9 @@ async function git($: Engine, cwd: string, args: string[]): Promise<string> {
 }
 
 // The first reason to block, or undefined.
-async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
+async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | undefined> {
   if (plan.block) return plan.block
-  const cwd = osPath(plan.cwd ?? (await $.session.cwd()), await $.session.cwd())
+  const cwd = osPath(plan.cwd ?? (await $.session.cwd()), await $.session.cwd(), isBash)
   const top = (await git($, cwd, ['rev-parse', '--show-toplevel'])).trim()
   const repo = (plan.repo ?? top.split(/[\\/]/).pop() ?? '').toLowerCase()
   const mayName = live.mentionRepos.includes('*') || live.mentionRepos.includes(repo)
@@ -68,9 +71,9 @@ async function verdict($: Engine, plan: Plan): Promise<string | undefined> {
     const v = checkText(text, mayName || Boolean(creditOnly))
     if (v) return describe(v, where)
   }
-  const written = new Set(plan.written.map(p => osPath(p, cwd).toLowerCase()))
+  const written = new Set(plan.written.map(p => osPath(p, cwd, isBash).toLowerCase()))
   for (const { where, path, written: fromCommand } of plan.files) {
-    const full = osPath(path, cwd)
+    const full = osPath(path, cwd, isBash)
     // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a
     // file of the same name in the session folder is a different file: it is never read.
     if (plan.isCwdUnknown && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)) {
@@ -158,7 +161,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   if (!live.dir) await setUp($)
   let reason: string | undefined
   try {
-    reason = await verdict($, plan)
+    reason = await verdict($, plan, tool === 'Bash')
   } catch (err) {
     // A guard that fails must not stop the work; the scripts still run beside it in shadow.
     await log($, { at: Date.now(), tool, error: String(err).slice(0, 200), command: command.slice(0, 2000) })
