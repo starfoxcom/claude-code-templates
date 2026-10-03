@@ -9,7 +9,7 @@
 #     `@claude review this PR`.
 #
 # Merge gate participation: this workflow PATCHes the `Claude On-Demand`
-# check-run on the PR HEAD SHA via the Checks API after Opus finishes its
+# check-run on the PR HEAD SHA via the Checks API after the deep reviewer finishes its
 # review. The check was created at status=in_progress by claude-code-review.yml's
 # init-deep-check job; this workflow upgrades it to success/failure based on
 # the deep verdict. When branch protection requires `Claude On-Demand` (the
@@ -56,7 +56,7 @@ jobs:
     # Anchor the bot-loop guard to startsWith — the action's progress comment
     # body STARTS with "Claude Code is working"; legitimate escalation
     # comments may quote the phrase when discussing the filter itself (e.g.
-    # listing invariants for Opus to verify). Using `!contains` here would
+    # listing invariants for the deep tier to verify). Using `!contains` here would
     # reject any such quote and silently block the deep tier from firing.
     if: |
       (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
@@ -80,7 +80,7 @@ jobs:
       id-token: write
       actions: read
       # Needed to PATCH the `Claude On-Demand` check-run on the PR HEAD SHA
-      # both at job start (in_progress) and after the Opus review completes
+      # both at job start (in_progress) and after the deep review completes
       # (success/failure based on verdict).
       checks: write
     steps:
@@ -118,7 +118,7 @@ jobs:
       # the title to "Deep review in progress". For manual `@claude review
       # this PR` triggers without a prior routine run on this HEAD SHA, the
       # check may not yet exist — create it. Either way, the PR's check
-      # rollup now shows "Claude On-Demand: in_progress" while Opus runs.
+      # rollup now shows "Claude On-Demand: in_progress" while the deep reviewer runs.
       - name: Upsert Claude On-Demand check to in_progress
         if: steps.pr-head.outputs.head_sha != ''
         env:
@@ -133,7 +133,7 @@ jobs:
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
               -F "output[title]=Deep review in progress" \
-              -F "output[summary]=Opus is reviewing the PR. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment."
+              -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment."
             echo "::notice::Set existing Claude On-Demand check $CHECK_ID to in_progress"
           else
             gh api "repos/$REPO/check-runs" -X POST \
@@ -141,35 +141,163 @@ jobs:
               -F head_sha="$HEAD_SHA" \
               -F status="in_progress" \
               -F "output[title]=Deep review in progress" \
-              -F "output[summary]=Manual @claude trigger fired on a HEAD SHA with no prior routine run. Opus is reviewing."
+              -F "output[summary]=Manual @claude trigger fired on a HEAD SHA with no prior routine run. The deep reviewer is running."
             echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
           fi
 
       - name: Run Claude
-        # Pinned to v1's resolved SHA (resolved 2026-05-04). The bare `@v1`
-        # floats — silent behavior changes from auto-updates burned other
-        # projects already. Update via
+        id: claude_attempt_1
+        continue-on-error: true
+        # Pinned to the v1 tag's resolved SHA (v1.0.213). The bare `@v1` floats,
+        # and silent behavior changes from auto-updates burned other projects
+        # already. Update via
         #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
-        # and bump the SHA here AND in `.github/workflows/claude-code-review.yml`.
-        uses: anthropics/claude-code-action@8c196b2f61a66bfdf93322bde3a3e668669089ed  # v1
+        # and bump the SHA here AND in `.github/workflows/claude-code-review.yml`
+        # in one hotfix: both tiers carry the same pin.
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        # The token goes in both as a `with:` input and as an env var, the
+        # upstream workaround for credential loss in tag mode.
+        # `--disallowedTools` bans helper agents and wake-ups on every attempt:
+        # a one-shot session that delegates ends with no verdict.
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--allowedTools "Bash(gh *),Read" --max-turns 50 --model {{REVIEW_DEEP_MODEL}}'
-          # Allow the routine review's `claude[bot]` to trigger this workflow.
-          # The bare action defaults to "humans only" as a bot-loop safety;
-          # we explicitly opt in to claude → claude because the routine tier
-          # is the canonical caller for deep-review escalations per
-          # `.claude/rules/review-tiers.md`.
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_DEEP_MODEL}} --effort {{REVIEW_DEEP_EFFORT}}'
+          show_full_output: false
+          additional_permissions: |
+            actions: read
           allowed_bots: "claude"
-          # NOTE: this action does NOT support a `system_prompt:` input.
-          # Project context is auto-loaded by Claude Code from `CLAUDE.md` +
-          # `.claude/rules/*.md` at repo root once the runner checks out. The
-          # structured `@claude` comment from the routine review provides the
-          # per-PR focus, invariants, and out-of-scope list.
+          # Allow the routine review's `claude[bot]` to trigger this workflow: the
+          # routine tier is the caller for deep-review escalations.
+          # This action has no `system_prompt:` input. Claude Code loads
+          # `CLAUDE.md` + `.claude/rules/*.md` from the checkout, and the
+          # structured `@claude` comment from the routine review gives the
+          # per-PR focus, invariants and the binary verdict rule.
+
+      # ── Usage-limit exhaustion vs transient failure ──────────────────────
+      # On a usage limit: skip the same-model retry and go to the backup model.
+      # On any other failure: retry the same model first, then the backup only
+      # if the retry also fails.
+      - name: Detect failure class
+        id: failure_class
+        if: steps.claude_attempt_1.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          RUN_ID="${{ github.run_id }}"
+
+          JOB_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
+            --jq '[.jobs[] | select(.name | test("On-demand"))] | first | .id // empty')
+          if [ -z "$JOB_ID" ]; then
+            echo "::warning::Could not resolve job ID — treating as transient failure"
+            echo "usage_limit=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LOG=$(gh api "repos/$REPO/actions/jobs/$JOB_ID/logs" 2>/dev/null || true)
+          # The action also saves the CLI's messages to a file, on disk even when
+          # the job log has not reached the API yet. Only its final `result`
+          # message is read: the rest holds the PR's own diff and comments, whose
+          # words must not decide the failure class. A plan cap reads "You've
+          # reached your <model> limit" with HTTP 429. The patterns are the CLI's
+          # and API's own error wording, never bare words a diff could contain.
+          RESULT=$(jq -c '[.[]? | select(.type == "result")] | last // empty'             "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
+          if printf '%s %s' "$LOG" "$RESULT" | grep -qiE 'rate_limit_error|usage limit|quota exceeded|resource_exhausted|reached your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
+            echo "::warning::Usage limit detected in attempt 1 — skipping the same-model retry, falling back to the backup model"
+            echo "usage_limit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Attempt 1 failure is not a usage limit — retrying the same model"
+            echo "usage_limit=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Back off before attempt 2
+        if: steps.claude_attempt_1.outcome == 'failure'
+        run: sleep 90
+
+      # Attempt 2a: same-model retry, for transient failures only.
+      - name: Run Claude (retry)
+        id: claude_retry
+        if: steps.claude_attempt_1.outcome == 'failure' && steps.failure_class.outputs.usage_limit != 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_DEEP_MODEL}} --effort {{REVIEW_DEEP_EFFORT}}'
+          show_full_output: false
+          additional_permissions: |
+            actions: read
+          allowed_bots: "claude"
+
+      # The backup runs on a job-private copy of the CLI at CLI_VERSION,
+      # installed only when it is about to run, so a backup model newer than
+      # the pinned action's own CLI is still accepted. Keep CLI_VERSION at or
+      # above the version the backup model needs.
+      - name: Install Claude Code for the backup reviewer
+        id: claude-cli
+        if: |
+          (steps.failure_class.outputs.usage_limit == 'true') ||
+          (steps.claude_retry.outcome == 'failure')
+        continue-on-error: true
+        shell: bash
+        env:
+          CLI_VERSION: "2.1.280"
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::error::Claude Code $CLI_VERSION install failed three times"
+              exit 1
+            fi
+            sleep 5
+          done
+          src="$HOME/.local/share/claude/versions/$CLI_VERSION"
+          if [ ! -x "$src" ]; then
+            src="$(readlink -f "$HOME/.local/bin/claude")"
+          fi
+          dest="$RUNNER_TEMP/claude-cli/claude"
+          mkdir -p "$(dirname "$dest")"
+          cp "$src" "$dest"
+          chmod +x "$dest"
+          installed="$("$dest" --version | awk '{print $1}')"
+          if [ "$installed" != "$CLI_VERSION" ]; then
+            echo "::error::expected Claude Code $CLI_VERSION, got '$installed'"
+            exit 1
+          fi
+          echo "Claude Code $installed at $dest"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+
+      # Attempt 2b: the backup model. Fires on a usage limit,
+      # or when the same-model retry also failed. The Evaluate step below owns
+      # the outcome, so every attempt continues on error.
+      - name: Run Claude (backup)
+        id: claude_fallback
+        if: |
+          steps.claude-cli.outcome == 'success' && (
+          (steps.failure_class.outputs.usage_limit == 'true') ||
+          (steps.claude_retry.outcome == 'failure'))
+        continue-on-error: true
+        uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        with:
+          path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_BACKUP_MODEL}} --effort {{REVIEW_BACKUP_EFFORT}}'
+          show_full_output: false
+          additional_permissions: |
+            actions: read
+          allowed_bots: "claude"
 
       - name: Evaluate deep-tier verdict
         # PATCH the `Claude On-Demand` check on the PR HEAD SHA to
-        # success/failure based on Opus's verdict comment. When branch
+        # success/failure based on the deep reviewer's verdict comment. When branch
         # protection requires `Claude On-Demand`, this PATCH is what
         # actually gates merge for auto-escalated PRs.
         #
@@ -181,13 +309,17 @@ jobs:
         # via comment-correlation.
         #
         # The action posts a comment starting with "**Claude finished
-        # @claude[bot]'s task in <duration>**" when Opus completes its review.
+        # @claude[bot]'s task in <duration>**" when the deep reviewer completes.
         # We re-read that comment and translate to check conclusion.
         if: always() && steps.pr-head.outputs.head_sha != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr-head.outputs.pr_number }}
           HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
+          # The model whose attempt completed, for the check title: the job name
+          # and a green first step cannot tell (every attempt continues on
+          # error). Keep these labels in step with the `--model` arguments above.
+          REVIEWER: ${{ steps.claude_attempt_1.outcome == 'success' && '{{REVIEW_DEEP_MODEL}} {{REVIEW_DEEP_EFFORT}}' || steps.claude_retry.outcome == 'success' && '{{REVIEW_DEEP_MODEL}} {{REVIEW_DEEP_EFFORT}} (retry)' || steps.claude_fallback.outcome == 'success' && '{{REVIEW_BACKUP_MODEL}} {{REVIEW_BACKUP_EFFORT}} (backup)' || 'none' }}
         run: |
           REPO="${{ github.repository }}"
 
@@ -221,12 +353,12 @@ jobs:
 
           if [ -z "$COMMENT" ]; then
             # FAIL-CLOSED: neutral counts as passing in required status checks — failure blocks merge until a retry succeeds.
-            echo "::error::No deep-tier completion comment found — Opus action errored or skipped. Setting check to failure (fail-closed)."
+            echo "::error::No deep-tier completion comment found — every attempt errored or was skipped. Setting check to failure (fail-closed)."
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
               -F conclusion="failure" \
               -F "output[title]=Deep review errored" \
-              -F "output[summary]=The Opus action did not post a completion comment (errored or skipped). Retry with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the deep tier keeps failing, report it to the maintainer."
+              -F "output[summary]=The reviewer never ran to completion (attempt 1: ${{ steps.claude_attempt_1.outcome }}, usage limit: ${{ steps.failure_class.outputs.usage_limit }}, retry: ${{ steps.claude_retry.outcome || 'skipped' }}, backup: ${{ steps.claude_fallback.outcome || 'skipped' }}). This is not a blocking finding; nothing was judged. Retry with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the deep tier keeps failing, report it to the maintainer."
             exit 1
           fi
 
@@ -237,25 +369,25 @@ jobs:
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
               -F conclusion="failure" \
-              -F "output[title]=Deep review verdict missing" \
-              -F "output[summary]=Opus completed but did not include a 🔴/🟢 verdict line. Re-trigger with a comment starting with \`@claude review this PR\` and ensure the prompt mandates a binary verdict on the final line."
+              -F "output[title]=Deep review verdict missing ($REVIEWER)" \
+              -F "output[summary]=The deep reviewer ($REVIEWER) completed but did not include a 🔴/🟢 verdict line. Re-trigger with a comment starting with \`@claude review this PR\` and ensure the prompt mandates a binary verdict on the final line."
             exit 1
           fi
 
           if echo "$VERDICT_LINE" | grep -qF "🔴"; then
-            echo "::error::Deep-tier verdict: 🔴 Blocking — merge blocked"
+            echo "::error::Deep-tier verdict: 🔴 Blocking — merge blocked (reviewer: $REVIEWER)"
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="completed" \
               -F conclusion="failure" \
-              -F "output[title]=Deep review verdict: 🔴 Blocking" \
-              -F "output[summary]=Opus returned a blocking verdict. Fix on the PR branch, then re-trigger with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the finding does not apply, explain why after the phrase in that comment, or in a separate comment first."
+              -F "output[title]=Deep review verdict: 🔴 Blocking ($REVIEWER)" \
+              -F "output[summary]=The deep reviewer ($REVIEWER) returned a blocking verdict. Fix on the PR branch, then re-trigger with a comment starting with \`@claude review this PR — depth pass on <focus>\`. If the finding does not apply, explain why after the phrase in that comment, or in a separate comment first."
             exit 1
           fi
 
-          echo "✅ Deep-tier verdict clean — PATCHing Claude On-Demand to success"
+          echo "✅ Deep-tier verdict clean — PATCHing Claude On-Demand to success (reviewer: $REVIEWER)"
           gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
             -F status="completed" \
             -F conclusion="success" \
-            -F "output[title]=Deep review verdict: 🟢 LGTM" \
-            -F "output[summary]=Opus signed off. Merge gate's deep-tier requirement satisfied."
+            -F "output[title]=Deep review verdict: 🟢 LGTM ($REVIEWER)" \
+            -F "output[summary]=The deep reviewer ($REVIEWER) signed off. Merge gate's deep-tier requirement satisfied."
           exit 0
