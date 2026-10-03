@@ -5,7 +5,8 @@ import { expect, mock, test } from 'claude-code/testing'
 const AI_TRAILER = 'Co-' + 'Authored-By: Cla' + 'ude <noreply@anthro' + 'pic.com>'
 const LOG = 'C:/Users/me/.claude/mods-data/guards/decisions.jsonl'
 
-function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Windows_NT') {
+// `isDiffCut`: the diff went past the engine's output cap.
+function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Windows_NT', isDiffCut = false) {
   const seen = { files: new Map(Object.entries(files)), ran: [] as string[], runs: [] as string[][] }
   mock.clock(on)
   mock.env(on, { USERPROFILE: 'C:/Users/me', OS: os })
@@ -22,8 +23,10 @@ function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Wind
   })
   on('process.run', ($, e) => {
     seen.runs.push([...e.argv])
-    const out = e.argv.includes('--show-toplevel') ? 'C:/Repos/my-game\n' : e.argv.includes('diff') ? diff : ''
-    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    const isDiff = e.argv.includes('diff')
+    const out = e.argv.includes('--show-toplevel') ? 'C:/Repos/my-game\n' : isDiff ? diff : ''
+    const isStdoutTruncated = isDiff && isDiffCut
+    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated, isStderrTruncated: false } }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.call', { tool: 'Bash' }, ($, e) => {
@@ -75,6 +78,11 @@ test('a relative body file under a folder built at run time is named unread, nev
     expect(entry.mod).toBeNull()
     expect(entry.unread?.length).toBe(1)
   }
+  // A file of the same name in the session folder is a different file: still named unread, never read.
+  seen.files.set('C:/Repos/my-game/body.md', '## What\n- clean\n')
+  await bash($, 'cd "$REPO" && gh pr create --title t --body-file body.md')
+  const sameName = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+  expect(sameName.unread?.length).toBe(1)
   // A literal folder still refuses a file that is not there.
   await bash($, 'cd C:/Repos/other && gh pr create --title t --body-file body.md')
   const literal = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
@@ -86,6 +94,14 @@ test('a commit looks at the lines it adds', async ($, on) => {
   await bash($, "git commit -m 'feat: x'")
   expect(seen.runs.some(argv => argv.includes('--cached'))).toBe(true)
   expect(seen.files.get(LOG)).toContain('added to src/a.ts')
+})
+
+test('a diff past the output cap names the rest of the added lines unread', async ($, on) => {
+  const seen = world(on, {}, `+++ b/src/a.ts\n@@ -0,0 +1 @@\n+const x = 1\n`, 'Windows_NT', true)
+  await bash($, "git commit -m 'feat: x'")
+  const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+  expect(entry.mod).toBeNull()
+  expect(entry.unread).toEqual(['the lines the commit adds past the first part of its diff'])
 })
 
 test('read-only and clean commands run untouched and log nothing', async ($, on) => {
