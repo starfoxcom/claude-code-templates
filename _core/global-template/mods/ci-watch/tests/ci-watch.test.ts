@@ -1,7 +1,16 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Watch } from '../hooks/register'
-import { MKDIR_SCRIPT, claimWake, isPushOrPr, mergedNumber, settle, targetFolder, wakeText } from '../hooks/register'
+import {
+  MKDIR_SCRIPT,
+  SWEEP_SCRIPT,
+  claimWake,
+  isPushOrPr,
+  mergedNumber,
+  settle,
+  targetFolder,
+  wakeText,
+} from '../hooks/register'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
@@ -100,6 +109,7 @@ function world(on: On) {
   on('process.run', async ($, e) => {
     const args = e.argv.join(' ')
     if (e.argv[2] === MKDIR_SCRIPT) seen.order.push(`mkdir ${e.argv[3]}`)
+    if (e.argv[2] === SWEEP_SCRIPT) seen.order.push(`sweep ${e.argv.slice(3).join(' ')}`)
     if (args.includes('pr checks')) await seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {
       return {
@@ -189,6 +199,16 @@ test('watches stopped while saving fails stay stopped, and the save is tried aga
   seen.isWriteDown = false
   await clock.advance(60_000)
   expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches).toEqual([])
+})
+
+test("other sessions' old files are swept once per load, never this session's", async ($, on) => {
+  const { seen } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  expect(seen.order.filter(step => step.startsWith('sweep'))).toEqual([
+    'sweep C:/Users/me/.claude/mods-data/ci-watch 2 s1',
+  ])
 })
 
 test('the data folder is made before the first save, and a failed save never fails the push', async ($, on) => {

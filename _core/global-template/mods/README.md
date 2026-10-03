@@ -19,7 +19,7 @@ Every mod is optional and independent, with one exception noted in the table (sh
 | `shared-pc` | For several sessions on one machine: one session at a time holds "the seat" for heavy work (builds, full test suites, local CI); the rest wait in a visible line in a band above the prompt. Heavy commands queue by themselves; `/pc` (and the `pc` tool) can hold the seat for a measurement window, release it, or ask to go next. Starts no new heavy work while usage-guard has paused sessions. | Opt-in |
 | `skill-check` | Checks that a skill's run shows the steps its contract requires. When the turn that ran the skill ends with steps unseen, one follow-up turn names them, asking to do them or say why they do not apply. No contract, no effect. | Opt-in |
 | `tasks` | Keeps the task list honest: one task in progress at a time, finished work marked done, a list that survives compaction and completion, reminders that name the stale task, and a nudge to make a list after several tool calls with none. Draws its own list (a band and a pane) in place of the built-in panel for the main session. | Opt-in |
-| `usage-guard` | Near a plan usage limit, every session saves its work once (`/session-close`, local only), runs your per-project stop commands, and waits; after the limit resets, sessions resume with `/session-start`. A card above the prompt shows the pause, with "Cancel auto-resume". `/usage-guard cancel` cancels it. | Opt-in |
+| `usage-guard` | Near a plan usage limit, every session saves its work once (`/session-close`, local only), each project's background work is stopped once by your per-project stop commands, and sessions wait; after the limit resets, sessions resume with `/session-start`. A card above the prompt shows the pause, with "Cancel auto-resume". `/usage-guard cancel` cancels it. | Opt-in |
 
 "Recommended on" means we suggest installing it with every setup; "opt-in" means install it only when you want what it does. Installing is manual for now (see Install below).
 
@@ -84,11 +84,11 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 |---|---|
 | `session-facts` | `<session>.json` per session (the status line sweeps files older than three days) |
 | `compact-handoff` | hand-off files: one per session in `on` mode, plus `<session>-precompute.md` when the engine writes a summary ahead of time; newest 20, at most 14 days, in `shadow` mode |
-| `ci-watch` | `<session>.json`; a settled watch is dropped after an hour, or at once when the PR is merged or closed |
+| `ci-watch` | `<session>.json` (the watches) and `<session>.owner` (which loaded copy of the mod polls); a settled watch is dropped after an hour, or at once when the PR is merged or closed; both files are swept two days after their session last wrote them |
 | `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json` |
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
-| `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session per pause, so each wraps up once; swept after 14 days) |
+| `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days) |
 | status line | `statusline/runners.json` (runner check cache), `statusline/swept.json` |
 
 ## Status line
