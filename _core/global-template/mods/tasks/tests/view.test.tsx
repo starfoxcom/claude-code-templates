@@ -37,6 +37,7 @@ function world(on: On, tasks: TaskRow[], updatedAt = NOW, carried: TaskRow[] = [
     return { value: { isPlaced: true } }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.attach', ($, e) => ({ clientId: e.clientId }))
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   return opened
 }
@@ -51,30 +52,43 @@ const LIST: TaskRow[] = [
   { id: '3', subject: 'Shadow-test it', status: 'pending' },
 ]
 
-test('the band names the task in progress and opens the full list', async ($, on) => {
-  const opened = world(on, LIST)
-  await start($)
-  const ui = await $.ui.mount({ plugin: 'tasks', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+test('a Desktop session shows the band once the app attaches, before any tool call', async ($, on) => {
+  world(on, LIST)
+  // How the Desktop app starts a session: not interactive, drawing nowhere until it attaches.
+  await $.session.start({ cwd: 'C:/Repos/x', surface: null, isInteractive: false })
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  const ui = await $.ui.mount({ plugin: 'tasks', surface: 'desktop', component: 'AbovePrompt', props: PROPS })
   expect(await ui.find({ type: 'Text', text: /🔨 #2 Building the guards mod/ })).toBeDefined()
-  await ui.press({ key: 'tasks-list' })
-  expect(opened).toEqual([PANE])
 })
 
-test('the pane lists every task, finished ones included', async ($, on) => {
-  world(on, LIST)
-  await start($)
-  const ui = await $.ui.mount({
-    plugin: 'tasks',
-    surface: 'terminal',
-    component: 'Pane',
-    requestId: PANE,
-    props: PANE_PROPS,
-  } as never)
-  expect(await ui.find({ key: 'task-1' })).toBeDefined()
-  expect(await ui.find({ key: 'task-2' })).toBeDefined()
-  expect(await ui.find({ key: 'task-3' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /1 of 3 done/ })).toBeDefined()
-})
+// The band and the pane draw through the engine's own validation on each surface the CLI and the
+// Desktop app use.
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the band names the task in progress and opens the full list on ${surface}`, async ($, on) => {
+    const opened = world(on, LIST)
+    await start($)
+    const ui = await $.ui.mount({ plugin: 'tasks', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /🔨 #2 Building the guards mod/ })).toBeDefined()
+    await ui.press({ key: 'tasks-list' })
+    expect(opened).toEqual([PANE])
+  })
+
+  test(`the pane lists every task, finished ones included, on ${surface}`, async ($, on) => {
+    world(on, LIST)
+    await start($)
+    const ui = await $.ui.mount({
+      plugin: 'tasks',
+      surface,
+      component: 'Pane',
+      requestId: PANE,
+      props: PANE_PROPS,
+    } as never)
+    expect(await ui.find({ key: 'task-1' })).toBeDefined()
+    expect(await ui.find({ key: 'task-2' })).toBeDefined()
+    expect(await ui.find({ key: 'task-3' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /1 of 3 done/ })).toBeDefined()
+  })
+}
 
 test('a finished list leaves the band after a while', async ($, on) => {
   world(on, [{ id: '1', subject: 'Done thing', status: 'completed' }], NOW - 10 * 60_000)

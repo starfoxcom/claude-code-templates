@@ -326,36 +326,39 @@ function cardOf(seen: World): { id: string; text: string; dismissed: boolean } |
   return text === undefined ? undefined : JSON.parse(text)
 }
 
-async function mountCard($: Engine) {
+async function mountCard($: Engine, surface: 'terminal' | 'desktop' = 'terminal') {
   return $.ui.mount({
     plugin: 'usage-guard',
-    surface: 'terminal',
+    surface,
     component: 'AbovePrompt',
     props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never,
   })
 }
 
-test('the pause shows a card that stays until dismissed, for every session', async ($, on) => {
-  const seen = world(on)
-  await start($)
-  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
-  await endTurn($)
+// The card draws through the engine's own validation on each surface the CLI and the Desktop app use.
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`the pause shows a card that stays until dismissed, for every session, on ${surface}`, async ($, on) => {
+    const seen = world(on)
+    await start($)
+    seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+    await endTurn($)
 
-  expect(cardOf(seen)?.id).toBe(`paused:${RESET}`)
-  expect(cardOf(seen)?.text).toContain('Work resumes on its own at Fri 2026-10-02 12:02')
-  await seen.clock.advance(30_000)
-  const ui = await mountCard($)
-  expect(await ui.find({ key: 'usage-dismiss' })).toBeDefined()
-  expect(await ui.find({ key: 'usage-cancel' })).toBeDefined()
+    expect(cardOf(seen)?.id).toBe(`paused:${RESET}`)
+    expect(cardOf(seen)?.text).toContain('Work resumes on its own at Fri 2026-10-02 12:02')
+    await seen.clock.advance(30_000)
+    const ui = await mountCard($, surface)
+    expect(await ui.find({ key: 'usage-dismiss' })).toBeDefined()
+    expect(await ui.find({ key: 'usage-cancel' })).toBeDefined()
 
-  await ui.press({ key: 'usage-dismiss' })
-  expect(cardOf(seen)?.dismissed).toBe(true)
-  // Another session reaching the same event does not raise the dismissed card again.
-  seen.sessionId = 'sess-b'
-  await seen.clock.advance(60_000)
-  expect(seen.claims.has(`${KEY}-sess-b`)).toBe(true)
-  expect(cardOf(seen)?.dismissed).toBe(true)
-})
+    await ui.press({ key: 'usage-dismiss' })
+    expect(cardOf(seen)?.dismissed).toBe(true)
+    // Another session reaching the same event does not raise the dismissed card again.
+    seen.sessionId = 'sess-b'
+    await seen.clock.advance(60_000)
+    expect(seen.claims.has(`${KEY}-sess-b`)).toBe(true)
+    expect(cardOf(seen)?.dismissed).toBe(true)
+  })
+}
 
 test('the card cancels the automatic resume', async ($, on) => {
   const seen = world(on)
