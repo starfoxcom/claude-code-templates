@@ -10,10 +10,18 @@ const isExpanded = atom({ plugin: 'session-info', key: 'isExpanded' } as const, 
 
 const GIT_TIMEOUT_MS = 5_000
 
-const live: { isStarted: boolean; effort?: string; refreshMs: number; maxFiles: number } = {
+const live: {
+  isStarted: boolean
+  effort?: string
+  refreshMs: number
+  maxFiles: number
+  reading?: Promise<void>
+  isReadAgainWanted: boolean
+} = {
   isStarted: false,
   refreshMs: 30_000,
   maxFiles: 8,
+  isReadAgainWanted: false,
 }
 
 function baseName(folder: string): string {
@@ -30,7 +38,7 @@ async function readGit($: EngineInterface): Promise<GitState> {
 }
 
 // A failed read never rejects the hook that asked for it: the row keeps its last reading.
-async function refresh($: EngineInterface): Promise<void> {
+async function readOnce($: EngineInterface): Promise<void> {
   try {
     const [model, root, git] = await Promise.all([$.session.model(), $.session.root(), readGit($)])
     const next: SessionLine = { model: modelName(model), effort: live.effort, project: baseName(root), git }
@@ -38,6 +46,26 @@ async function refresh($: EngineInterface): Promise<void> {
   } catch {
     // Read again at the next turn, shell command or tick.
   }
+}
+
+async function readUntilCurrent($: EngineInterface): Promise<void> {
+  do {
+    live.isReadAgainWanted = false
+    await readOnce($)
+  } while (live.isReadAgainWanted)
+}
+
+// One git read at a time, so an older reading never lands over a newer one. A refresh asked for while
+// one runs is folded into a single read after it, which starts after every request it answers.
+async function refresh($: EngineInterface): Promise<void> {
+  if (live.reading) {
+    live.isReadAgainWanted = true
+    return live.reading
+  }
+  live.reading = readUntilCurrent($).finally(() => {
+    live.reading = undefined
+  })
+  return live.reading
 }
 
 // A hot reload starts the module over without a new session.start, and a Desktop session starts with no
