@@ -4,9 +4,10 @@
 // - Credit: a line that credits an AI (Co-Authored-By naming one, "Generated with ...", a session link,
 //   an Anthropic noreply address, the robot emoji). Blocked in every repo, in every message, title,
 //   body, comment and body file, and in lines a commit adds to project files.
-// - Name: the plain word "Claude" or "Anthropic". Blocked in messages by default; repos whose subject is
-//   Claude Code itself (the `mentionRepos` setting) may name it. Repo identifiers that carry the word
-//   (CLAUDE.md, .claude/, claude.yml, the review action and check names) are never a mention.
+// - Name: the plain word "Claude" or "Anthropic". Allowed by default (`mentionRepos` is "*"); narrow
+//   `mentionRepos` to a list of repos and the word is blocked in messages everywhere else. Repo
+//   identifiers that carry the word (CLAUDE.md, .claude/, claude.yml, the review action and check names)
+//   are never a mention.
 
 // Obfuscation-tolerant: optional zero-width or separator characters between letters.
 const Z = '[\\u200b\\u200c\\u200d\\u2060\\ufeff\\s\\-_.*]*'
