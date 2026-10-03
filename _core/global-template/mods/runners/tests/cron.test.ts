@@ -44,6 +44,13 @@ test('malformed expressions do not parse', () => {
   for (const expr of [...bad, '5-1 * * * *']) expect([expr, parseCron(expr)]).toEqual([expr, null])
 })
 
+test('a range or list element with a missing number does not parse', () => {
+  // GitHub refuses these, so the workflow never runs and no time may be shown for it.
+  const bad = ['/5 * * * *', '-5 * * * *', '0,,5 * * * *', '0, * * * *', '1-/2 * * * *', '0 0 1 * 1-', '*/ * * * *']
+  for (const expr of bad) expect([expr, parseCron(expr)]).toEqual([expr, null])
+  expect(at('5/10 17 * * *')).toBe('2026-10-02T17:05:00.000Z')
+})
+
 test('cron lines are read from workflow text, quoted or not', () => {
   const workflow = [
     'on:',
