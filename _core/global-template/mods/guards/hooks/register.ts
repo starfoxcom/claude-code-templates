@@ -64,11 +64,15 @@ async function git($: Engine, cwd: string, args: string[]): Promise<string> {
 // for a known cause are named unread instead.
 async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, isBash: boolean) {
   const written = new Set(plan.written.map(p => osPath(p, cwd, isBash).toLowerCase()))
-  for (const { where, path, written: fromCommand } of plan.files) {
-    const full = osPath(path, cwd, isBash)
+  const session = await $.session.cwd()
+  for (const { where, path, written: fromCommand, folder } of plan.files) {
+    // The folder in effect where the file is named; a file read through a pipe keeps the command's.
+    const base = !folder ? cwd : folder.path === undefined ? session : osPath(folder.path, session, isBash)
+    const full = osPath(path, base, isBash)
     // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a
     // file of the same name in the session folder is a different file: it is never read.
-    if (plan.isCwdUnknown && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)) {
+    const isFolderUnknown = folder ? folder.isUnknown : plan.isCwdUnknown
+    if (isFolderUnknown && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)) {
       if (!fromCommand) plan.unread.push(where)
       continue
     }
