@@ -89,6 +89,21 @@ for (const surface of SURFACES) {
   })
 }
 
+const STATE = 'C:/Users/me/.claude/mods-data/ci-watch/s1.json'
+const OWNER = 'C:/Users/me/.claude/mods-data/ci-watch/s1.owner'
+
+test('a stop pressed in an instance a newer load replaced is left to the newer one', async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  await pushed($, 'terminal')
+  const ui = await $.ui.mount({ plugin: 'ci-watch', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  // A hot reload: the newer instance names itself in the owner file and keeps the saved watches.
+  seen.files.set(OWNER, 'a-newer-instance')
+  const before = seen.files.get(STATE)
+  await ui.press({ key: 'ci-watch-stop-o/r#7' })
+  expect(seen.files.get(STATE)).toBe(before)
+})
+
 test('with nothing watched the band draws nothing of its own', async ($, on) => {
   world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
