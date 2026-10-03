@@ -683,3 +683,29 @@ test("another session's cancel leaves this session's own arm in place", async ($
   await seen.clock.advance(WAKE - NOW)
   expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
 })
+
+test('an arm that met a longer pause still resumes the session after another session cancels it', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  const later = '2026-10-02T22:00:00.000Z'
+  const laterWake = Date.parse(later) + 2 * 60_000
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['seven_day'],
+    percentUsed: 95,
+    resetsAt: later,
+    wakeAt: laterWake,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  // The status still names the arm, now at the pause's wake.
+  const status = await $.command.run({ command: 'usage-guard', args: '' } as never)
+  expect(status).toEqual(expect.objectContaining({ text: expect.stringContaining('Armed to resume') }))
+  // Session B cancels the pause: no pause resume comes, and the arm resumes this session once.
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'cancelled' }))
+  await seen.clock.advance(laterWake - WAKE)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+})
