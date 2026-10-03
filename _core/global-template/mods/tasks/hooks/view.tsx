@@ -72,6 +72,109 @@ function countOf(tasks: readonly TaskRow[], kind: Kind): number {
   return tasks.filter(task => kindOf(task) === kind).length
 }
 
+type Ui = ReturnType<Engine['ui']['resolve']>
+
+// The line above the prompt while only last session's leftovers are listed.
+function carriedLine(ui: Ui, $: Engine, count: number) {
+  const { Box, Button, Text } = ui
+  return (
+    <Box>
+      <Text color="magenta">↩ {count} carried over from the last session, check them against the hand-off </Text>
+      <Button key="tasks-list" label="List" onPress={() => openList($)} />
+    </Box>
+  )
+}
+
+// The line above the prompt: done count, the task being worked (or the next one), open and held counts.
+function bandLine(ui: Ui, $: Engine, tasks: readonly TaskRow[]) {
+  const { Box, Button, Text } = ui
+  const active = tasks.filter(t => kindOf(t) === 'working')
+  const done = countOf(tasks, 'done')
+  const kept = tasks.length - countOf(tasks, 'dropped')
+  const open = countOf(tasks, 'open')
+  const held = countOf(tasks, 'hold')
+  return (
+    <Box>
+      <Text color={done === kept ? 'green' : undefined}>
+        ✅ {done}/{kept}{' '}
+      </Text>
+      {currentText(ui, tasks, active)}
+      {open > 0 ? <Text>· 📝 {open} </Text> : null}
+      {held > 0 ? <Text color="yellow">· 🚧 {held} </Text> : null}
+      <Button key="tasks-list" label="List" onPress={() => openList($)} />
+    </Box>
+  )
+}
+
+function currentText(ui: Ui, tasks: readonly TaskRow[], active: readonly TaskRow[]) {
+  const { Text } = ui
+  const first = active[0]
+  if (first) {
+    return (
+      <Text color={active.length > 1 ? 'yellow' : 'cyan'} bold wrap="truncate-end">
+        · 🔨 #{first.id} {first.activeForm ?? first.subject}
+        {active.length > 1 ? ` (+${active.length - 1} more at once)` : ''}{' '}
+      </Text>
+    )
+  }
+  const upcoming = ordered(tasks).find(t => kindOf(t) === 'open')
+  if (!upcoming) return null
+  return (
+    <Text dimColor wrap="truncate-end">
+      · next #{upcoming.id} {upcoming.subject}{' '}
+    </Text>
+  )
+}
+
+function carriedGroup(ui: Ui, carried: readonly TaskRow[]) {
+  const { Box, Text } = ui
+  return (
+    <Box key="group-carried" flexDirection="column" marginBottom={1}>
+      <Text bold color="magenta">
+        ↩ Carried over from the last session ({carried.length})
+      </Text>
+      {carried.map(t => (
+        <Box key={`carried-${t.id}`}>
+          <Text dimColor wrap="truncate-end">
+            {'  '}#{t.id} {t.subject}
+            {t.hold ? ` (on hold: ${t.hold})` : ''}
+          </Text>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+function kindGroup(ui: Ui, group: (typeof KINDS)[number], tasks: readonly TaskRow[]) {
+  const { Box, Text } = ui
+  const rows = tasks.filter(t => kindOf(t) === group.kind)
+  if (rows.length === 0) return null
+  return (
+    <Box key={`group-${group.kind}`} flexDirection="column" marginTop={1}>
+      <Text bold color={group.color}>
+        {group.icon} {group.title} ({rows.length})
+      </Text>
+      {rows.map(t => (
+        <Box key={`task-${t.id}`} flexDirection="column">
+          <Text
+            color={group.color}
+            bold={group.kind === 'working'}
+            dimColor={group.kind === 'done'}
+            wrap="truncate-end"
+          >
+            {'  '}#{t.id} {t.subject}
+          </Text>
+          {t.hold ? (
+            <Text dimColor wrap="truncate-end">
+              {'      '}waits on: {t.hold}
+            </Text>
+          ) : null}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
 // Called from register.ts's session.start: a plugin hooks an event once, and a render hook may not
 // write state, so the view cannot start itself.
 export async function startView($: Engine): Promise<void> {
@@ -104,111 +207,37 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return inner
     const shown = await read($, view)
     if (!shown) return inner
-    const tasks = shown.tasks
-    const active = tasks.filter(t => kindOf(t) === 'working')
-    const done = countOf(tasks, 'done')
-    const kept = tasks.length - countOf(tasks, 'dropped')
-    const open = countOf(tasks, 'open')
-    const held = countOf(tasks, 'hold')
-    if (done === kept && (await $.clock.now()) - shown.updatedAt > LINGER_MS) return inner
-    const { Box, Button, Text } = $.ui.resolve(e)
-    const carried = shown.carried ?? []
-    if (tasks.length === 0 && carried.length > 0) {
-      return (
-        <Box flexDirection="column">
-          {inner}
-          <Box>
-            <Text color="magenta">
-              ↩ {carried.length} carried over from the last session, check them against the hand-off{' '}
-            </Text>
-            <Button key="tasks-list" label="List" onPress={() => openList($)} />
-          </Box>
-        </Box>
-      )
-    }
-    const first = active[0]
-    const upcoming = ordered(tasks).find(t => kindOf(t) === 'open')
+    const isAllDone = countOf(shown.tasks, 'done') === shown.tasks.length - countOf(shown.tasks, 'dropped')
+    if (isAllDone && (await $.clock.now()) - shown.updatedAt > LINGER_MS) return inner
+    const ui = $.ui.resolve(e)
+    const line =
+      shown.tasks.length === 0 && shown.carried.length > 0
+        ? carriedLine(ui, $, shown.carried.length)
+        : bandLine(ui, $, shown.tasks)
     return (
-      <Box flexDirection="column">
+      <ui.Box flexDirection="column">
         {inner}
-        <Box>
-          <Text color={done === kept ? 'green' : undefined}>
-            ✅ {done}/{kept}{' '}
-          </Text>
-          {first ? (
-            <Text color={active.length > 1 ? 'yellow' : 'cyan'} bold wrap="truncate-end">
-              · 🔨 #{first.id} {first.activeForm ?? first.subject}
-              {active.length > 1 ? ` (+${active.length - 1} more at once)` : ''}{' '}
-            </Text>
-          ) : upcoming ? (
-            <Text dimColor wrap="truncate-end">
-              · next #{upcoming.id} {upcoming.subject}{' '}
-            </Text>
-          ) : null}
-          {open > 0 ? <Text>· 📝 {open} </Text> : null}
-          {held > 0 ? <Text color="yellow">· 🚧 {held} </Text> : null}
-          <Button key="tasks-list" label="List" onPress={() => openList($)} />
-        </Box>
-      </Box>
+        {line}
+      </ui.Box>
     )
   })
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
     const shown = await read($, view)
     const tasks = ordered(shown?.tasks ?? [])
     const carried = ordered(shown?.carried ?? [])
     const done = countOf(tasks, 'done')
     const kept = tasks.length - countOf(tasks, 'dropped')
+    const close = () => void $.ui.close({ id: PANE }).catch(() => undefined)
     return (
-      <Box flexDirection="column">
-        {carried.length > 0 ? (
-          <Box key="group-carried" flexDirection="column" marginBottom={1}>
-            <Text bold color="magenta">
-              ↩ Carried over from the last session ({carried.length})
-            </Text>
-            {carried.map(t => (
-              <Box key={`carried-${t.id}`}>
-                <Text dimColor wrap="truncate-end">
-                  {'  '}#{t.id} {t.subject}
-                  {t.hold ? ` (on hold: ${t.hold})` : ''}
-                </Text>
-              </Box>
-            ))}
-          </Box>
-        ) : null}
-        <Text bold>{tasks.length === 0 ? 'No tasks in this session.' : `${done} of ${kept} done`}</Text>
-        {KINDS.map(group => {
-          const rows = tasks.filter(t => kindOf(t) === group.kind)
-          if (rows.length === 0) return null
-          return (
-            <Box key={`group-${group.kind}`} flexDirection="column" marginTop={1}>
-              <Text bold color={group.color}>
-                {group.icon} {group.title} ({rows.length})
-              </Text>
-              {rows.map(t => (
-                <Box key={`task-${t.id}`} flexDirection="column">
-                  <Text
-                    color={group.color}
-                    bold={group.kind === 'working'}
-                    dimColor={group.kind === 'done'}
-                    wrap="truncate-end"
-                  >
-                    {'  '}#{t.id} {t.subject}
-                  </Text>
-                  {t.hold ? (
-                    <Text dimColor wrap="truncate-end">
-                      {'      '}waits on: {t.hold}
-                    </Text>
-                  ) : null}
-                </Box>
-              ))}
-            </Box>
-          )
-        })}
-        <Button key="tasks-close" label="Close" onPress={() => void $.ui.close({ id: PANE }).catch(() => undefined)} />
-      </Box>
+      <ui.Box flexDirection="column">
+        {carried.length > 0 ? carriedGroup(ui, carried) : null}
+        <ui.Text bold>{tasks.length === 0 ? 'No tasks in this session.' : `${done} of ${kept} done`}</ui.Text>
+        {KINDS.map(group => kindGroup(ui, group, tasks))}
+        <ui.Button key="tasks-close" label="Close" onPress={close} />
+      </ui.Box>
     )
   })
 }
