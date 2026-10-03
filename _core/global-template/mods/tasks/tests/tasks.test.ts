@@ -174,6 +174,20 @@ test("the mod answers the task tools itself, in the engine tools' shapes", async
     result: unknown
   }
   expect(missing.result).toEqual({ success: false, taskId: '9', updatedFields: [], error: 'Task not found' })
+  // A status the engine's tool does not know is refused, and the task stays as it was.
+  const unknown = (await $.tool.call({ tool: 'TaskUpdate', taskId: '2', status: 'done' } as never)) as never as {
+    result: unknown
+  }
+  expect(unknown.result).toEqual({
+    success: false,
+    taskId: '2',
+    updatedFields: [],
+    error: 'status must be pending, in_progress, completed or deleted',
+  })
+  const still = (await $.tool.call({ tool: 'TaskGet', taskId: '2' } as never)) as never as {
+    result: { task: { status: string } }
+  }
+  expect(still.result.task.status).toBe('in_progress')
 })
 
 test('ids never repeat, even after a deleted task', async ($, on) => {
