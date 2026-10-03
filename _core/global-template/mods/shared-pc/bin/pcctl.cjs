@@ -64,11 +64,13 @@ function lock() {
   for (;;) {
     try {
       fs.mkdirSync(MUTEX)
-      fs.writeFileSync(OWNER, token)
+      // Stamped only if no one has: the first stamp on a folder owns it.
+      fs.writeFileSync(OWNER, token, { flag: 'wx' })
       held = token
       return
     } catch (err) {
-      // ENOENT on the stamp: a breaker moved the folder aside before it was stamped. Not ours: try again.
+      // A breaker moved the folder aside before the stamp: ENOENT, or EEXIST when another writer's
+      // folder took the path and was stamped first. Not ours either way: try again.
       if (err.code !== 'EEXIST' && err.code !== 'ENOENT') throw err
     }
     breakStale()
