@@ -163,10 +163,13 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
     await log($, { at: Date.now(), tool, error: String(err).slice(0, 200), command: command.slice(0, 2000) })
     return run()
   }
-  if (live.mode === 'enforce' && reason) return { deny: `BLOCKED (guards): ${reason}` }
-  const result = await run()
-  const scripts =
-    result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined)
+  // An enforced block is counted and logged like any other decision: it is the one a false block is
+  // debugged from. The command never ran, so the scripts' answer is unknown.
+  const isBlocked = live.mode === 'enforce' && reason !== undefined
+  const result = isBlocked ? { deny: `BLOCKED (guards): ${reason}` } : await run()
+  const scripts = isBlocked
+    ? undefined
+    : (result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined))
   await count($, Boolean(reason), Boolean(scripts))
   if (reason || scripts || plan.unread.length > 0) {
     await log($, {
@@ -175,6 +178,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
       tool,
       mod: reason ?? null,
       scripts: scripts ? String(scripts).slice(0, 300) : null,
+      ...(isBlocked ? { enforced: true } : {}),
       unread: plan.unread,
       command: command.slice(0, 2000),
     })
