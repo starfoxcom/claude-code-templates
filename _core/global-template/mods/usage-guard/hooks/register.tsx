@@ -135,6 +135,11 @@ async function claim($: EngineInterface, name: string): Promise<boolean> {
 
 const resetKey = (pause: Pause) => String(Date.parse(pause.episode ?? pause.resetsAt))
 
+// A pause that already reaches a planned reset: the plan is part of it. Weekly usage only falls at its
+// reset, so a fresh reading after an extension plans that later reset; an earlier one is a stale reading.
+const covers = (pause: Pause | undefined, planned: Pause) =>
+  pause !== undefined && Date.parse(planned.resetsAt) <= Date.parse(pause.resetsAt)
+
 // A pause another session wrote since this one read the file: joined, never replaced. A later reset
 // extends it in place and keeps its episode, so no session wraps up or stops its work twice.
 function joinPause(shared: Pause, planned: Pause): Pause {
@@ -361,8 +366,8 @@ async function check($: EngineInterface): Promise<void> {
     if (hot.length === 0) return
     const planned = planPause(hot, live.delayMinutes, sessionId)
     // One pause per reset: a cancelled or finished one is not re-armed by the
-    // same high reading.
-    if (pause?.resetsAt === planned.resetsAt) return
+    // same high reading, nor by a stale one for a reset it was extended past.
+    if (covers(pause, planned)) return
     pause = planned
     // Of several sessions crossing the line together, one writes the pause. The
     // others write the same pause only if the winner has not yet, so a cancel
@@ -374,9 +379,9 @@ async function check($: EngineInterface): Promise<void> {
     if (isSharedLive) {
       pause = joinPause(shared, planned)
       if (pause !== shared) await writePause($, pause)
-    } else if (isWinner || shared?.resetsAt !== planned.resetsAt) {
+    } else if (!covers(shared, planned)) {
       await writePause($, pause)
-    } else return // The loser honours a cancel written since the winner's pause.
+    } else return // A cancel written since the winner's pause, or since it was extended, is honoured.
   }
   if (pause) await act($, pause)
 }
