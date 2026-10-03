@@ -191,8 +191,8 @@ On `apply`:
    - `{{DEV_BRANCH}}` ← `project.dev_branch` (development / integration branch where day-to-day work targets and PRs base from. `develop` for Gitflow, same as `main_branch` for trunk-based.)
    - `{{GITFLOW_OR_TRUNK}}` ← `project.branching_model`
    - `{{STACK_COMMANDS_ALLOWLIST}}` ← see step 5 below
-   - `{{REVIEW_DEEP_MODEL}}` ← deliberate stable default `claude-opus-4-8` (deep-review tier model for `.github/workflows/claude.yml`'s `--model`). Default-only — no UI field; pick deliberately (not newest-by-default), then tune it in the bound workflow.
-   - `{{REVIEW_ROUTINE_MODEL}}` ← deliberate stable default `claude-sonnet-4-6` (routine-review tier model for `.github/workflows/claude-code-review.yml`'s `--model`). Default-only — tune it in the bound workflow.
+   - `{{REVIEW_DEEP_MODEL}}` ← deliberate stable default `claude-fable-5-1` (deep-review tier model for `.github/workflows/claude.yml`'s `--model`). Default-only — no UI field; pick deliberately (not newest-by-default), then tune it in the bound workflow.
+   - `{{REVIEW_ROUTINE_MODEL}}` ← deliberate stable default `claude-fable-5-1` (routine-review tier model for `.github/workflows/claude-code-review.yml`'s `--model`). Default-only — tune it in the bound workflow.
    - `{{REVIEW_DEEP_EFFORT}}` ← default `low` (the deep tier's `--effort`, one of `low`, `medium`, `high`, `xhigh`, `max`; pairs with the deep model, so change the two together). Default-only — tune it in the bound workflow.
    - `{{REVIEW_ROUTINE_EFFORT}}` ← default `low` (the routine tier's `--effort`; pairs with the routine model, so change the two together). Default-only — tune it in the bound workflow.
    - `{{REVIEW_BACKUP_MODEL}}` ← deliberate stable default `claude-opus-5-5` (the backup reviewer both tiers fall back to. The routine tier uses it after any failed attempt. The deep tier uses it at once on a spent usage allowance, and after a second failed attempt on its own model for any other failure). Default-only — tune it in the bound workflow.
