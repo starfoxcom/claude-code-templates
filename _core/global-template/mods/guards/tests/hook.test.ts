@@ -86,6 +86,11 @@ test(
     const result = await bash($, 'gh pr create --title t --body-file /tmp/body.md')
     expect((result as { deny?: string }).deny).toBeUndefined()
     expect(seen.ran).toHaveLength(1)
+    // Not there either: the mapping was a guess, so the file is named unread, never refused.
+    const missed = await bash($, 'gh pr create --title t --body-file /tmp/gone.md')
+    expect((missed as { deny?: string }).deny).toBeUndefined()
+    const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+    expect(entry.unread?.length).toBe(1)
   },
 )
 
