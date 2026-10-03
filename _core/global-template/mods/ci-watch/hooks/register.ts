@@ -168,16 +168,10 @@ async function save($: EngineInterface): Promise<void> {
     await $.fs.write(path, JSON.stringify({ watches: live.watches }))
     live.isUnsaved = false
   } catch {
-    // The watches stay in memory, and the next poll keeps the ones the file lacks.
+    // Memory stays the truth (the file may lack a new watch or still hold stopped ones), and the next
+    // poll saves again.
     live.isUnsaved = true
   }
-}
-
-// The saved watches, plus, after a failed save, the ones only memory holds.
-function mergeSaved(saved: Watch[]): Watch[] {
-  if (!live.isUnsaved) return saved
-  const same = (a: Watch, b: Watch) => a.repo === b.repo && a.number === b.number
-  return [...saved, ...live.watches.filter(w => !saved.some(s => same(s, w)))]
 }
 
 async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {
@@ -279,9 +273,9 @@ async function startWatch($: EngineInterface, repo: string, number: number, head
 async function poll($: EngineInterface): Promise<void> {
   // Start from the saved state: a hot reload can leave an earlier instance's timer running beside
   // this one, and reading the file keeps a watch the other already settled from waking twice. With
-  // no saved file yet, the watches in memory stand.
-  const start = await readSaved($)
-  if (start) live.watches = mergeSaved(start)
+  // no saved file yet, or after a failed save, the watches in memory stand.
+  const start = live.isUnsaved ? undefined : await readSaved($)
+  if (start) live.watches = start
   const now = await $.clock.now()
   let changed = false
   const kept: Watch[] = []
@@ -326,7 +320,7 @@ async function poll($: EngineInterface): Promise<void> {
   // right before waking: a settlement it already records was sent by the other instance. This
   // instance's record is written before its prompt goes out.
   const recorded = settled.length > 0 ? await readSaved($) : undefined
-  if (changed) await save($)
+  if (changed || live.isUnsaved) await save($)
   for (const watch of settled) {
     if (!isRecorded(recorded, watch) && claimWake(watch))
       void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
