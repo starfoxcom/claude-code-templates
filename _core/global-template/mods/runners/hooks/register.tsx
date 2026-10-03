@@ -89,7 +89,8 @@ async function online($: Engine, repo: string): Promise<{ online: number; busy: 
   const out = await run($, ['gh', 'api', `repos/${repo}/actions/runners`, '--jq', jq])
   if (out === null) return null
   const [count, busy] = out.trim().split(' ').map(Number)
-  return { online: count, busy }
+  if (!Number.isInteger(count) || !Number.isInteger(busy)) return null
+  return { online: count as number, busy: busy as number }
 }
 
 // The count from the API's total, not a listing, which stops at 20.
