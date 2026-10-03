@@ -142,6 +142,21 @@ async function ensureDir($: EngineInterface, dir: string): Promise<void> {
   if (exitCode === 0) madeDirs.add(dir)
 }
 
+// Every session leaves a state file and an owner file behind. Once per load, those of other sessions
+// not written for SWEEP_DAYS are removed (`<folder> <days> <this session's id>`).
+const SWEEP_DAYS = 2
+export const SWEEP_SCRIPT =
+  'const fs=require("fs"),p=require("path");const [d,days,keep]=process.argv.slice(1);' +
+  'if(fs.existsSync(d)){const cut=Date.now()-days*864e5;for(const n of fs.readdirSync(d)){' +
+  'if(!/\\.(json|owner)$/.test(n)||n.startsWith(keep+"."))continue;' +
+  'try{const f=p.join(d,n);if(fs.statSync(f).mtimeMs<cut)fs.unlinkSync(f)}catch{}}}'
+
+async function sweep($: EngineInterface): Promise<void> {
+  const path = await statePath($)
+  const args = [path.slice(0, path.lastIndexOf('/')), String(SWEEP_DAYS), await $.session.id()]
+  await $.process.run(['node', '-e', SWEEP_SCRIPT, ...args], { timeoutMs: 20_000 }).catch(() => undefined)
+}
+
 async function statePath($: EngineInterface): Promise<string> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
@@ -149,7 +164,6 @@ async function statePath($: EngineInterface): Promise<string> {
   return `${dir}/${await $.session.id()}.json`.replaceAll('\\', '/')
 }
 
-// A failed write never rejects a hook: the push it follows has already run.
 // A hot reload loads this module again but leaves the earlier instance's timer (and old code)
 // running beside the new one. The instance that starts polling last names itself in the session's
 // owner file; one that finds another name there is retired: it stops polling and its hooks pass
@@ -179,6 +193,7 @@ export async function isRetired($: EngineInterface): Promise<boolean> {
   }
 }
 
+// A failed write never rejects a hook: the push it follows has already run.
 async function save($: EngineInterface): Promise<void> {
   try {
     const path = await statePath($)
@@ -356,6 +371,7 @@ async function startPolling($: EngineInterface): Promise<void> {
   if (live.isPolling) return
   live.isPolling = true
   await claimOwner($)
+  await sweep($)
   await load($)
   const tick = $.clock.every(live.pollMs, async () => {
     if (await isRetired($)) return void tick.cancel()
