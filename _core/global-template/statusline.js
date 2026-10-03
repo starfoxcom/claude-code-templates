@@ -219,8 +219,10 @@ function main(raw) {
   }
   // `null`, a number or a list parse fine but are not the input object.
   if (!input || typeof input !== 'object' || Array.isArray(input)) input = {}
-  const cwd = input.workspace?.current_dir || input.cwd || process.cwd()
-  const project = path.basename(input.workspace?.project_dir || cwd)
+  // Only a non-empty string is a folder; any other value falls back.
+  const text = value => (typeof value === 'string' && value ? value : undefined)
+  const cwd = text(input.workspace?.current_dir) ?? text(input.cwd) ?? process.cwd()
+  const project = path.basename(text(input.workspace?.project_dir) ?? cwd)
   const lines = [
     [modelPart(input), project, branchPart(cwd)],
     [ciPart(input.session_id)],
