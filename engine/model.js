@@ -1,10 +1,12 @@
 // The answer model: two questions, a few advanced choices, and everything
 // derived from them. This is the single source for what a bind produces.
 
-// Must be models the pinned claude-code-action in the workflow templates
-// accepts; these are the pins this repo's own review workflows run on.
-// Change them together with the action pin, never on their own.
-export const REVIEW_MODELS = { routine: "claude-sonnet-4-6", deep: "claude-opus-4-8" };
+// The pins this repo's own review workflows run on. The routine and deep
+// models must be ones the pinned claude-code-action accepts; the backup runs
+// on the CLI_VERSION the workflow templates install, so it must be one that
+// version accepts. Change them together with those pins, never on their own.
+export const REVIEW_MODELS = { routine: "claude-fable-5-1", deep: "claude-fable-5-1", backup: "claude-opus-5-5" };
+export const REVIEW_EFFORTS = { routine: "low", deep: "low", backup: "high" };
 
 export const CODE_RESEARCH_TOOLS = {
   // match: regex over tool-call names, used by the session-close adherence count.
@@ -153,6 +155,10 @@ export function valuesFor(a, { year = new Date().getFullYear() } = {}) {
     GITFLOW_OR_TRUNK: gitflow ? "gitflow" : "trunk",
     REVIEW_ROUTINE_MODEL: REVIEW_MODELS.routine,
     REVIEW_DEEP_MODEL: REVIEW_MODELS.deep,
+    REVIEW_BACKUP_MODEL: REVIEW_MODELS.backup,
+    REVIEW_ROUTINE_EFFORT: REVIEW_EFFORTS.routine,
+    REVIEW_DEEP_EFFORT: REVIEW_EFFORTS.deep,
+    REVIEW_BACKUP_EFFORT: REVIEW_EFFORTS.backup,
     TOOLS_CODE_RESEARCH_NAME: tool.name,
     TOOLS_CODE_RESEARCH_URL: tool.url,
     TOOLS_CODE_RESEARCH_NAME_KEBAB: a.advanced.codeResearch,
