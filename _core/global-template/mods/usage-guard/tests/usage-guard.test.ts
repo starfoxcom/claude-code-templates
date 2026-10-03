@@ -202,6 +202,61 @@ test('two projects with the same folder name each stop their own work', async ($
   expect(seen.claims.has(`stop-${KEY}-d__clients_x_my-game`)).toBe(true)
 })
 
+test('a pause another session wrote for an earlier reset is extended; each wraps up once', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  const WEEKLY = '2026-10-03T19:00:00.000Z'
+  // While this session claims its pause, another one writes its own for the 5-hour reset.
+  const other: Pause = {
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 91,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
+  }
+  seen.duringClaim = name => {
+    if (name.startsWith('pause-')) seen.files.set(PAUSE_FILE, JSON.stringify(other))
+  }
+  seen.limits = [
+    { kind: 'five_hour', percentUsed: 91, resetsAt: RESET },
+    { kind: 'seven_day', percentUsed: 92, resetsAt: WEEKLY },
+  ]
+  await endTurn($)
+  const joined = pauseOf(seen)
+  expect(joined?.resetsAt).toBe(WEEKLY)
+  expect(joined?.episode).toBe(RESET)
+  expect(joined?.triggeredBy).toBe('sess-b')
+  // Claims stay keyed on the first reset: the next checks wrap up nothing more.
+  expect(seen.claims.has(`${KEY}-sess-a`)).toBe(true)
+  await seen.clock.advance(5 * 60_000)
+  expect(seen.commands.filter(c => c.command === 'session-close')).toHaveLength(1)
+})
+
+test('a pause another session wrote for a later reset is kept, and this session wraps up once', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  const WEEKLY = '2026-10-03T19:00:00.000Z'
+  const other: Pause = {
+    status: 'active',
+    kinds: ['seven_day'],
+    percentUsed: 92,
+    resetsAt: WEEKLY,
+    wakeAt: Date.parse(WEEKLY) + 120_000,
+    triggeredBy: 'sess-b',
+  }
+  seen.duringClaim = name => {
+    if (name.startsWith('pause-')) seen.files.set(PAUSE_FILE, JSON.stringify(other))
+  }
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  expect(pauseOf(seen)).toEqual(other)
+  await seen.clock.advance(5 * 60_000)
+  expect(seen.commands.filter(c => c.command === 'session-close')).toHaveLength(1)
+})
+
 test('a session opened during a pause only waits, then resumes', async ($, on) => {
   const seen = world(on)
   const pause: Pause = {

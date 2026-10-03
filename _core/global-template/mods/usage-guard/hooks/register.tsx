@@ -15,6 +15,9 @@ export type Pause = {
   resetsAt: string
   wakeAt: number
   triggeredBy: string
+  /** The reset the first pause of this run named. Kept when a later limit extends the pause, so the
+   * wrap-up, stop and resume claims (keyed on it) still run once per session. */
+  episode?: string
 }
 
 const CHECK_EVERY_MS = 60_000
@@ -130,7 +133,21 @@ async function claim($: EngineInterface, name: string): Promise<boolean> {
   }
 }
 
-const resetKey = (pause: Pause) => String(Date.parse(pause.resetsAt))
+const resetKey = (pause: Pause) => String(Date.parse(pause.episode ?? pause.resetsAt))
+
+// A pause another session wrote since this one read the file: joined, never replaced. A later reset
+// extends it in place and keeps its episode, so no session wraps up or stops its work twice.
+function joinPause(shared: Pause, planned: Pause): Pause {
+  if (Date.parse(planned.resetsAt) <= Date.parse(shared.resetsAt)) return shared
+  return {
+    ...shared,
+    resetsAt: planned.resetsAt,
+    wakeAt: planned.wakeAt,
+    kinds: [...new Set([...shared.kinds, ...planned.kinds])],
+    percentUsed: Math.max(shared.percentUsed, planned.percentUsed),
+    episode: shared.episode ?? shared.resetsAt,
+  }
+}
 
 async function readZone($: EngineInterface): Promise<void> {
   try {
@@ -349,16 +366,16 @@ async function check($: EngineInterface): Promise<void> {
     // Of several sessions crossing the line together, one writes the pause. The
     // others write the same pause only if the winner has not yet, so a cancel
     // written in between is not undone.
-    if (await claim($, `pause-${resetKey(planned)}`)) {
+    const isWinner = await claim($, `pause-${resetKey(planned)}`)
+    // Read again after the claim: another session may have paused for a different reset meanwhile.
+    const shared = await readPause($)
+    const isSharedLive = shared?.status === 'active' && shared.wakeAt > now
+    if (isSharedLive) {
+      pause = joinPause(shared, planned)
+      if (pause !== shared) await writePause($, pause)
+    } else if (isWinner || shared?.resetsAt !== planned.resetsAt) {
       await writePause($, pause)
-    } else {
-      // The loser acts on the shared file, never on its own plan: a cancel written
-      // since the winner's pause stands.
-      const shared = await readPause($)
-      if (shared?.resetsAt !== planned.resetsAt) await writePause($, pause)
-      else if (shared.status !== 'active') return
-      else pause = shared
-    }
+    } else return // The loser honours a cancel written since the winner's pause.
   }
   if (pause) await act($, pause)
 }
