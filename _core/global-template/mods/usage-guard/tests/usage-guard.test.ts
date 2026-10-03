@@ -611,8 +611,36 @@ test('arming names a known reset, or says why it cannot', () => {
     { kind: 'five_hour', percentUsed: 40, resetsAt: RESET },
     { kind: 'seven_day', percentUsed: 10 },
   ]
-  expect(planArm(limits, '5h', 2)).toEqual({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE })
-  expect(planArm(limits, 'week', 2)).toBe('No weekly reset is known yet, so there is nothing to arm.')
-  expect(planArm(limits, '', 2)).toBe('Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.')
-  expect(planArm(limits, 'day', 2)).toBe('Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.')
+  expect(planArm(limits, '5h', 2, NOW)).toEqual({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE })
+  expect(planArm(limits, 'week', 2, NOW)).toBe('No weekly reset is known yet, so there is nothing to arm.')
+  const usage = 'Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.'
+  expect(planArm(limits, '', 2, NOW)).toBe(usage)
+  expect(planArm(limits, 'day', 2, NOW)).toBe(usage)
+  // A reading that still names a reset already past is no reset to wait for.
+  const past = Date.parse(RESET)
+  expect(planArm(limits, '5h', 2, past)).toBe('No 5-hour reset is known yet, so there is nothing to arm.')
+  expect(planArm(limits, '5h', 2, past - 1)).toEqual({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE })
+})
+
+test('an armed wake that comes due during a pause leaves the resume to the pause', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  // Another session paused for the weekly reset, which falls three hours after the armed one.
+  const weekly = '2026-10-02T22:00:00.000Z'
+  const weeklyWake = Date.parse(weekly) + 2 * 60_000
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['seven_day'],
+    percentUsed: 95,
+    resetsAt: weekly,
+    wakeAt: weeklyWake,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  await seen.clock.advance(weeklyWake - WAKE)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
 })
