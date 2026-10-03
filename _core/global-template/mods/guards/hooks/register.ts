@@ -152,7 +152,8 @@ async function count($: Engine, isModBlock: boolean, isScriptBlock: boolean) {
 
 async function guard($: Engine, tool: string, command: string, run: () => Promise<any>) {
   const plan = inspect(command, tool === 'PowerShell')
-  if (!plan.isWrite && plan.branches.length === 0 && !plan.block) return run()
+  // A write the reading missed still carries the command-text backstop, so text alone is reason to check.
+  if (!plan.isWrite && plan.texts.length === 0 && plan.branches.length === 0 && !plan.block) return run()
   // A hot reload starts the module over without a new session.start: set up on first use.
   if (!live.dir) await setUp($)
   let reason: string | undefined

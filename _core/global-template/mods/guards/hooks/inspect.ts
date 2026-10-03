@@ -198,25 +198,27 @@ export function inspect(command: string, powershell: boolean): Plan {
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
   // for credit lines, so a spelling the reading does not model still cannot carry one into history. The
   // hook's own raw-text patterns are the floor: a write hidden in backticks or fed to `bash` on stdin is
-  // missed by the reading, never by them.
+  // missed by the reading, never by them. `isWrite` stays the reading's own answer; the hook checks any
+  // command that has text to check.
   if (plan.isWrite || RAW_WRITES.some(re => re.test(command)))
     plan.texts.push({ where: 'the command text', text: stripPaths(command), creditOnly: true })
   return plan
 }
 
-// The shipped no-ai-attribution hook's write patterns, matched on the raw command text. `REST`: the rest
-// of the same command, up to a separator or a line end.
+// The shipped no-ai-attribution hook's write patterns (`_core/global-template/hooks/no-ai-attribution.py`),
+// matched on the raw command text, plus the history rewrites. A `gh api` call counts only with a writing
+// method or fields: a read reaches no history. `REST`: the rest of the same command, up to a separator or
+// a line end.
 const REST = String.raw`[^|;&\n]*?`
-const GIT_WRITES = 'commit|merge|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace'
+const GIT_WRITES = 'commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace'
 const GH_NOUNS = 'pr|issue|release|gist|repo'
 const GH_VERBS = 'create|edit|comment|review|merge|close|reopen'
-const API_WRITE = String.raw`(?:-X|--method)\s*(?:POST|PATCH|PUT)|(?<=\s)-[fF]\s|--field|--raw-field|--input`
+const API_WRITE = String.raw`(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)|(?<=\s)-[fF]\s|--field|--raw-field|--input`
 const RAW_WRITES = [
   String.raw`\bgit\b${REST}\b(?:${GIT_WRITES})\b`,
   String.raw`\bgh\b${REST}\b(?:${GH_NOUNS})\b${REST}\b(?:${GH_VERBS})\b`,
   String.raw`\bgh\b${REST}\bapi\b(?=${REST}(?:${API_WRITE}))`,
-  String.raw`\bcurl\b${REST}api\.github\.com`,
-  String.raw`Invoke-(?:RestMethod|WebRequest)\b${REST}api\.github\.com`,
+  String.raw`\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b${REST}api\.github\.com`,
 ].map(source => new RegExp(source, 'i'))
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()

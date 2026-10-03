@@ -62,6 +62,21 @@ test('in enforce mode a block is refused, counted and logged', { options: { mode
   expect(Object.values(stats)).toMatchObject([{ checked: 1, mod: 1, scripts: 0 }])
 })
 
+test('writes the reading misses are still refused in enforce mode', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  for (const command of [
+    `OUT=\`git commit -m '${AI_TRAILER}'\``,
+    `bash <<'EOF'\ngit commit -m '${AI_TRAILER}'\nEOF`,
+    `echo "git commit -m '${AI_TRAILER}'" | bash`,
+    `git push -o "merge_request.description=${AI_TRAILER}"`,
+  ]) {
+    const result = await bash($, command)
+    expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
+  }
+  expect(seen.ran).toEqual([])
+  expect((seen.files.get(LOG) ?? '').trim().split('\n')).toHaveLength(4)
+})
+
 test('a body file is read, and a credit inside it is found', async ($, on) => {
   const seen = world(on, { 'C:/tmp/body.md': `## What\n- x\n\n${AI_TRAILER}\n` })
   await bash($, 'gh pr create --title t --body-file /c/tmp/body.md')
