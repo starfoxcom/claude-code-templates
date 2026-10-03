@@ -40,6 +40,7 @@ test('every prompt carries the local time, the context fill to compaction and pl
     return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   let seen: readonly string[] = []
   on('prompt.submit', ($, e) => {
     seen = e.context ?? []

@@ -1,1 +1,26 @@
-{ "name": "session-facts", "version": "0.1.0", "description": "Adds the exact local time and context fill to every prompt, for the model only." }
+{
+  "name": "session-facts",
+  "version": "0.1.0",
+  "description": "Adds the exact local time and context fill to every prompt, for the model only, and shows the session's budgets (context, plan usage, prompt cache) in a row above the prompt.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "planWarnAt": {
+      "type": "number",
+      "title": "Warn on plan usage at (%)",
+      "description": "A plan window at or above this share turns yellow and shows when it resets. It turns red at usage-guard's wrap-up level.",
+      "default": 75
+    },
+    "cacheWarnMinutes": {
+      "type": "number",
+      "title": "Warn before the cache goes cold (minutes)",
+      "description": "The prompt-cache countdown shows once this few minutes are left. 0 shows it only once the cache is cold.",
+      "default": 10
+    },
+    "cacheTtlMinutes": {
+      "type": "number",
+      "title": "Prompt cache lifetime (minutes)",
+      "description": "How long the prompt cache stays warm after a response: 60 on a one-hour cache, 5 on the five-minute one.",
+      "default": 60
+    }
+  }
+}
