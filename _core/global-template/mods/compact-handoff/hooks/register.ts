@@ -41,6 +41,23 @@ export const MOD_TAGS = [
   'guards',
 ]
 export const INJECTED_LINE = new RegExp(`^\\[(?:${MOD_TAGS.join('|')})\\](?: |$)`)
+// The tags the engine wraps its own user-role text in. A message the person types may start with any
+// other `<` (an HTML snippet, a generic, a log line); scripts/helper.cjs keeps the same list.
+export const ENGINE_TAGS = [
+  'system-reminder',
+  'command-name',
+  'command-message',
+  'command-args',
+  'local-command',
+  'ide_',
+  'user-prompt-submit-hook',
+  'task-notification',
+  'cross-session-message',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+]
+export const ENGINE_TAG = new RegExp(`^<(?:${ENGINE_TAGS.join('|')})`)
 
 type Mode = 'off' | 'shadow' | 'on'
 
@@ -83,7 +100,7 @@ function isPersonMessage(message: SessionMessage): boolean {
   if (message.role !== 'user' || (message.toolResults?.length ?? 0) > 0) return false
   const text = message.text.trim()
   return (
-    !text.startsWith('<') &&
+    !ENGINE_TAG.test(text) &&
     !text.startsWith('[SYSTEM') &&
     !text.startsWith('This session is being continued') &&
     !text.startsWith(PERSON_MARK) &&
