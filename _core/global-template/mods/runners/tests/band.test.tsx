@@ -1,3 +1,4 @@
+import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { clockTime, isListed, mergeReading, pgrepPattern, rowText } from '../hooks/register'
@@ -81,7 +82,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 const LISTED = [{ label: 'local', processes: ['Runner.Listener'], start: ['start-runners'], stop: [['stop-runners']] }]
 const LIST_FILE = 'C:/Users/me/.claude/mods-data/runners/runners.json'
 
-function machine(on: Parameters<Parameters<typeof test>[1]>[1], isUp: () => boolean) {
+function machine(on: On, isUp: () => boolean) {
   const runs: string[][] = []
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { USERPROFILE: 'C:/Users/me', OS: 'Windows_NT' })

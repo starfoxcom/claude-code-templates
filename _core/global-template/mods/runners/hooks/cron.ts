@@ -25,8 +25,9 @@ function parseField(text: string, min: number, max: number): Field | null {
     if (!ELEMENT.test(part)) return null
     const [range = '', stepText] = part.split('/')
     const step = stepText === undefined ? 1 : Number(stepText)
-    let [lo, hi] = range === '*' ? [min, max] : range.split('-').map(Number)
-    if (hi === undefined) hi = stepText === undefined ? lo : max
+    const bounds = range === '*' ? [min, max] : range.split('-').map(Number)
+    const lo = bounds[0] ?? NaN
+    const hi = bounds[1] ?? (stepText === undefined ? lo : max)
     if (![lo, hi, step].every(Number.isInteger) || step < 1 || lo < min || hi > max || lo > hi) return null
     for (let v = lo; v <= hi; v += step) values.add(v)
   }
@@ -38,9 +39,8 @@ export type Cron = { minutes: Field; hours: Field; days: Field; months: Field; w
 export function parseCron(expr: string): Cron | null {
   const parts = expr.trim().split(/\s+/)
   if (parts.length !== 5) return null
-  const fields = parts.map((text, i) => parseField(text, FIELDS[i].min, FIELDS[i].max))
-  if (fields.some(field => field === null)) return null
-  const [minutes, hours, days, months, weekdays] = fields as Field[]
+  const [minutes, hours, days, months, weekdays] = FIELDS.map(({ min, max }, i) => parseField(parts[i] ?? '', min, max))
+  if (!minutes || !hours || !days || !months || !weekdays) return null
   // Day of week 7 is Sunday, as 0 is.
   if (weekdays.values.has(7)) weekdays.values.add(0)
   return { minutes, hours, days, months, weekdays }
@@ -77,7 +77,7 @@ export function nextRun(cron: Cron, after: number): number | null {
 // Every `cron:` value in a workflow file's text, quoted or not.
 export function cronsIn(workflow: string): string[] {
   const line = /^\s*-?\s*cron:\s*(['"]?)([^'"\n#]+?)\1\s*(#.*)?$/gm
-  return [...workflow.matchAll(line)].map(match => match[2].trim())
+  return [...workflow.matchAll(line)].map(match => (match[2] ?? '').trim())
 }
 
 // The soonest run among several workflow files' schedules; invalid expressions are skipped.
