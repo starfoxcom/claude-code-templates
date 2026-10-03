@@ -2,7 +2,7 @@ import type { On, SessionRateLimit } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Pause } from '../hooks/register'
-import { CLAIM, WRAP_UP_ARGS } from '../hooks/register'
+import { CLAIM, planArm, WRAP_UP_ARGS } from '../hooks/register'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
@@ -570,4 +570,168 @@ test('a wrap-up owed by a running turn is dropped when the pause is cancelled be
   await endTurn($)
 
   expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
+})
+
+test('an armed session resumes after the reset it named, below the line and without a pause', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Armed') }))
+
+  await seen.clock.advance(WAKE - NOW - 1)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  await seen.clock.advance(1)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  // Nothing is shared: no pause, no wrap-up, no card for the other sessions.
+  expect(pauseOf(seen)).toBeUndefined()
+  expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
+})
+
+test('disarm drops the armed wake', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  const answer = await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Disarmed') }))
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+})
+
+test('an arm for the reset a pause already resumes at does not resume the session twice', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  expect(pauseOf(seen)?.status).toBe('active')
+
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+})
+
+test('arming names a known reset, or says why it cannot', () => {
+  const limits: SessionRateLimit[] = [
+    { kind: 'five_hour', percentUsed: 40, resetsAt: RESET },
+    { kind: 'seven_day', percentUsed: 10 },
+  ]
+  expect(planArm(limits, '5h', 2, NOW)).toEqual({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE })
+  expect(planArm(limits, 'week', 2, NOW)).toBe('No weekly reset is known yet, so there is nothing to arm.')
+  const usage = 'Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.'
+  expect(planArm(limits, '', 2, NOW)).toBe(usage)
+  expect(planArm(limits, 'day', 2, NOW)).toBe(usage)
+  // A reading that still names a reset already past is no reset to wait for.
+  const past = Date.parse(RESET)
+  expect(planArm(limits, '5h', 2, past)).toBe('No 5-hour reset is known yet, so there is nothing to arm.')
+  expect(planArm(limits, '5h', 2, past - 1)).toEqual({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE })
+  // A reset time that does not read as a date is no reset either.
+  const unreadable: SessionRateLimit[] = [{ kind: 'five_hour', percentUsed: 40, resetsAt: 'soon' }]
+  expect(planArm(unreadable, '5h', 2, NOW)).toBe('No 5-hour reset is known yet, so there is nothing to arm.')
+})
+
+test('an arm resumes the session once when a pause for its reset began after the last check', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  await seen.clock.advance(WAKE - NOW - 30_000)
+  // Another session paused for the same reset after this session's last check.
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 92,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  await seen.clock.advance(30_000)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(pauseOf(seen)?.status).toBe('done')
+})
+
+test('an armed wake that comes due during a pause leaves the resume to the pause', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  // Another session paused for the weekly reset, which falls three hours after the armed one.
+  const weekly = '2026-10-02T22:00:00.000Z'
+  const weeklyWake = Date.parse(weekly) + 2 * 60_000
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['seven_day'],
+    percentUsed: 95,
+    resetsAt: weekly,
+    wakeAt: weeklyWake,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  await seen.clock.advance(weeklyWake - WAKE)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+})
+
+test('an armed wake another instance of this module already fired does not resume again', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  // The instance a hot reload left behind won the claim first.
+  seen.claims.add(`arm-${KEY}-sess-a`)
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+})
+
+test('a cancel in this session also drops its armed wake', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  await $.command.run({ command: 'usage-guard', args: 'cancel' } as never)
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+})
+
+test("another session's cancel leaves this session's own arm in place", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  // Session B paused for the same reset and cancelled it; this session never crossed the line.
+  const cancelled: Pause = {
+    status: 'cancelled',
+    kinds: ['five_hour'],
+    percentUsed: 92,
+    resetsAt: RESET,
+    wakeAt: WAKE,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(cancelled))
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+})
+
+test('an arm that met a longer pause still resumes the session after another session cancels it', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  const later = '2026-10-02T22:00:00.000Z'
+  const laterWake = Date.parse(later) + 2 * 60_000
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['seven_day'],
+    percentUsed: 95,
+    resetsAt: later,
+    wakeAt: laterWake,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  // The status still names the arm, now at the pause's wake.
+  const status = await $.command.run({ command: 'usage-guard', args: '' } as never)
+  expect(status).toEqual(expect.objectContaining({ text: expect.stringContaining('Armed to resume') }))
+  // Session B cancels the pause: no pause resume comes, and the arm resumes this session once.
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'cancelled' }))
+  await seen.clock.advance(laterWake - WAKE)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
 })
