@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { cacheChip, contextChip, pauseChip, planChip, shortLocal } from '../hooks/budgets'
+import { cacheChip, compactedMark, contextChip, pauseChip, planChip, shortLocal } from '../hooks/budgets'
 import type { Budgets } from '../types'
 
 // 2026-10-02 16:00 UTC: 09:00 on a Friday at a UTC-7 host.
@@ -33,15 +33,31 @@ const CONTEXT_CASES: { name: string; b: Partial<Budgets>; text: RegExp; color?: 
   { name: 'red at nine tenths', b: { tokens: 420_300 }, text: /84%/, color: 'red' },
   { name: 'past the point reads 0k left', b: { tokens: 480_000 }, text: /0k to compact$/, color: 'red' },
   { name: 'no compaction point falls back to the window', b: { compactsAt: undefined }, text: /^ctx \S+ 50%$/ },
+  {
+    name: 'a compaction minutes ago is named after the fill',
+    b: { tokens: 40_000, compactedAt: NOW - 5 * MINUTE },
+    text: /^ctx ▰▱▱▱▱▱▱▱▱▱ 8% · 427k to compact · just compacted 08:55$/,
+  },
+  { name: 'unknown fill right after a compaction', b: { tokens: undefined, compactedAt: NOW }, text: /^ctx -- · just compacted 09:00$/ },
 ]
 
 for (const { name, b, text, color } of CONTEXT_CASES) {
   test(`contextChip: ${name}`, () => {
-    const chip = contextChip({ ...B, ...b })
+    const chip = contextChip({ ...B, ...b }, NOW)
     expect(chip.text).toMatch(text)
     expect(chip.color).toBe(color)
   })
 }
+
+test('compactedMark: a quarter hour after the compaction, then nothing', () => {
+  const cases: [number | undefined, string][] = [
+    [undefined, ''],
+    [NOW, ' · just compacted 09:00'],
+    [NOW - 15 * MINUTE + 1, ' · just compacted 08:45'],
+    [NOW - 15 * MINUTE, ''],
+  ]
+  for (const [at, expected] of cases) expect([at, compactedMark(at, 420, NOW)]).toEqual([at, expected])
+})
 
 const RESET = Date.UTC(2026, 9, 2, 21, 0, 0)
 const PLAN_CASES: { used: number; text: string; color?: string }[] = [
@@ -79,7 +95,7 @@ test('pauseChip: only while the pause is still ahead', () => {
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
 
 function world(on: On, pause?: object) {
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   on('process.run', () => ({
     value: {
@@ -109,6 +125,7 @@ function world(on: On, pause?: object) {
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   on('session.attach', ($, e) => ({ clientId: e.clientId }))
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+  return clock
 }
 
 async function start($: Engine, surface: 'terminal' | 'desktop'): Promise<void> {
@@ -136,5 +153,20 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: /PAUSED → Fri 10:00/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5h 80%/ })).toBeUndefined()
+  })
+
+  test(`${surface}: a compaction is named on the row for a quarter hour`, async ($, on) => {
+    const clock = world(on)
+    on('session.compact', () => ({ messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }] }) as never)
+    await start($, surface)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'old', toolUses: [] }] } as never)
+    // The row's 30-second refresh picks the compaction up.
+    await clock.advance(30_000)
+    const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /^ctx \S+ 50% · just compacted 09:00$/})).toBeDefined()
+    await clock.advance(15 * MINUTE)
+    await ui.redraw()
+    expect(await ui.find({ type: 'Text', text: /just compacted/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /^ctx \S+ 50%$/ })).toBeDefined()
   })
 }

@@ -37,8 +37,19 @@ export function contextText(tokens: number | undefined, size: number, compactsAt
   return `ctx ${bar(tokens / (compactsAt ?? size))} ${Math.round((tokens / size) * 100)}%${left}`
 }
 
-export function contextChip(b: Budgets): Chip {
-  const text = contextText(b.tokens, b.size, b.compactsAt)
+const JUST_COMPACTED_MS = 15 * 60_000
+
+/**
+ * ` · just compacted 09:00` for a quarter hour after a compaction, on the row and the facts line
+ * alike: every figure in the compaction's summary is from before it ran.
+ */
+export function compactedMark(compactedAt: number | undefined, offsetMinutes: number, now: number): string {
+  if (compactedAt === undefined || now - compactedAt >= JUST_COMPACTED_MS) return ''
+  return ` · just compacted ${shortLocal(compactedAt, offsetMinutes).slice(4)}`
+}
+
+export function contextChip(b: Budgets, now: number): Chip {
+  const text = contextText(b.tokens, b.size, b.compactsAt) + compactedMark(b.compactedAt, b.offsetMinutes, now)
   if (b.tokens === undefined) return { text }
   const ratio = b.tokens / (b.compactsAt ?? b.size)
   return { text, color: ratio >= 0.9 ? 'red' : ratio >= 0.75 ? 'yellow' : undefined }
@@ -70,7 +81,7 @@ export function chipsOf(b: Budgets, now: number): Chip[] {
   const pause = pauseChip(b, now)
   const plan = pause ? [pause] : b.limits.map(limit => planChip(limit, b))
   const cache = cacheChip(b, now)
-  return [contextChip(b), ...plan, ...(cache ? [cache] : [])]
+  return [contextChip(b, now), ...plan, ...(cache ? [cache] : [])]
 }
 
 export function registerBudgetsView(on: On): void {
