@@ -298,7 +298,17 @@ async function headOf($: EngineInterface, repo: string, number: number): Promise
   }
 }
 
-async function startWatch($: EngineInterface, repo: string, number: number, headSha: string): Promise<Watch> {
+// A push that moves no commit (tags, "Everything up-to-date") keeps the watch on that head, settled or
+// not, so it wakes the session once. `isAsked`: the watch tool, which starts over on request.
+async function startWatch(
+  $: EngineInterface,
+  repo: string,
+  number: number,
+  headSha: string,
+  isAsked = false,
+): Promise<Watch> {
+  const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
+  if (same && !isAsked) return same
   const startedAt = await $.clock.now()
   const id = `${startedAt}-${Math.random().toString(36).slice(2)}`
   const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id }
@@ -462,7 +472,7 @@ export const register: Register = (on, options) => {
     const repo = typeof input.repo === 'string' && input.repo ? input.repo : (await prOfBranch($))?.repo
     if (!Number.isInteger(number) || !repo)
       return { deny: 'ci-watch needs a PR number, and a repo when the branch has no PR.' }
-    await startWatch($, repo, number, await headOf($, repo, number))
+    await startWatch($, repo, number, await headOf($, repo, number), true)
     return { result: `Watching ${repo}#${number}; you will be woken once its checks settle.` }
   })
 
