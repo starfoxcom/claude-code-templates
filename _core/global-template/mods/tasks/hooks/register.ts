@@ -296,11 +296,19 @@ function changedFields(mirror: Mirror, task: MirrorTask, args: TaskArgs): string
   return fields
 }
 
+const STATUSES = new Set(['pending', 'in_progress', 'completed', 'deleted'])
+
 function updateTask(mirror: Mirror, args: TaskArgs, turn: number, now: number): unknown {
   const id = String(args.taskId ?? '')
   const task = findTask(mirror, id)
   if (!task) return { success: false, taskId: id, updatedFields: [], error: 'Task not found' }
   const from = task.status
+  // The engine's own tool refuses any other status; a reply claiming a change that never happened would
+  // leave the model believing a task finished while every view still shows it open.
+  if (args.status !== undefined && !STATUSES.has(String(args.status))) {
+    const error = 'status must be pending, in_progress, completed or deleted'
+    return { success: false, taskId: id, updatedFields: [], error }
+  }
   if (args.status === 'deleted') {
     applyUpdate(mirror, args, turn, now)
     return { success: true, taskId: id, updatedFields: ['deleted'], statusChange: { from, to: 'deleted' } }
