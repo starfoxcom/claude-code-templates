@@ -9,7 +9,7 @@ const LOG = 'C:/Users/me/.claude/mods-data/guards/decisions.jsonl'
 function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Windows_NT', isDiffCut = false) {
   const seen = { files: new Map(Object.entries(files)), ran: [] as string[], runs: [] as string[][] }
   mock.clock(on)
-  mock.env(on, { USERPROFILE: 'C:/Users/me', OS: os })
+  mock.env(on, { USERPROFILE: 'C:/Users/me', TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp', OS: os })
   on('session.id', () => ({ value: 'sess-a' }))
   on('session.cwd', () => ({ value: 'C:/Repos/my-game' }) as never)
   on('fs.read', ($, e) => {
@@ -76,6 +76,13 @@ test('writes the reading misses are still refused in enforce mode', { options: {
   }
   expect(seen.ran).toEqual([])
   expect((seen.files.get(LOG) ?? '').trim().split('\n')).toHaveLength(5)
+})
+
+test('a Bash body file under /tmp is read from the Windows temp folder', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { 'C:/Users/me/AppData/Local/Temp/body.md': '## What\n- clean\n' })
+  const result = await bash($, 'gh pr create --title t --body-file /tmp/body.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(1)
 })
 
 test('a body file is read, and a credit inside it is found', async ($, on) => {
