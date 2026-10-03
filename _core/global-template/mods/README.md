@@ -21,7 +21,7 @@ Every mod is optional and independent, with one exception noted in the table (sh
 | `tasks` | Keeps the task list honest: one task in progress at a time, finished work marked done, a list that survives compaction and completion, reminders that name the stale task, and a nudge to make a list after several tool calls with none. Draws its own list (a band and a pane) in place of the built-in panel for the main session. | Opt-in |
 | `usage-guard` | Near a plan usage limit, every session saves its work once (`/session-close`, local only), runs your per-project stop commands, and waits; after the limit resets, sessions resume with `/session-start`. A card above the prompt shows the pause, with "Cancel auto-resume". `/usage-guard cancel` cancels it. | Opt-in |
 
-"Recommended on" means the setup offers it pre-selected; "opt-in" means it is offered unselected.
+"Recommended on" means we suggest installing it with every setup; "opt-in" means install it only when you want what it does. Installing is manual for now (see Install below).
 
 ### Options
 
