@@ -31,12 +31,30 @@ async function run($: Engine, argv: string[]): Promise<string | null> {
   return r && r.exitCode === 0 ? r.stdout : null
 }
 
+// Whether `tasklist /NH /FO CSV` lists the process, by its whole image name with or without `.exe`:
+// `vmmem` is not `vmmemWSL`.
+export function isListed(tasklist: string, name: string): boolean {
+  const wanted = name.toLowerCase()
+  return tasklist.split(/\r?\n/).some(line => {
+    const image = (line.split('","')[0] ?? '').replace(/^"/, '').toLowerCase()
+    return image === wanted || image === `${wanted}.exe`
+  })
+}
+
+// `pgrep -f` reads every command line, so a second check running at the same moment would match the
+// first one's own pattern. A bracketed first letter still matches the runner but not the pattern.
+export function pgrepPattern(name: string): string {
+  return `[${name[0]}]${name.slice(1)}`
+}
+
 async function isUp($: Engine, runner: Runner): Promise<boolean> {
   if (live.isWindows) {
-    const list = ((await run($, ['tasklist', '/NH', '/FO', 'CSV'])) ?? '').toLowerCase()
-    return runner.processes.every(name => list.includes(`"${name.toLowerCase()}`))
+    const list = (await run($, ['tasklist', '/NH', '/FO', 'CSV'])) ?? ''
+    return runner.processes.every(name => isListed(list, name))
   }
-  for (const name of runner.processes) if ((await run($, ['pgrep', '-f', name])) === null) return false
+  for (const name of runner.processes) {
+    if ((await run($, ['pgrep', '-f', pgrepPattern(name)])) === null) return false
+  }
   return true
 }
 
@@ -138,9 +156,13 @@ async function pressStart($: Engine, index: number): Promise<void> {
 }
 
 // A busy runner is in the middle of a job (a nightly suite can run for hours): Stop asks once more.
+// The busy count is read again at the press: the last check can be minutes old, and a job that started
+// since must still get the question.
 async function pressStop($: Engine, index: number): Promise<void> {
   const row = (await read($, view))?.rows[index]
-  if (row && (row.busy ?? 0) > 0 && !row.isConfirming) return setRow($, index, { isConfirming: true })
+  const repo = RUNNERS[index]?.repo
+  const busy = row && !row.isConfirming && repo ? ((await online($, repo))?.busy ?? row.busy) : row?.busy
+  if (row && (busy ?? 0) > 0 && !row.isConfirming) return setRow($, index, { busy, isConfirming: true })
   for (const argv of RUNNERS[index]?.stop ?? []) await run($, argv)
   await setRow($, index, { isConfirming: false, startedAt: undefined })
   await check($).catch(() => undefined)
