@@ -118,13 +118,28 @@ function carriedForward(messages: readonly SessionMessage[]): { kept: string[]; 
   return { kept, index }
 }
 
-// How many of `texts`' first messages repeat the end of `carried`, in order: the tail the engine kept.
-function keptTail(carried: readonly string[], texts: readonly string[]): number {
-  for (let k = Math.min(carried.length, texts.length); k > 0; k--) {
-    const end = carried.slice(carried.length - k)
-    if (end.every((text, i) => text === texts[i])) return k
+const indexLine = (text: string) => `- ${text.replace(/\s+/g, ' ').slice(0, INDEX_LINE_CHARS)}...`
+
+// How many of `texts`' first messages are the tail the engine kept: a run that repeats the end of the
+// carried block, after only messages the block already holds (older tail members the budget moved to
+// the index). The longest run wins, then the earliest, so a "yes" typed again after the tail is kept.
+// A message the block does not hold ends the search: words are carried twice rather than lost.
+function keptTail(previous: { kept: string[]; index: string[] }, texts: readonly string[]): number {
+  const { kept, index } = previous
+  const isHeld = (text: string) => kept.includes(text) || index.includes(indexLine(text))
+  let tail = 0
+  let run = 0
+  for (let end = 0; end < texts.length; end++) {
+    for (let k = Math.min(kept.length, end + 1); k > run; k--) {
+      if (kept.slice(-k).every((text, i) => text === texts[end - k + 1 + i])) {
+        tail = end + 1
+        run = k
+        break
+      }
+    }
+    if (!isHeld(texts[end] ?? '')) break
   }
-  return 0
+  return tail
 }
 
 // `typed` is the transcript's own list (see transcriptWords); without it the
@@ -140,7 +155,7 @@ export function personWords(
   // from the block. Only that leading run is folded, so a "yes" typed again later is kept. The
   // transcript's list starts after the compaction and has no such run.
   const texts = source.map(stripInjected).filter(Boolean)
-  const fresh = typed ? texts : texts.slice(keptTail(previous.kept, texts))
+  const fresh = typed ? texts : texts.slice(keptTail(previous, texts))
   const all = [...previous.kept, ...fresh]
 
   const kept: string[] = []
@@ -153,7 +168,7 @@ export function personWords(
     used += text.length
     cut = i
   }
-  const overflow = all.slice(0, cut).map(text => `- ${text.replace(/\s+/g, ' ').slice(0, INDEX_LINE_CHARS)}...`)
+  const overflow = all.slice(0, cut).map(indexLine)
   const index = [...previous.index, ...overflow].slice(-INDEX_MAX_LINES)
 
   const head = index.length > 0 ? `${PERSON_MARK}\n${INDEX_HEAD}\n${index.join('\n')}` : PERSON_MARK

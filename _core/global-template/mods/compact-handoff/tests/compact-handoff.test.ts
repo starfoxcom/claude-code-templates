@@ -274,6 +274,18 @@ test('a message the last compaction kept beside its summary is carried once', as
   expect(second.indexOf('bake the shadows')).toBeLessThan(second.indexOf('ship it'))
 })
 
+test('a kept tail the budget cut into the index is carried once, in order', async () => {
+  const [a, b] = ['A', 'B'].map(letter => letter.repeat(150))
+  const first = personWords([said(a ?? ''), said(b ?? '')], 200)
+  expect(first).not.toContain(a ?? '')
+  // The engine kept both as the tail; only B was carried in full.
+  const second = personWords([said(first), said(a ?? ''), said(b ?? ''), said('ship it')], 10_000)
+  expect(second.split(b ?? '').length - 1).toBe(1)
+  expect(second).not.toContain(a ?? '')
+  expect(second).toContain(`- ${'A'.repeat(100)}...`)
+  expect(second.indexOf(b ?? '')).toBeLessThan(second.indexOf('ship it'))
+})
+
 test('a short answer the person gives again after a compaction is kept both times', async () => {
   const first = personWords([said('lock the rings?'), said('yes')], 10_000)
   const second = personWords([said(first), said('bake the shadows too?'), said('yes')], 10_000)
