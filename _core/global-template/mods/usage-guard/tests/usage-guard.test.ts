@@ -644,3 +644,13 @@ test('an armed wake that comes due during a pause leaves the resume to the pause
   await seen.clock.advance(weeklyWake - WAKE)
   expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
 })
+
+test('an armed wake another instance of this module already fired does not resume again', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  // The instance a hot reload left behind won the claim first.
+  seen.claims.add(`arm-${KEY}-sess-a`)
+  await seen.clock.advance(WAKE - NOW)
+  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+})
