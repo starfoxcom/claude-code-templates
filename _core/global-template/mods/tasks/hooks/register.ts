@@ -364,7 +364,8 @@ async function mirrorOf($: EngineInterface): Promise<Mirror> {
   return live.mirror
 }
 
-async function saveMirror($: EngineInterface, mirror: Mirror): Promise<void> {
+// True when the mirror file was written.
+async function saveMirror($: EngineInterface, mirror: Mirror): Promise<boolean> {
   mirror.updatedAt = await $.clock.now()
   mirror.turn = live.turn
   mirror.tasks.sort((a, b) => Number(a.id) - Number(b.id))
@@ -376,7 +377,10 @@ async function saveMirror($: EngineInterface, mirror: Mirror): Promise<void> {
   }
   const dir = await dataDir($)
   await ensureDir($, dir).catch(() => undefined)
-  await $.fs.write(`${dir}/${mirror.session}.json`, JSON.stringify(mirror, null, 1)).catch(() => undefined)
+  return $.fs.write(`${dir}/${mirror.session}.json`, JSON.stringify(mirror, null, 1)).then(
+    () => true,
+    () => false,
+  )
 }
 
 function withContext<T extends object>(result: T, note: string | undefined): T {
@@ -417,7 +421,9 @@ async function clearEngineStore($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   if (importEngineTasks(mirror, [...found.values()], live.turn, now)) {
     mirror.changedAt = now
-    await saveMirror($, mirror)
+    // The engine's files are deleted only once the mirror holding their copy is written; until then
+    // they wait for the next start.
+    if (!(await saveMirror($, mirror))) return
   }
   await $.process.run(['node', '-e', UNLINK_SCRIPT, dir, ...names], { timeoutMs: 20_000 })
 }

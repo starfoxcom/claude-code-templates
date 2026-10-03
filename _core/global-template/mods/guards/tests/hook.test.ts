@@ -5,10 +5,10 @@ import { expect, mock, test } from 'claude-code/testing'
 const AI_TRAILER = 'Co-' + 'Authored-By: Cla' + 'ude <noreply@anthro' + 'pic.com>'
 const LOG = 'C:/Users/me/.claude/mods-data/guards/decisions.jsonl'
 
-function world(on: On, files: Record<string, string> = {}, diff = '') {
+function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Windows_NT') {
   const seen = { files: new Map(Object.entries(files)), ran: [] as string[], runs: [] as string[][] }
   mock.clock(on)
-  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  mock.env(on, { USERPROFILE: 'C:/Users/me', OS: os })
   on('session.id', () => ({ value: 'sess-a' }))
   on('session.cwd', () => ({ value: 'C:/Repos/my-game' }) as never)
   on('fs.read', ($, e) => {
@@ -91,4 +91,10 @@ test('read-only and clean commands run untouched and log nothing', async ($, on)
   await bash($, "git commit -m 'docs: x'")
   expect(seen.ran).toHaveLength(2)
   expect(seen.files.has(LOG)).toBe(false)
+})
+
+test('off Windows a one-letter top folder is read where it is, not as a drive', async ($, on) => {
+  const seen = world(on, { '/u/me/b.md': `## What\n- x\n\n${AI_TRAILER}\n` }, '', 'Linux')
+  await bash($, 'gh pr create --title t --body-file /u/me/b.md')
+  expect(seen.files.get(LOG)).toContain('file /u/me/b.md')
 })
