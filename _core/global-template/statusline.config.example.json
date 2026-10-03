@@ -1,4 +1,0 @@
-{
-  "_note": "Copy to ~/.claude/statusline.config.json, next to statusline.js. Each runner entry is { \"label\": shown on the status line, \"process\": the process name to look for }, checked machine-wide once a minute (tasklist on Windows, pgrep -f elsewhere). An empty list hides the runners line. Example for one GitHub Actions self-hosted runner: \"runners\": [{ \"label\": \"runners\", \"process\": \"Runner.Listener\" }]",
-  "runners": []
-}
