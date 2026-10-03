@@ -60,12 +60,19 @@ export function planPause(hot: readonly SessionRateLimit[], delayMinutes: number
 const ARM_KINDS: Record<string, string> = { '5h': 'five_hour', week: 'seven_day' }
 
 // The wake `/usage-guard arm <5h|week>` sets: the named window's next reset plus the resume delay,
-// whatever its usage, or why there is none.
-export function planArm(limits: readonly SessionRateLimit[], which: string, delayMinutes: number): ArmedWake | string {
+// whatever its usage, or why there is none. A reading can carry a reset already past (check() skips
+// those too); that one is no reset to wait for.
+export function planArm(
+  limits: readonly SessionRateLimit[],
+  which: string,
+  delayMinutes: number,
+  now: number,
+): ArmedWake | string {
   const kind = ARM_KINDS[which]
   if (!kind) return 'Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.'
   const resetsAt = limits.find(limit => limit.kind === kind)?.resetsAt
-  if (!resetsAt) return `No ${LIMIT_NAMES[kind]} reset is known yet, so there is nothing to arm.`
+  if (!resetsAt || Date.parse(resetsAt) <= now)
+    return `No ${LIMIT_NAMES[kind]} reset is known yet, so there is nothing to arm.`
   return { kind, resetsAt, wakeAt: Date.parse(resetsAt) + delayMinutes * 60_000 }
 }
 
@@ -372,18 +379,22 @@ async function scheduleArm($: EngineInterface, arm: ArmedWake): Promise<void> {
 }
 
 // An armed wake that came due: this session resumes, unless the arm was dropped or replaced, or a
-// pause for the same reset resumes it already.
+// pause owns the resume. A pause still on (another session may have extended it past this reset)
+// resumes every session when it ends, so resuming now would work through the pause and then resume
+// again; a pause for this same reset has resumed or will resume it already.
 async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   const current = await read($, armedWake)
   if (current?.resetsAt !== arm.resetsAt || current.kind !== arm.kind) return
   await update($, armedWake, () => null)
   const pause = await readPause($)
+  if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) return
   if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled') return
   await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
 }
 
 async function armByHand($: EngineInterface, which: string): Promise<string> {
-  const planned = planArm((await $.session.usage()).rateLimits, which, live.delayMinutes)
+  const { rateLimits } = await $.session.usage()
+  const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
   if (typeof planned === 'string') return planned
   await update($, armedWake, () => planned)
   await scheduleArm($, planned)
