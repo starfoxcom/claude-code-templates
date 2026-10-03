@@ -88,7 +88,8 @@ export function commandWords(command: string, isPowerShell = false): string {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? ''
     kept.push(line)
-    const doc = /<<-?\s*(["']?)([A-Za-z_][\w.-]*)\1/.exec(line)
+    // `<<` alone: `<<<` feeds one word, not the lines after it.
+    const doc = /(?<!<)<<(?!<)-?\s*(["']?)([A-Za-z_][\w.-]*)\1/.exec(line)
     if (!doc) continue
     while (i + 1 < lines.length && (lines[i + 1] ?? '').trim() !== doc[2]) i++
     i++

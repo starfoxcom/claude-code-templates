@@ -371,6 +371,9 @@ test('a push or a new PR is the subcommand, never words inside a message', () =>
   expect(isPushOrPr("gh pr comment 5 --body 'create the gh pr create docs'")).toBe(false)
   expect(isPushOrPr("git commit -F - <<'EOF'\nfix: then git push it\nEOF")).toBe(false)
   expect(isPushOrPr('git log --oneline origin/x..HEAD')).toBe(false)
+  // A here-string feeds one word: the lines after it are still commands.
+  expect(isPushOrPr('git commit -F - <<< fixup\ngit push')).toBe(true)
+  expect(mergedNumber('git commit -F - <<< fixup\ngh pr merge 7 --merge')).toBe(7)
   // Each shell's own escape: a backtick escapes nothing in Bash, a backslash nothing in PowerShell.
   const twoMessages = 'git commit -m "docs(ci): describe `ci-watch`" -m "The mod watches after git push."'
   expect(isPushOrPr(twoMessages)).toBe(false)
