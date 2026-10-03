@@ -2,7 +2,7 @@
 
 A mod is a small Claude Code plugin made of **function hooks**: a TypeScript module whose `register(on, options)` function hooks engine events (`session.start`, `prompt.submit`, `tool.call`, `turn.complete`, `ui.render`, …) and reaches the engine through the `$` interface. Mods run inside the Claude Code process, so they can read a command before it runs, add a line to a prompt, draw a band above the prompt, register a slash command or a tool, or wake a session once.
 
-**Requirements:** Claude Code **2.1.287 or newer** (the function-hook API is early access; older builds ignore these folders), and `node` on `PATH` (several mods run a small Node helper for file work the hook sandbox cannot do).
+**Requirements:** Claude Code **2.1.287 or newer** (the function-hook API is early access; older builds ignore these folders), and `node` on `PATH` (several mods run a small Node helper for file work the hook sandbox cannot do). The mods run in the terminal CLI and in the Code tab of the Claude Desktop app; both load them the same way (see [Install](#install)).
 
 Every mod is optional and independent, with one exception noted in the table (shared-pc and usage-guard cooperate when both are on). `statusline.js` in the folder above reads what several mods write; see [Status line](#status-line).
 
@@ -71,8 +71,9 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
    ```
 
    On Windows the separator is `;` (verified). On macOS and Linux it is `:` (`~/.claude/mods/session-facts:~/.claude/mods/ci-watch`), per the CLI's plugin reference; not yet verified on those systems.
-3. **Fully restart** Claude Code. The variable is read at start, so a new entry needs a restart; editing a mod that is already loaded does not (saving one of its files reloads it in running sessions).
-4. Optional: copy `skill-check/skill-contracts.example.json` to `~/.claude/skill-contracts.json`, and `../statusline.config.example.json` to `~/.claude/statusline.config.json`.
+3. **Fully restart** Claude Code. The variable is read at start, so a new entry needs a restart. Editing a mod that is already loaded reloads it in running terminal sessions when one of its files is saved.
+4. **Desktop app:** it reads the same `~/.claude/settings.json`, so steps 1 to 3 cover it. Desktop sessions are not interactive terminal sessions, and the CLI watches mod folders by default only in those, so in Desktop an edited mod loads at the next session start. To reload on save there too, add `"CLAUDE_CODE_PLUGIN_DIR_WATCH": "1"` to the same `env` block; it is optional and only matters while you edit mods.
+5. Optional: copy `skill-check/skill-contracts.example.json` to `~/.claude/skill-contracts.json`, and `../statusline.config.example.json` to `~/.claude/statusline.config.json`.
 
 Load each mod once. A folder enabled for hot reload elsewhere (a development copy) loads again on restart, so remove a development copy once the mod is installed.
 
@@ -100,7 +101,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 3. runners: local CI runners on or off, only when `statusline.config.json` lists them (machine-wide, checked once a minute);
 4. budgets: context fill and tokens left before compaction (exact with `session-facts`; without it the threshold is left out), plan usage per window (or the `usage-guard` pause), and the prompt-cache countdown in its last minutes.
 
-Mods that draw their own band above the prompt (`shared-pc`, `tasks`) get no status-line piece. Install it with `"statusLine": { "type": "command", "command": "node \"<home>/.claude/statusline.js\"", "refreshInterval": 15 }` in `~/.claude/settings.json`. `refreshInterval` re-runs the command every 15 seconds on top of the usual events, so the CI and runner lines keep updating while the session is idle; without it they change only when something happens in the session. Use it in place of the simpler `statusline-command.sh.template` (one line, bash only); Claude Code runs a single status line command.
+Mods that draw their own band above the prompt (`shared-pc`, `tasks`) get no status-line piece. Install it with `"statusLine": { "type": "command", "command": "node \"<home>/.claude/statusline.js\"", "refreshInterval": 15 }` in `~/.claude/settings.json`. `refreshInterval` re-runs the command every 15 seconds on top of the usual events, so the CI and runner lines keep updating while the session is idle; without it they change only when something happens in the session. Use it in place of the simpler `statusline-command.sh.template` (one line, bash only); Claude Code runs a single status line command. Whether the Desktop app draws a command status line is not yet confirmed; until it is, treat the CI, runner and budget lines as terminal-only. The bands (`shared-pc`, `tasks`, the `usage-guard` card) draw in both.
 
 ---
 
@@ -135,7 +136,7 @@ Lessons from building these, for the current function-hook API:
 - **Render hooks are pure.** Writing state from `ui.render` is refused and the hook is skipped; start timers and fill state from another event.
 - **Name clashes:** a variable named `h` shadows the JSX factory ("h is not a function"), and the validator does not catch it.
 - **Budget:** a hook has 10 seconds. `$.clock.sleep` counts against it; waiting on `$` calls does not, but a slow `$.process.spawn` inside `tool.call` still holds the command up.
-- **Drawing:** a card positioned absolutely above the prompt band is clipped; draw cards inside the band. Every `AbovePrompt` hook calls `next(e)` and keeps its own tree, so cards from several mods stack.
+- **Drawing:** a card positioned absolutely above the prompt band is clipped; draw cards inside the band. Build every element through `$.ui.resolve(e)` and keep to the elements both surfaces have (`Box`, `Text`, `Button` and the like; `Raster` and `Image` are terminal-only), and run each mounting test over `['terminal', 'desktop'] as const` so a Desktop break shows in `claude plugin test`. Every `AbovePrompt` hook calls `next(e)` and keeps its own tree, so cards from several mods stack.
 - **Notifications:** do not rely on `$.ui.toast` (gone in seconds, no styling), `$.audio.play` (silent in some terminals) or OS notifications (may be off). Anything a person must see is a card in the band that stays until dismissed or answered. Colors: yellow when the person must or may act, blue for information, green for good news, red for an error.
 - **Waking a session:** `$.session.append` notes do not wake an idle session; `$.prompt.submit` does, for one turn. Wake once per event.
 - **Tests** (`import { test, expect, mock } from 'claude-code/testing'`): `$` in a test has no real file system (hook `fs.read` / `fs.write` yourself; paths arrive with Windows backslashes); there is no `session.append`; `op` events answer `{ value }`; call `$.session.start({ cwd })` and `mock.clock(on)` before mounting a band; a hook's refusal reaches the test's `$.tool.call` as `{ isError, text }`. A `key` on a `Text` fails validation (the engine draws its own component), so key a `Box`; mount a pane with `requestId: <pane id>` and the pane props. The mod under test loads its own copy of its modules, so a test cannot change the mod's behaviour by mutating an imported value; test such tables through an exported pure function instead.
