@@ -317,6 +317,33 @@ test('a newcomer whose unstamped mutex a breaker moves aside takes it again', ()
   b.unlock()
 })
 
+test('a newcomer never stamps over a folder another writer stamped first', () => {
+  const sb = sandbox()
+  const b = writer(sb.dir)
+  const owner = path.join(b.MUTEX, 'owner')
+  // b's folder was moved aside and another writer's took the path and was stamped (here already stale,
+  // so b can break it and finish) before b's own stamp lands.
+  const restore = once(
+    'writeFileSync',
+    file => file === owner,
+    () => {
+      fs.writeFileSync(owner, 'other-writer')
+      const old = (Date.now() - 10_000) / 1000
+      fs.utimesSync(owner, old, old)
+    },
+  )
+  try {
+    b.lock()
+  } finally {
+    restore()
+  }
+  assert.ok(b.owns())
+  const asides = fs.readdirSync(sb.dir).filter(name => name.startsWith('.mutex.stale-'))
+  const owners = asides.map(name => fs.readFileSync(path.join(sb.dir, name, 'owner'), 'utf8'))
+  assert.deepStrictEqual(owners, ['other-writer'], "b took a fresh folder, never the other writer's stamp")
+  b.unlock()
+})
+
 test("a breaker never hands back a newcomer's unstamped mutex", () => {
   const sb = sandbox()
   const a = writer(sb.dir)
