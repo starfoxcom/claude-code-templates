@@ -29,10 +29,15 @@ async function readGit($: EngineInterface): Promise<GitState> {
   }
 }
 
+// A failed read never rejects the hook that asked for it: the row keeps its last reading.
 async function refresh($: EngineInterface): Promise<void> {
-  const [model, root, git] = await Promise.all([$.session.model(), $.session.root(), readGit($)])
-  const next: SessionLine = { model: modelName(model), effort: live.effort, project: baseName(root), git }
-  await update($, line, () => next)
+  try {
+    const [model, root, git] = await Promise.all([$.session.model(), $.session.root(), readGit($)])
+    const next: SessionLine = { model: modelName(model), effort: live.effort, project: baseName(root), git }
+    await update($, line, () => next)
+  } catch {
+    // Read again at the next turn, shell command or tick.
+  }
 }
 
 // A hot reload starts the module over without a new session.start, and a Desktop session starts with no
@@ -41,7 +46,7 @@ async function start($: EngineInterface): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
   await refresh($)
-  if (live.refreshMs > 0) $.clock.every(live.refreshMs, () => void refresh($).catch(() => undefined))
+  if (live.refreshMs > 0) $.clock.every(live.refreshMs, () => void refresh($))
 }
 
 export const register: Register = (on, options) => {
@@ -85,7 +90,7 @@ export const register: Register = (on, options) => {
   // A checkout, commit or pull in the shell moves the branch before the turn ends.
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const result = await next(e)
-    void refresh($).catch(() => undefined)
+    void refresh($)
     return result
   })
 
