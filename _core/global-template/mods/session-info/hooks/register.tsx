@@ -21,6 +21,8 @@ const live: {
   effort?: string
   /** The effort picked for the model in settings, as last read; a change there is a new pick. */
   selected?: string
+  /** Settings were read once in this load: only a later change counts as a new pick. */
+  hasReadPick: boolean
   refreshMs: number
   maxFiles: number
   reading?: Promise<void>
@@ -30,6 +32,7 @@ const live: {
   refreshMs: 30_000,
   maxFiles: 8,
   isReadAgainWanted: false,
+  hasReadPick: false,
 }
 
 function baseName(folder: string): string {
@@ -57,10 +60,14 @@ export function selectedEffort(config: Record<string, unknown>, model: string): 
 
 // The row shows the effort before the first request: the one picked in settings. A request's own
 // effort (after any downgrade for the model) replaces it, until the pick changes again.
+// The first read in a load only fills an empty row: a request may already have shown the effort it
+// used (after a hot reload, the turn's request lands before the row starts).
 function takeEffort(config: Record<string, unknown>, model: string): void {
   const selected = selectedEffort(config, model)
-  if (selected !== live.selected || live.effort === undefined) live.effort = selected ?? live.effort
+  const isNewPick = live.hasReadPick && selected !== live.selected
+  if (isNewPick || live.effort === undefined) live.effort = selected ?? live.effort
   live.selected = selected
+  live.hasReadPick = true
 }
 
 // A failed read never rejects the hook that asked for it: the row keeps its last reading.
