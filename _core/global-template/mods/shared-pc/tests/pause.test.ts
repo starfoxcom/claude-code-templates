@@ -74,3 +74,13 @@ test('the pause end is shown in the host time zone, not the sandbox clock', asyn
   const hold = await $.tool.call({ tool: 'mcp__shared-pc__pc', action: 'hold', minutes: 10 } as never)
   expect(JSON.stringify(hold)).toContain('until 14:05 (America/Mexico_City)')
 })
+
+test('/pc help lists every argument, and an unknown one answers with the same list', async ($, on) => {
+  mock.clock(on)
+  fakeHost(on, null)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const help = (await $.command.run({ command: 'pc', args: 'help' } as never)) as { text: string }
+  for (const line of ['/pc next [name]', '/pc leave', '/pc release', '/pc hold <min> [reason]', '/pc done'])
+    expect(help.text).toContain(line)
+  expect(await $.command.run({ command: 'pc', args: 'bogus' } as never)).toEqual(help)
+})

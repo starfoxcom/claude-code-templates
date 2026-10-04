@@ -534,6 +534,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'usage-guard',
       description: 'Usage pause status. Also: cancel, arm 5h|week (resume after that reset), disarm, settings',
+      argumentHint: ARGUMENT_HINT,
     })
 
     await startTimers($)
@@ -605,9 +606,21 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'usage-guard' }, async ($, e) => ({ text: await runCommand($, e.args) }))
 }
 
-// `/usage-guard [settings | arm 5h|week | disarm | cancel]`; with no argument, the status.
+const ARGUMENT_HINT = '[help | settings | arm 5h|week | disarm | cancel]'
+const HELP = [
+  '/usage-guard: pauses a session before a plan window runs out and resumes it after the reset.',
+  '  /usage-guard              the pause status and the wrap-up level',
+  '  /usage-guard cancel       cancel the active pause: no automatic resume',
+  '  /usage-guard arm 5h|week  resume this session after that window resets',
+  '  /usage-guard disarm       drop the armed resume',
+  '  /usage-guard settings     open the settings pane',
+  '  /usage-guard help         this list',
+].join('\n')
+
+// `/usage-guard [help | settings | arm 5h|week | disarm | cancel]`; with no argument, the status.
 async function runCommand($: EngineInterface, args: string): Promise<string> {
   const [verb = '', which = ''] = args.trim().split(/\s+/)
+  if (verb === 'help') return HELP
   if (verb === 'settings') {
     await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
     return 'Opened the usage-guard settings.'
