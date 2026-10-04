@@ -2,6 +2,8 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
+import { isMainSkill } from '../hooks/register'
+
 const CONTRACTS = {
   'my-game': {
     'session-close': [
@@ -11,7 +13,7 @@ const CONTRACTS = {
   },
 }
 
-type World = { prompts: string[] }
+type World = { prompts: string[]; duringSkill?: () => Promise<unknown> }
 
 function world(on: On): World {
   const seen: World = { prompts: [] }
@@ -21,7 +23,12 @@ function world(on: On): World {
     return { value: JSON.stringify(CONTRACTS) }
   })
   on('session.root', () => ({ value: 'C:/Repos/my-game' }))
-  on('command.run', () => ({}) as never)
+  on('skill.prompt', ($, e) => ({ text: e.text }))
+  // The Skill tool expands the skill's prompt inside its own call, as the engine does.
+  on('tool.call', { tool: 'Skill' }, async () => {
+    await seen.duringSkill?.()
+    return { result: {} } as never
+  })
   on('prompt.submit', ($, e) => {
     seen.prompts.push(e.text)
     return { text: e.text }
@@ -32,7 +39,7 @@ function world(on: On): World {
 }
 
 async function runSkill($: Engine): Promise<void> {
-  await $.command.run({ command: 'session-close', args: '' } as never)
+  await $.skill.prompt({ skill: 'session-close', text: '' })
 }
 
 async function shell($: Engine, command: string): Promise<void> {
@@ -65,7 +72,58 @@ test('a run with a missing step gets one follow-up naming it', async ($, on) => 
 
 test('a skill with no contract is left alone', async ($, on) => {
   const seen = world(on)
-  await $.command.run({ command: 'find', args: 'x' } as never)
+  await $.skill.prompt({ skill: 'find', text: '' })
   await endTurn($)
   expect(seen.prompts).toEqual([])
+})
+
+test('the Skill tool starts a run like a typed /name', async ($, on) => {
+  const seen = world(on)
+  seen.duringSkill = () => runSkill($)
+  await $.tool.call({ tool: 'Skill', skill: 'session-close' } as never)
+  await shell($, 'git commit -q -F msg.txt')
+  await endTurn($)
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.prompts[0]).toContain('no sign of the board check')
+})
+
+test("a subagent's skill starts no run for the main session", async ($, on) => {
+  const seen = world(on)
+  seen.duringSkill = () => runSkill($)
+  await $.tool.call({ tool: 'Skill', skill: 'session-close', agentId: 'a1' } as never)
+  await endTurn($)
+  expect(seen.prompts).toEqual([])
+})
+
+test("the main session's skill starts a run even while a subagent's skill is expanding", async ($, on) => {
+  const seen = world(on)
+  let isInner = false
+  seen.duringSkill = async () => {
+    if (isInner) return runSkill($)
+    isInner = true
+    return $.tool.call({ tool: 'Skill', skill: 'session-close' } as never)
+  }
+  await $.tool.call({ tool: 'Skill', skill: 'other', agentId: 'a1' } as never)
+  await endTurn($)
+  expect(seen.prompts.length).toBe(1)
+})
+
+test("a subagent's skill expanding inside the main session's Skill call starts no run", async ($, on) => {
+  const seen = world(on)
+  let isInner = false
+  seen.duringSkill = async () => {
+    if (isInner) return runSkill($)
+    isInner = true
+    return $.tool.call({ tool: 'Skill', skill: 'session-close', agentId: 'a1' } as never)
+  }
+  await $.tool.call({ tool: 'Skill', skill: 'other' } as never)
+  await endTurn($)
+  expect(seen.prompts).toEqual([])
+})
+
+test('whose skill: by the skill named in the calls in flight', () => {
+  expect(isMainSkill({ main: [], agent: [] }, 'a')).toBe(true)
+  expect(isMainSkill({ main: ['a'], agent: ['a'] }, 'a')).toBe(true)
+  expect(isMainSkill({ main: ['b'], agent: ['a'] }, 'a')).toBe(false)
+  expect(isMainSkill({ main: [], agent: ['b'] }, 'a')).toBe(true)
 })
