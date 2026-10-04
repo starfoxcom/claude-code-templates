@@ -2,6 +2,7 @@ import type { ConfigRow, ConfigSetInput, On } from 'claude-code'
 import type { Engine, Mounted } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 
+import { HELP } from '../hooks/register'
 import { parseNumber } from '../hooks/settings'
 
 // The settings pane over faked /config rows: the engine's own validation draws it on each surface,
@@ -115,4 +116,13 @@ test('/session-facts settings opens the pane', async ($, on) => {
   const answer = await $.command.run({ command: 'session-facts', args: 'settings' } as never)
   expect(seen.opened).toEqual([PANE])
   expect(answer).toEqual(expect.objectContaining({ text: 'Opened the session-facts settings.' }))
+})
+
+test('/session-facts with help, no argument or an unknown one answers with the help', async ($, on) => {
+  const seen = world(on)
+  for (const args of ['help', '', 'nonsense']) {
+    const answer = await $.command.run({ command: 'session-facts', args } as never)
+    expect(answer).toEqual(expect.objectContaining({ text: HELP }))
+  }
+  expect(seen.opened).toEqual([])
 })
