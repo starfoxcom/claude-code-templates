@@ -45,6 +45,12 @@ const live: {
   isStarted: boolean
   /** The data folders exist (made once per module load by the claim helper). */
   isPrepared: boolean
+  /** The session ended and this process does not go on as another: no more check-ins. */
+  isEnded: boolean
+  /** A /clear or /resume moved this process to another session id: the next check-in starts over. */
+  isRestorePending: boolean
+  /** The pause (its `resetKey`) whose resume the person disarmed here: the pause does not arm it again. */
+  declined?: string
   hasWork: boolean
   isStatusShown: boolean
   wakeTimer?: Timer
@@ -61,6 +67,8 @@ const live: {
   isTurnRunning: false,
   isStarted: false,
   isPrepared: false,
+  isEnded: false,
+  isRestorePending: false,
   // Set by the first tool call that changed something; a session that only
   // read has nothing to save, so near a limit it waits instead of wrapping up.
   hasWork: false,
@@ -376,8 +384,14 @@ async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> 
   await beat($)
 }
 
-// This session's check-in: it is open, in this project, with this armed wake.
+// This session's check-in: it is open, in this project, with this armed wake. The first one after a
+// /clear or /resume starts over as a new session would.
 async function beat($: EngineInterface): Promise<void> {
+  if (live.isEnded) return
+  if (live.isRestorePending) {
+    live.isRestorePending = false
+    return restoreArm($)
+  }
   await writeRecord($, {
     session: await $.session.id(),
     project: projectOf(await $.session.root()),
@@ -390,7 +404,7 @@ async function beat($: EngineInterface): Promise<void> {
 // An arm set by hand stays: it already resumes the session, at the pause's wake or after it. A session
 // with nothing saved only waits, and a new session would have nothing to pick up from it.
 async function armForPause($: EngineInterface, pause: Pause): Promise<void> {
-  if (!live.hasWork) return
+  if (!live.hasWork || live.declined === resetKey(pause)) return
   const current = await read($, armedWake)
   if (current && !current.byPause) return
   if (current?.resetsAt === pause.resetsAt && current.wakeAt === pause.wakeAt) return
@@ -408,7 +422,7 @@ async function restoreArm($: EngineInterface): Promise<void> {
   const session = await $.session.id()
   const project = projectOf(await $.session.root())
   const { own, left } = planTakeover(await readRecords($), session, project, await $.clock.now())
-  if (own) return setArm($, own)
+  if (own) return takeArm($, own)
   let adopted: ArmedWake | undefined
   // Two sessions opened together could both find themselves alone: one claim per wake keeps it single.
   for (const record of left) {
@@ -416,8 +430,14 @@ async function restoreArm($: EngineInterface): Promise<void> {
     await writeRecord($, { ...record, arm: null })
     adopted ??= record.arm ?? undefined
   }
-  if (adopted) await setArm($, adopted)
+  if (adopted) await takeArm($, adopted)
   else await beat($)
+}
+
+// Its timer too: after a /clear or /resume this module's timers already run, so nothing else would set it.
+async function takeArm($: EngineInterface, arm: ArmedWake): Promise<void> {
+  await setArm($, arm)
+  await scheduleArm($, arm)
 }
 
 async function armByHand($: EngineInterface, which: string): Promise<string> {
@@ -432,8 +452,11 @@ async function armByHand($: EngineInterface, which: string): Promise<string> {
   )
 }
 
+// During a pause it also declines that pause's resume, or the minute check would arm it right back.
 async function disarm($: EngineInterface): Promise<string> {
   const current = await read($, armedWake)
+  const pause = await readPause($)
+  if (pause?.status === 'active') live.declined = resetKey(pause)
   live.armTimer?.cancel()
   live.armTimer = undefined
   await setArm($, null)
@@ -600,6 +623,8 @@ export const register: Register = (on, options) => {
     // A hot reload starts the module over without a session.start: the first turn after it restarts
     // the timers and reads the time zone again.
     await startTimers($).catch(() => undefined)
+    // The first turn after a /clear or /resume need not wait for the minute timer to start over.
+    if (live.isRestorePending) await beat($).catch(() => undefined)
     return next(e)
   })
 
@@ -622,7 +647,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    await closeRecord($, e.sessionId, e.reason === 'clear').catch(() => undefined)
+    await closeRecord($, e.sessionId, e.reason === 'clear' || e.reason === 'resume').catch(() => undefined)
     return next(e)
   })
 
@@ -630,10 +655,19 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: ARM_TOOL as never }, async ($, e) => ({ result: await runTool($, e as ArmToolInput) }))
 }
 
-// A session that ends is closed at once, its arm kept for a restart or for the project's next session.
-// A /clear goes on in this process under a new id, which takes the arm with it at its next check-in.
-async function closeRecord($: EngineInterface, session: string, isClear: boolean): Promise<void> {
-  const arm = isClear ? null : await read($, armedWake)
+// A session that ends is closed at once, its arm kept on its record for a restart or for the project's
+// next session. After a /clear or /resume this process goes on under another id: it lets go of the arm
+// and, at its next check-in, starts over as that session (`restoreArm`), so the arm follows only when it
+// is then the project's one open session. Any other end stops the check-ins: a late one from the minute
+// timer would make the closed session look open and hold its arm back from the next session.
+async function closeRecord($: EngineInterface, session: string, isSwitch: boolean): Promise<void> {
+  const arm = await read($, armedWake)
+  if (isSwitch) {
+    live.armTimer?.cancel()
+    live.armTimer = undefined
+    await update($, armedWake, () => null)
+    live.isRestorePending = true
+  } else live.isEnded = true
   await writeRecord($, { session, project: projectOf(await $.session.root()), beatAt: 0, arm })
 }
 
