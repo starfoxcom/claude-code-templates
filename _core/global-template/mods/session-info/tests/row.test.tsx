@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HELP } from '../hooks/register'
+import { HELP, selectedEffort } from '../hooks/register'
 
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
 const SURFACES = ['terminal', 'desktop'] as const
@@ -13,11 +13,14 @@ function world(on: On, status = DIRTY) {
     gitCalls: 0,
     status,
     isModelDown: false,
+    /** What settings.read answers: the effort picks a test sets. */
+    settings: {} as Record<string, unknown>,
     clock: mock.clock(on, { now: 0 }),
     /** A git read waits on this, answering with the status it saw when it started. */
     gate: undefined as Promise<void> | undefined,
     commands: [] as { name: string; argumentHint?: string }[],
   }
+  on('settings.read', () => ({ value: seen.settings }))
   on('session.model', () => {
     if (seen.isModelDown) throw new Error('no model yet')
     return { value: 'claude-opus-5-5[1m]' }
@@ -108,6 +111,40 @@ test('the effort comes from the main loop, never a subagent', async ($, on) => {
   await $.turn.complete({ turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'done' } as never)
   const ui = await mount($, 'terminal')
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · Emberholm/ })).toBeDefined()
+})
+
+const TURN_DONE = { turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'done' } as never
+
+test("a request's own effort beats an unchanged pick, even when it lands before the row starts", async ($, on) => {
+  const seen = world(on)
+  seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'max' } } }
+  // After a hot reload the turn's request comes first; the turn's end starts the row.
+  const step = { turnId: 't', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }
+  await drain($.turn.step(step as never))
+  await $.turn.complete(TURN_DONE)
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 high · / })).toBeDefined()
+  // A refresh with the same pick keeps it.
+  await seen.clock.advance(30_000)
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 high · / })).toBeDefined()
+})
+
+test('the effort picked in settings shows before the first request, and a new pick replaces it', async ($, on) => {
+  const seen = world(on)
+  seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
+  await start($, 'terminal')
+  const ui = await mount($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · Emberholm/ })).toBeDefined()
+  seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
+  await seen.clock.advance(30_000)
+  const after = await mount($, 'terminal')
+  expect(await after.find({ type: 'Text', text: /Opus 5\.5 medium · Emberholm/ })).toBeDefined()
+})
+
+test('the picked effort is read per model, with the top-level setting as the fallback', () => {
+  const settings = { effortLevel: 'max', modelSettings: { 'claude-fable-5-1': { effortLevel: 'low' } } }
+  expect(selectedEffort(settings, 'claude-fable-5-1[1m]')).toBe('low')
+  expect(selectedEffort(settings, 'claude-opus-5-5')).toBe('max')
+  expect(selectedEffort({}, 'claude-opus-5-5')).toBeUndefined()
 })
 
 test('a shell command rereads git, so a checkout shows at once', async ($, on) => {

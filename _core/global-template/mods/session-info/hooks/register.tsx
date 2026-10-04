@@ -19,6 +19,10 @@ export const HELP = [
 const live: {
   isStarted: boolean
   effort?: string
+  /** The effort picked for the model in settings, as last read; a change there is a new pick. */
+  selected?: string
+  /** Settings were read once in this load: only a later change counts as a new pick. */
+  hasReadPick: boolean
   refreshMs: number
   maxFiles: number
   reading?: Promise<void>
@@ -28,6 +32,7 @@ const live: {
   refreshMs: 30_000,
   maxFiles: 8,
   isReadAgainWanted: false,
+  hasReadPick: false,
 }
 
 function baseName(folder: string): string {
@@ -43,10 +48,34 @@ async function readGit($: EngineInterface): Promise<GitState> {
   }
 }
 
+// The effort picked for `model`: `/effort` and the model picker keep it per model under `modelSettings`,
+// an older settings file at the top level. Nothing picked: the model's own default, which only a
+// request shows.
+export function selectedEffort(config: Record<string, unknown>, model: string): string | undefined {
+  const bare = model.replace(/\[[^\]]*\]$/, '')
+  const perModel = config.modelSettings as Record<string, { effortLevel?: unknown }> | undefined
+  const effort = perModel?.[bare]?.effortLevel ?? config.effortLevel
+  return typeof effort === 'string' || typeof effort === 'number' ? String(effort) : undefined
+}
+
+// The row shows the effort before the first request: the one picked in settings. A request's own
+// effort (after any downgrade for the model) replaces it, until the pick changes again.
+// The first read in a load only fills an empty row: a request may already have shown the effort it
+// used (after a hot reload, the turn's request lands before the row starts).
+function takeEffort(config: Record<string, unknown>, model: string): void {
+  const selected = selectedEffort(config, model)
+  const isNewPick = live.hasReadPick && selected !== live.selected
+  if (isNewPick || live.effort === undefined) live.effort = selected ?? live.effort
+  live.selected = selected
+  live.hasReadPick = true
+}
+
 // A failed read never rejects the hook that asked for it: the row keeps its last reading.
 async function readOnce($: EngineInterface): Promise<void> {
   try {
+    const config = $.settings.read().catch(() => ({}))
     const [model, root, git] = await Promise.all([$.session.model(), $.session.root(), readGit($)])
+    takeEffort((await config) ?? {}, model)
     const next: SessionLine = { model: modelName(model), effort: live.effort, project: baseName(root), git }
     await update($, line, () => next)
   } catch {
