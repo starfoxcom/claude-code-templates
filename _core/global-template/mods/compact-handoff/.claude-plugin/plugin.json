@@ -2,6 +2,7 @@
   "name": "compact-handoff",
   "version": "0.1.0",
   "description": "Turns compaction into a focused hand-off: the person's messages kept word for word, a budgeted hand-off, and a recall tool over the full transcript.",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "mode": {
       "type": "string",
