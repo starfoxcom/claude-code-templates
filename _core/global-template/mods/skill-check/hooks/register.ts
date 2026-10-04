@@ -12,7 +12,7 @@ export type Contracts = Record<string, Record<string, Step[]>>
 
 type Run = { skill: string; steps: Step[]; seen: Set<number>; isFollowedUp: boolean }
 
-const live: { run?: Run } = {}
+const live: { run?: Run; agentSkills: number } = { agentSkills: 0 }
 
 export function missingSteps(run: Run): Step[] {
   return run.steps.filter((step, index) => !run.seen.has(index))
@@ -59,19 +59,26 @@ async function startRun($: EngineInterface, skill: string): Promise<void> {
 }
 
 export const register: Register = on => {
-  on('command.run', async ($, e, next) => {
-    await startRun($, e.command)
-    return next(e)
+  // A run starts where a skill's prompt is expanded: `/name` and the Skill tool alike. Hooking
+  // every command instead would put this mod's name on each command's reply.
+  on('skill.prompt', async ($, e, next) => {
+    const result = await next(e)
+    if (live.agentSkills === 0) await startRun($, e.skill)
+    return result
   })
 
   on('tool.call', async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId || 'deny' in result || result.isError) return result
-    if (e.tool === 'Skill') {
-      const skill = String((e as unknown as { skill?: string }).skill ?? '').replace(/^\//, '')
-      if (skill) await startRun($, skill)
-      return result
+    // A subagent's Skill call expands its prompt inside this call: no run for the main session.
+    if (e.agentId && e.tool === 'Skill') {
+      live.agentSkills += 1
+      try {
+        return await next(e)
+      } finally {
+        live.agentSkills -= 1
+      }
     }
+    const result = await next(e)
+    if (e.agentId || 'deny' in result || result.isError || e.tool === 'Skill') return result
     if (live.run) {
       const { tool, tool_use_id, consent, agentId, ...input } = e as unknown as Record<string, unknown>
       markSeen(live.run, String(tool), JSON.stringify(input))
