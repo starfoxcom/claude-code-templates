@@ -457,3 +457,20 @@ test('a refused command name never stops the rest of the session start', async (
   await $.session.start({ cwd: 'C:/Repos/x' } as never)
   expect(mirror(seen).carried?.map(task => task.id)).toEqual(['7'])
 })
+
+test("a finished session's leftovers are carried over once, never into every later session", async ($, on) => {
+  const seen = world(on)
+  const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK] }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify(old))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  expect(mirror(seen).carried?.map(task => task.id)).toEqual(['7'])
+  expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBe(NOW)
+})
+
+test('a list already handed over is not carried again', async ($, on) => {
+  const seen = world(on)
+  const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK], handedOverAt: 1 }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify(old))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  expect(mirror(seen).carried).toBeUndefined()
+})
