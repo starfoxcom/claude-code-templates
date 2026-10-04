@@ -515,18 +515,6 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('a disarm during a pause holds across a hot reload: the session does not resume', async ($, on) => {
-  const seen = world(on)
-  // As the hot-reload test above, after a disarm the earlier instance recorded as a claim on disk.
-  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE }
-  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-a' }))
-  seen.claims.add(`${KEY}-sess-a`)
-  seen.claims.add(`declined-${KEY}-sess-a`)
-  await $.turn.start({ turnId: 't2' } as never)
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toEqual([])
-})
-
 test('a session resumes once per reset, even beside an instance left by a hot reload', async ($, on) => {
   const seen = world(on)
   const pause = {
@@ -824,37 +812,81 @@ test('arming and disarming by hand write the record, and every minute the sessio
   expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
 })
 
-test('the automatic pause arms a session it wraps up; a restart after the reset still resumes it', async ($, on) => {
-  const seen = world(on)
-  await start($)
-  await doWork($)
-  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
-  await endTurn($)
-  expect(recordOf(seen, 'sess-a')?.arm).toEqual({ ...ARM_5H, byPause: true })
-})
-
 test('a session restarted after the reset of its pause resumes once, with no "by hand" card', async ($, on) => {
   const seen = world(on)
-  // The reset passed while the session was closed: its wake was two minutes ago.
+  // The reset passed while the session was closed: its wake was two minutes ago, and it had met the pause.
   const resetsAt = '2026-10-02T16:56:00.000Z'
-  const wakeAt = NOW - 2 * 60_000
   const pause: Pause = {
     status: 'active',
     kinds: ['five_hour'],
     percentUsed: 93,
     resetsAt,
-    wakeAt,
+    wakeAt: NOW - 2 * 60_000,
     triggeredBy: 'sess-a',
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
-  const arm = { kind: 'five_hour', resetsAt, wakeAt, byPause: true }
-  leave(seen, { session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm })
+  seen.claims.add(`${Date.parse(resetsAt)}-sess-a`)
   await start($)
-  await seen.clock.advance(0)
 
   expect(resumes(seen)).toHaveLength(1)
   expect(cardOf(seen)?.id).toBe(`reset:${resetsAt}`)
   expect(pauseOf(seen)?.status).toBe('done')
+  // Nothing of the pause is saved as an arm: only arms set by hand go to disk.
+  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+})
+
+test('a restart after another session marked the pause done still resumes it once', async ($, on) => {
+  const seen = world(on)
+  const resetsAt = '2026-10-02T16:56:00.000Z'
+  const done: Pause = {
+    status: 'done',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt,
+    wakeAt: NOW - 2 * 60_000,
+    triggeredBy: 'sess-b',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(done))
+  seen.claims.add(`${Date.parse(resetsAt)}-sess-a`)
+  await start($)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
+test('a new session never resumes on start, though the pause is done', async ($, on) => {
+  const seen = world(on)
+  const resetsAt = '2026-10-02T16:56:00.000Z'
+  const base: Pause = {
+    status: 'done',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt,
+    wakeAt: NOW - 2 * 60_000,
+    triggeredBy: 'sess-b',
+  }
+  // A new session: it never met the pause.
+  seen.files.set(PAUSE_FILE, JSON.stringify(base))
+  await start($)
+  expect(resumes(seen)).toEqual([])
+})
+
+test('a restart after a cancelled pause, or a day past its reset, does not resume', async ($, on) => {
+  const seen = world(on)
+  const resetsAt = '2026-10-01T16:56:00.000Z'
+  const old: Pause = {
+    status: 'done',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt,
+    wakeAt: NOW - TAKEOVER_WITHIN_MS,
+    triggeredBy: 'sess-a',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(old))
+  seen.claims.add(`${Date.parse(resetsAt)}-sess-a`)
+  await start($)
+  expect(resumes(seen)).toEqual([])
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...old, status: 'cancelled', wakeAt: NOW - 60_000 }))
+  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
+  expect(resumes(seen)).toEqual([])
 })
 
 test("a new session alone in the project takes over a closed session's arm, and only once", async ($, on) => {
@@ -879,36 +911,6 @@ test('with another session open in the project, or the arm in another project, n
   expect(recordOf(seen, 'sess-old')?.arm).toEqual(ARM_5H)
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toEqual([])
-})
-
-test('a disarm during a pause sticks: the minute check does not arm the session again', async ($, on) => {
-  const seen = world(on)
-  await start($)
-  await doWork($)
-  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
-  await endTurn($)
-  expect(recordOf(seen, 'sess-a')?.arm).toEqual({ ...ARM_5H, byPause: true })
-
-  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
-  await seen.clock.advance(60_000)
-  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
-  // Nor does the pause's own wake: the session stays put at the reset.
-  await seen.clock.advance(WAKE - NOW - 60_000)
-  expect(resumes(seen)).toEqual([])
-})
-
-test("another session's cancel drops the arm the pause gave this session", async ($, on) => {
-  const seen = world(on)
-  await start($)
-  await doWork($)
-  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
-  await endTurn($)
-  const pause = pauseOf(seen)
-  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'cancelled' }))
-
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toEqual([])
-  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
 })
 
 test('an ending session is closed at once, keeps its arm, and checks in no more', async ($, on) => {
