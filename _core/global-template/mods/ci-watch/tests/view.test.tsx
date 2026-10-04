@@ -34,6 +34,18 @@ const SUMMARY_CASES: { name: string; watch: Partial<Watch>; text: string; color:
     text: '⏰ PR 7 · stuck pending',
     color: 'yellow',
   },
+  {
+    name: 'all passed, not yet settled',
+    watch: { checks: { a: 'pass', b: 'skipping' } },
+    text: '⏳ PR 7 · all 2 passed, confirming',
+    color: 'green',
+  },
+  {
+    name: 'some still running',
+    watch: { checks: { a: 'pass', b: 'pending' } },
+    text: '⏳ PR 7 · 1/2 done',
+    color: 'yellow',
+  },
   { name: 'no checks yet', watch: {}, text: '⏳ PR 7 · 0/0 done', color: 'yellow' },
 ]
 
