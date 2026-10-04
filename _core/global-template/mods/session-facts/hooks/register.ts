@@ -3,7 +3,7 @@ import type { EngineInterface, Register, SessionRateLimit, TurnUsage } from 'cla
 
 import type { Budgets, CacheCheck } from '../types'
 import { compactedMark, contextText, registerBudgetsView } from './budgets'
-import { checkCache, nextLifetime } from './cache'
+import { checkCache, nextLifetime, READ_CACHE_LINES, writtenLifetime } from './cache'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 // The hooks run in a sandbox with no time zone of its own, so the host's
@@ -184,6 +184,20 @@ async function noteCache($: EngineInterface, usage: TurnUsage): Promise<void> {
   live.isWindowFresh = false
 }
 
+// The lifetime the API wrote the cache with, read off the transcript once the turn is on disk;
+// the guess from misses stands while the transcript cannot be read.
+async function readLifetime($: EngineInterface, transcript: string): Promise<void> {
+  try {
+    const { exitCode, stdout } = await $.process.run([...READ_CACHE_LINES, transcript], { timeoutMs: 5_000 })
+    const written = exitCode === 0 ? writtenLifetime(stdout) : undefined
+    if (written === undefined) return
+    live.cacheLifetimeMs = written
+    await refreshBudgets($)
+  } catch {
+    // The countdown keeps the lifetime it had.
+  }
+}
+
 // A hot reload starts the module over without a new session.start, so the
 // first prompt after one sets up too.
 async function setUp($: EngineInterface): Promise<void> {
@@ -225,6 +239,13 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (!live.isSetUp) await setUp($)
     else await refreshBudgets($)
+    return result
+  })
+
+  // The main conversation's turn is over and written down; a subagent stops through SubagentStop.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (e.transcript_path) void readLifetime($, e.transcript_path)
     return result
   })
 
