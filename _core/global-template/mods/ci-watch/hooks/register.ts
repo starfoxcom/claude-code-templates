@@ -30,7 +30,7 @@ export const HELP = [
 ].join('\n')
 
 const live = {
-  pollMs: 60_000,
+  pollMs: 30_000,
   timeoutMs: 60 * 60_000,
   watches: [] as Watch[],
   isPolling: false,
@@ -54,18 +54,22 @@ export function settle(
   now: number,
   timeoutMs: number,
   quietMs: number,
+  isHeadCurrent = false,
 ): Watch {
   const names = Object.keys(checks)
   const isQuiet = names.length > 0 && names.every(name => !PENDING.has(checks[name] ?? ''))
   const stablePolls = isQuiet ? watch.stablePolls + 1 : 0
   const quietSince = isQuiet ? (watch.quietSince ?? now) : undefined
-  const next: Watch = { ...watch, checks, stablePolls, quietSince }
+  const hasRun = watch.hasRun || (isHeadCurrent && !isQuiet && names.length > 0)
+  const next: Watch = { ...watch, checks, stablePolls, quietSince, ...(hasRun ? { hasRun } : {}) }
   // Nothing wakes the session while any check or workflow still runs: a fix pushed mid-run
-  // restarts the rest. Two quiet polls also let a workflow that starts late show up, and the
-  // checks must stay quiet a full poll interval: instances left by a hot reload poll seconds
-  // apart, and right after a push GitHub can still answer with the old commit's results.
+  // restarts the rest. Once a check was seen running on this head, the first quiet poll settles:
+  // the results are this commit's. Without that, right after a push GitHub can still answer with
+  // the old commit's results, so two quiet polls a full poll interval apart are needed (instances
+  // left by a hot reload poll seconds apart).
   const hasFailed = names.some(name => FAILED.has(checks[name] ?? ''))
-  if (stablePolls >= SETTLE_POLLS && now - (quietSince ?? now) >= quietMs)
+  const isConfirmed = hasRun || (stablePolls >= SETTLE_POLLS && now - (quietSince ?? now) >= quietMs)
+  if (isQuiet && isConfirmed)
     return { ...next, outcome: hasFailed ? 'failed' : 'passed', settledAt: now }
   if (now - watch.startedAt > timeoutMs) return { ...next, outcome: 'timeout', settledAt: now }
   return next
@@ -415,7 +419,15 @@ async function poll($: EngineInterface): Promise<void> {
     const head = await headOf($, current.repo, current.number)
     const base =
       head && head !== current.headSha
-        ? { ...current, headSha: head, startedAt: now, stablePolls: 0, quietSince: undefined, checks: {} }
+        ? {
+            ...current,
+            headSha: head,
+            startedAt: now,
+            stablePolls: 0,
+            checks: {},
+            quietSince: undefined,
+            hasRun: false,
+          }
         : current
     let checks: Record<string, string> | undefined
     try {
@@ -431,7 +443,7 @@ async function poll($: EngineInterface): Promise<void> {
       // next poll tries again. Only the time limit can settle the watch meanwhile.
     }
     const next = checks
-      ? settle(base, checks, now, live.timeoutMs, live.pollMs)
+      ? settle(base, checks, now, live.timeoutMs, live.pollMs, head !== '' && head === base.headSha)
       : now - base.startedAt > live.timeoutMs
         ? { ...base, outcome: 'timeout' as const, settledAt: now }
         : base
@@ -471,7 +483,7 @@ async function startPolling($: EngineInterface): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
-  live.pollMs = Number(options.pollSeconds ?? 60) * 1000
+  live.pollMs = Number(options.pollSeconds ?? 30) * 1000
   live.timeoutMs = Number(options.timeoutMinutes ?? 60) * 60_000
   registerView(on)
   settings(on, options)
