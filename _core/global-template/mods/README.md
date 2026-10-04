@@ -99,10 +99,11 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
 | `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days) |
 | `runners` | `runners.json` (optional): your own runner list, read at session start; the last reading lives in the session |
+| `session-facts` | `<session>.json`: the last reply's time, the prompt-cache lifetime and the last cache check, so the countdown survives a reload; files of other sessions are swept two days after they were last written |
 
 ## Rows in place of a status line
 
-Four mods each draw one row above the prompt: `session-info` (the session), `ci-watch` (CI), `runners` (local runners) and `session-facts` (budgets). Together they show what a command status line would, with buttons and details a status line cannot have, and they draw in the terminal and in the Desktop app alike; the Desktop app does not draw a command status line. These templates ship no status line any more. If `~/.claude/settings.json` still has a `statusLine` block from an older setup, remove it once the rows are installed, so the terminal does not show the same facts twice. The older `statusline.js` left files under `~/.claude/mods-data/statusline/` and `~/.claude/mods-data/session-facts/`; both folders can be deleted.
+Four mods each draw one row above the prompt: `session-info` (the session), `ci-watch` (CI), `runners` (local runners) and `session-facts` (budgets). Together they show what a command status line would, with buttons and details a status line cannot have, and they draw in the terminal and in the Desktop app alike; the Desktop app does not draw a command status line. These templates ship no status line any more. If `~/.claude/settings.json` still has a `statusLine` block from an older setup, remove it once the rows are installed, so the terminal does not show the same facts twice. The older `statusline.js` left files under `~/.claude/mods-data/statusline/`, which can be deleted. Its per-session window files in `~/.claude/mods-data/session-facts/` are swept by `session-facts` itself after two days; keep that folder, it holds the mod's own files now.
 
 ---
 
