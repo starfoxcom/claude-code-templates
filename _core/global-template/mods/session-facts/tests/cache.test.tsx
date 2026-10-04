@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { checkCache, nextLifetime, SHORT_LIFETIME_MS } from '../hooks/cache'
+import { checkCache, nextLifetime, SHORT_LIFETIME_MS, writtenLifetime } from '../hooks/cache'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -69,15 +69,14 @@ const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 10
 function world(on: On) {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
-  on('process.run', () => ({
-    value: {
-      exitCode: 0,
-      stdout: '420 America/Phoenix\n',
-      stderr: '',
-      isStdoutTruncated: false,
-      isStderrTruncated: false,
-    },
-  }))
+  // The zone probe, or the transcript's cache lines when the command names the transcript.
+  const transcript = { lines: '', reads: [] as string[] }
+  on('process.run', ($, e) => {
+    const path = e.argv.length > 3 ? e.argv[3] : undefined
+    if (path) transcript.reads.push(path)
+    const stdout = path ? transcript.lines : '420 America/Phoenix\n'
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('session.usage', () => ({
     value: { startedAt: 0, context: { tokens: 250_000, window: 500_000 }, rateLimits: [] },
   }))
@@ -98,8 +97,9 @@ function world(on: On) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
   })
   on('turn.complete', () => ({ text: '' }))
+  on('classic.Stop', () => ({}) as never)
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { clock, reply }
+  return { clock, reply, transcript }
 }
 
 // A streaming event runs only as it is read.
@@ -174,6 +174,47 @@ test('only the first request of the main conversation counts', async ($, on) => 
   await turn($, { agentId: 'a1' })
   reply.usage = null
   await turn($)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache/ })).toBeUndefined()
+})
+
+const line = (written: Record<string, number>, extra: object = {}) =>
+  JSON.stringify({ ...extra, message: { usage: { cache_creation: written } } })
+const ONE_HOUR = line({ ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1_455 })
+const FIVE_MINUTES = line({ ephemeral_5m_input_tokens: 900, ephemeral_1h_input_tokens: 0 })
+
+test('writtenLifetime: the newest main-conversation write names the lifetime', () => {
+  expect(writtenLifetime(ONE_HOUR)).toBe(HOUR)
+  expect(writtenLifetime(FIVE_MINUTES)).toBe(SHORT_LIFETIME_MS)
+  expect(writtenLifetime([ONE_HOUR, FIVE_MINUTES].join('\n'))).toBe(SHORT_LIFETIME_MS)
+  expect(writtenLifetime([FIVE_MINUTES, ONE_HOUR].join('\n'))).toBe(HOUR)
+  // A subagent's line, a write of nothing and a cut-off line are skipped.
+  const subagent = line({ ephemeral_5m_input_tokens: 900 }, { isSidechain: true })
+  const nothing = line({ ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 })
+  expect(writtenLifetime([ONE_HOUR, subagent, nothing, '{"message":{"us'].join('\n'))).toBe(HOUR)
+  expect(writtenLifetime('')).toBeUndefined()
+})
+
+const STOP = { transcript_path: 'C:/t/s1.jsonl', stop_hook_active: false } as never
+
+test('the countdown runs on the lifetime the transcript shows, not the setting', async ($, on) => {
+  const { transcript } = world(on)
+  transcript.lines = FIVE_MINUTES
+  await start($)
+  await turn($)
+  await $.classic.Stop(STOP)
+  expect(transcript.reads).toEqual(['C:/t/s1.jsonl'])
+  const ui = await row($)
+  const text = /^cache 5m left · cold start 250k$/
+  expect(await ui.find({ type: 'Text', text, color: 'yellow' } as never)).toBeDefined()
+})
+
+test('an unreadable transcript keeps the setting', async ($, on) => {
+  const { transcript } = world(on)
+  transcript.lines = 'not json'
+  await start($)
+  await turn($)
+  await $.classic.Stop(STOP)
   const ui = await row($)
   expect(await ui.find({ type: 'Text', text: /^cache/ })).toBeUndefined()
 })

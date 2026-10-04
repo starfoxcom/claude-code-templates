@@ -41,7 +41,7 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
 | `usage-guard` | `wakeDelayMinutes` | `2` | How long after the reset sessions resume. |
 | `session-facts` | `planWarnAt` | `75` | Plan usage (%) at which a window turns yellow and shows when it resets; it turns red at `usage-guard`'s `wrapUpAt`. |
 | `session-facts` | `cacheWarnMinutes` | `10` | The prompt-cache countdown shows once this few minutes are left. |
-| `session-facts` | `cacheTtlMinutes` | `60` | How long the prompt cache stays warm after a response: 60 on a one-hour cache, 5 on the five-minute one. A miss between 5 minutes and this lifetime switches the countdown to 5 minutes until a warm request outlives them. |
+| `session-facts` | `cacheTtlMinutes` | `60` | The prompt-cache lifetime to assume until it is read from the session transcript after each reply (the API records which lifetime each cache write used: 60 minutes on a plan within its included usage, 5 past it or on an API key), and whenever the transcript cannot be read. In that fallback, a miss between 5 minutes and this lifetime switches the countdown to 5 minutes until a warm request outlives them. |
 | `session-info` | `refreshSeconds` | `30` | How often git is reread between turns, to catch a branch switch or an edit made outside the session. `0` rereads only after turns and shell commands. |
 | `session-info` | `maxFiles` | `8` | How many changed files the expanded row lists before it says how many more. |
 | `runners` | `checkSeconds` | `60` | How often processes, runners, queued runs and schedules are read (schedules at most once an hour). |
