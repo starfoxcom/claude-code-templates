@@ -63,8 +63,9 @@ function contextPart(tokens: number | undefined, fullWindow: number, now: number
   return fill === undefined ? `${text}${mark} (unknown until the first response of this window)` : text + mark
 }
 
+// A fresh session learns its plan figures from its first response; until then the line says so.
 function planPart(limits: readonly SessionRateLimit[]): string {
-  if (limits.length === 0) return ''
+  if (limits.length === 0) return ' | plan used: unknown until the first response'
   const parts = limits.map(limit => `${LIMIT_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')} ${limit.percentUsed}%`)
   return ` | plan used: ${parts.join(', ')}`
 }

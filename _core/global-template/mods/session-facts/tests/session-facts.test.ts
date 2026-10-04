@@ -74,7 +74,8 @@ test('an unreadable host zone and window fall back instead of failing the prompt
 
   expect(seen[0]).toContain('2026-10-02 16:00:00 UTC (host zone unread)')
   expect(seen[0]).toContain('| ctx -- (unknown until the first response of this window)')
-  expect(seen[0]).not.toContain('plan used')
+  // A fresh session has no plan figures before its first response: the line says so instead of dropping them.
+  expect(seen[0]).toContain('| plan used: unknown until the first response |')
 })
 
 const SUMMARY = { role: 'user', text: 'SUMMARY', toolUses: [] }
