@@ -234,8 +234,11 @@ test('an unreadable transcript keeps the setting', async ($, on) => {
 const MEMORY = 'C:/Users/me/.claude/mods-data/session-facts/s1.json'
 
 test('parseMemory: the saved facts, or nothing for a torn or foreign file', () => {
-  const saved = { lastResponseAt: NOW, lifetimeMs: HOUR, lastModel: 'm', check: { at: NOW, resent: 9, miss: 'early' } }
+  const check = { at: NOW, resent: 9, miss: 'early' }
+  const saved = { lastResponseAt: NOW, lifetimeMs: HOUR, isLifetimeRead: true, lastModel: 'm', check }
   expect(parseMemory(JSON.stringify(saved))).toEqual(saved)
+  // A file from before the flag existed reads as a guessed lifetime.
+  expect(parseMemory(JSON.stringify({ lastResponseAt: NOW, lifetimeMs: HOUR }))?.isLifetimeRead).toBe(false)
   expect(parseMemory(JSON.stringify({ ...saved, check: { at: NOW, resent: 9, miss: 'odd' } }))?.check).toBeUndefined()
   expect(parseMemory(JSON.stringify({ lifetimeMs: HOUR }))).toBeUndefined()
   expect(parseMemory('{"lastResponseAt": 1')).toBeUndefined()
@@ -297,4 +300,34 @@ test('a compaction later in a turn does not hide a real expiry on the next one',
   await turn($)
   const ui = await row($)
   expect(await ui.find({ type: 'Text', text: /^cache expired · resent 230k$/ })).toBeDefined()
+})
+
+test('a lifetime the transcript confirmed is not cut to 5 minutes by a mid-life break', async ($, on) => {
+  const { clock, reply, transcript } = world(on)
+  transcript.lines = ONE_HOUR
+  await start($)
+  await turn($)
+  await $.classic.Stop(STOP)
+  // Twenty minutes in, the prefix changes for another reason (a tool server attaching): a miss, not a 5-minute cache.
+  await clock.advance(20 * MINUTE)
+  reply.usage = COLD
+  await turn($)
+  await clock.advance(10 * MINUTE)
+  const ui = await row($)
+  // Named a break, and the countdown keeps the hour: 30 of its minutes are still ahead, so it stays hidden.
+  expect(await ui.find({ type: 'Text', text: /^cache broke early · resent 230k$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /left|likely expired|lasts 5m/ })).toBeUndefined()
+})
+
+test('a resumed plan session still says plan usage is unknown until its first reply', async ($, on) => {
+  const { files } = world(on)
+  files.set(MEMORY, JSON.stringify({ lastResponseAt: NOW - MINUTE, lifetimeMs: HOUR }))
+  const seen: string[] = []
+  on('prompt.submit', ($, e) => {
+    seen.push(...(e.context ?? []))
+    return { text: e.text, context: e.context }
+  })
+  await start($)
+  await $.prompt.submit({ text: 'hello again' } as never)
+  expect(seen.join('\n')).toContain('plan used: unknown until the first response')
 })
