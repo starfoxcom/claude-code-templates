@@ -119,9 +119,11 @@ function currentText(ui: Ui, tasks: readonly TaskRow[], active: readonly TaskRow
   }
   const upcoming = ordered(tasks).find(t => kindOf(t) === 'open')
   if (!upcoming) return null
+  // The open kind's own icon and color, as the list draws it.
+  const look = KINDS.find(k => k.kind === 'open')
   return (
-    <Text dimColor wrap="truncate-end">
-      · next #{upcoming.id} {upcoming.subject}{' '}
+    <Text key="tasks-next" color={look?.color} wrap="truncate-end">
+      · {look?.icon} next #{upcoming.id} {upcoming.subject}{' '}
     </Text>
   )
 }
