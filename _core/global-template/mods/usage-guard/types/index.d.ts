@@ -22,8 +22,9 @@ export type SettingsView = {
 }
 
 /**
- * A wake the person armed by hand (`/usage-guard arm 5h|week`): this session alone resumes its saved
- * work after that reset. Kept in state so a hot reload (a settings change, an edit) re-arms it.
+ * A wake that resumes this session's work after a reset, armed by hand (`/usage-guard arm 5h|week`).
+ * Kept in state so a hot reload (a settings change, an edit)
+ * re-arms it.
  */
 export type ArmedWake = {
   /** The limit's kind: `five_hour` or `seven_day`. */

@@ -1,25 +1,25 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { ArmedWake, UsageCard } from '../types'
+import type { Pause } from './plan'
+import {
+  CLAIM,
+  covers,
+  hotLimits,
+  NO_WORK_NOTICE,
+  joinPause,
+  LIMIT_NAMES,
+  limitName,
+  planArm,
+  planPause,
+  projectOf,
+  resetKey,
+  resumePrompt,
+  WRAP_UP_ARGS,
+} from './plan'
 import { stopCommandsFor } from './rules'
 import { register as settings, SETTINGS_PANE } from './settings'
-
-// One shared file tells every session on the machine that a pause is on, so
-// a session that never crossed the line itself still wraps up. Which sessions
-// have wrapped up is kept as claims beside it (see `claim`), never in this file,
-// so no two sessions rewrite it at once.
-export type Pause = {
-  status: 'active' | 'done' | 'cancelled'
-  kinds: string[]
-  percentUsed: number
-  resetsAt: string
-  wakeAt: number
-  triggeredBy: string
-  /** The reset the first pause of this run named. Kept when a later limit extends the pause, so the
-   * wrap-up, stop and resume claims (keyed on it) still run once per session. */
-  episode?: string
-}
 
 const CHECK_EVERY_MS = 60_000
 // How often the card above the prompt re-reads the shared files, so a Dismiss
@@ -32,54 +32,8 @@ const READ_ZONE = [
   '-e',
   'console.log(new Date().getTimezoneOffset() + " " + Intl.DateTimeFormat().resolvedOptions().timeZone)',
 ]
-const LIMIT_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly' }
-
-export const WRAP_UP_ARGS =
-  'Plan usage limit nearly reached (automatic wrap-up). Commit locally only: no push, no PR, no CI. ' +
-  'Save the hand-off so /session-start can resume, stop every background task and monitor, keep it short.'
 
 type Zone = { offsetMinutes: number; name: string }
-
-export function hotLimits(limits: readonly SessionRateLimit[], wrapUpAt: number): SessionRateLimit[] {
-  return limits.filter(limit => limit.resetsAt !== undefined && limit.percentUsed >= wrapUpAt)
-}
-
-export function planPause(hot: readonly SessionRateLimit[], delayMinutes: number, sessionId: string): Pause {
-  const latest = [...hot].sort((a, b) => Date.parse(b.resetsAt ?? '') - Date.parse(a.resetsAt ?? ''))[0]
-  const resetsAt = latest?.resetsAt ?? ''
-  return {
-    status: 'active',
-    kinds: hot.map(limit => limit.kind),
-    percentUsed: Math.max(...hot.map(limit => limit.percentUsed)),
-    resetsAt,
-    wakeAt: Date.parse(resetsAt) + delayMinutes * 60_000,
-    triggeredBy: sessionId,
-  }
-}
-
-const ARM_KINDS: Record<string, string> = { '5h': 'five_hour', week: 'seven_day' }
-
-// The wake `/usage-guard arm <5h|week>` sets: the named window's next reset plus the resume delay,
-// whatever its usage, or why there is none. A reading can carry a reset already past (check() skips
-// those too); that one is no reset to wait for.
-export function planArm(
-  limits: readonly SessionRateLimit[],
-  which: string,
-  delayMinutes: number,
-  now: number,
-): ArmedWake | string {
-  const kind = ARM_KINDS[which]
-  if (!kind) return 'Name the reset to wake at: /usage-guard arm 5h or /usage-guard arm week.'
-  const resetsAt = limits.find(limit => limit.kind === kind)?.resetsAt
-  // Written as "not later" so a reset time that does not parse (NaN) is refused too.
-  if (!resetsAt || !(Date.parse(resetsAt) > now))
-    return `No ${LIMIT_NAMES[kind]} reset is known yet, so there is nothing to arm.`
-  return { kind, resetsAt, wakeAt: Date.parse(resetsAt) + delayMinutes * 60_000 }
-}
-
-function limitName(pause: Pause): string {
-  return pause.kinds.map(kind => LIMIT_NAMES[kind] ?? kind.replace(/_/g, '-')).join(' + ')
-}
 
 // Module state: a hot reload starts it over, which is safe because the pause
 // itself lives in the shared file.
@@ -87,7 +41,8 @@ const live: {
   zone: Zone
   isTurnRunning: boolean
   isStarted: boolean
-  hasWork: boolean
+  /** The session id whose tool calls changed something: a /clear goes on under a new id with none. */
+  workSession?: string
   isStatusShown: boolean
   wakeTimer?: Timer
   /** The wake the person armed by hand (`armedWake`), counting down in this module. */
@@ -102,19 +57,20 @@ const live: {
   zone: { offsetMinutes: 0, name: 'UTC' },
   isTurnRunning: false,
   isStarted: false,
-  // Set by the first tool call that changed something; a session that only
-  // read has nothing to save, so near a limit it waits instead of wrapping up.
-  hasWork: false,
   isStatusShown: false,
   handled: new Set(),
   wrapUpAt: 90,
   delayMinutes: 2,
 }
 
-async function pausePath($: EngineInterface): Promise<string> {
+async function dataDir($: EngineInterface): Promise<string> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
-  return `${configured ?? `${home}/.claude`}/mods-data/usage-guard/pause.json`.replace(/\\/g, '/')
+  return `${configured ?? `${home}/.claude`}/mods-data/usage-guard`.replace(/\\/g, '/')
+}
+
+async function pausePath($: EngineInterface): Promise<string> {
+  return `${await dataDir($)}/pause.json`
 }
 
 async function readPause($: EngineInterface): Promise<Pause | undefined> {
@@ -129,53 +85,27 @@ async function writePause($: EngineInterface, pause: Pause): Promise<void> {
   await $.fs.write(await pausePath($), JSON.stringify(pause, null, 2))
 }
 
-// Claims under mods-data/usage-guard/claims/. `mkdir` is atomic, so of several
-// sessions acting on one pause at the same moment exactly one wins each claim:
-// `pause-<reset>`, the session that writes the pause and stops its project's
-// background work; `<reset>-<session>`, that session has wrapped up (or, opened
-// during the pause, only waits). The helper also makes the data folder, which
-// the engine's fs cannot, and sweeps claims older than two weeks.
-export const CLAIM =
-  'const fs=require("fs"),p=require("path");const [d,n]=process.argv.slice(1);const c=p.join(d,"claims");' +
-  'fs.mkdirSync(c,{recursive:true});for(const x of fs.readdirSync(c)){try{const f=p.join(c,x);' +
-  'if(Date.now()-fs.statSync(f).mtimeMs>12096e5)fs.rmdirSync(f)}catch{}}' +
-  'try{fs.mkdirSync(p.join(c,n));console.log("won")}catch(e){if(e.code!=="EEXIST")throw e;console.log("taken")}'
+async function runClaimHelper($: EngineInterface, name: string): Promise<{ exitCode: number; stdout: string }> {
+  return $.process.run(['node', '-e', CLAIM, await dataDir($), name.replace(/[^\w-]/g, '_')], { timeoutMs: 10_000 })
+}
 
-// True when this session won the claim; a helper that fails counts as a win, as
-// before claims existed, so a missing `node` never stops the wrap-up.
-async function claim($: EngineInterface, name: string): Promise<boolean> {
+// True when this session won the claim, false when it was taken, null when the helper failed and
+// nothing reached the disk.
+async function tryClaim($: EngineInterface, name: string): Promise<boolean | null> {
   if (live.handled.has(name)) return false
   live.handled.add(name)
-  const dir = (await pausePath($)).replace(/\/pause\.json$/, '')
   try {
-    const { exitCode, stdout } = await $.process.run(['node', '-e', CLAIM, dir, name.replace(/[^\w-]/g, '_')], {
-      timeoutMs: 10_000,
-    })
-    return exitCode !== 0 || stdout.trim() !== 'taken'
+    const { exitCode, stdout } = await runClaimHelper($, name)
+    return exitCode === 0 ? stdout.trim() !== 'taken' : null
   } catch {
-    return true
+    return null
   }
 }
 
-const resetKey = (pause: Pause) => String(Date.parse(pause.episode ?? pause.resetsAt))
-
-// A pause that already reaches a planned reset: the plan is part of it. Weekly usage only falls at its
-// reset, so a fresh reading after an extension plans that later reset; an earlier one is a stale reading.
-const covers = (pause: Pause | undefined, planned: Pause) =>
-  pause !== undefined && Date.parse(planned.resetsAt) <= Date.parse(pause.resetsAt)
-
-// A pause another session wrote since this one read the file: joined, never replaced. A later reset
-// extends it in place and keeps its episode, so no session wraps up or stops its work twice.
-function joinPause(shared: Pause, planned: Pause): Pause {
-  if (Date.parse(planned.resetsAt) <= Date.parse(shared.resetsAt)) return shared
-  return {
-    ...shared,
-    resetsAt: planned.resetsAt,
-    wakeAt: planned.wakeAt,
-    kinds: [...new Set([...shared.kinds, ...planned.kinds])],
-    percentUsed: Math.max(shared.percentUsed, planned.percentUsed),
-    episode: shared.episode ?? shared.resetsAt,
-  }
+// A helper that fails counts as a win, as before claims existed, so a missing `node` never stops
+// the wrap-up.
+async function claim($: EngineInterface, name: string): Promise<boolean> {
+  return (await tryClaim($, name)) !== false
 }
 
 async function readZone($: EngineInterface): Promise<void> {
@@ -279,9 +209,7 @@ async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
 // projects each stop their own, and of two sessions in one project only the first runs the commands.
 async function stopBackground($: EngineInterface, pause: Pause): Promise<void> {
   const root = await $.session.root()
-  // The whole path names the project: two repos may share a folder name (`~/work/app`, `~/clients/x/app`).
-  const project = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
-  if (!(await claim($, `stop-${resetKey(pause)}-${project}`))) return
+  if (!(await claim($, `stop-${resetKey(pause)}-${projectOf(root)}`))) return
   for (const argv of stopCommandsFor(root)) {
     await $.process.run(argv, { timeoutMs: 60_000 }).catch(() => undefined)
   }
@@ -291,7 +219,7 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
   setStatus($, `Plan limit near: paused until ${resumeAt}`)
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
-  if (!live.hasWork) {
+  if (live.workSession !== (await $.session.id())) {
     await notice(
       $,
       `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, waiting. Work resumes on ` +
@@ -299,6 +227,7 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
     )
     return
   }
+  await claim($, `work-${resetKey(pause)}-${await $.session.id()}`)
   await notice(
     $,
     `${limitName(pause)} plan usage at ${pause.percentUsed}%: saving work now. Work resumes on its own at ` +
@@ -341,27 +270,58 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
   }
 }
 
-async function resume($: EngineInterface, resetsAt: string): Promise<void> {
+// When a claim helper fails at the wake: whether this session should go on by itself is not known.
+const UNCONFIRMED_NOTICE =
+  'Plan limits have reset. Whether this session should go on by itself could not be confirmed, so it waits ' +
+  'for you; resume it by hand.'
+
+async function resume($: EngineInterface, resetsAt: string, isArmed = false): Promise<void> {
+  // Read first: an arm for this reset counts even if its own timer clears it while this one runs.
+  const isArmedHere = isArmed || (await read($, armedWake))?.resetsAt === resetsAt
   const pause = await readPause($)
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
   // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
   // timer beside this one. The shared `done` status cannot be the claim: every session resumes.
-  if (!(await claim($, `resume-${resetKey(pause)}-${await $.session.id()}`))) return
+  const won = await tryClaim($, `resume-${resetKey(pause)}-${await $.session.id()}`)
+  if (won === false) return
   if (pause.status === 'active') await writePause($, { ...pause, status: 'done' })
   setStatus($, undefined)
   await showCard($, `reset:${resetsAt}`, 'Plan limits have reset. Sessions are resuming their saved work.')
+  // Fails closed: with no resume claim on disk, an instance a hot reload left beside this one could
+  // win it too, and find the work claim this one's question made.
+  if (won === null) return notice($, UNCONFIRMED_NOTICE)
+  // Only a session that saved work, or one armed, goes on by itself. Another session in the project
+  // would rebuild the same hand-off and work the same tasks beside it, with nobody watching either.
+  const work = isArmedHere || (await hadWork($, pause))
+  if (work === null) return notice($, UNCONFIRMED_NOTICE)
+  // Worded as what is on record, not what happened: a wrap-up whose own claim failed before a hot
+  // reload, or one before a /clear, saved work that left no claim under this session's id.
+  if (!work) return notice($, NO_WORK_NOTICE)
   await resumeWork($, 'Plan limits have reset: resuming the saved work.')
 }
 
+// A wrap-up with work leaves a claim (this instance remembers it as handled, another finds it taken).
+// Asking makes the claim for a session without one, which is harmless: only a session whose resume
+// claim is on disk asks, so no other instance gets this far for it.
+// Unknown (null) when the helper fails: a session told it saved nothing would never be resumed by hand.
+async function hadWork($: EngineInterface, pause: Pause): Promise<boolean | null> {
+  const name = `work-${resetKey(pause)}-${await $.session.id()}`
+  if (live.handled.has(name)) return true
+  live.handled.add(name)
+  try {
+    const { exitCode, stdout } = await runClaimHelper($, name)
+    return exitCode === 0 ? stdout.trim() === 'taken' : null
+  } catch {
+    return null
+  }
+}
+
+// Never the project's /session-start: a ritual that proposes a plan and waits for an OK would wake the
+// session only to stop it again. The engine runs a plugin's prompt once the session is idle, so a
+// person typing meanwhile is never cut off.
 async function resumeWork($: EngineInterface, text: string): Promise<void> {
   await notice($, text)
-  if (await hasCommand($, 'session-start')) {
-    void $.command.run({ command: 'session-start' }).catch(() => undefined)
-  } else {
-    void $.prompt
-      .submit({ text: '[usage-guard] Plan limits have reset. Resume the saved work from your hand-off.' })
-      .catch(() => undefined)
-  }
+  void $.prompt.submit({ text: resumePrompt(text) }).catch(() => undefined)
 }
 
 async function armWake($: EngineInterface, pause: Pause): Promise<void> {
@@ -399,24 +359,34 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   }
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) {
-    const later: ArmedWake = { kind: arm.kind, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
-    await update($, armedWake, () => later)
+    const later: ArmedWake = { ...arm, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
+    await setArm($, later)
     await scheduleArm($, later)
     return
   }
-  // An instance left by a hot reload may fire the same arm beside this one: one wins the claim.
-  if (!(await claim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`))) return
-  await update($, armedWake, () => null)
-  if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled')
-    return resume($, pause.resetsAt)
-  await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
+  // An instance left by a hot reload may fire the same arm beside this one: one wins the claim. With no
+  // claim on disk the other could win it too, so a failed helper resumes nothing (fails closed).
+  const won = await tryClaim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`)
+  if (won === false) return
+  // The arm stays set until the resume has run, so the pause's own timer, firing beside this one, sees it.
+  const isPauseReset = pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled'
+  if (won === null) await notice($, UNCONFIRMED_NOTICE)
+  else if (isPauseReset) await resume($, arm.resetsAt, true)
+  else await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
+  // Cleared only if still this arm: the person may have set another while the resume ran.
+  const now = await read($, armedWake)
+  if (now?.resetsAt === arm.resetsAt && now.kind === arm.kind) await setArm($, null)
+}
+
+async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
+  await update($, armedWake, () => arm)
 }
 
 async function armByHand($: EngineInterface, which: string): Promise<string> {
   const { rateLimits } = await $.session.usage()
   const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
   if (typeof planned === 'string') return planned
-  await update($, armedWake, () => planned)
+  await setArm($, planned)
   await scheduleArm($, planned)
   return (
     `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
@@ -424,11 +394,12 @@ async function armByHand($: EngineInterface, which: string): Promise<string> {
   )
 }
 
+// Drops the arm set by hand. A pause's own resume is the pause's: /usage-guard cancel stops it.
 async function disarm($: EngineInterface): Promise<string> {
   const current = await read($, armedWake)
   live.armTimer?.cancel()
   live.armTimer = undefined
-  await update($, armedWake, () => null)
+  await setArm($, null)
   return current ? 'Disarmed: this session will not resume on its own.' : 'Nothing was armed.'
 }
 
@@ -509,9 +480,9 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
   await notice(
     $,
-    `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes on its own ` +
-      `at ${localTime(pause.wakeAt)}; /session-start then picks up the saved work. To skip the automatic ` +
-      `resume, run /usage-guard cancel.`,
+    `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes at ` +
+      `${localTime(pause.wakeAt)}: a session with saved work then goes on by itself, and one with nothing ` +
+      `on record is told. To skip the automatic resume, run /usage-guard cancel.`,
   )
 }
 
@@ -531,12 +502,7 @@ export const register: Register = (on, options) => {
     await readZone($)
     const pause = await readPause($)
     if (pause?.status === 'active') await meetPause($, pause)
-    await $.command.register({
-      name: 'usage-guard',
-      description: 'Usage pause status. Also: cancel, arm 5h|week (resume after that reset), disarm, settings',
-      argumentHint: ARGUMENT_HINT,
-    })
-
+    await registerSurface($)
     await startTimers($)
     return result
   })
@@ -591,7 +557,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     // Core marks a call read-only (true) or leaves the flag out, never false: any
     // answered call without the mark may have changed something.
-    if (!result.deny && !result.isError && result.isReadOnly !== true) live.hasWork = true
+    if (!result.deny && !result.isError && result.isReadOnly !== true) live.workSession = await $.session.id()
     return result
   })
 
@@ -604,6 +570,14 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'usage-guard' }, async ($, e) => ({ text: await runCommand($, e.args) }))
+}
+
+async function registerSurface($: EngineInterface): Promise<void> {
+  await $.command.register({
+    name: 'usage-guard',
+    description: 'Usage pause status. Also: cancel, arm 5h|week (resume after that reset), disarm, settings',
+    argumentHint: ARGUMENT_HINT,
+  })
 }
 
 const ARGUMENT_HINT = '[help | settings | arm 5h|week | disarm | cancel]'
