@@ -2,6 +2,8 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
+import { isMainSkill } from '../hooks/register'
+
 const CONTRACTS = {
   'my-game': {
     'session-close': [
@@ -91,4 +93,23 @@ test("a subagent's skill starts no run for the main session", async ($, on) => {
   await $.tool.call({ tool: 'Skill', skill: 'session-close', agentId: 'a1' } as never)
   await endTurn($)
   expect(seen.prompts).toEqual([])
+})
+
+test("the main session's skill starts a run even while a subagent's skill is expanding", async ($, on) => {
+  const seen = world(on)
+  let isInner = false
+  seen.duringSkill = async () => {
+    if (isInner) return runSkill($)
+    isInner = true
+    return $.tool.call({ tool: 'Skill', skill: 'session-close' } as never)
+  }
+  await $.tool.call({ tool: 'Skill', skill: 'other', agentId: 'a1' } as never)
+  await endTurn($)
+  expect(seen.prompts.length).toBe(1)
+})
+
+test('whose skill: a main call, or no call at all, is the main session', () => {
+  expect(isMainSkill({ main: 0, agent: 0 })).toBe(true)
+  expect(isMainSkill({ main: 1, agent: 1 })).toBe(true)
+  expect(isMainSkill({ main: 0, agent: 1 })).toBe(false)
 })

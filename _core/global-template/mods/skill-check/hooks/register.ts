@@ -12,7 +12,16 @@ export type Contracts = Record<string, Record<string, Step[]>>
 
 type Run = { skill: string; steps: Step[]; seen: Set<number>; isFollowedUp: boolean }
 
-const live: { run?: Run; agentSkills: number } = { agentSkills: 0 }
+// Skill tool calls in flight, the main session's and its subagents', counted apart.
+const live: { run?: Run; skillCalls: { main: number; agent: number } } = { skillCalls: { main: 0, agent: 0 } }
+
+// The engine's skill.prompt event does not say whose loop expands the prompt, so it is told apart by
+// the Skill calls in flight: the main session's own call, or none at all (a typed /name), starts a
+// run. Left out: a /name typed while only a subagent's Skill call is expanding its prompt, a window
+// as short as that expansion; that one run is missed.
+export function isMainSkill(calls: { main: number; agent: number }): boolean {
+  return calls.main > 0 || calls.agent === 0
+}
 
 export function missingSteps(run: Run): Step[] {
   return run.steps.filter((step, index) => !run.seen.has(index))
@@ -63,22 +72,23 @@ export const register: Register = on => {
   // every command instead would put this mod's name on each command's reply.
   on('skill.prompt', async ($, e, next) => {
     const result = await next(e)
-    if (live.agentSkills === 0) await startRun($, e.skill)
+    if (isMainSkill(live.skillCalls)) await startRun($, e.skill)
     return result
   })
 
   on('tool.call', async ($, e, next) => {
-    // A subagent's Skill call expands its prompt inside this call: no run for the main session.
-    if (e.agentId && e.tool === 'Skill') {
-      live.agentSkills += 1
+    // A Skill call expands its prompt inside this call: counted while it runs (see isMainSkill).
+    if (e.tool === 'Skill') {
+      const whose = e.agentId ? 'agent' : 'main'
+      live.skillCalls[whose] += 1
       try {
         return await next(e)
       } finally {
-        live.agentSkills -= 1
+        live.skillCalls[whose] -= 1
       }
     }
     const result = await next(e)
-    if (e.agentId || 'deny' in result || result.isError || e.tool === 'Skill') return result
+    if (e.agentId || 'deny' in result || result.isError) return result
     if (live.run) {
       const { tool, tool_use_id, consent, agentId, ...input } = e as unknown as Record<string, unknown>
       markSeen(live.run, String(tool), JSON.stringify(input))
