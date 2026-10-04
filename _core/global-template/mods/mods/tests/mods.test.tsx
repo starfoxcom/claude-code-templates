@@ -2,7 +2,7 @@ import type { CommandInfo, On } from 'claude-code'
 import type { Engine, Mounted } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HELP, modFolders } from '../hooks/register'
+import { expandHome, HELP, modFolders } from '../hooks/register'
 
 const PANE_PROPS = {
   title: 'Mods',
@@ -16,18 +16,25 @@ const DIRS = ['ci-watch', 'shared-pc', 'broken'].map(mod => String.raw`C:\Users\
 const MANIFESTS: Record<string, object> = {
   'C:/Users/me/.claude/mods/ci-watch/.claude-plugin/plugin.json': { name: 'ci-watch', description: 'Watches CI.' },
   'C:/Users/me/.claude/mods/shared-pc/.claude-plugin/plugin.json': { name: 'shared-pc', description: 'Turns.' },
+  '/home/me/.claude/mods/tasks/.claude-plugin/plugin.json': { name: 'tasks', description: 'Keeps the list.' },
+  '/opt/mods/runners/.claude-plugin/plugin.json': { name: 'runners', description: 'Local runners.' },
 }
+const WINDOWS_ENV = { OS: 'Windows_NT', CLAUDE_CODE_PLUGIN_DIRS: DIRS }
+// What the README allows on macOS and Linux: `:` between folders, `~` for the home folder.
+const POSIX_ENV = { HOME: '/home/me', CLAUDE_CODE_PLUGIN_DIRS: '~/.claude/mods/tasks:/opt/mods/runners/' }
 const COMMANDS: CommandInfo[] = [
   { name: 'ci-watch', description: 'The PRs this session watches', source: 'plugin' },
   { name: 'pc', description: 'The shared PC', source: 'plugin' },
   { name: 'help', description: 'Help', source: 'builtin' },
 ]
 
-function world(on: On) {
+function world(on: On, env: Record<string, string> = WINDOWS_ENV) {
   const seen = { opened: [] as string[], commands: [] as { name: string; argumentHint?: string }[] }
-  mock.env(on, { OS: 'Windows_NT', CLAUDE_CODE_PLUGIN_DIRS: DIRS })
+  mock.env(on, env)
   on('fs.read', ($, e) => {
-    const manifest = MANIFESTS[e.path.replaceAll('\\', '/')]
+    // The engine resolves a POSIX path against the host's drive when the tests run on Windows.
+    const path = e.path.replaceAll('\\', '/')
+    const manifest = MANIFESTS[path] ?? MANIFESTS[path.replace(/^[A-Za-z]:(?=\/(?:home|opt)\/)/, '')]
     if (!manifest) throw new Error('ENOENT')
     return { value: JSON.stringify(manifest) }
   })
@@ -85,4 +92,21 @@ test('the folder list splits on ; on Windows and on : elsewhere', () => {
   expect(modFolders(String.raw`C:\a; C:\b;`, true)).toEqual([String.raw`C:\a`, String.raw`C:\b`])
   expect(modFolders('/home/me/a:/home/me/b', false)).toEqual(['/home/me/a', '/home/me/b'])
   expect(modFolders(undefined, true)).toEqual([])
+})
+
+test('on macOS and Linux, a ~ folder and a trailing-slash folder both show their manifest', async ($, on) => {
+  world(on, POSIX_ENV)
+  const ui = await mountPane($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /2 mods loaded/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Keeps the list\./ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Local runners\./ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /No readable plugin\.json/ })).toBeUndefined()
+})
+
+test('a leading ~ is the home folder; a ~ inside a name is not', () => {
+  expect(expandHome('~/.claude/mods/tasks', '/home/me')).toBe('/home/me/.claude/mods/tasks')
+  expect(expandHome(String.raw`~\mods\tasks`, String.raw`C:\Users\me`)).toBe(String.raw`C:\Users\me\mods\tasks`)
+  expect(expandHome('~', '/home/me')).toBe('/home/me')
+  expect(expandHome('~other/mods', '/home/me')).toBe('~other/mods')
+  expect(expandHome('/opt/mods', '/home/me')).toBe('/opt/mods')
 })
