@@ -89,17 +89,23 @@ async function runClaimHelper($: EngineInterface, name: string): Promise<{ exitC
   return $.process.run(['node', '-e', CLAIM, await dataDir($), name.replace(/[^\w-]/g, '_')], { timeoutMs: 10_000 })
 }
 
-// True when this session won the claim; a helper that fails counts as a win, as
-// before claims existed, so a missing `node` never stops the wrap-up.
-async function claim($: EngineInterface, name: string): Promise<boolean> {
+// True when this session won the claim, false when it was taken, null when the helper failed and
+// nothing reached the disk.
+async function tryClaim($: EngineInterface, name: string): Promise<boolean | null> {
   if (live.handled.has(name)) return false
   live.handled.add(name)
   try {
     const { exitCode, stdout } = await runClaimHelper($, name)
-    return exitCode !== 0 || stdout.trim() !== 'taken'
+    return exitCode === 0 ? stdout.trim() !== 'taken' : null
   } catch {
-    return true
+    return null
   }
+}
+
+// A helper that fails counts as a win, as before claims existed, so a missing `node` never stops
+// the wrap-up.
+async function claim($: EngineInterface, name: string): Promise<boolean> {
+  return (await tryClaim($, name)) !== false
 }
 
 async function readZone($: EngineInterface): Promise<void> {
@@ -264,6 +270,11 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
   }
 }
 
+// When a claim helper fails at the wake: whether this session should go on by itself is not known.
+const UNCONFIRMED_NOTICE =
+  'Plan limits have reset. Whether this session should go on by itself could not be confirmed, so it waits ' +
+  'for you; resume it by hand.'
+
 async function resume($: EngineInterface, resetsAt: string, isArmed = false): Promise<void> {
   // Read first: an arm for this reset counts even if its own timer clears it while this one runs.
   const isArmedHere = isArmed || (await read($, armedWake))?.resetsAt === resetsAt
@@ -271,15 +282,18 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
   // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
   // timer beside this one. The shared `done` status cannot be the claim: every session resumes.
-  if (!(await claim($, `resume-${resetKey(pause)}-${await $.session.id()}`))) return
+  const won = await tryClaim($, `resume-${resetKey(pause)}-${await $.session.id()}`)
+  if (won === false) return
   if (pause.status === 'active') await writePause($, { ...pause, status: 'done' })
   setStatus($, undefined)
   await showCard($, `reset:${resetsAt}`, 'Plan limits have reset. Sessions are resuming their saved work.')
+  // Fails closed: with no resume claim on disk, an instance a hot reload left beside this one could
+  // win it too, and find the work claim this one's question made.
+  if (won === null) return notice($, UNCONFIRMED_NOTICE)
   // Only a session that saved work, or one armed, goes on by itself. Another session in the project
   // would rebuild the same hand-off and work the same tasks beside it, with nobody watching either.
   const work = isArmedHere || (await hadWork($, pause))
-  if (work === null) return notice($, 'Plan limits have reset. Whether this session saved work could not be ' +
-    'confirmed, so it waits for you; resume it by hand.')
+  if (work === null) return notice($, UNCONFIRMED_NOTICE)
   // Worded as what is on record, not what happened: a wrap-up whose own claim failed before a hot
   // reload, or one before a /clear, saved work that left no claim under this session's id.
   if (!work) return notice($, NO_WORK_NOTICE)
@@ -287,7 +301,8 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
 }
 
 // A wrap-up with work leaves a claim (this instance remembers it as handled, another finds it taken).
-// Asking makes the claim for a session without one, which is harmless: its resume claim is taken.
+// Asking makes the claim for a session without one, which is harmless: only a session whose resume
+// claim is on disk asks, so no other instance gets this far for it.
 // Unknown (null) when the helper fails: a session told it saved nothing would never be resumed by hand.
 async function hadWork($: EngineInterface, pause: Pause): Promise<boolean | null> {
   const name = `work-${resetKey(pause)}-${await $.session.id()}`
@@ -349,10 +364,14 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
     await scheduleArm($, later)
     return
   }
-  // An instance left by a hot reload may fire the same arm beside this one: one wins the claim.
-  if (!(await claim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`))) return
+  // An instance left by a hot reload may fire the same arm beside this one: one wins the claim. With no
+  // claim on disk the other could win it too, so a failed helper resumes nothing (fails closed).
+  const won = await tryClaim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`)
+  if (won === false) return
   // The arm stays set until the resume has run, so the pause's own timer, firing beside this one, sees it.
-  if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled') await resume($, pause.resetsAt, true)
+  const isPauseReset = pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled'
+  if (won === null) await notice($, UNCONFIRMED_NOTICE)
+  else if (isPauseReset) await resume($, arm.resetsAt, true)
   else await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
   // Cleared only if still this arm: the person may have set another while the resume ran.
   const now = await read($, armedWake)
