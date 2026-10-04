@@ -27,17 +27,24 @@ export const WRAP_UP_ARGS =
   'Save the hand-off so the work can resume after the reset, stop every background task and monitor, ' +
   'keep it short.'
 
-// What every wake submits. The session resumes on its own: the person armed it, or the automatic pause
-// did, exactly so the work goes on without them. A new session that took over a closed one's wake
-// starts with an empty conversation, hence the hand-off.
+// What every wake submits: to a session the person armed by hand, or to one the pause resumes because it
+// saved work at its wrap-up. Only the plan approval is waived, the one stop `/session-start` would add;
+// every step a project's rules keep for the person still waits for them. A wrap-up ends in a compaction
+// or a /clear more often than not, hence the hand-off.
 export function resumePrompt(reason: string): string {
   return (
-    `[usage-guard] ${reason} Continue the pending work now, without waiting for the person's OK or a plan ` +
-    'approval: this resume is automatic so the work goes on by itself. If this conversation does not hold ' +
-    "the work, rebuild it first from the newest hand-off, the task list and git. The project's own rules " +
-    'still apply.'
+    `[usage-guard] ${reason} Continue the pending work now; do not wait for a plan approval, this resume is ` +
+    'automatic. If this conversation does not hold the work, rebuild it first from the newest hand-off, the ' +
+    "task list and git. Every step the project's rules keep for the person (a push, a PR or merge, a visual " +
+    'check, anything destructive) still stops and waits for them.'
   )
 }
+
+// What a session hears at the reset when no saved work is on record under its id. Never "saved no work":
+// a wrap-up whose claim failed before a hot reload, or one before a /clear, left work and no record.
+export const NO_WORK_NOTICE =
+  'Plan limits have reset. No saved work is on record for this session, so it does not go on by itself; ' +
+  'pick up a hand-off by hand, for example with /session-start.'
 
 export function hotLimits(limits: readonly SessionRateLimit[], wrapUpAt: number): SessionRateLimit[] {
   return limits.filter(limit => limit.resetsAt !== undefined && limit.percentUsed >= wrapUpAt)
@@ -89,11 +96,11 @@ export function limitName(pause: Pause): string {
 // the engine's fs cannot, and sweeps claims older than two weeks.
 export const CLAIM =
   'const fs=require("fs"),p=require("path");const [d,n]=process.argv.slice(1);' +
-  'for(const s of ["claims"]){const c=p.join(d,s);fs.mkdirSync(c,{recursive:true});' +
+  'const c=p.join(d,"claims");fs.mkdirSync(c,{recursive:true});' +
   'for(const x of fs.readdirSync(c)){try{const f=p.join(c,x);' +
-  'if(Date.now()-fs.statSync(f).mtimeMs>12096e5)fs.rmSync(f,{recursive:true})}catch{}}}' +
-  'if(n){try{fs.mkdirSync(p.join(d,"claims",n));console.log("won")}' +
-  'catch(e){if(e.code!=="EEXIST")throw e;console.log("taken")}}'
+  'if(Date.now()-fs.statSync(f).mtimeMs>12096e5)fs.rmSync(f,{recursive:true})}catch{}}' +
+  'try{fs.mkdirSync(p.join(c,n));console.log("won")}' +
+  'catch(e){if(e.code!=="EEXIST")throw e;console.log("taken")}'
 
 export const resetKey = (pause: Pause) => String(Date.parse(pause.episode ?? pause.resetsAt))
 
