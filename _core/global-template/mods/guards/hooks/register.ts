@@ -3,6 +3,7 @@ import type { EngineInterface as Engine, Register } from 'claude-code'
 import { inspect } from './inspect'
 import type { Plan } from './inspect'
 import { checkAddedLines, checkBranch, checkText, describe } from './policy'
+import { register as settings, SETTINGS_PANE } from './settings'
 
 // guards: one in-process check on every Bash and PowerShell call, replacing the attribution and
 // `gh run watch` scripts. It reads the command (which program, which flags, which message) instead of
@@ -211,14 +212,76 @@ export const register: Register = (on, options) => {
     .split(',')
     .map(s => s.trim().toLowerCase())
     .filter(Boolean)
+  settings(on, options)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await setUp($)
+    await $.command.register({
+      name: 'guards',
+      description: 'The guard mode and what it caught. Also: settings, help',
+      argumentHint: ARGUMENT_HINT,
+    })
     return result
   })
+  on('command.run', { command: 'guards' }, async ($, e) => ({ text: await runCommand($, e.args) }))
   on('tool.call', { tool: 'Bash' }, ($, e, next) => guard($, 'Bash', String(e.command ?? ''), () => next(e)))
   on('tool.call', { tool: 'PowerShell' }, ($, e, next) =>
     guard($, 'PowerShell', String((e as { command?: unknown }).command ?? ''), () => next(e)),
   )
+}
+
+const ARGUMENT_HINT = '[help | settings]'
+const HELP = [
+  '/guards: reads every shell command that writes history (commits, PRs, issues, releases) for AI credit.',
+  '  /guards           the mode, where the product may be named, and what it caught',
+  '  /guards settings  open the settings pane',
+  '  /guards help      this list',
+].join('\n')
+
+type DayCount = { checked: number; mod: number; scripts: number }
+
+// The counts of the last `days` days in stats.json, today included.
+export function sumDays(stats: Record<string, DayCount>, now: number, days: number): DayCount {
+  const total = { checked: 0, mod: 0, scripts: 0 }
+  for (let back = 0; back < days; back++) {
+    const row = stats[new Date(now - back * 86_400_000).toISOString().slice(0, 10)]
+    if (!row) continue
+    total.checked += row.checked
+    total.mod += row.mod
+    total.scripts += row.scripts
+  }
+  return total
+}
+
+async function statusText($: Engine): Promise<string> {
+  if (!live.dir) await setUp($)
+  let stats: Record<string, DayCount> = {}
+  try {
+    stats = JSON.parse(String(await $.fs.read(`${live.dir}/stats.json`)))
+  } catch {
+    // Nothing checked yet.
+  }
+  const isEnforced = live.mode === 'enforce'
+  const names = live.mentionRepos.includes('*') ? 'every repo' : live.mentionRepos.join(', ') || 'no repo'
+  const line = (label: string, c: DayCount) =>
+    `${label}: ${c.checked} writes checked, ${c.mod} ${isEnforced ? 'blocked' : 'it would block'}, ` +
+    `${c.scripts} the guard scripts blocked.`
+  const now = await $.clock.now()
+  return [
+    isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
+    `The product name may appear in ${names}; AI credit is blocked everywhere.`,
+    line('Today', sumDays(stats, now, 1)),
+    line('Last 7 days', sumDays(stats, now, 7)),
+  ].join('\n')
+}
+
+// `/guards [help | settings]`; with no argument, the status. Another word gets the list.
+async function runCommand($: Engine, args: string): Promise<string> {
+  const verb = args.trim().split(/\s+/)[0] ?? ''
+  if (verb === 'settings') {
+    await $.ui.open({ id: SETTINGS_PANE, title: 'Guards settings', focus: true })
+    return 'Opened the guards settings.'
+  }
+  return verb ? HELP : statusText($)
 }
