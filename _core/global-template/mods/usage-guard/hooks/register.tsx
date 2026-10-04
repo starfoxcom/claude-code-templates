@@ -7,6 +7,7 @@ import {
   CLAIM,
   covers,
   hotLimits,
+  NO_WORK_NOTICE,
   joinPause,
   LIMIT_NAMES,
   limitName,
@@ -84,9 +85,8 @@ async function writePause($: EngineInterface, pause: Pause): Promise<void> {
   await $.fs.write(await pausePath($), JSON.stringify(pause, null, 2))
 }
 
-async function runClaimHelper($: EngineInterface, name?: string): Promise<{ exitCode: number; stdout: string }> {
-  const argv = ['node', '-e', CLAIM, await dataDir($), ...(name ? [name.replace(/[^\w-]/g, '_')] : [])]
-  return $.process.run(argv, { timeoutMs: 10_000 })
+async function runClaimHelper($: EngineInterface, name: string): Promise<{ exitCode: number; stdout: string }> {
+  return $.process.run(['node', '-e', CLAIM, await dataDir($), name.replace(/[^\w-]/g, '_')], { timeoutMs: 10_000 })
 }
 
 // True when this session won the claim; a helper that fails counts as a win, as
@@ -280,7 +280,9 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
   const work = isArmedHere || (await hadWork($, pause))
   if (work === null) return notice($, 'Plan limits have reset. Whether this session saved work could not be ' +
     'confirmed, so it waits for you; resume it by hand.')
-  if (!work) return notice($, 'Plan limits have reset. This session saved no work, so it waits for you.')
+  // Worded as what is on record, not what happened: a wrap-up whose own claim failed before a hot
+  // reload, or one before a /clear, saved work that left no claim under this session's id.
+  if (!work) return notice($, NO_WORK_NOTICE)
   await resumeWork($, 'Plan limits have reset: resuming the saved work.')
 }
 
@@ -459,9 +461,9 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
   await notice(
     $,
-    `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). They reset at ` +
-      `${localTime(pause.wakeAt)}: a session with saved work then resumes on its own, and one with nothing ` +
-      `saved is told. To skip the automatic resume, run /usage-guard cancel.`,
+    `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes at ` +
+      `${localTime(pause.wakeAt)}: a session with saved work then goes on by itself, and one with nothing ` +
+      `on record is told. To skip the automatic resume, run /usage-guard cancel.`,
   )
 }
 
