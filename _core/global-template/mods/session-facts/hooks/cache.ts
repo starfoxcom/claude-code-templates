@@ -73,8 +73,9 @@ export function writtenLifetime(lines: string): number | undefined {
 }
 
 /**
- * The lifetime the countdown runs on next, when the transcript cannot tell: the short one once a miss inside the expected lifetime
- * proves it, back to the configured one once a warm request outlives the short one.
+ * The lifetime the countdown runs on next, when the transcript cannot tell: the short one once a miss
+ * inside the expected lifetime proves it, back to the configured one once a warm request outlives
+ * the short one.
  */
 export function nextLifetime(check: CacheCheck, sinceLastMs: number | undefined, current: number, configured: number) {
   if (check.miss === 'short') return SHORT_LIFETIME_MS
