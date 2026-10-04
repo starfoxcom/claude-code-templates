@@ -48,6 +48,8 @@ export type Mirror = {
   // The previous session's unfinished tasks in this folder, shown for checking, never recreated here.
   carried?: MirrorTask[]
   carriedFrom?: string
+  // The carried list's `updatedAt` when it was read: a list saved again since then is not marked.
+  carriedUpdatedAt?: number
   // Set once the carried-over note reached the model; kept on disk so a hot reload never repeats it.
   isCarryNoted?: boolean
   // Marks a clean end (session.end). The running stamp lives in its own `<session>.alive` file.
@@ -527,11 +529,13 @@ async function clearEngineStore($: EngineInterface): Promise<void> {
 
 // Marks the finished list whose leftovers just reached the model, so no later session shows them again.
 // Done when the note goes out, not at the start: a session that ends before its first prompt never saw
-// them, and the next new session carries them instead.
-async function markHandedOver($: EngineInterface, session: string | undefined): Promise<void> {
-  if (!session) return
-  const path = `${await dataDir($)}/${session}.json`
+// them, and the next new session carries them instead. A list resumed and saved again after it was carried
+// holds tasks this session never showed, so it stays unmarked for the next new session.
+async function markHandedOver($: EngineInterface, carrier: Mirror): Promise<void> {
+  if (!carrier.carriedFrom) return
+  const path = `${await dataDir($)}/${carrier.carriedFrom}.json`
   const previous = JSON.parse(String(await $.fs.read(path))) as Mirror
+  if (previous.updatedAt !== carrier.carriedUpdatedAt) return
   previous.handedOverAt = await $.clock.now()
   await $.fs.write(path, JSON.stringify(previous, null, 1))
 }
@@ -556,6 +560,7 @@ async function carryOver($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   mirror.carried = openTasks(previous)
   mirror.carriedFrom = previous.session
+  mirror.carriedUpdatedAt = previous.updatedAt
   mirror.changedAt = now
   await saveMirror($, mirror)
 }
@@ -651,7 +656,7 @@ export const register: Register = (on, options) => {
       notes.push(carriedText(mirror.carried))
       mirror.isCarryNoted = true
       await saveMirror($, mirror)
-      await markHandedOver($, mirror.carriedFrom).catch(() => undefined)
+      await markHandedOver($, mirror).catch(() => undefined)
     }
     const note = live.afterCompact ? openListText(mirror, live.turn) : staleText(mirror, live.turn)
     live.afterCompact = false
