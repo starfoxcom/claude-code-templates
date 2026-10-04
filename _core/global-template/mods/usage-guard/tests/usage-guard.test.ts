@@ -4,8 +4,6 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Pause } from '../hooks/plan'
 import { CLAIM, planArm, WRAP_UP_ARGS } from '../hooks/plan'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
-import type { SessionRecord } from '../hooks/sessions'
-import { ALIVE_MS, planTakeover, TAKEOVER_WITHIN_MS } from '../hooks/sessions'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
 // lookup is tested on its own below and the hook tests check that only the zone probe ran.
@@ -54,17 +52,6 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
   on('fs.write', ($, e) => {
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
-  })
-  // A claim exists once the helper made its folder.
-  on('fs.exists', ($, e) => {
-    const path = key(e.path)
-    const claimName = /\/claims\/([^/]+)$/.exec(path)?.[1]
-    return { value: claimName !== undefined ? seen.claims.has(claimName) : seen.files.has(path) }
-  })
-  on('fs.list', ($, e) => {
-    const dir = `${key(e.path)}/`
-    const names = [...seen.files.keys()].filter(path => path.startsWith(dir)).map(path => path.slice(dir.length))
-    return { value: names.map(name => ({ name, kind: 'file', size: 0, mtimeMs: 0 })) as never }
   })
   on('process.run', ($, e) => {
     seen.runs.push([...e.argv])
@@ -154,7 +141,10 @@ test('crossing the line wraps up, stops background work and resumes after the re
   const pause = pauseOf(seen)
   expect(pause?.status).toBe('active')
   expect(pause?.wakeAt).toBe(WAKE)
-  expect(seen.claims).toEqual(new Set([`pause-${KEY}`, `${KEY}-sess-a`, `stop-${KEY}-c__repos_my-game`]))
+  // `work-`: it wrapped up with work, so it resumes by itself after the reset.
+  expect(seen.claims).toEqual(
+    new Set([`pause-${KEY}`, `${KEY}-sess-a`, `stop-${KEY}-c__repos_my-game`, `work-${KEY}-sess-a`]),
+  )
   expect(stopsRun(seen)).toEqual([])
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
@@ -186,7 +176,7 @@ test('another session in the same project wraps up once and leaves the stop comm
   await endTurn($)
 
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
-  expect(seen.claims).toEqual(new Set([`stop-${KEY}-c__repos_my-game`, `${KEY}-sess-a`]))
+  expect(seen.claims).toEqual(new Set([`stop-${KEY}-c__repos_my-game`, `${KEY}-sess-a`, `work-${KEY}-sess-a`]))
   expect(pauseOf(seen)).toEqual(other)
 })
 
@@ -278,7 +268,7 @@ test('a pause another session wrote for a later reset is kept, and this session 
   expect(seen.commands.filter(c => c.command === 'session-close')).toHaveLength(1)
 })
 
-test('a session opened during a pause only waits, then resumes', async ($, on) => {
+test('a session opened during a pause only waits; at the reset it is told, not set to work', async ($, on) => {
   const seen = world(on)
   const pause: Pause = {
     status: 'active',
@@ -294,7 +284,9 @@ test('a session opened during a pause only waits, then resumes', async ($, on) =
   expect(seen.commands).toEqual([])
   expect(cardOf(seen)?.text).toContain('Work resumes on its own at Fri 2026-10-02 12:02')
   await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toHaveLength(1)
+  // Another session carries the saved work; this one only learns the limits reset.
+  expect(resumes(seen)).toEqual([])
+  expect(cardOf(seen)?.id).toBe(`reset:${RESET}`)
 })
 
 test('a session opened after the reset is told to resume by hand', async ($, on) => {
@@ -327,7 +319,7 @@ test('cancel stops the automatic resume', async ($, on) => {
   expect(resumes(seen)).toEqual([])
 })
 
-test('a session that changed nothing only waits near the limit, then resumes', async ($, on) => {
+test('a session that changed nothing only waits near the limit, and is not set to work after', async ($, on) => {
   const seen = world(on)
   await start($)
   // Reading counts as no work.
@@ -339,7 +331,9 @@ test('a session that changed nothing only waits near the limit, then resumes', a
   expect(seen.commands).toEqual([])
   expect(cardOf(seen)?.id).toBe(`paused:${RESET}`)
   await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toHaveLength(1)
+  // Another session carries the saved work; this one only learns the limits reset.
+  expect(resumes(seen)).toEqual([])
+  expect(cardOf(seen)?.id).toBe(`reset:${RESET}`)
 })
 
 // The resumes this session submitted: the automatic "continue now" prompt, never /session-start.
@@ -508,6 +502,8 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   seen.claims.add(`${KEY}-sess-a`)
+  // It wrapped up with work: the claim says so, though the reload emptied the module's memory.
+  seen.claims.add(`work-${KEY}-sess-a`)
   await $.turn.start({ turnId: 't2' } as never)
 
   expect(seen.commands).toEqual([])
@@ -775,220 +771,6 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
 })
 
-const SESSIONS_DIR = 'C:/Users/me/.claude/mods-data/usage-guard/sessions'
-const ARM_5H = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }
-
-function recordOf(seen: World, session: string): SessionRecord | undefined {
-  const text = seen.files.get(`${SESSIONS_DIR}/${session}.json`)
-  return text === undefined ? undefined : (JSON.parse(text) as SessionRecord)
-}
-
-// A record an earlier process left on disk.
-function leave(seen: World, record: SessionRecord): void {
-  seen.files.set(`${SESSIONS_DIR}/${record.session}.json`, JSON.stringify(record))
-}
-
-test('an arm set by hand is saved with the session, so a restart of that session still resumes', async ($, on) => {
-  const seen = world(on)
-  leave(seen, { session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
-  await start($)
-
-  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toHaveLength(1)
-  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
-})
-
-test('arming and disarming by hand write the record, and every minute the session checks in', async ($, on) => {
-  const seen = world(on)
-  await start($)
-  expect(recordOf(seen, 'sess-a')).toEqual({ session: 'sess-a', project: 'c:/repos/my-game', beatAt: NOW, arm: null })
-
-  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
-  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
-  await seen.clock.advance(60_000)
-  expect(recordOf(seen, 'sess-a')?.beatAt).toBe(NOW + 60_000)
-  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
-  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
-})
-
-test('a session restarted after the reset of its pause resumes once, with no "by hand" card', async ($, on) => {
-  const seen = world(on)
-  // The reset passed while the session was closed: its wake was two minutes ago, and it had met the pause.
-  const resetsAt = '2026-10-02T16:56:00.000Z'
-  const pause: Pause = {
-    status: 'active',
-    kinds: ['five_hour'],
-    percentUsed: 93,
-    resetsAt,
-    wakeAt: NOW - 2 * 60_000,
-    triggeredBy: 'sess-a',
-  }
-  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
-  seen.claims.add(`${Date.parse(resetsAt)}-sess-a`)
-  await start($)
-
-  expect(resumes(seen)).toHaveLength(1)
-  expect(cardOf(seen)?.id).toBe(`reset:${resetsAt}`)
-  expect(pauseOf(seen)?.status).toBe('done')
-  // Nothing of the pause is saved as an arm: only arms set by hand go to disk.
-  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
-})
-
-test('a restart after another session marked the pause done still resumes it once', async ($, on) => {
-  const seen = world(on)
-  const resetsAt = '2026-10-02T16:56:00.000Z'
-  const done: Pause = {
-    status: 'done',
-    kinds: ['five_hour'],
-    percentUsed: 93,
-    resetsAt,
-    wakeAt: NOW - 2 * 60_000,
-    triggeredBy: 'sess-b',
-  }
-  seen.files.set(PAUSE_FILE, JSON.stringify(done))
-  seen.claims.add(`${Date.parse(resetsAt)}-sess-a`)
-  await start($)
-  expect(resumes(seen)).toHaveLength(1)
-})
-
-test('a new session never resumes on start, though the pause is done', async ($, on) => {
-  const seen = world(on)
-  const resetsAt = '2026-10-02T16:56:00.000Z'
-  const base: Pause = {
-    status: 'done',
-    kinds: ['five_hour'],
-    percentUsed: 93,
-    resetsAt,
-    wakeAt: NOW - 2 * 60_000,
-    triggeredBy: 'sess-b',
-  }
-  // A new session: it never met the pause.
-  seen.files.set(PAUSE_FILE, JSON.stringify(base))
-  await start($)
-  expect(resumes(seen)).toEqual([])
-})
-
-test('a restart after a cancelled pause, or a day past its reset, does not resume', async ($, on) => {
-  const seen = world(on)
-  const resetsAt = '2026-10-01T16:56:00.000Z'
-  const old: Pause = {
-    status: 'done',
-    kinds: ['five_hour'],
-    percentUsed: 93,
-    resetsAt,
-    wakeAt: NOW - TAKEOVER_WITHIN_MS,
-    triggeredBy: 'sess-a',
-  }
-  seen.files.set(PAUSE_FILE, JSON.stringify(old))
-  seen.claims.add(`${Date.parse(resetsAt)}-sess-a`)
-  await start($)
-  expect(resumes(seen)).toEqual([])
-  seen.files.set(PAUSE_FILE, JSON.stringify({ ...old, status: 'cancelled', wakeAt: NOW - 60_000 }))
-  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
-  expect(resumes(seen)).toEqual([])
-})
-
-test("a new session alone in the project takes over a closed session's arm, and only once", async ($, on) => {
-  const seen = world(on)
-  leave(seen, { session: 'sess-old', project: 'c:/repos/my-game', beatAt: NOW - 10 * 60_000, arm: ARM_5H })
-  await start($)
-
-  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
-  expect(recordOf(seen, 'sess-old')?.arm).toBeNull()
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toHaveLength(1)
-})
-
-test('with another session open in the project, or the arm in another project, nothing moves', async ($, on) => {
-  const seen = world(on)
-  leave(seen, { session: 'sess-old', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
-  leave(seen, { session: 'sess-open', project: 'c:/repos/my-game', beatAt: NOW - 30_000, arm: null })
-  leave(seen, { session: 'sess-far', project: 'c:/repos/other', beatAt: 0, arm: ARM_5H })
-  await start($)
-
-  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
-  expect(recordOf(seen, 'sess-old')?.arm).toEqual(ARM_5H)
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toEqual([])
-})
-
-test('an ending session is closed at once, keeps its arm, and checks in no more', async ($, on) => {
-  const seen = world(on)
-  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  await start($)
-  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
-
-  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
-  const closed = { session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H }
-  expect(recordOf(seen, 'sess-a')).toEqual(closed)
-  // A minute timer still firing while the process exits would make it look open: it writes nothing.
-  await seen.clock.advance(60_000)
-  expect(recordOf(seen, 'sess-a')).toEqual(closed)
-})
-
-test('after a /clear the process takes its arm along when it is the only session in the project', async ($, on) => {
-  const seen = world(on)
-  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  await start($)
-  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
-
-  await $.session.end({ reason: 'clear', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
-  seen.sessionId = 'sess-b'
-  await $.turn.start({ text: 'hi', turnId: 't2' })
-  expect(recordOf(seen, 'sess-b')?.arm).toEqual(ARM_5H)
-  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toHaveLength(1)
-})
-
-test('after a /clear beside another open session in the project, the arm stays for later', async ($, on) => {
-  const seen = world(on)
-  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
-  await start($)
-  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
-  leave(seen, { session: 'sess-open', project: 'c:/repos/my-game', beatAt: NOW, arm: null })
-
-  await $.session.end({ reason: 'clear', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
-  seen.sessionId = 'sess-b'
-  await seen.clock.advance(60_000)
-  expect(recordOf(seen, 'sess-b')?.arm).toBeNull()
-  expect(recordOf(seen, 'sess-a')).toEqual({ session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toEqual([])
-})
-
-test('a takeover needs every other session of the project closed, and takes the latest wake first', () => {
-  const project = 'c:/repos/my-game'
-  const later = { kind: 'seven_day', resetsAt: '2026-10-04T18:00:00.000Z', wakeAt: Date.UTC(2026, 9, 4, 18, 2) }
-  const record = (session: string, beatAt: number, arm: SessionRecord['arm'], at = project): SessionRecord => ({
-    session,
-    project: at,
-    beatAt,
-    arm,
-  })
-  const closedAt = NOW - ALIVE_MS
-  // Its own arm wins over everything else.
-  expect(planTakeover([record('me', 0, ARM_5H), record('x', 0, later)], 'me', project, NOW)).toEqual({
-    own: ARM_5H,
-    left: [],
-  })
-  // Checked in exactly ALIVE_MS ago is closed; a millisecond later it is still open.
-  const closed = planTakeover([record('x', closedAt, later), record('y', 0, ARM_5H)], 'me', project, NOW)
-  expect(closed.left.map(r => r.session)).toEqual(['x', 'y'])
-  expect(planTakeover([record('x', closedAt + 1, null), record('y', 0, ARM_5H)], 'me', project, NOW)).toEqual({
-    left: [],
-  })
-  // A wake more than a day past stays put; one a moment younger moves.
-  const stale = { ...ARM_5H, wakeAt: NOW - TAKEOVER_WITHIN_MS }
-  expect(planTakeover([record('x', 0, stale)], 'me', project, NOW)).toEqual({ left: [] })
-  const recent = { ...stale, wakeAt: stale.wakeAt + 1 }
-  expect(planTakeover([record('x', 0, recent)], 'me', project, NOW).left.map(r => r.session)).toEqual(['x'])
-  // Another project's sessions neither block nor move; no records, nothing to take.
-  expect(planTakeover([record('x', NOW, ARM_5H, 'c:/repos/other')], 'me', project, NOW)).toEqual({ left: [] })
-  expect(planTakeover([], 'me', project, NOW)).toEqual({ left: [] })
-})
-
 test('the session arms itself with the arm tool, and the arm counts as no work to save', async ($, on) => {
   const seen = world(on)
   await start($)
@@ -1000,7 +782,6 @@ test('the session arms itself with the arm tool, and the arm counts as no work t
   expect((await arm('arm', 'day')).result).toContain('/usage-guard arm 5h')
   expect((await arm('arm', '5h')).result).toContain('Armed')
   expect((await arm('status')).result).toContain('Armed to resume at Fri 2026-10-02 12:02')
-  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
 
   // Near the line the session only waits: arming changed nothing the wrap-up must save.
   seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
