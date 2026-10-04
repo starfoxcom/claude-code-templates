@@ -52,6 +52,9 @@ export type Mirror = {
   isCarryNoted?: boolean
   // Marks a clean end (session.end). The running stamp lives in its own `<session>.alive` file.
   endedAt?: number
+  // Set on a finished session's list once a newer session carried its leftovers: they are shown
+  // once, in that session, never again in every session after it.
+  handedOverAt?: number
 }
 
 type UpdateArgs = {
@@ -415,7 +418,8 @@ export function pickPredecessor(
   now: number,
 ): Mirror | undefined {
   return mirrors
-    .filter(mirror => mirror.session !== session && mirror.root === root && openTasks(mirror).length > 0)
+    .filter(mirror => mirror.session !== session && mirror.root === root && !mirror.handedOverAt)
+    .filter(mirror => openTasks(mirror).length > 0)
     .filter(mirror => isFinished(mirror.endedAt, aliveAt.get(mirror.session), now))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
@@ -536,9 +540,13 @@ async function carryOver($: EngineInterface): Promise<void> {
   }
   const previous = pickPredecessor(mirrors, aliveAt, mirror.root ?? '', mirror.session, await $.clock.now())
   if (!previous) return
+  const now = await $.clock.now()
   mirror.carried = openTasks(previous)
   mirror.carriedFrom = previous.session
-  mirror.changedAt = await $.clock.now()
+  mirror.changedAt = now
+  // The finished list is written back marked, so the next new session does not show it again.
+  previous.handedOverAt = now
+  await $.fs.write(`${dir}/${previous.session}.json`, JSON.stringify(previous, null, 1)).catch(() => undefined)
   await saveMirror($, mirror)
 }
 
