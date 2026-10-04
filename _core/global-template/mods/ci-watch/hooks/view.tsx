@@ -38,6 +38,10 @@ export function summary(watch: Watch): { text: string; color: 'green' | 'red' | 
   const done = states.filter(([, bucket]) => bucket !== PENDING).length
   const pr = `PR ${watch.number}`
   if (watch.outcome === 'passed') return { text: `✅ ${pr} · all ${states.length} passed`, color: 'green' }
+  // A check failed while others still run: red for the failure, the hourglass and count for the rest.
+  if (failed.length > 0 && !watch.outcome && done < states.length) {
+    return { text: `⏳ ${pr} · ${done}/${states.length} done · failed so far: ${failed.join(', ')}`, color: 'red' }
+  }
   if (failed.length > 0) return { text: `❌ ${pr} · failed: ${failed.join(', ')}`, color: 'red' }
   if (watch.outcome === 'timeout') return { text: `⏰ ${pr} · stuck pending`, color: 'yellow' }
   // Every check passed, and the watch waits out its quiet polls (a late workflow can still show up)
