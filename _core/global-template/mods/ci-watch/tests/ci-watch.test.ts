@@ -13,6 +13,8 @@ import { type Seen, world } from './world'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
+// The default poll interval.
+const POLL_MS = 30_000
 
 test('passed only after two quiet polls in a row', () => {
   const first = settle(BASE, { build: 'pass', review: 'pass' }, 1, HOUR, 1)
@@ -31,6 +33,20 @@ test('a failure settles only after every check is done, two quiet polls in a row
   const final = settle(once, { build: 'fail', review: 'fail' }, 3, HOUR, 1)
   expect(final.outcome).toBe('failed')
   expect(wakeText(final)).toContain('failed: build, review')
+})
+
+test('once a check ran on this head, the first poll with every check done settles', () => {
+  const running = settle(BASE, { build: 'pass', review: 'pending' }, 1, HOUR, 60_000, true)
+  expect(running.hasRun).toBe(true)
+  expect(running.outcome).toBeUndefined()
+  const done = settle(running, { build: 'pass', review: 'fail' }, 2, HOUR, 60_000, true)
+  expect(done.outcome).toBe('failed')
+})
+
+test('a running check read before GitHub names the new head does not count', () => {
+  const stale = settle(BASE, { build: 'pending' }, 1, HOUR, 60_000, false)
+  expect(stale.hasRun).toBeUndefined()
+  expect(settle(stale, { build: 'pass' }, 2, HOUR, 60_000, true).outcome).toBeUndefined()
 })
 
 test('two quiet polls seconds apart do not settle: the checks must stay quiet a full poll interval', () => {
@@ -61,14 +77,14 @@ test('a push starts a watch and the session is woken once when it passes', async
   const saved = JSON.parse(seen.files.get('C:/Users/me/.claude/mods-data/ci-watch/s1.json') ?? '{}')
   expect(saved.watches?.[0]?.number).toBe(7)
 
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
   seen.bucket = 'pass'
-  await clock.advance(60_000)
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
+  await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   expect(seen.prompts[0]).toContain('o/r#7: all 1 checks settled')
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
 })
 
@@ -77,15 +93,15 @@ test('a push that moves no commit keeps the settled watch: no second wake', asyn
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.bucket = 'pass'
-  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   // "Everything up-to-date": the head is the same commit.
   await $.tool.call({ tool: 'Bash', command: 'git push --tags' } as never)
-  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   // Asked by name, the same head is watched again.
   await $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 7, repo: 'o/r' } as never)
-  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(2)
 })
 
@@ -94,17 +110,17 @@ test('a push GitHub has not seen yet restarts the settled watch once the new hea
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.bucket = 'fail'
-  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   // The fix is pushed, but GitHub still names the old commit when the push asks.
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.head = 'b2'
   seen.bucket = 'pending'
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   const saved = JSON.parse(seen.files.get(STATE) ?? '{}')
   expect(saved.watches?.[0]?.headSha).toBe('b2')
   seen.bucket = 'pass'
-  for (let poll = 0; poll < 3; poll++) await clock.advance(60_000)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(2)
   expect(seen.prompts[1]).toContain('with no failure')
 })
@@ -120,7 +136,7 @@ test('an instance a newer load has replaced stops polling and never wakes the se
   // A hot reload: the newer instance names itself in the owner file.
   seen.files.set(OWNER, 'a-newer-instance')
   seen.bucket = 'fail'
-  for (let poll = 0; poll < 4; poll++) await clock.advance(60_000)
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
   // Its hooks pass through too: a push starts no watch here.
   const before = seen.files.get(STATE)
@@ -136,7 +152,7 @@ test('a watch whose save failed is kept from memory and still wakes the session'
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.bucket = 'pass'
-  for (let i = 0; i < 4; i++) await clock.advance(60_000)
+  for (let i = 0; i < 4; i++) await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   expect(seen.prompts[0]).toContain('o/r#7: all 1 checks settled')
 })
@@ -149,10 +165,10 @@ test('watches stopped while saving fails stay stopped, and the save is tried aga
   seen.isWriteDown = true
   await $.command.run({ command: 'ci-watch', args: 'stop' } as never)
   seen.bucket = 'fail'
-  for (let i = 0; i < 4; i++) await clock.advance(60_000)
+  for (let i = 0; i < 4; i++) await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
   seen.isWriteDown = false
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches).toEqual([])
 })
 
@@ -197,8 +213,8 @@ test('a stop made while a poll waits on gh is not undone by that poll', async ($
     seen.duringChecks = undefined
     return $.command.run({ command: 'ci-watch', args: 'stop' } as never)
   }
-  await clock.advance(60_000)
-  for (let i = 0; i < 4; i++) await clock.advance(60_000)
+  await clock.advance(POLL_MS)
+  for (let i = 0; i < 4; i++) await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
   expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches).toEqual([])
 })
@@ -212,7 +228,7 @@ test('a watch started while a poll reads the saved file is kept by that poll', a
     seen.duringStateRead = undefined
     return $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 8, repo: 'o/r' } as never)
   }
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   const saved = JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }
   expect(saved.watches.map(w => w.number).sort()).toEqual([7, 8])
 })
@@ -223,14 +239,14 @@ test('a poll in flight when a newer load takes over neither saves nor wakes', as
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.bucket = 'pass'
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   const before = seen.files.get(STATE)
   // The newer load claims the owner file while this poll waits on gh.
   seen.duringChecks = () => {
     seen.duringChecks = undefined
     seen.files.set(OWNER, 'a-newer-instance')
   }
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
   expect(seen.files.get(STATE)).toBe(before)
 })
@@ -244,7 +260,7 @@ test('a watch started while a poll waits on gh is kept by that poll', async ($, 
     seen.duringChecks = undefined
     return $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 8, repo: 'o/r' } as never)
   }
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   const saved = JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }
   expect(saved.watches.map(w => w.number).sort()).toEqual([7, 8])
 })
@@ -255,29 +271,30 @@ test('a settlement another instance woke the session for during the gh calls is 
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.bucket = 'pass'
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   seen.duringChecks = () => otherInstanceRecords(seen, { outcome: 'passed', settledAt: 1 })
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
 
   expect(seen.prompts).toEqual([])
 })
 
-test('a failure wakes the session once, only after every check is done', async ($, on) => {
+test('a failure wakes the session once, on the first poll after every check is done', async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.bucket = 'fail'
   seen.rows = [{ name: 'review', bucket: 'pending' }]
-  await clock.advance(60_000)
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
+  await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
 
+  // A check was seen running on this head, so the results are this commit's: no quiet wait.
   seen.rows = [{ name: 'review', bucket: 'pass' }]
-  await clock.advance(60_000)
-  expect(seen.prompts).toEqual([])
-  await clock.advance(60_000)
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts.length).toBe(1)
+  await clock.advance(POLL_MS)
+  await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   expect(seen.prompts[0]).toContain('all checks settled; failed: build')
 })
@@ -287,14 +304,14 @@ test('a failed checks read is not a quiet poll: stale results never settle a wat
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.bucket = 'pass'
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   seen.isChecksDown = true
-  await clock.advance(60_000)
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
+  await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
 
   seen.isChecksDown = false
-  await clock.advance(60_000)
+  await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   expect(seen.prompts[0]).toContain('o/r#7: all 1 checks settled')
 })
