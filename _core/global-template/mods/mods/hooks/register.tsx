@@ -24,6 +24,11 @@ export function modFolders(value: string | undefined, isWindows: boolean): strin
     .filter(Boolean)
 }
 
+// A leading `~` as the engine reads it when it loads the mods; `$.fs.read` takes the path as written.
+export function expandHome(folder: string, home: string): string {
+  return /^~(?:[\\/]|$)/.test(folder) ? home + folder.slice(1) : folder
+}
+
 async function readMod($: Engine, folder: string): Promise<ModInfo> {
   const path = `${folder.replaceAll('\\', '/').replace(/\/+$/, '')}/.claude-plugin/plugin.json`
   try {
@@ -38,7 +43,8 @@ async function readMod($: Engine, folder: string): Promise<ModInfo> {
 async function readMods($: Engine): Promise<ModInfo[]> {
   const isWindows = (await $.env.get('OS')) === 'Windows_NT'
   const folders = modFolders(await $.env.get('CLAUDE_CODE_PLUGIN_DIRS'), isWindows)
-  return Promise.all(folders.map(folder => readMod($, folder)))
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '~'
+  return Promise.all(folders.map(folder => readMod($, expandHome(folder, home))))
 }
 
 // Every surface but mobile draws the pane; the mobile app gets the engine's own.
