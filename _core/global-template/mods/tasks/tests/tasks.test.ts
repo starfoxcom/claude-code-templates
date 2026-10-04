@@ -464,6 +464,9 @@ test("a finished session's leftovers are carried over once, never into every lat
   seen.files.set(`${DIR}/old.json`, JSON.stringify(old))
   await $.session.start({ cwd: 'C:/Repos/x' } as never)
   expect(mirror(seen).carried?.map(task => task.id)).toEqual(['7'])
+  // Marked only once the note reached the model: a session ending before its first prompt saw nothing.
+  expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBeUndefined()
+  await $.prompt.submit({ text: 'hi' } as never)
   expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBe(NOW)
 })
 
