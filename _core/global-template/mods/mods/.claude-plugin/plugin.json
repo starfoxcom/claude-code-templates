@@ -1,0 +1,5 @@
+{
+  "name": "mods",
+  "version": "0.1.0",
+  "description": "/mods opens a pane listing the loaded mods, what each one does, and the slash commands they add."
+}
