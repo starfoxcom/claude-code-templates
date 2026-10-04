@@ -12,7 +12,21 @@ export type Contracts = Record<string, Record<string, Step[]>>
 
 type Run = { skill: string; steps: Step[]; seen: Set<number>; isFollowedUp: boolean }
 
-const live: { run?: Run } = {}
+// The skills of the Skill tool calls in flight, the main session's and its subagents' kept apart.
+type InFlight = { main: string[]; agent: string[] }
+const live: { run?: Run; inFlight: InFlight } = { inFlight: { main: [], agent: [] } }
+
+// The engine's skill.prompt event does not say whose loop expands the prompt, so it is told apart by
+// the skill named in the Skill calls in flight: a main-session call for it, or no call for it at all
+// (a typed /name), starts a run; a subagent's call for it alone does not. Left out: a /name typed
+// while a subagent's Skill call expands the very same skill; that one run is missed.
+export function isMainSkill(inFlight: InFlight, skill: string): boolean {
+  return inFlight.main.includes(skill) || !inFlight.agent.includes(skill)
+}
+
+export function skillName(input: unknown): string {
+  return String((input as { skill?: unknown }).skill ?? '').replace(/^\//, '')
+}
 
 export function missingSteps(run: Run): Step[] {
   return run.steps.filter((step, index) => !run.seen.has(index))
@@ -59,19 +73,28 @@ async function startRun($: EngineInterface, skill: string): Promise<void> {
 }
 
 export const register: Register = on => {
-  on('command.run', async ($, e, next) => {
-    await startRun($, e.command)
-    return next(e)
+  // A run starts where a skill's prompt is expanded: `/name` and the Skill tool alike. Hooking
+  // every command instead would put this mod's name on each command's reply.
+  on('skill.prompt', async ($, e, next) => {
+    const result = await next(e)
+    if (isMainSkill(live.inFlight, e.skill)) await startRun($, e.skill)
+    return result
   })
 
   on('tool.call', async ($, e, next) => {
+    // A Skill call expands its prompt inside this call: its skill is held while it runs (see isMainSkill).
+    if (e.tool === 'Skill') {
+      const names = live.inFlight[e.agentId ? 'agent' : 'main']
+      const skill = skillName(e)
+      names.push(skill)
+      try {
+        return await next(e)
+      } finally {
+        names.splice(names.indexOf(skill), 1)
+      }
+    }
     const result = await next(e)
     if (e.agentId || 'deny' in result || result.isError) return result
-    if (e.tool === 'Skill') {
-      const skill = String((e as unknown as { skill?: string }).skill ?? '').replace(/^\//, '')
-      if (skill) await startRun($, skill)
-      return result
-    }
     if (live.run) {
       const { tool, tool_use_id, consent, agentId, ...input } = e as unknown as Record<string, unknown>
       markSeen(live.run, String(tool), JSON.stringify(input))

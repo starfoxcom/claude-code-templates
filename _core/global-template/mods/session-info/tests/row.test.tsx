@@ -2,6 +2,8 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
+import { HELP } from '../hooks/register'
+
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
 const SURFACES = ['terminal', 'desktop'] as const
 const DIRTY = '## develop...origin/develop [ahead 2, behind 1]\n M a.ts\n M b.ts\n?? c.ts\n'
@@ -14,6 +16,7 @@ function world(on: On, status = DIRTY) {
     clock: mock.clock(on, { now: 0 }),
     /** A git read waits on this, answering with the status it saw when it started. */
     gate: undefined as Promise<void> | undefined,
+    commands: [] as { name: string; argumentHint?: string }[],
   }
   on('session.model', () => {
     if (seen.isModelDown) throw new Error('no model yet')
@@ -36,7 +39,10 @@ function world(on: On, status = DIRTY) {
     }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
+  on('command.register', ($, e) => {
+    seen.commands.push({ name: e.name, argumentHint: e.argumentHint })
+    return { value: { command: e.name } as never }
+  })
   on('session.attach', ($, e) => ({ clientId: e.clientId }))
   // turn.step streams: the stand-in for the model answers with no chunks.
   on('turn.step', async function* ($, e) {
@@ -150,4 +156,14 @@ test('one git read at a time: a slow read never lands over a checkout made while
   expect(seen.gitCalls).toBe(3)
   expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /main/ })).toBeDefined()
   expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /develop/ })).toBeUndefined()
+})
+
+test('/session-info shows its verbs in the menu, and help or anything else lists them', async ($, on) => {
+  const seen = world(on)
+  await start($, 'terminal')
+  expect(seen.commands).toEqual([{ name: 'session-info', argumentHint: '[help | settings]' }])
+  for (const args of ['', 'help', 'setings']) {
+    const answer = await $.command.run({ command: 'session-info', args } as never)
+    expect(answer).toEqual(expect.objectContaining({ text: HELP }))
+  }
 })

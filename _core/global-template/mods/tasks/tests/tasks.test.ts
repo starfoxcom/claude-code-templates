@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Mirror } from '../hooks/register'
-import { MKDIR_SCRIPT } from '../hooks/register'
+import { HELP, MKDIR_SCRIPT } from '../hooks/register'
 
 const MIRROR_FILE = 'C:/Users/me/.claude/mods-data/tasks/sess-a.json'
 
@@ -15,10 +15,12 @@ type World = {
   isDataDown?: boolean
   /** Files past the sweep's age limit. */
   old: string[]
+  commands: { name: string; argumentHint?: string }[]
+  opened: string[]
 }
 
 function world(on: On): World {
-  const seen: World = { files: new Map(), nextId: 1, listed: [], runs: [], old: [] }
+  const seen: World = { files: new Map(), nextId: 1, listed: [], runs: [], old: [], commands: [], opened: [] }
   mock.clock(on, { now: Date.UTC(2026, 9, 2, 19, 0, 0) })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
@@ -49,6 +51,14 @@ function world(on: On): World {
     return { value: names.map(name => ({ name, kind: 'file', size: 1, mtimeMs: 1, isLink: false })) } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => {
+    seen.commands.push({ name: e.name, argumentHint: e.argumentHint })
+    return { value: { command: e.name } as never }
+  })
+  on('ui.open', ($, e) => {
+    seen.opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('prompt.submit', ($, e) => ({ text: e.text, context: e.context }) as never)
@@ -366,4 +376,15 @@ test("after a reload the engine's store is left alone, even a subagent task matc
   await turn($)
   expect(seen.runs.find(run => run.includes(engine))).toBeUndefined()
   expect(mirror(seen).tasks.map(task => [task.id, task.status])).toEqual([['1', 'pending']])
+})
+
+test('/tasks opens the list or its settings, and help or anything else lists its verbs', async ($, on) => {
+  const seen = world(on)
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  expect(seen.commands).toEqual([{ name: 'tasks', argumentHint: '[help | settings]' }])
+  const run = (args: string) => $.command.run({ command: 'tasks', args } as never)
+  expect(await run('')).toEqual(expect.objectContaining({ text: 'Opened the task list.' }))
+  expect(await run('settings')).toEqual(expect.objectContaining({ text: 'Opened the tasks settings.' }))
+  expect(seen.opened).toEqual(['tasks', 'tasks-settings'])
+  for (const args of ['help', 'lists']) expect(await run(args)).toEqual(expect.objectContaining({ text: HELP }))
 })
