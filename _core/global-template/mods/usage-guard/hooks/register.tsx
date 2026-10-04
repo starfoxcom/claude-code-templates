@@ -311,6 +311,8 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
 async function resume($: EngineInterface, resetsAt: string): Promise<void> {
   const pause = await readPause($)
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
+  // The person disarmed this session during the pause: it stays put; meetPause names the reset later.
+  if (live.declined === resetKey(pause)) return
   // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
   // timer beside this one. The shared `done` status cannot be the claim: every session resumes.
   if (!(await claim($, `resume-${resetKey(pause)}-${await $.session.id()}`))) return
@@ -417,7 +419,7 @@ async function armForPause($: EngineInterface, pause: Pause): Promise<void> {
 
 // At start: the wake this session armed before a restart, or the wakes closed sessions left in this
 // project when it is the project's one open session (`planTakeover`). It takes over their resume at
-// the earliest wake and clears them from their records.
+// the latest wake, after every window they waited on has reset, and clears them from their records.
 async function restoreArm($: EngineInterface): Promise<void> {
   const session = await $.session.id()
   const project = projectOf(await $.session.root())
@@ -456,7 +458,11 @@ async function armByHand($: EngineInterface, which: string): Promise<string> {
 async function disarm($: EngineInterface): Promise<string> {
   const current = await read($, armedWake)
   const pause = await readPause($)
-  if (pause?.status === 'active') live.declined = resetKey(pause)
+  if (pause?.status === 'active') {
+    live.declined = resetKey(pause)
+    live.wakeTimer?.cancel()
+    live.wakeTimer = undefined
+  }
   live.armTimer?.cancel()
   live.armTimer = undefined
   await setArm($, null)
