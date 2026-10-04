@@ -298,7 +298,7 @@ async function setUp($: Engine) {
   await $.command.register({
     name: 'pc',
     description: 'Shared PC: show the line, or next [name] | leave | release | hold <min> [reason] | done',
-    argumentHint: '[next [name] | leave | release | hold <min> [reason] | done]',
+    argumentHint: '[help | next [name] | leave | release | hold <min> [reason] | done]',
     immediate: true,
   })
   await $.tool.register({
@@ -630,8 +630,20 @@ async function toolAction($: Engine, input: ToolInput): Promise<string> {
   }
 }
 
+const HELP = [
+  '/pc: the shared PC seat; heavy commands take turns on it, first come, first served.',
+  '  /pc                       the seat, who holds it and the line',
+  '  /pc next [name]           let this session (or the named one) go next; approves your own request',
+  '  /pc leave                 leave the line',
+  '  /pc release               give the seat back',
+  '  /pc hold <min> [reason]   keep the seat for a measurement or a multi-command run (default 15 min)',
+  '  /pc done                  same as release',
+  '  /pc help                  this list',
+].join('\n')
+
 async function commandAction($: Engine, args: string): Promise<string> {
   const [verb = '', ...rest] = args.trim().split(/\s+/).filter(Boolean)
+  if (verb === 'help') return HELP
   let reply: Reply
   switch (verb) {
     case '':
@@ -654,7 +666,7 @@ async function commandAction($: Engine, args: string): Promise<string> {
       reply = await change($, ['release', ctx.me])
       break
     default:
-      return 'Usage: /pc [next [name] | leave | release | hold <min> [reason] | done]'
+      return HELP
   }
   return describe(reply)
 }
