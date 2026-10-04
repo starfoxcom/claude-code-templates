@@ -5,6 +5,7 @@ import type { RunnerView } from '../types'
 import { soonestRun } from './cron'
 import { RUNNERS } from './rules'
 import type { Runner } from './rules'
+import { register as settings, SETTINGS_PANE } from './settings'
 
 // The machine's local CI runners in one row above the prompt: on or off, how many are online and
 // busy, queued runs and the next scheduled run, with Start and Stop. Every value is read in a timer,
@@ -236,12 +237,19 @@ export function clockTime(ms: number, offsetMinutes: number | null): string {
 
 export const register: Register = (on, options) => {
   live.checkMs = Math.max(15, Number(options.checkSeconds ?? 60)) * 1000
+  settings(on, options)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await start($)
+    await $.command.register({
+      name: 'runners',
+      description: "The local CI runners' state. Also: settings, help",
+      argumentHint: ARGUMENT_HINT,
+    })
     return result
   })
+  on('command.run', { command: 'runners' }, async ($, e) => ({ text: await runCommand($, e.args) }))
   // A Desktop session joins its surface after session.start, and a hot reload skips session.start.
   on('session.attach', async ($, e, next) => {
     const result = await next(e)
@@ -282,4 +290,31 @@ export const register: Register = (on, options) => {
       </Box>
     )
   })
+}
+
+const ARGUMENT_HINT = '[help | settings]'
+const HELP = [
+  '/runners: the local CI runners in a row above the prompt, with Start and Stop.',
+  "  /runners           each runner's state",
+  '  /runners settings  open the settings pane',
+  '  /runners help      this list',
+].join('\n')
+
+// `/runners [help | settings]`; with no argument, each runner's last reading. Another word gets the list.
+async function runCommand($: Engine, args: string): Promise<string> {
+  const verb = args.trim().split(/\s+/)[0] ?? ''
+  if (verb === 'settings') {
+    await $.ui.open({ id: SETTINGS_PANE, title: 'Runners settings', focus: true })
+    return 'Opened the runners settings.'
+  }
+  if (verb) return HELP
+  if (live.runners.length === 0)
+    return (
+      'No runners listed. Add one to ~/.claude/mods-data/runners/runners.json (or hooks/rules.ts): ' +
+      'label and processes, and optionally repo, start and stop.'
+    )
+  const rows = (await read($, view))?.rows ?? []
+  if (rows.length === 0) return 'Reading the runners; ask again in a moment.'
+  const now = await $.clock.now()
+  return rows.map(row => `⚙ ${rowText(row, now, ms => clockTime(ms, live.zoneOffset))}`).join('\n')
 }
