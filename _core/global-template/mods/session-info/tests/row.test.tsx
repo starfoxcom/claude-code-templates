@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { HELP } from '../hooks/register'
+import { HELP, selectedEffort } from '../hooks/register'
 
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
 const SURFACES = ['terminal', 'desktop'] as const
@@ -108,6 +108,26 @@ test('the effort comes from the main loop, never a subagent', async ($, on) => {
   await $.turn.complete({ turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'done' } as never)
   const ui = await mount($, 'terminal')
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · GameProject/ })).toBeDefined()
+})
+
+test('the effort picked in settings shows before the first request, and a new pick replaces it', async ($, on) => {
+  const seen = world(on)
+  let settings: Record<string, unknown> = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
+  on('settings.read', () => ({ value: settings }))
+  await start($, 'terminal')
+  const ui = await mount($, 'terminal')
+  expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · GameProject/ })).toBeDefined()
+  settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
+  await seen.clock.advance(30_000)
+  const after = await mount($, 'terminal')
+  expect(await after.find({ type: 'Text', text: /Opus 5\.5 medium · GameProject/ })).toBeDefined()
+})
+
+test('the picked effort is read per model, with the top-level setting as the fallback', () => {
+  const settings = { effortLevel: 'max', modelSettings: { 'claude-fable-5-1': { effortLevel: 'low' } } }
+  expect(selectedEffort(settings, 'claude-fable-5-1[1m]')).toBe('low')
+  expect(selectedEffort(settings, 'claude-opus-5-5')).toBe('max')
+  expect(selectedEffort({}, 'claude-opus-5-5')).toBeUndefined()
 })
 
 test('a shell command rereads git, so a checkout shows at once', async ($, on) => {
