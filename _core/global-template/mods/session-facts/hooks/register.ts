@@ -1,8 +1,9 @@
 import { atom, update } from 'claude-code'
-import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
+import type { EngineInterface, Register, SessionRateLimit, TurnUsage } from 'claude-code'
 
-import type { Budgets } from '../types'
+import type { Budgets, CacheCheck } from '../types'
 import { compactedMark, contextText, registerBudgetsView } from './budgets'
+import { checkCache, nextLifetime } from './cache'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 // The hooks run in a sandbox with no time zone of its own, so the host's
@@ -97,8 +98,22 @@ const live: {
   compaction?: Compaction
   planWarnAt: number
   cacheWarnMinutes: number
+  // The configured cache lifetime, and the one the countdown runs on (5 min once a miss proves it).
   cacheTtlMs: number
-} = { zone: UTC, isSetUp: false, planWarnAt: 75, cacheWarnMinutes: 10, cacheTtlMs: 60 * 60_000 }
+  cacheLifetimeMs: number
+  cacheCheck?: CacheCheck
+  // The model of the last response and whether a compaction ran since: either starts the cache over.
+  lastModel?: string
+  isWindowFresh: boolean
+} = {
+  zone: UTC,
+  isSetUp: false,
+  planWarnAt: 75,
+  cacheWarnMinutes: 10,
+  cacheTtlMs: 60 * 60_000,
+  cacheLifetimeMs: 60 * 60_000,
+  isWindowFresh: false,
+}
 
 // usage-guard's own threshold, so the row turns red where the guard steps in.
 async function readWrapUpAt($: EngineInterface): Promise<number> {
@@ -139,7 +154,8 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
         percentUsed: limit.percentUsed,
         resetsAt: limit.resetsAt ? Date.parse(limit.resetsAt) : undefined,
       })),
-      cacheExpiresAt: live.lastResponseAt === undefined ? undefined : live.lastResponseAt + live.cacheTtlMs,
+      cacheExpiresAt: live.lastResponseAt === undefined ? undefined : live.lastResponseAt + live.cacheLifetimeMs,
+      cacheCheck: live.cacheCheck,
       pausedUntil,
       offsetMinutes: live.zone.offsetMinutes,
       planWarnAt: live.planWarnAt,
@@ -150,6 +166,18 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
   } catch {
     // The row keeps its last reading.
   }
+}
+
+// The first request after a prompt is the one a cold cache makes pay for the whole conversation.
+async function noteCache($: EngineInterface, usage: TurnUsage): Promise<void> {
+  const at = await $.clock.now()
+  const sinceLastMs = live.lastResponseAt === undefined ? undefined : at - live.lastResponseAt
+  const isModelChange = live.lastModel !== undefined && live.lastModel !== usage.model
+  const isFreshWindow = live.isWindowFresh || isModelChange
+  live.cacheCheck = checkCache(usage, { at, sinceLastMs, lifetimeMs: live.cacheLifetimeMs, isFreshWindow })
+  live.cacheLifetimeMs = nextLifetime(live.cacheCheck, sinceLastMs, live.cacheLifetimeMs, live.cacheTtlMs)
+  live.lastModel = usage.model
+  live.isWindowFresh = false
 }
 
 // A hot reload starts the module over without a new session.start, so the
@@ -171,6 +199,7 @@ export const register: Register = (on, options) => {
   live.planWarnAt = Number(options.planWarnAt ?? 75)
   live.cacheWarnMinutes = Number(options.cacheWarnMinutes ?? 10)
   live.cacheTtlMs = Number(options.cacheTtlMinutes ?? 60) * 60_000
+  live.cacheLifetimeMs = live.cacheTtlMs
   registerBudgetsView(on)
   settings(on, options)
 
@@ -192,6 +221,13 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (!live.isSetUp) await setUp($)
     else await refreshBudgets($)
+    return result
+  })
+
+  // Main's own requests only; a subagent keeps a cache of its own.
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    if (e.agentId === undefined && e.index === 0 && result.usage) await noteCache($, result.usage)
     return result
   })
 
@@ -224,6 +260,7 @@ export const register: Register = (on, options) => {
     // stands, whose `messages` and `tokensAfter` the types guarantee.
     if (result.skip !== undefined || result.messages.length === 0) return result
     live.compaction = { at: await $.clock.now(), tokensAfter: result.tokensAfter }
+    live.isWindowFresh = true
     const fact =
       `[session-facts] ${await factsLine($, true)} | ` +
       'every figure in the summary above is from before the compaction; base the State line on THIS line'
