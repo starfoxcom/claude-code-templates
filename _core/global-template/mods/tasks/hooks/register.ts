@@ -50,9 +50,7 @@ export type Mirror = {
   carriedFrom?: string
   // Set once the carried-over note reached the model; kept on disk so a hot reload never repeats it.
   isCarryNoted?: boolean
-  // While the session runs with open tasks it stamps aliveAt every minute; endedAt marks a clean end.
-  // A session that is still running is never another session's predecessor.
-  aliveAt?: number
+  // Marks a clean end (session.end). The running stamp lives in its own `<session>.alive` file.
   endedAt?: number
 }
 
@@ -398,21 +396,25 @@ export function carriedText(carried: readonly MirrorTask[]): string {
   )
 }
 
-// A session ended cleanly, stopped stamping, or never stamped (written before the stamps existed).
-export function isFinished(mirror: Mirror, now: number): boolean {
-  return mirror.endedAt !== undefined || mirror.aliveAt === undefined || now - mirror.aliveAt > ALIVE_STALE_MS
+// A running session writes the time to `<session>.alive` every minute and at each turn; it is a
+// file of its own so the stamp never rewrites a task list. A session is finished when it never
+// stamped (gone before the stamps existed), stopped stamping, or ended after its last stamp.
+export function isFinished(endedAt: number | undefined, aliveAt: number | undefined, now: number): boolean {
+  if (aliveAt === undefined || now - aliveAt > ALIVE_STALE_MS) return true
+  return endedAt !== undefined && endedAt >= aliveAt
 }
 
 // The newest other finished session in the same folder that left open tasks.
 export function pickPredecessor(
   mirrors: readonly Mirror[],
+  aliveAt: ReadonlyMap<string, number>,
   root: string,
   session: string,
   now: number,
 ): Mirror | undefined {
   return mirrors
     .filter(mirror => mirror.session !== session && mirror.root === root && openTasks(mirror).length > 0)
-    .filter(mirror => isFinished(mirror, now))
+    .filter(mirror => isFinished(mirror.endedAt, aliveAt.get(mirror.session), now))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 
@@ -520,15 +522,17 @@ async function carryOver($: EngineInterface): Promise<void> {
   if (mirror.tasks.length > 0 || mirror.carried) return
   const dir = await dataDir($)
   const mirrors: Mirror[] = []
+  const aliveAt = new Map<string, number>()
   for (const entry of await $.fs.list(dir)) {
-    if (!entry.name.endsWith('.json')) continue
     try {
-      mirrors.push(JSON.parse(String(await $.fs.read(`${dir}/${entry.name}`))) as Mirror)
+      const text = String(await $.fs.read(`${dir}/${entry.name}`))
+      if (entry.name.endsWith('.json')) mirrors.push(JSON.parse(text) as Mirror)
+      else if (entry.name.endsWith('.alive')) aliveAt.set(entry.name.slice(0, -'.alive'.length), Number(text))
     } catch {
       // A half-written or foreign file is skipped.
     }
   }
-  const previous = pickPredecessor(mirrors, mirror.root ?? '', mirror.session, await $.clock.now())
+  const previous = pickPredecessor(mirrors, aliveAt, mirror.root ?? '', mirror.session, await $.clock.now())
   if (!previous) return
   mirror.carried = openTasks(previous)
   mirror.carriedFrom = previous.session
@@ -536,21 +540,19 @@ async function carryOver($: EngineInterface): Promise<void> {
   await saveMirror($, mirror)
 }
 
-// Stamps this session's mirror as running. Only a list with open tasks can be carried over, so only
-// such a list is written; the stamp rides on the next save otherwise.
+// Writes only the stamp file, for the session id of the moment: a timer a hot reload left behind,
+// or one still running after /clear, stamps the live session and never touches a task list.
 async function stampAlive($: EngineInterface): Promise<void> {
-  const mirror = await mirrorOf($)
-  mirror.aliveAt = await $.clock.now()
-  delete mirror.endedAt
-  if (openTasks(mirror).length > 0) await saveMirror($, mirror)
+  const dir = await dataDir($)
+  await ensureDir($, dir).catch(() => undefined)
+  await $.fs.write(`${dir}/${await $.session.id()}.alive`, String(await $.clock.now()))
 }
 
-// Once per load: a hot reload starts the module over without a session.start, so the first turn or
-// tool call after it starts the stamps again.
+// Stamps at once, and starts the minute timer once per load (a hot reload runs no session.start).
 async function startAlive($: EngineInterface): Promise<void> {
+  await stampAlive($).catch(() => undefined)
   if (live.isAliveStarted) return
   live.isAliveStarted = true
-  await stampAlive($).catch(() => undefined)
   $.clock.every(ALIVE_EVERY_MS, () => void stampAlive($).catch(() => undefined))
 }
 
