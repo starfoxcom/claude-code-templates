@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { checkCache, nextLifetime, SHORT_LIFETIME_MS, writtenLifetime } from '../hooks/cache'
+import { checkCache, nextLifetime, parseMemory, SHORT_LIFETIME_MS, writtenLifetime } from '../hooks/cache'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -72,7 +72,7 @@ function world(on: On) {
   // The zone probe, or the transcript's cache lines when the command names the transcript.
   const transcript = { lines: '', reads: [] as string[] }
   on('process.run', ($, e) => {
-    const path = e.argv.length > 3 ? e.argv[3] : undefined
+    const path = e.argv.length === 4 ? e.argv[3] : undefined
     if (path) transcript.reads.push(path)
     const stdout = path ? transcript.lines : '420 America/Phoenix\n'
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -81,8 +81,17 @@ function world(on: On) {
     value: { startedAt: 0, context: { tokens: 250_000, window: 500_000 }, rateLimits: [] },
   }))
   on('settings.read', () => ({ value: { pluginConfigs: {} } }) as never)
-  on('fs.read', () => {
-    throw new Error('ENOENT')
+  // The data folder, keyed with forward slashes; the pause file is never there.
+  const files = new Map<string, string>()
+  on('session.id', () => ({ value: 's1' }))
+  on('fs.read', ($, e) => {
+    const text = files.get(e.path.replaceAll('\\', '/'))
+    if (text === undefined) throw new Error('ENOENT')
+    return { value: text }
+  })
+  on('fs.write', ($, e) => {
+    files.set(e.path.replaceAll('\\', '/'), e.text)
+    return { value: undefined }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
@@ -99,7 +108,7 @@ function world(on: On) {
   on('turn.complete', () => ({ text: '' }))
   on('classic.Stop', () => ({}) as never)
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { clock, reply, transcript }
+  return { clock, reply, transcript, files }
 }
 
 // A streaming event runs only as it is read.
@@ -217,4 +226,43 @@ test('an unreadable transcript keeps the setting', async ($, on) => {
   await $.classic.Stop(STOP)
   const ui = await row($)
   expect(await ui.find({ type: 'Text', text: /^cache/ })).toBeUndefined()
+})
+
+const MEMORY = 'C:/Users/me/.claude/mods-data/session-facts/s1.json'
+
+test('parseMemory: the saved facts, or nothing for a torn or foreign file', () => {
+  const saved = { lastResponseAt: NOW, lifetimeMs: HOUR, lastModel: 'm', check: { at: NOW, resent: 9, miss: 'early' } }
+  expect(parseMemory(JSON.stringify(saved))).toEqual(saved)
+  expect(parseMemory(JSON.stringify({ ...saved, check: { at: NOW, resent: 9, miss: 'odd' } }))?.check).toBeUndefined()
+  expect(parseMemory(JSON.stringify({ lifetimeMs: HOUR }))).toBeUndefined()
+  expect(parseMemory('{"lastResponseAt": 1')).toBeUndefined()
+  expect(parseMemory('')).toBeUndefined()
+})
+
+test('each reply is remembered in the data folder', async ($, on) => {
+  const { files } = world(on)
+  await start($)
+  await turn($)
+  expect(parseMemory(files.get(MEMORY) ?? '')).toEqual(
+    expect.objectContaining({ lastResponseAt: NOW, lifetimeMs: HOUR, lastModel: 'claude-opus-5-5' }),
+  )
+})
+
+test('after a reload the countdown carries on from the remembered reply', async ($, on) => {
+  const { files } = world(on)
+  files.set(MEMORY, JSON.stringify({ lastResponseAt: NOW - 55 * MINUTE, lifetimeMs: HOUR }))
+  await start($)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache 5m left · cold start 250k$/ })).toBeDefined()
+})
+
+test('a break right after a reload is flagged, not taken for a fresh start', async ($, on) => {
+  const { files, reply } = world(on)
+  const remembered = { lastResponseAt: NOW - 2 * MINUTE, lifetimeMs: HOUR, lastModel: 'claude-opus-5-5' }
+  files.set(MEMORY, JSON.stringify(remembered))
+  reply.usage = COLD
+  await start($)
+  await turn($)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache broke early · resent 230k$/ })).toBeDefined()
 })
