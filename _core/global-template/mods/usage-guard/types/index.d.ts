@@ -31,6 +31,8 @@ export type ArmedWake = {
   kind: string
   resetsAt: string
   wakeAt: number
+  /** Set by the session itself through the tool: a cancel of the pause for its reset drops it. */
+  byTool?: boolean
 }
 
 declare module 'claude-code' {

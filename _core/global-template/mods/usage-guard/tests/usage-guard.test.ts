@@ -304,7 +304,7 @@ test('a session opened after the reset is told to resume by hand', async ($, on)
 
   expect(cardOf(seen)?.text).toContain('Run /session-start to resume')
   expect(pauseOf(seen)?.status).toBe('done')
-  expect(seen.commands).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('cancel stops the automatic resume', async ($, on) => {
@@ -464,7 +464,7 @@ test('a session that loses the pause claim honours a cancel written since the wi
   expect(seen.commands).toEqual([])
   expect(seen.claims.has(`${KEY}-sess-a`)).toBe(false)
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('a cancel of an extended pause holds against a session still reading the earlier reset', async ($, on) => {
@@ -530,7 +530,7 @@ test('a session resumes once per reset, even beside an instance left by a hot re
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   await seen.clock.advance(WAKE - NOW)
 
-  expect(seen.commands).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('stop commands are found by the project folder name, case-insensitively, and only for that project', () => {
@@ -790,4 +790,16 @@ test('the session arms itself with the arm tool, and the arm counts as no work t
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toHaveLength(1)
   expect((await arm('disarm')).result).toBe('Nothing was armed.')
+})
+
+test("an arm the session set itself yields to the person's cancel of that reset's pause", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.tool.call({ tool: 'mcp__usage-guard__arm', action: 'arm', window: '5h' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  // The person cancels the pause from another session.
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pauseOf(seen), status: 'cancelled' }))
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
 })
