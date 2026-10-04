@@ -22,17 +22,15 @@ export type SettingsView = {
 }
 
 /**
- * A wake that resumes this session's work after a reset: armed by hand (`/usage-guard arm 5h|week`),
- * or by the automatic pause for a session it wrapped up. Kept in state so a hot reload (a settings
- * change, an edit) re-arms it, and on disk so a restart or a new session in the project does.
+ * A wake that resumes this session's work after a reset, armed by hand (`/usage-guard arm 5h|week`) or
+ * by the session itself (the `arm` tool). Kept in state so a hot reload (a settings change, an edit)
+ * re-arms it, and on disk so a restart or a new session in the project does.
  */
 export type ArmedWake = {
   /** The limit's kind: `five_hour` or `seven_day`. */
   kind: string
   resetsAt: string
   wakeAt: number
-  /** Armed by the automatic pause: a cancel of that pause drops it. */
-  byPause?: boolean
 }
 
 declare module 'claude-code' {
