@@ -119,13 +119,38 @@ test('planChip: an unknown window keeps its own name', () => {
   expect(planChip({ kind: 'seven_day_opus', percentUsed: 3 }, B).text).toBe('seven-day-opus 3%')
 })
 
-test('cacheChip: hidden while warm, a countdown near the end, then cold', () => {
+test('cacheChip: hidden while warm, then a countdown naming the cold start, then likely expired', () => {
+  const cold = { text: 'cache likely expired · cold start 250k', color: 'red' }
   expect(cacheChip({ ...B, cacheExpiresAt: NOW + 11 * MINUTE }, NOW)).toBeUndefined()
-  expect(cacheChip({ ...B, cacheExpiresAt: NOW + 10 * MINUTE }, NOW)).toEqual({ text: 'cache 10m', color: 'yellow' })
-  expect(cacheChip({ ...B, cacheExpiresAt: NOW + MINUTE - 1 }, NOW)).toEqual({ text: 'cache cold', color: 'red' })
-  expect(cacheChip({ ...B, cacheExpiresAt: NOW - MINUTE }, NOW)).toEqual({ text: 'cache cold', color: 'red' })
+  const countdown = { text: 'cache 10m left · cold start 250k', color: 'yellow' }
+  expect(cacheChip({ ...B, cacheExpiresAt: NOW + 10 * MINUTE }, NOW)).toEqual(countdown)
+  expect(cacheChip({ ...B, cacheExpiresAt: NOW + MINUTE - 1 }, NOW)).toEqual(cold)
+  expect(cacheChip({ ...B, cacheExpiresAt: NOW - MINUTE }, NOW)).toEqual(cold)
   expect(cacheChip({ ...B, cacheExpiresAt: undefined }, NOW)).toBeUndefined()
 })
+
+const WARM_FOR_AN_HOUR = { ...B, cacheExpiresAt: NOW + 60 * MINUTE }
+const NOTICE_CASES: { name: string; check: Budgets['cacheCheck']; chip?: { text: string; color?: string } }[] = [
+  { name: 'a warm check says nothing', check: { at: NOW, resent: 1_000 } },
+  { name: 'an expected miss says nothing', check: { at: NOW, resent: 230_000, miss: 'expected' } },
+  {
+    name: 'an expiry is confirmed, uncolored',
+    check: { at: NOW - 15 * MINUTE + 1, resent: 230_000, miss: 'expired' },
+    chip: { text: 'cache expired · resent 230k', color: undefined },
+  },
+  {
+    name: 'an early break needs an eye',
+    check: { at: NOW, resent: 230_000, miss: 'early' },
+    chip: { text: 'cache broke early · resent 230k', color: 'yellow' },
+  },
+  { name: 'gone after a quarter hour', check: { at: NOW - 15 * MINUTE, resent: 230_000, miss: 'early' } },
+]
+
+for (const { name, check, chip } of NOTICE_CASES) {
+  test(`cacheChip: ${name}`, () => {
+    expect(cacheChip({ ...WARM_FOR_AN_HOUR, cacheCheck: check }, NOW)).toEqual(chip)
+  })
+}
 
 test('pauseChip: only while the pause is still ahead', () => {
   expect(pauseChip({ ...B, pausedUntil: NOW + MINUTE }, NOW)?.text).toBe('PAUSED → Fri 09:01')

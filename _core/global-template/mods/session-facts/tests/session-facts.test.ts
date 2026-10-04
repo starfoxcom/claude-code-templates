@@ -44,7 +44,7 @@ test('every prompt carries the local time, the context fill to compaction and pl
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await $.prompt.submit({ text: 'hello' } as never)
 
-  // The facts go to the model and the budgets row only; nothing is written to disk.
+  // The facts go to the model and the budgets row only; before a reply nothing is written to disk.
   expect(writes).toEqual([])
   expect(seen.length).toBe(1)
   expect(seen[0]).toContain('2026-10-02 09:00:00 America/Phoenix')
