@@ -329,7 +329,8 @@ test('answers that repeat the carried pair after the kept tail are kept', async 
 })
 
 for (const mode of ['on', 'off'] as const) {
-  test(`${mode}: /compact-handoff names the mode, opens its settings, and lists its verbs`, { options: { mode } }, async ($, on) => {
+  const name = `${mode}: /compact-handoff names the mode, opens its settings, and lists its verbs`
+  test(name, { options: { mode } }, async ($, on) => {
     const seen = world(on)
     await start($)
     expect(seen.commands).toEqual([{ name: 'compact-handoff', argumentHint: '[help | settings]' }])
