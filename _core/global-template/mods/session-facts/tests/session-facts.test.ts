@@ -49,7 +49,7 @@ test('every prompt carries the local time, the context fill to compaction and pl
   expect(seen.length).toBe(1)
   expect(seen[0]).toContain('2026-10-02 09:00:00 America/Phoenix')
   // The budgets row's own text, so the State line copied from it reads like the row.
-  expect(seen[0]).toContain('| ctx ▰▰▰▰▰▰▱▱▱▱ 57% · 181k to compact |')
+  expect(seen[0]).toContain('| ctx 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ 57% · 181k to compact |')
   expect(seen[0]).toContain('plan used: 5-hour 3%, week 20%')
   expect(seen[0]).not.toContain('2026-10-04')
 })
@@ -116,22 +116,22 @@ test('a compaction is followed by a fresh facts line, and later lines name it fo
   expect([texts[0], texts[2]]).toEqual(['SUMMARY', 'kept'])
   // The size the compaction left, never the 450k the engine still reports from before it.
   expect(texts[1]).toContain('[session-facts] 2026-10-02 09:00:00 America/Phoenix')
-  expect(texts[1]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 8% · 427k to compact · just compacted 09:00 |')
+  expect(texts[1]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 8% · 427k to compact · just compacted 09:00 |')
   expect(texts[1]).toContain('week 68%')
   expect(texts[1]).toContain('from before the compaction')
 
   usage.tokens = undefined
   await $.prompt.submit({ text: 'next' } as never)
-  expect(seen[0]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 8% · 427k to compact · just compacted 09:00 |')
+  expect(seen[0]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 8% · 427k to compact · just compacted 09:00 |')
 
   usage.tokens = 60_000
   await clock.advance(15 * 60_000 - 1)
   await $.prompt.submit({ text: 'still close' } as never)
-  expect(seen[1]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 12% · 407k to compact · just compacted 09:00 |')
+  expect(seen[1]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 12% · 407k to compact · just compacted 09:00 |')
 
   await clock.advance(1)
   await $.prompt.submit({ text: 'after that' } as never)
-  expect(seen[2]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 12% · 407k to compact |')
+  expect(seen[2]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 12% · 407k to compact |')
   expect(seen[2]).not.toContain('just compacted')
 })
 
@@ -145,7 +145,7 @@ test('a compaction with no size afterwards says the fill is unknown, not the old
   // A response came before the next prompt: its fill is the fresh one.
   usage.tokens = 55_000
   await $.prompt.submit({ text: 'next' } as never)
-  expect(seen[0]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 11% · 412k to compact · just compacted 09:00 |')
+  expect(seen[0]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 11% · 412k to compact · just compacted 09:00 |')
 })
 
 test('a precompute, a skipped compaction and a subagent compaction pass through untouched', async ($, on) => {

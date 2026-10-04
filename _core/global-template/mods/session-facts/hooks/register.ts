@@ -53,11 +53,12 @@ function formatLocal(nowMs: number, zone: Zone): string {
   return `${local.toISOString().slice(0, 19).replace('T', ' ')} ${zone.name}`
 }
 
-// The budgets row's text, so the State line copied from this reads like the row. Until the first
-// response after a compaction the engine has no fill of its own; the compaction's size stands in.
+// The budgets row's figures, its bar drawn as colored squares since the State line copied from
+// this is read on the phone. Until the first response after a compaction the engine has no fill
+// of its own; the compaction's size stands in.
 function contextPart(tokens: number | undefined, fullWindow: number, now: number): string {
   const fill = tokens ?? live.compaction?.tokensAfter
-  const text = contextText(fill, live.window?.size ?? fullWindow, live.window?.compactsAt)
+  const text = contextText(fill, live.window?.size ?? fullWindow, live.window?.compactsAt, true)
   const mark = compactedMark(live.compaction?.at, live.zone.offsetMinutes, now)
   return fill === undefined ? `${text}${mark} (unknown until the first response of this window)` : text + mark
 }
