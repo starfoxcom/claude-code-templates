@@ -8,6 +8,8 @@ export type Watch = {
   stablePolls: number
   // When the checks last went quiet; unset while any runs.
   quietSince?: number
+  // A check was seen running while GitHub named this head, so the results read since are this commit's.
+  hasRun?: boolean
   outcome?: 'passed' | 'failed' | 'timeout'
   settledAt?: number
   /** Set when the watch starts; names its wake claim (see `claimWake`). */
