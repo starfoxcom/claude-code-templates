@@ -3,7 +3,7 @@ import type { EngineInterface, Register, SessionRateLimit, TurnUsage } from 'cla
 
 import type { Budgets, CacheCheck } from '../types'
 import { compactedMark, contextText, registerBudgetsView } from './budgets'
-import { checkCache, nextLifetime, READ_CACHE_LINES, writtenLifetime } from './cache'
+import { checkCache, nextLifetime, parseMemory, PREPARE_DIR, READ_CACHE_LINES, writtenLifetime } from './cache'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 // The hooks run in a sandbox with no time zone of its own, so the host's
@@ -87,7 +87,7 @@ async function factsLine($: EngineInterface, isCompacting = false): Promise<stri
   }
 }
 
-const BUDGETS_EVERY_MS = 30_000
+const BUDGETS_EVERY_MS = 5_000
 const DEFAULT_WRAP_UP_AT = 90
 
 // The budgets row (budgets.tsx) reads this; each file names the state with its own literal reference.
@@ -192,10 +192,46 @@ async function readLifetime($: EngineInterface, transcript: string): Promise<voi
     const written = exitCode === 0 ? writtenLifetime(stdout) : undefined
     if (written === undefined) return
     live.cacheLifetimeMs = written
+    await saveMemory($)
     await refreshBudgets($)
   } catch {
     // The countdown keeps the lifetime it had.
   }
+}
+
+// This session's cache memory, in the mods' data folder; unknown until the folder is ready.
+let memoryFile: string | undefined
+
+async function prepareMemory($: EngineInterface): Promise<void> {
+  try {
+    const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+    const dir = `${configured ?? `${home}/.claude`}/mods-data/session-facts`.replaceAll('\\', '/')
+    const id = await $.session.id()
+    const { exitCode } = await $.process.run([...PREPARE_DIR, dir, id], { timeoutMs: 10_000 })
+    if (exitCode === 0) memoryFile = `${dir}/${id}.json`
+  } catch {
+    // The memory stays off; the countdown starts over after a reload, as before.
+  }
+}
+
+// A reload forgets the last reply; without it the countdown hides and a break right after reads as
+// a fresh start. So the facts the cache check needs are read back on set-up, when not already known.
+async function restoreMemory($: EngineInterface): Promise<void> {
+  if (!memoryFile || live.lastResponseAt !== undefined) return
+  const saved = parseMemory(String(await $.fs.read(memoryFile).catch(() => '')))
+  if (!saved) return
+  live.lastResponseAt = saved.lastResponseAt
+  live.cacheLifetimeMs = saved.lifetimeMs
+  live.lastModel = saved.lastModel
+  live.cacheCheck = saved.check
+}
+
+async function saveMemory($: EngineInterface): Promise<void> {
+  if (!memoryFile || live.lastResponseAt === undefined) return
+  const { lastResponseAt, cacheLifetimeMs: lifetimeMs, lastModel, cacheCheck: check } = live
+  const text = JSON.stringify({ lastResponseAt, lifetimeMs, lastModel, check })
+  await $.fs.write(memoryFile, text).catch(() => undefined)
 }
 
 // A hot reload starts the module over without a new session.start, so the
@@ -204,6 +240,8 @@ async function setUp($: EngineInterface): Promise<void> {
   live.isSetUp = true
   live.zone = await readZone($)
   live.window = await readWindow($)
+  await prepareMemory($)
+  await restoreMemory($)
   await refreshBudgets($)
   $.clock.every(HOUR_MS, () => {
     void readZone($).then(read => {
@@ -259,6 +297,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     live.lastResponseAt = await $.clock.now()
+    await saveMemory($)
     await refreshBudgets($)
     return result
   })

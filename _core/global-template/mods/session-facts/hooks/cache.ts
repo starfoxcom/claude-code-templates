@@ -82,3 +82,40 @@ export function nextLifetime(check: CacheCheck, sinceLastMs: number | undefined,
   if (check.miss === undefined && sinceLastMs !== undefined && sinceLastMs > SHORT_LIFETIME_MS) return configured
   return current
 }
+
+/** What a reload would forget and the cache check needs: written after each reply, read back on set-up. */
+export type CacheMemory = { lastResponseAt: number; lifetimeMs: number; lastModel?: string; check?: CacheCheck }
+
+const MISSES = new Set(['expired', 'early', 'short', 'expected'])
+
+/** The saved memory, or nothing when the file is missing, torn or from another shape. */
+export function parseMemory(text: string): CacheMemory | undefined {
+  try {
+    const saved = JSON.parse(text) as Partial<CacheMemory>
+    if (!Number.isFinite(saved.lastResponseAt) || !Number.isFinite(saved.lifetimeMs)) return undefined
+    const check = saved.check
+    const isCheck = check && Number.isFinite(check.at) && Number.isFinite(check.resent)
+    const isMiss = check?.miss === undefined || MISSES.has(check.miss)
+    return {
+      lastResponseAt: Number(saved.lastResponseAt),
+      lifetimeMs: Number(saved.lifetimeMs),
+      lastModel: typeof saved.lastModel === 'string' ? saved.lastModel : undefined,
+      check: isCheck && isMiss ? check : undefined,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+// The engine's fs makes no missing folders, and a session's file outlives it: one node run per load
+// makes the folder and removes other sessions' files older than two days (`<folder> <this session>`).
+export const PREPARE_DIR = [
+  'node',
+  '-e',
+  [
+    'const fs = require("fs"), p = require("path"); const [d, keep] = process.argv.slice(1)',
+    'fs.mkdirSync(d, { recursive: true }); const cut = Date.now() - 2 * 864e5',
+    'for (const n of fs.readdirSync(d)) { if (n === keep + ".json") continue',
+    'try { const f = p.join(d, n); if (fs.statSync(f).mtimeMs < cut) fs.unlinkSync(f) } catch {} }',
+  ].join('; '),
+]
