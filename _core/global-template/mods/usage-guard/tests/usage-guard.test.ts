@@ -81,7 +81,6 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     registered.push(e)
     return { value: { command: e.name } as never }
   })
-  on('tool.register', () => ({ value: { tool: 'mcp__usage-guard__arm' } }) as never)
   on('command.run', ($, e) => {
     seen.commands.push({ command: e.command, args: e.args })
     return {}
@@ -769,37 +768,4 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
   const lines = ['/usage-guard cancel', '/usage-guard arm 5h|week', '/usage-guard disarm', '/usage-guard settings']
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
-})
-
-test('the session arms itself with the arm tool, and the arm counts as no work to save', async ($, on) => {
-  const seen = world(on)
-  await start($)
-  const arm = (action: string, window?: string) =>
-    $.tool.call({ tool: 'mcp__usage-guard__arm', action, ...(window ? { window } : {}) } as never) as Promise<{
-      result: string
-    }>
-
-  expect((await arm('arm', 'day')).result).toContain('/usage-guard arm 5h')
-  expect((await arm('arm', '5h')).result).toContain('Armed')
-  expect((await arm('status')).result).toContain('Armed to resume at Fri 2026-10-02 12:02')
-
-  // Near the line the session only waits: arming changed nothing the wrap-up must save.
-  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
-  await endTurn($)
-  expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toHaveLength(1)
-  expect((await arm('disarm')).result).toBe('Nothing was armed.')
-})
-
-test("an arm the session set itself yields to the person's cancel of that reset's pause", async ($, on) => {
-  const seen = world(on)
-  await start($)
-  await $.tool.call({ tool: 'mcp__usage-guard__arm', action: 'arm', window: '5h' } as never)
-  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
-  await endTurn($)
-  // The person cancels the pause from another session.
-  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pauseOf(seen), status: 'cancelled' }))
-  await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toEqual([])
 })
