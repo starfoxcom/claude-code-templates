@@ -64,6 +64,8 @@ test('nextLifetime: 5 minutes once a miss proves it, the setting again once a wa
   expect(nextLifetime(check(), undefined, SHORT_LIFETIME_MS, HOUR)).toBe(SHORT_LIFETIME_MS)
 })
 
+// A compaction needs a conversation to compact, or the test kit runs no plugin's hook.
+const COMPACTION = { trigger: 'auto', messages: [{ role: 'user', text: 'old', toolUses: [] }] } as never
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
 
 function world(on: On) {
@@ -100,8 +102,9 @@ function world(on: On) {
     () => ({ messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }], tokensAfter: 40_000 }) as never,
   )
   // turn.step streams: the stand-in for the model answers with no chunks, at the usage the test set.
-  const reply = { usage: WARM as object | null, model: 'claude-opus-5-5' }
+  const reply = { usage: WARM as object | null, model: 'claude-opus-5-5', thinkMs: 0 }
   on('turn.step', async function* ($, e) {
+    if (reply.thinkMs) await clock.advance(reply.thinkMs)
     const usage = reply.usage && { ...reply.usage, model: reply.model }
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage } as never
   })
@@ -163,7 +166,7 @@ test('an expected miss stays quiet: session start, a compaction, a model change'
   reply.usage = COLD
   await start($)
   await turn($)
-  await $.session.compact({ trigger: 'auto', messages: [] } as never)
+  await $.session.compact(COMPACTION)
   await clock.advance(MINUTE)
   await turn($)
   await clock.advance(MINUTE)
@@ -265,4 +268,33 @@ test('a break right after a reload is flagged, not taken for a fresh start', asy
   await turn($)
   const ui = await row($)
   expect(await ui.find({ type: 'Text', text: /^cache broke early · resent 230k$/ })).toBeDefined()
+})
+
+test('a miss is timed when the request is sent, not after a long reply', async ($, on) => {
+  const { clock, reply, transcript } = world(on)
+  transcript.lines = FIVE_MINUTES
+  await start($)
+  await turn($)
+  await $.classic.Stop(STOP)
+  await clock.advance(3 * MINUTE)
+  // Broken three minutes into a five-minute cache; timed after a 2.5-minute reply it would read expired.
+  reply.usage = COLD
+  reply.thinkMs = 150_000
+  await turn($)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache broke early · / })).toBeDefined()
+})
+
+test('a compaction later in a turn does not hide a real expiry on the next one', async ($, on) => {
+  const { clock, reply } = world(on)
+  await start($)
+  await drain($.turn.step({ turnId: 't', index: 0, model: 'claude-opus-5-5', messageCount: 1 } as never))
+  await $.session.compact(COMPACTION)
+  await drain($.turn.step({ turnId: 't', index: 1, model: 'claude-opus-5-5', messageCount: 1 } as never))
+  await $.turn.complete({ turnId: 't', answer: '', durationMs: 1, reason: 'answer' } as never)
+  await clock.advance(2 * HOUR)
+  reply.usage = COLD
+  await turn($)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache expired · resent 230k$/ })).toBeDefined()
 })
