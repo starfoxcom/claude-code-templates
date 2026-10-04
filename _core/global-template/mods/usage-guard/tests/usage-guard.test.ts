@@ -76,7 +76,10 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
       { name: 'session-start', description: '', source: 'user' },
     ],
   }))
-  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
+  on('command.register', ($, e) => {
+    registered.push(e)
+    return { value: { command: e.name } as never }
+  })
   on('command.run', ($, e) => {
     seen.commands.push({ command: e.command, args: e.args })
     return {}
@@ -734,4 +737,17 @@ test('an arm that met a longer pause still resumes the session after another ses
   seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'cancelled' }))
   await seen.clock.advance(laterWake - WAKE)
   expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+})
+
+const registered: { name: string; argumentHint?: string }[] = []
+
+test('/usage-guard shows its arguments in the menu and lists them on help', async ($, on) => {
+  world(on)
+  await start($)
+  const hint = registered.find(command => command.name === 'usage-guard')?.argumentHint
+  expect(hint).toBe('[help | settings | arm 5h|week | disarm | cancel]')
+  const help = await $.command.run({ command: 'usage-guard', args: 'help' } as never)
+  const lines = ['/usage-guard cancel', '/usage-guard arm 5h|week', '/usage-guard disarm', '/usage-guard settings']
+  for (const line of lines)
+    expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
 })
