@@ -26,6 +26,8 @@ export type Seen = {
   prState: string
   /** The head commit `gh pr view` reports (default `a1`). */
   head?: string
+  /** Each slash command registered, with its argument hint. */
+  commands: { name: string; argumentHint?: string }[]
 }
 
 export function world(on: On) {
@@ -37,13 +39,17 @@ export function world(on: On) {
     isReadable: false,
     order: [],
     prState: 'OPEN',
+    commands: [],
   }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   on('session.id', () => ({ value: 's1' }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('tool.register', ($, e) => ({ value: { tool: `mcp__ci-watch__${e.name}` } }))
-  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
+  on('command.register', ($, e) => {
+    seen.commands.push({ name: e.name, argumentHint: e.argumentHint })
+    return { value: { command: e.name } as never }
+  })
   on('fs.write', ($, e) => {
     if (seen.isWriteDown) throw new Error('ENOENT')
     seen.files.set(e.path.replaceAll('\\', '/'), e.text)
