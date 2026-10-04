@@ -11,7 +11,18 @@ const expanded = atom({ plugin: 'ci-watch', key: 'expanded' } as const, [])
 
 const PENDING = 'pending'
 const FAILED = new Set(['fail', 'cancel'])
-const MARK: Record<string, string> = { pass: '✓', skipping: '–', fail: '✗', cancel: '✗', pending: '…' }
+
+type Tone = 'green' | 'red' | 'yellow' | 'gray'
+
+/** Each check state's icon and color, the tasks list's grammar: green done, red act, yellow wait. */
+export const LOOKS: Record<string, { icon: string; color: Tone }> = {
+  pass: { icon: '✅', color: 'green' },
+  fail: { icon: '❌', color: 'red' },
+  cancel: { icon: '🚫', color: 'red' },
+  pending: { icon: '⏳', color: 'yellow' },
+  skipping: { icon: '➖', color: 'gray' },
+}
+const UNKNOWN = { icon: '❔', color: 'gray' as Tone }
 
 /** A stop button's key; register.ts takes its press (`ui.press`), since $ never crosses a callback. */
 export const STOP_PREFIX = 'ci-watch-stop-'
@@ -26,10 +37,10 @@ export function summary(watch: Watch): { text: string; color: 'green' | 'red' | 
   const failed = states.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
   const done = states.filter(([, bucket]) => bucket !== PENDING).length
   const pr = `PR ${watch.number}`
-  if (watch.outcome === 'passed') return { text: `${pr} · all ${states.length} passed`, color: 'green' }
-  if (failed.length > 0) return { text: `${pr} · failed: ${failed.join(', ')}`, color: 'red' }
-  if (watch.outcome === 'timeout') return { text: `${pr} · stuck pending`, color: 'yellow' }
-  return { text: `${pr} · ${done}/${states.length} done`, color: 'yellow' }
+  if (watch.outcome === 'passed') return { text: `✅ ${pr} · all ${states.length} passed`, color: 'green' }
+  if (failed.length > 0) return { text: `❌ ${pr} · failed: ${failed.join(', ')}`, color: 'red' }
+  if (watch.outcome === 'timeout') return { text: `⏰ ${pr} · stuck pending`, color: 'yellow' }
+  return { text: `⏳ ${pr} · ${done}/${states.length} done`, color: 'yellow' }
 }
 
 type Ui = ReturnType<EngineInterface['ui']['resolve']>
@@ -61,13 +72,16 @@ function checkList(ui: Ui, watch: Watch) {
   const { Box, Text } = ui
   return (
     <Box flexDirection="column" paddingLeft={2}>
-      {Object.entries(watch.checks).map(([name, bucket]) => (
-        <Box key={`ci-watch-check-${name}`}>
-          <Text dimColor={!FAILED.has(bucket)} color={FAILED.has(bucket) ? 'red' : undefined}>
-            {MARK[bucket] ?? '?'} {name}
-          </Text>
-        </Box>
-      ))}
+      {Object.entries(watch.checks).map(([name, bucket]) => {
+        const look = LOOKS[bucket] ?? UNKNOWN
+        return (
+          <Box key={`ci-watch-check-${name}`}>
+            <Text color={look.color}>
+              {look.icon} {name}
+            </Text>
+          </Box>
+        )
+      })}
     </Box>
   )
 }
