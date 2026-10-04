@@ -63,9 +63,12 @@ function contextPart(tokens: number | undefined, fullWindow: number, now: number
   return fill === undefined ? `${text}${mark} (unknown until the first response of this window)` : text + mark
 }
 
-// A fresh session learns its plan figures from its first response; until then the line says so.
+// A plan session learns its plan figures from its first response; until then the line says so.
+// Past it, an empty list means the account has no plan windows (an API key), and the line, like
+// the row, names none. A hot reload forgets the last response, so one more line may say unknown.
 function planPart(limits: readonly SessionRateLimit[]): string {
-  if (limits.length === 0) return ' | plan used: unknown until the first response'
+  const isFresh = live.lastResponseAt === undefined
+  if (limits.length === 0) return isFresh ? ' | plan used: unknown until the first response' : ''
   const parts = limits.map(limit => `${LIMIT_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')} ${limit.percentUsed}%`)
   return ` | plan used: ${parts.join(', ')}`
 }
