@@ -402,6 +402,7 @@ for (const { name, aliveAt, endedAt, isCarried } of [
   { name: 'a session that ended after its last stamp', aliveAt: NOW - 60_000, endedAt: NOW - 30_000, isCarried: true },
   { name: 'a session resumed after it ended', aliveAt: NOW - 10_000, endedAt: NOW - 30_000, isCarried: false },
   { name: 'a session from before the stamps', aliveAt: undefined, endedAt: undefined, isCarried: true },
+  { name: 'a session with a damaged stamp', aliveAt: 'garbage', endedAt: undefined, isCarried: true },
 ]) {
   test(`carry-over from ${name}: ${isCarried ? 'carried' : 'left alone'}`, async ($, on) => {
     const seen = world(on)
