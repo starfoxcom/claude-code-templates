@@ -81,6 +81,40 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
+test('rows whose key names where the plugin came from are still this mod, saved under their own key', async ($, on) => {
+  const writes: Pick<ConfigSetInput, 'key' | 'value'>[] = []
+  const qualified = ROWS.map(row => ({ ...row, key: row.key.replace('usage-guard.', 'usage-guard@inline.') }))
+  on('config.list', () => ({ value: [...qualified, { ...ROWS[1], key: 'usage-guard-extra.wrapUpAt' }] }))
+  on('config.set', ($, e) => {
+    writes.push({ key: e.key, value: e.value })
+    return { value: e.value }
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ key: 'setting-wrapUpAt' })).toBeDefined()
+  expect(await ui.find({ key: 'setting-wakeDelayMinutes' })).toBeDefined()
+  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
+  // Only the one row: a plugin whose name merely starts the same is another plugin.
+  expect(writes).toEqual([{ key: 'usage-guard@inline.wrapUpAt', value: 85 }])
+})
+
+test('a pane with no rows of its own says what /config listed', async ($, on) => {
+  on('config.list', () => ({ value: [ROWS[0]] }))
+  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /listed 1 row\(s\), such as theme \(engine\)\./ })).toBeDefined()
+})
+
+test('a pane whose /config cannot be listed says why', async ($, on) => {
+  on('config.list', () => {
+    throw new Error('no menu here')
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+  const ui = await mountPane($, 'desktop')
+  // A hook that throws is skipped, so the list fails as one with no answer at all would.
+  expect(await ui.find({ type: 'Text', text: /No settings for usage-guard here: \/config could not be listed \(/ })).toBeDefined()
+})
+
 test('a refused change shows its reason under the field', async ($, on) => {
   world(on, 'Must be between 50 and 99')
   const ui = await mountPane($)
