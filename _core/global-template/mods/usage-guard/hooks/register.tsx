@@ -40,7 +40,8 @@ const live: {
   zone: Zone
   isTurnRunning: boolean
   isStarted: boolean
-  hasWork: boolean
+  /** The session id whose tool calls changed something: a /clear goes on under a new id with none. */
+  workSession?: string
   isStatusShown: boolean
   wakeTimer?: Timer
   /** The wake the person armed by hand (`armedWake`), counting down in this module. */
@@ -55,9 +56,6 @@ const live: {
   zone: { offsetMinutes: 0, name: 'UTC' },
   isTurnRunning: false,
   isStarted: false,
-  // Set by the first tool call that changed something; a session that only
-  // read has nothing to save, so near a limit it waits instead of wrapping up.
-  hasWork: false,
   isStatusShown: false,
   handled: new Set(),
   wrapUpAt: 90,
@@ -215,7 +213,7 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
   setStatus($, `Plan limit near: paused until ${resumeAt}`)
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
-  if (!live.hasWork) {
+  if (live.workSession !== (await $.session.id())) {
     await notice(
       $,
       `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, waiting. Work resumes on ` +
@@ -354,7 +352,9 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   // The arm stays set until the resume has run, so the pause's own timer, firing beside this one, sees it.
   if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled') await resume($, pause.resetsAt, true)
   else await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
-  await setArm($, null)
+  // Cleared only if still this arm: the person may have set another while the resume ran.
+  const now = await read($, armedWake)
+  if (now?.resetsAt === arm.resetsAt && now.kind === arm.kind) await setArm($, null)
 }
 
 async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
@@ -460,8 +460,8 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   await notice(
     $,
     `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). They reset at ` +
-      `${localTime(pause.wakeAt)}: sessions with saved work then resume on their own, and this one, with ` +
-      `nothing saved, is told. To skip the automatic resume, run /usage-guard cancel.`,
+      `${localTime(pause.wakeAt)}: a session with saved work then resumes on its own, and one with nothing ` +
+      `saved is told. To skip the automatic resume, run /usage-guard cancel.`,
   )
 }
 
@@ -536,7 +536,7 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     // Core marks a call read-only (true) or leaves the flag out, never false: any
     // answered call without the mark may have changed something.
-    if (!result.deny && !result.isError && result.isReadOnly !== true) live.hasWork = true
+    if (!result.deny && !result.isError && result.isReadOnly !== true) live.workSession = await $.session.id()
     return result
   })
 
