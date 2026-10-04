@@ -48,7 +48,11 @@ const CONTEXT_CASES: { name: string; b: Partial<Budgets>; text: RegExp; color?: 
     b: { tokens: 40_000, compactedAt: NOW - 5 * MINUTE },
     text: /^ctx ▰▱▱▱▱▱▱▱▱▱ 8% · 427k to compact · just compacted 08:55$/,
   },
-  { name: 'unknown fill right after a compaction', b: { tokens: undefined, compactedAt: NOW }, text: /^ctx -- · just compacted 09:00$/ },
+  {
+    name: 'unknown fill right after a compaction',
+    b: { tokens: undefined, compactedAt: NOW },
+    text: /^ctx -- · just compacted 09:00$/,
+  },
 ]
 
 for (const { name, b, text, color } of CONTEXT_CASES) {
@@ -60,7 +64,14 @@ for (const { name, b, text, color } of CONTEXT_CASES) {
 }
 
 test('fillTone: green, then yellow at three quarters, red at nine tenths', () => {
-  const cases: [number, string][] = [[0, 'green'], [0.7499, 'green'], [0.75, 'yellow'], [0.8999, 'yellow'], [0.9, 'red'], [1.2, 'red']]
+  const cases: [number, string][] = [
+    [0, 'green'],
+    [0.7499, 'green'],
+    [0.75, 'yellow'],
+    [0.8999, 'yellow'],
+    [0.9, 'red'],
+    [1.2, 'red'],
+  ]
   for (const [ratio, tone] of cases) expect([ratio, fillTone(ratio)]).toEqual([ratio, tone])
 })
 
