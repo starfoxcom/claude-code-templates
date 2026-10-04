@@ -60,6 +60,9 @@ export const ENGINE_TAGS = [
   'bash-stderr',
 ]
 export const ENGINE_TAG = new RegExp(`^<(?:${ENGINE_TAGS.join('|')})`)
+// A prompt a plugin submitted in the person's place, and the engine's note that the person pressed Esc.
+// scripts/helper.cjs carries the same pattern.
+export const NOT_PERSON = /^(?:The [\w.-]+ plugin sent a message:|\[Request interrupted by user)/
 
 type Mode = 'off' | 'shadow' | 'on'
 
@@ -116,6 +119,7 @@ function isPersonMessage(message: SessionMessage): boolean {
   const text = message.text.trim()
   return (
     !ENGINE_TAG.test(text) &&
+    !NOT_PERSON.test(text) &&
     !text.startsWith('[SYSTEM') &&
     !text.startsWith('This session is being continued') &&
     !text.startsWith(PERSON_MARK) &&
