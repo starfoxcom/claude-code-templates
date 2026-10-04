@@ -863,6 +863,19 @@ test('with another session open in the project, or the arm in another project, n
   expect(resumes(seen)).toEqual([])
 })
 
+test('a disarm during a pause sticks: the minute check does not arm the session again', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  expect(recordOf(seen, 'sess-a')?.arm).toEqual({ ...ARM_5H, byPause: true })
+
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  await seen.clock.advance(60_000)
+  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+})
+
 test("another session's cancel drops the arm the pause gave this session", async ($, on) => {
   const seen = world(on)
   await start($)
@@ -877,16 +890,49 @@ test("another session's cancel drops the arm the pause gave this session", async
   expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
 })
 
-test('an ending session is closed at once and keeps its arm; a /clear hands it on', async ($, on) => {
+test('an ending session is closed at once, keeps its arm, and checks in no more', async ($, on) => {
   const seen = world(on)
   on('session.end', ($, e) => ({ sessionId: e.sessionId }))
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
 
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
-  expect(recordOf(seen, 'sess-a')).toEqual({ session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
+  const closed = { session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H }
+  expect(recordOf(seen, 'sess-a')).toEqual(closed)
+  // A minute timer still firing while the process exits would make it look open: it writes nothing.
+  await seen.clock.advance(60_000)
+  expect(recordOf(seen, 'sess-a')).toEqual(closed)
+})
+
+test('after a /clear the process takes its arm along when it is the only session in the project', async ($, on) => {
+  const seen = world(on)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+
   await $.session.end({ reason: 'clear', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ text: 'hi', turnId: 't2' })
+  expect(recordOf(seen, 'sess-b')?.arm).toEqual(ARM_5H)
   expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
+test('after a /clear beside another open session in the project, the arm stays for later', async ($, on) => {
+  const seen = world(on)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  leave(seen, { session: 'sess-open', project: 'c:/repos/my-game', beatAt: NOW, arm: null })
+
+  await $.session.end({ reason: 'clear', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
+  seen.sessionId = 'sess-b'
+  await seen.clock.advance(60_000)
+  expect(recordOf(seen, 'sess-b')?.arm).toBeNull()
+  expect(recordOf(seen, 'sess-a')).toEqual({ session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
 })
 
 test('a takeover needs every other session of the project closed, and takes the earliest wake first', () => {
