@@ -78,14 +78,22 @@ type Ui = ReturnType<Engine['ui']['resolve']>
 function carriedLine(ui: Ui, $: Engine, count: number) {
   const { Box, Button, Text } = ui
   return (
-    <Box>
-      <Text color="magenta">↩ {count} carried over from the last session, check them against the hand-off </Text>
-      <Button key="tasks-list" label="List" onPress={() => openList($)} />
+    <Box flexWrap="nowrap">
+      <Box key="tasks-carried" flexShrink={1} minWidth={0}>
+        <Text color="magenta" wrap="truncate-end">
+          ↩ {count} carried over from the last session, check them against the hand-off{' '}
+        </Text>
+      </Box>
+      <Box key="tasks-list-slot" flexShrink={0}>
+        <Button key="tasks-list" label="List" onPress={() => openList($)} />
+      </Box>
     </Box>
   )
 }
 
 // The line above the prompt: done count, the task being worked (or the next one), open and held counts.
+// It stays one line however narrow the band gets (a side pane takes room): the counts and the button
+// keep their width, and only the task's name gives way, cut short with an ellipsis.
 function bandLine(ui: Ui, $: Engine, tasks: readonly TaskRow[]) {
   const { Box, Button, Text } = ui
   const active = tasks.filter(t => kindOf(t) === 'working')
@@ -93,15 +101,32 @@ function bandLine(ui: Ui, $: Engine, tasks: readonly TaskRow[]) {
   const kept = tasks.length - countOf(tasks, 'dropped')
   const open = countOf(tasks, 'open')
   const held = countOf(tasks, 'hold')
+  const current = currentText(ui, tasks, active)
   return (
-    <Box>
-      <Text color={done === kept ? 'green' : undefined}>
-        ✅ {done}/{kept}{' '}
-      </Text>
-      {currentText(ui, tasks, active)}
-      {open > 0 ? <Text>· 📝 {open} </Text> : null}
-      {held > 0 ? <Text color="yellow">· 🚧 {held} </Text> : null}
-      <Button key="tasks-list" label="List" onPress={() => openList($)} />
+    <Box flexWrap="nowrap">
+      <Box key="tasks-done" flexShrink={0}>
+        <Text color={done === kept ? 'green' : undefined}>
+          ✅ {done}/{kept}{' '}
+        </Text>
+      </Box>
+      {current ? (
+        <Box key="tasks-current" flexShrink={1} minWidth={0}>
+          {current}
+        </Box>
+      ) : null}
+      {open > 0 ? (
+        <Box key="tasks-open" flexShrink={0}>
+          <Text>· 📝 {open} </Text>
+        </Box>
+      ) : null}
+      {held > 0 ? (
+        <Box key="tasks-held" flexShrink={0}>
+          <Text color="yellow">· 🚧 {held} </Text>
+        </Box>
+      ) : null}
+      <Box key="tasks-list-slot" flexShrink={0}>
+        <Button key="tasks-list" label="List" onPress={() => openList($)} />
+      </Box>
     </Box>
   )
 }
