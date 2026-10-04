@@ -14,12 +14,14 @@ export type CacheContext = {
   lifetimeMs: number
   /** A compaction or a model change since the last response: the cache starts over by design. */
   isFreshWindow: boolean
+  /** The transcript confirmed the lifetime, so a miss inside it is a break, never a shorter cache. */
+  isLifetimeRead?: boolean
 }
 
 function missCause(c: CacheContext): CacheMiss {
   if (c.isFreshWindow || c.sinceLastMs === undefined) return 'expected'
   if (c.sinceLastMs >= c.lifetimeMs) return 'expired'
-  return c.sinceLastMs < SHORT_LIFETIME_MS ? 'early' : 'short'
+  return c.sinceLastMs < SHORT_LIFETIME_MS || c.isLifetimeRead ? 'early' : 'short'
 }
 
 /**
@@ -84,7 +86,14 @@ export function nextLifetime(check: CacheCheck, sinceLastMs: number | undefined,
 }
 
 /** What a reload would forget and the cache check needs: written after each reply, read back on set-up. */
-export type CacheMemory = { lastResponseAt: number; lifetimeMs: number; lastModel?: string; check?: CacheCheck }
+export type CacheMemory = {
+  lastResponseAt: number
+  lifetimeMs: number
+  /** The lifetime came from the transcript, not from the guess. */
+  isLifetimeRead: boolean
+  lastModel?: string
+  check?: CacheCheck
+}
 
 const MISSES = new Set(['expired', 'early', 'short', 'expected'])
 
@@ -99,6 +108,7 @@ export function parseMemory(text: string): CacheMemory | undefined {
     return {
       lastResponseAt: Number(saved.lastResponseAt),
       lifetimeMs: Number(saved.lifetimeMs),
+      isLifetimeRead: saved.isLifetimeRead === true,
       lastModel: typeof saved.lastModel === 'string' ? saved.lastModel : undefined,
       check: isCheck && isMiss ? check : undefined,
     }

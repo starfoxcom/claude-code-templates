@@ -66,10 +66,10 @@ function contextPart(tokens: number | undefined, fullWindow: number, now: number
 
 // A plan session learns its plan figures from its first response; until then the line says so.
 // Past it, an empty list means the account has no plan windows (an API key), and the line, like
-// the row, names none. A hot reload forgets the last response, so one more line may say unknown.
+// the row, names none. "Replied" is this process's own: the engine's figures start empty in each
+// one, while the remembered last reply survives a reload or a resume.
 function planPart(limits: readonly SessionRateLimit[]): string {
-  const isFresh = live.lastResponseAt === undefined
-  if (limits.length === 0) return isFresh ? ' | plan used: unknown until the first response' : ''
+  if (limits.length === 0) return live.hasReplied ? '' : ' | plan used: unknown until the first response'
   const parts = limits.map(limit => `${LIMIT_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')} ${limit.percentUsed}%`)
   return ` | plan used: ${parts.join(', ')}`
 }
@@ -98,6 +98,8 @@ const live: {
   window?: Window
   isSetUp: boolean
   lastResponseAt?: number
+  // A response came in this process (the remembered `lastResponseAt` may be from before it).
+  hasReplied: boolean
   // The main conversation's last compaction.
   compaction?: Compaction
   planWarnAt: number
@@ -105,6 +107,8 @@ const live: {
   // The configured cache lifetime, and the one the countdown runs on (5 min once a miss proves it).
   cacheTtlMs: number
   cacheLifetimeMs: number
+  // The lifetime came from the transcript: the guess from misses no longer moves it.
+  isLifetimeRead: boolean
   cacheCheck?: CacheCheck
   // The model of the last response and whether a compaction ran since: either starts the cache over.
   lastModel?: string
@@ -116,6 +120,8 @@ const live: {
   cacheWarnMinutes: 10,
   cacheTtlMs: 60 * 60_000,
   cacheLifetimeMs: 60 * 60_000,
+  isLifetimeRead: false,
+  hasReplied: false,
   isWindowFresh: false,
 }
 
@@ -178,8 +184,10 @@ function noteCache(usage: TurnUsage, at: number): void {
   const sinceLastMs = live.lastResponseAt === undefined ? undefined : at - live.lastResponseAt
   const isModelChange = live.lastModel !== undefined && live.lastModel !== usage.model
   const isFreshWindow = live.isWindowFresh || isModelChange
-  live.cacheCheck = checkCache(usage, { at, sinceLastMs, lifetimeMs: live.cacheLifetimeMs, isFreshWindow })
-  live.cacheLifetimeMs = nextLifetime(live.cacheCheck, sinceLastMs, live.cacheLifetimeMs, live.cacheTtlMs)
+  const { cacheLifetimeMs: lifetimeMs, isLifetimeRead } = live
+  live.cacheCheck = checkCache(usage, { at, sinceLastMs, lifetimeMs, isFreshWindow, isLifetimeRead })
+  if (!live.isLifetimeRead)
+    live.cacheLifetimeMs = nextLifetime(live.cacheCheck, sinceLastMs, live.cacheLifetimeMs, live.cacheTtlMs)
   live.lastModel = usage.model
   live.isWindowFresh = false
 }
@@ -192,6 +200,7 @@ async function readLifetime($: EngineInterface, transcript: string): Promise<voi
     const written = exitCode === 0 ? writtenLifetime(stdout) : undefined
     if (written === undefined) return
     live.cacheLifetimeMs = written
+    live.isLifetimeRead = true
     await saveMemory($)
     await refreshBudgets($)
   } catch {
@@ -223,14 +232,15 @@ async function restoreMemory($: EngineInterface): Promise<void> {
   if (!saved) return
   live.lastResponseAt = saved.lastResponseAt
   live.cacheLifetimeMs = saved.lifetimeMs
+  live.isLifetimeRead = saved.isLifetimeRead
   live.lastModel = saved.lastModel
   live.cacheCheck = saved.check
 }
 
 async function saveMemory($: EngineInterface): Promise<void> {
   if (!memoryFile || live.lastResponseAt === undefined) return
-  const { lastResponseAt, cacheLifetimeMs: lifetimeMs, lastModel, cacheCheck: check } = live
-  const text = JSON.stringify({ lastResponseAt, lifetimeMs, lastModel, check })
+  const { lastResponseAt, cacheLifetimeMs: lifetimeMs, isLifetimeRead, lastModel, cacheCheck: check } = live
+  const text = JSON.stringify({ lastResponseAt, lifetimeMs, isLifetimeRead, lastModel, check })
   await $.fs.write(memoryFile, text).catch(() => undefined)
 }
 
@@ -299,6 +309,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     live.isWindowFresh = false
+    live.hasReplied = true
     live.lastResponseAt = await $.clock.now()
     await saveMemory($)
     await refreshBudgets($)
