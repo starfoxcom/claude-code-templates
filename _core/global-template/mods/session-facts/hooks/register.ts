@@ -23,6 +23,13 @@ type Compaction = { at: number; tokensAfter?: number }
 
 const UTC: Zone = { offsetMinutes: 0, name: 'UTC (host zone unread)' }
 
+const HINT = '[help | settings]'
+export const HELP = [
+  '/session-facts: the budgets row (context, plan usage, cache) and the time and budgets line on every prompt.',
+  '  /session-facts settings  open the settings pane',
+  '  /session-facts help      this list',
+].join('\n')
+
 const LIMIT_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'week' }
 
 async function readZone($: EngineInterface): Promise<Zone> {
@@ -270,14 +277,15 @@ export const register: Register = (on, options) => {
   settings(on, options)
 
   on('session.start', async ($, e, next) => {
-    const description = 'Budgets row: /session-facts settings opens its settings'
-    await $.command.register({ name: 'session-facts', description })
+    const description = 'The budgets row and the facts line on every prompt'
+    await $.command.register({ name: 'session-facts', description, argumentHint: HINT }).catch(() => undefined)
     await setUp($)
     return next(e)
   })
 
-  on('command.run', { command: 'session-facts' }, async ($, e, next) => {
-    if (e.args.trim() !== 'settings') return next(e)
+  // `/session-facts [help | settings]`; any other argument, or none, gets the help.
+  on('command.run', { command: 'session-facts' }, async ($, e) => {
+    if (e.args.trim() !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Session facts settings', focus: true })
     return { text: 'Opened the session-facts settings.' }
   })
