@@ -769,3 +769,16 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
 })
+
+test('after a /clear the new session id has no work: near the line it only waits, and is not set to work', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  // A /clear: the process goes on under a new session id, with no session.start.
+  seen.sessionId = 'sess-b'
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+})
