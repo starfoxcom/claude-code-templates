@@ -770,7 +770,7 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
 })
 
-test('after a /clear the new session id has no work: near the line it only waits, and is not set to work', async ($, on) => {
+test('after a /clear the new session id has no work: it only waits, and is not set to work', async ($, on) => {
   const seen = world(on)
   await start($)
   await doWork($)
