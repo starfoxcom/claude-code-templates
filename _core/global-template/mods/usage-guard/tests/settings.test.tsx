@@ -16,25 +16,27 @@ const PANE_PROPS = {
   view: {},
 } as never
 const ENGINE = { plugin: 'engine', tier: 'core' } as never
+const THEME: ConfigRow = {
+  key: 'theme',
+  label: 'Theme',
+  kind: 'choice',
+  value: 'dark',
+  options: ['dark', 'light'],
+  provider: ENGINE,
+  isLocked: false,
+}
+const WRAP_UP: ConfigRow = {
+  key: 'usage-guard.wrapUpAt',
+  label: 'Wrap up at (% used)',
+  description: 'When any plan window reaches this percentage, sessions wrap up.',
+  kind: 'number',
+  value: 90,
+  provider: ENGINE,
+  isLocked: false,
+}
 const ROWS: ConfigRow[] = [
-  {
-    key: 'theme',
-    label: 'Theme',
-    kind: 'choice',
-    value: 'dark',
-    options: ['dark', 'light'],
-    provider: ENGINE,
-    isLocked: false,
-  },
-  {
-    key: 'usage-guard.wrapUpAt',
-    label: 'Wrap up at (% used)',
-    description: 'When any plan window reaches this percentage, sessions wrap up.',
-    kind: 'number',
-    value: 90,
-    provider: ENGINE,
-    isLocked: false,
-  },
+  THEME,
+  WRAP_UP,
   {
     key: 'usage-guard.wakeDelayMinutes',
     label: 'Resume delay (minutes)',
@@ -84,7 +86,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 test('rows whose key names where the plugin came from are still this mod, saved under their own key', async ($, on) => {
   const writes: Pick<ConfigSetInput, 'key' | 'value'>[] = []
   const qualified = ROWS.map(row => ({ ...row, key: row.key.replace('usage-guard.', 'usage-guard@inline.') }))
-  on('config.list', () => ({ value: [...qualified, { ...ROWS[1], key: 'usage-guard-extra.wrapUpAt' }] }))
+  on('config.list', () => ({ value: [...qualified, { ...WRAP_UP, key: 'usage-guard-extra.wrapUpAt' }] }))
   on('config.set', ($, e) => {
     writes.push({ key: e.key, value: e.value })
     return { value: e.value }
@@ -99,7 +101,7 @@ test('rows whose key names where the plugin came from are still this mod, saved 
 })
 
 test('a pane with no rows of its own says what /config listed', async ($, on) => {
-  on('config.list', () => ({ value: [ROWS[0]] }))
+  on('config.list', () => ({ value: [THEME] }))
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   const ui = await mountPane($, 'desktop')
   expect(await ui.find({ type: 'Text', text: /listed 1 row\(s\), such as theme \(engine\)\./ })).toBeDefined()
