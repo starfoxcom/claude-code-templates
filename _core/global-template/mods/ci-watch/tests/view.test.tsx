@@ -29,6 +29,12 @@ const SUMMARY_CASES: { name: string; watch: Partial<Watch>; text: string; color:
     color: 'red',
   },
   {
+    name: 'failed while others still run',
+    watch: { checks: { a: 'fail', b: 'pending', c: 'pass' } },
+    text: '⏳ PR 7 · 2/3 done · failed so far: a',
+    color: 'red',
+  },
+  {
     name: 'timed out',
     watch: { checks: { a: 'pending' }, outcome: 'timeout' },
     text: '⏰ PR 7 · stuck pending',
@@ -78,7 +84,8 @@ for (const surface of SURFACES) {
     await pushed($, surface)
     await clock.advance(60_000)
     const ui = await $.ui.mount({ plugin: 'ci-watch', surface, component: 'AbovePrompt', props: PROPS })
-    expect(await ui.find({ type: 'Text', text: /PR 7 · failed: review/ })).toBeDefined()
+    // The build still runs, so the row says so beside the failure.
+    expect(await ui.find({ type: 'Text', text: /PR 7 · 1\/2 done · failed so far: review/ })).toBeDefined()
     expect(await ui.find({ type: 'Link', href: 'https://github.com/o/r/pull/7' } as never)).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /❌ review/ })).toBeUndefined()
     await ui.press({ key: 'ci-watch-checks-o/r#7' })
