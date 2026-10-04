@@ -2,7 +2,7 @@ import type { On, SessionRateLimit } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Pause } from '../hooks/plan'
-import { CLAIM, planArm, WRAP_UP_ARGS } from '../hooks/plan'
+import { CLAIM, NO_WORK_NOTICE, planArm, WRAP_UP_ARGS } from '../hooks/plan'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
@@ -29,6 +29,8 @@ type World = {
   sessionId: string
   /** Runs as a claim is made: another session acting meanwhile. */
   duringClaim?: (name: string) => void
+  /** Claims whose helper fails (exits non-zero) and writes nothing. */
+  failClaims?: Set<string>
 }
 
 function world(on: On, root = 'C:/Repos/my-game'): World {
@@ -56,10 +58,13 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
   on('process.run', ($, e) => {
     seen.runs.push([...e.argv])
     let out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
-    // With no name the helper only makes the folders.
-    if (e.argv[2] === CLAIM && e.argv[4] !== undefined) {
-      const name = e.argv[4]
+    if (e.argv[2] === CLAIM) {
+      const name = e.argv[4] ?? ''
       seen.duringClaim?.(name)
+      if (seen.failClaims?.has(name)) {
+        const failed = { exitCode: 1, stdout: '', stderr: 'EPERM', isStdoutTruncated: false, isStderrTruncated: false }
+        return { value: failed }
+      }
       out = seen.claims.has(name) ? 'taken\n' : 'won\n'
       seen.claims.add(name)
     }
@@ -151,7 +156,10 @@ test('crossing the line wraps up, stops background work and resumes after the re
   await seen.clock.advance(WAKE - NOW)
   // The session goes on by itself: no /session-start, whose plan would wait for the person's OK.
   expect(resumes(seen)).toHaveLength(1)
-  expect(resumes(seen)[0]).toContain("without waiting for the person's OK")
+  expect(resumes(seen)[0]).toContain('do not wait for a plan approval')
+  // Only the plan approval is waived: the steps a project keeps for the person still wait for them.
+  expect(resumes(seen)[0]).toContain("Every step the project's rules keep for the person")
+  expect(resumes(seen)[0]).toContain('still stops and waits for them')
   expect(seen.commands.map(c => c.command)).toEqual(['session-close'])
   expect(pauseOf(seen)?.status).toBe('done')
 })
@@ -508,6 +516,37 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
   expect(seen.commands).toEqual([])
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toHaveLength(1)
+})
+
+test('work whose claim failed before a hot reload is never called no work at the reset', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  // The wrap-up's own work claim fails: it counts as a win in memory and leaves nothing on disk.
+  seen.failClaims = new Set([`work-${KEY}-sess-a`])
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+  expect(seen.claims.has(`work-${KEY}-sess-a`)).toBe(false)
+})
+
+test('after a hot reload, a session with no work on record waits and says what is on record', async ($, on) => {
+  const seen = world(on)
+  // The state the test above leaves, after a hot reload emptied the module's memory: the session
+  // wrapped up, but its work claim never reached the disk.
+  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-a' }))
+  seen.claims.add(`${KEY}-sess-a`)
+  await $.turn.start({ turnId: 't2' } as never)
+  await seen.clock.advance(WAKE - NOW)
+
+  expect(resumes(seen)).toEqual([])
+  // It asked for its work claim and found none on record (it won it now), so it took the notice path.
+  expect(seen.claims.has(`work-${KEY}-sess-a`)).toBe(true)
+  // The test engine keeps no transcript, so the notice is checked as text: what is on record, never
+  // a claim that the session saved nothing.
+  expect(NO_WORK_NOTICE).toContain('No saved work is on record for this session')
+  expect(NO_WORK_NOTICE).not.toContain('saved no work')
 })
 
 test('a session resumes once per reset, even beside an instance left by a hot reload', async ($, on) => {
