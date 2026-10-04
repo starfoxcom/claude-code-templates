@@ -75,15 +75,16 @@ export const HOLD_HELP =
   'completing the task clears it too).'
 
 const KEEP_TASKS = 50
+const COMMAND = 'task-list'
 const ALIVE_EVERY_MS = 60_000
 // Missed heartbeats this long mean the session is gone (closed without an end, or crashed).
 const ALIVE_STALE_MS = 3 * ALIVE_EVERY_MS
 const HINT = '[help | settings]'
 export const HELP = [
-  '/tasks: keeps the task list honest and shows it in the band above the prompt.',
-  '  /tasks           open the task list',
-  '  /tasks settings  open the settings pane',
-  '  /tasks help      this list',
+  '/task-list: keeps the task list honest and shows it in the band above the prompt.',
+  '  /task-list           open the task list',
+  '  /task-list settings  open the settings pane',
+  '  /task-list help      this list',
 ].join('\n')
 const SWEEP_DAYS = 14
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
@@ -567,8 +568,9 @@ export const register: Register = (on, options) => {
   live.nudgeAfter = Number(options.nudgeAfterTools ?? 3)
   settings(on, options)
 
-  // `/tasks [help | settings]`; with no argument, the task list. Any other argument gets the help.
-  on('command.run', { command: 'tasks' }, async ($, e) => {
+  // `/task-list [help | settings]`; with no argument, the task list. Any other argument gets the help.
+  // Not `/tasks`: that name is a built-in command, and the engine refuses it.
+  on('command.run', { command: COMMAND }, async ($, e) => {
     const verb = e.args.trim()
     if (verb !== '' && verb !== 'settings') return { text: HELP }
     const [id, title] = verb === '' ? [PANE, 'Tasks'] : [SETTINGS_PANE, 'Tasks settings']
@@ -578,7 +580,10 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    await $.command.register({ name: 'tasks', description: 'The task list', argumentHint: HINT })
+    // A refused command must never cost the rest of the start: the list, the carry-over, the band.
+    await $.command
+      .register({ name: COMMAND, description: 'The task list', argumentHint: HINT })
+      .catch(() => undefined)
     const dir = await dataDir($)
     // Done before this session's list is read, so the two never race.
     await $.process
