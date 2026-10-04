@@ -470,6 +470,17 @@ test("a finished session's leftovers are carried over once, never into every lat
   expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBe(NOW)
 })
 
+test('a list resumed and saved again after it was carried is not marked', async ($, on) => {
+  const seen = world(on)
+  const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK] }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify(old))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  const newer = { ...OPEN_TASK, id: '9', subject: 'added after the carry' }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify({ ...old, updatedAt: 50, tasks: [OPEN_TASK, newer] }))
+  await $.prompt.submit({ text: 'hi' } as never)
+  expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBeUndefined()
+})
+
 test('a list already handed over is not carried again', async ($, on) => {
   const seen = world(on)
   const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK], handedOverAt: 1 }
