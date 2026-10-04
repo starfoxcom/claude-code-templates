@@ -48,6 +48,10 @@ export type Mirror = {
   // The previous session's unfinished tasks in this folder, shown for checking, never recreated here.
   carried?: MirrorTask[]
   carriedFrom?: string
+  // Set once the carried-over note reached the model; kept on disk so a hot reload never repeats it.
+  isCarryNoted?: boolean
+  // Marks a clean end (session.end). The running stamp lives in its own `<session>.alive` file.
+  endedAt?: number
 }
 
 type UpdateArgs = {
@@ -72,6 +76,9 @@ export const HOLD_HELP =
 
 const KEEP_TASKS = 50
 const COMMAND = 'task-list'
+const ALIVE_EVERY_MS = 60_000
+// Missed heartbeats this long mean the session is gone (closed without an end, or crashed).
+const ALIVE_STALE_MS = 3 * ALIVE_EVERY_MS
 const HINT = '[help | settings]'
 export const HELP = [
   '/task-list: keeps the task list honest and shows it in the band above the prompt.',
@@ -103,8 +110,8 @@ const live: {
   // finishes one task and starts the next settles before overlap is judged.
   checkOverlap: boolean
   afterCompact: boolean
-  isCarryNoted: boolean
   isEngineCleared: boolean
+  isAliveStarted: boolean
   nudgeAfter: number
 } = {
   turn: 0,
@@ -114,8 +121,8 @@ const live: {
   isNudged: false,
   checkOverlap: false,
   afterCompact: false,
-  isCarryNoted: false,
   isEngineCleared: false,
+  isAliveStarted: false,
   nudgeAfter: 3,
 }
 
@@ -390,10 +397,26 @@ export function carriedText(carried: readonly MirrorTask[]): string {
   )
 }
 
-// The newest other session in the same folder that left open tasks.
-export function pickPredecessor(mirrors: readonly Mirror[], root: string, session: string): Mirror | undefined {
+// A running session writes the time to `<session>.alive` every minute and at each turn; it is a
+// file of its own so the stamp never rewrites a task list. A session is finished when it never
+// stamped (gone before the stamps existed), stopped stamping, or ended after its last stamp.
+export function isFinished(endedAt: number | undefined, aliveAt: number | undefined, now: number): boolean {
+  // A stamp that is not a number (a damaged or foreign file) counts as no stamp.
+  if (aliveAt === undefined || !Number.isFinite(aliveAt) || now - aliveAt > ALIVE_STALE_MS) return true
+  return endedAt !== undefined && endedAt >= aliveAt
+}
+
+// The newest other finished session in the same folder that left open tasks.
+export function pickPredecessor(
+  mirrors: readonly Mirror[],
+  aliveAt: ReadonlyMap<string, number>,
+  root: string,
+  session: string,
+  now: number,
+): Mirror | undefined {
   return mirrors
     .filter(mirror => mirror.session !== session && mirror.root === root && openTasks(mirror).length > 0)
+    .filter(mirror => isFinished(mirror.endedAt, aliveAt.get(mirror.session), now))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 
@@ -501,20 +524,44 @@ async function carryOver($: EngineInterface): Promise<void> {
   if (mirror.tasks.length > 0 || mirror.carried) return
   const dir = await dataDir($)
   const mirrors: Mirror[] = []
+  const aliveAt = new Map<string, number>()
   for (const entry of await $.fs.list(dir)) {
-    if (!entry.name.endsWith('.json')) continue
     try {
-      mirrors.push(JSON.parse(String(await $.fs.read(`${dir}/${entry.name}`))) as Mirror)
+      const text = String(await $.fs.read(`${dir}/${entry.name}`))
+      if (entry.name.endsWith('.json')) mirrors.push(JSON.parse(text) as Mirror)
+      else if (entry.name.endsWith('.alive')) aliveAt.set(entry.name.slice(0, -'.alive'.length), Number(text))
     } catch {
       // A half-written or foreign file is skipped.
     }
   }
-  const previous = pickPredecessor(mirrors, mirror.root ?? '', mirror.session)
+  const previous = pickPredecessor(mirrors, aliveAt, mirror.root ?? '', mirror.session, await $.clock.now())
   if (!previous) return
   mirror.carried = openTasks(previous)
   mirror.carriedFrom = previous.session
   mirror.changedAt = await $.clock.now()
   await saveMirror($, mirror)
+}
+
+// Writes only the stamp file, for the session id of the moment: a timer a hot reload left behind,
+// or one still running after /clear, stamps the live session and never touches a task list.
+async function stampAlive($: EngineInterface): Promise<void> {
+  const dir = await dataDir($)
+  await ensureDir($, dir).catch(() => undefined)
+  await $.fs.write(`${dir}/${await $.session.id()}.alive`, String(await $.clock.now()))
+}
+
+// Stamps at once, and starts the minute timer once per load (a hot reload runs no session.start).
+async function startAlive($: EngineInterface): Promise<void> {
+  await stampAlive($).catch(() => undefined)
+  if (live.isAliveStarted) return
+  live.isAliveStarted = true
+  $.clock.every(ALIVE_EVERY_MS, () => void stampAlive($).catch(() => undefined))
+}
+
+async function markEnded($: EngineInterface): Promise<void> {
+  const mirror = await mirrorOf($)
+  mirror.endedAt = await $.clock.now()
+  if (mirror.tasks.length > 0 || mirror.carried) await saveMirror($, mirror)
 }
 
 export const register: Register = (on, options) => {
@@ -544,10 +591,20 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
     await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)
+    await startAlive($)
     return result
   })
 
+  // After a /clear the process goes on under a new session id with no session.start: the next save
+  // reads that session's own mirror.
+  on('session.end', async ($, e, next) => {
+    await markEnded($).catch(() => undefined)
+    live.mirror = undefined
+    return next(e)
+  })
+
   on('turn.start', async ($, e, next) => {
+    await startAlive($)
     live.turn += 1
     live.isTurnRunning = true
     live.toolsThisTurn = 0
@@ -572,8 +629,11 @@ export const register: Register = (on, options) => {
     if (live.isTurnRunning) return next(e)
     const mirror = await mirrorOf($)
     const notes: string[] = []
-    if (!live.isCarryNoted && mirror.carried?.length) notes.push(carriedText(mirror.carried))
-    live.isCarryNoted = true
+    if (!mirror.isCarryNoted && mirror.carried?.length) {
+      notes.push(carriedText(mirror.carried))
+      mirror.isCarryNoted = true
+      await saveMirror($, mirror)
+    }
     const note = live.afterCompact ? openListText(mirror, live.turn) : staleText(mirror, live.turn)
     live.afterCompact = false
     if (note) notes.push(note)

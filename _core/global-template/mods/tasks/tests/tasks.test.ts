@@ -19,11 +19,12 @@ type World = {
   opened: string[]
   /** The engine refuses the command name, as it does a built-in's. */
   isCommandRefused?: boolean
+  clock?: ReturnType<typeof mock.clock>
 }
 
 function world(on: On): World {
   const seen: World = { files: new Map(), nextId: 1, listed: [], runs: [], old: [], commands: [], opened: [] }
-  mock.clock(on, { now: Date.UTC(2026, 9, 2, 19, 0, 0) })
+  seen.clock = mock.clock(on, { now: Date.UTC(2026, 9, 2, 19, 0, 0) })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
   on('fs.read', ($, e) => {
@@ -390,6 +391,61 @@ test('/task-list opens the list or its settings, and help or anything else lists
   expect(await run('settings')).toEqual(expect.objectContaining({ text: 'Opened the tasks settings.' }))
   expect(seen.opened).toEqual(['tasks', 'tasks-settings'])
   for (const args of ['help', 'lists']) expect(await run(args)).toEqual(expect.objectContaining({ text: HELP }))
+})
+
+const NOW = Date.UTC(2026, 9, 2, 19, 0, 0)
+const DIR = 'C:/Users/me/.claude/mods-data/tasks'
+const OPEN_TASK = { id: '7', subject: 'keep going', status: 'in_progress', createdTurn: 1 }
+const STALE_MS = 3 * 60_000
+
+for (const { name, aliveAt, endedAt, isCarried } of [
+  { name: 'a session still running', aliveAt: NOW - 60_000, endedAt: undefined, isCarried: false },
+  { name: 'a session stamped at the stale limit', aliveAt: NOW - STALE_MS, endedAt: undefined, isCarried: false },
+  { name: 'a session just past the stale limit', aliveAt: NOW - STALE_MS - 1, endedAt: undefined, isCarried: true },
+  { name: 'a session that ended after its last stamp', aliveAt: NOW - 60_000, endedAt: NOW - 30_000, isCarried: true },
+  { name: 'a session resumed after it ended', aliveAt: NOW - 10_000, endedAt: NOW - 30_000, isCarried: false },
+  { name: 'a session from before the stamps', aliveAt: undefined, endedAt: undefined, isCarried: true },
+  { name: 'a session with a damaged stamp', aliveAt: 'garbage', endedAt: undefined, isCarried: true },
+]) {
+  test(`carry-over from ${name}: ${isCarried ? 'carried' : 'left alone'}`, async ($, on) => {
+    const seen = world(on)
+    const other = { session: 'other', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK], endedAt }
+    seen.files.set(`${DIR}/other.json`, JSON.stringify(other))
+    if (aliveAt !== undefined) seen.files.set(`${DIR}/other.alive`, String(aliveAt))
+    await $.session.start({ cwd: 'C:/Repos/x' } as never)
+    expect(mirror(seen).carried?.map(task => task.id)).toEqual(isCarried ? ['7'] : undefined)
+  })
+}
+
+test('a running session stamps at start, each turn and each minute; its end marks the list', async ($, on) => {
+  const seen = world(on)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  expect(seen.files.get(`${DIR}/sess-a.alive`)).toBe(String(NOW))
+  await seen.clock?.advance(60_000)
+  expect(seen.files.get(`${DIR}/sess-a.alive`)).toBe(String(NOW + 60_000))
+  await turn($)
+  await create($, 'work')
+  await $.session.end({ reason: 'other', sessionId: 'sess-a' } as never)
+  expect(mirror(seen).endedAt).toBe(NOW + 60_000)
+})
+
+test("the minute stamp never rewrites the task list, even an ended session's", async ($, on) => {
+  const seen = world(on)
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  const ended = { session: 'sess-a', root: 'c:/repos/x', updatedAt: 5, turn: 2, tasks: [OPEN_TASK], endedAt: NOW }
+  seen.files.set(MIRROR_FILE, JSON.stringify(ended))
+  await seen.clock?.advance(60_000)
+  expect(JSON.parse(seen.files.get(MIRROR_FILE) ?? '{}')).toEqual(ended)
+})
+
+test('a hot reload never repeats the carried-over note', async ($, on) => {
+  const seen = world(on)
+  // This session's own mirror, as a reloaded module finds it (no session.start): the note already went out.
+  const own = { session: 'sess-a', root: 'c:/repos/x', updatedAt: 5, turn: 2, tasks: [] }
+  seen.files.set(MIRROR_FILE, JSON.stringify({ ...own, carried: [OPEN_TASK], isCarryNoted: true }))
+  const answer = (await $.prompt.submit({ text: 'hi' } as never)) as never as { context?: string[] }
+  expect((answer.context ?? []).join(' ')).not.toContain('left unfinished')
 })
 
 test('a refused command name never stops the rest of the session start', async ($, on) => {
