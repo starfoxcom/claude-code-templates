@@ -70,7 +70,8 @@ export function compactedMark(compactedAt: number | undefined, offsetMinutes: nu
 
 // The bar always carries the fill's tone; the words turn only once it needs an eye.
 export function contextChip(b: Budgets, now: number): Chip {
-  const parts = [...contextParts(b.tokens, b.size, b.compactsAt), { text: compactedMark(b.compactedAt, b.offsetMinutes, now) }]
+  const mark = compactedMark(b.compactedAt, b.offsetMinutes, now)
+  const parts = [...contextParts(b.tokens, b.size, b.compactsAt), { text: mark }]
   const text = parts.map(part => part.text).join('')
   if (b.tokens === undefined) return { text, parts }
   const tone = fillTone(b.tokens / (b.compactsAt ?? b.size))
