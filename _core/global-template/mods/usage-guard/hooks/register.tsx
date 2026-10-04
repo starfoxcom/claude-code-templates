@@ -18,7 +18,7 @@ import {
 } from './plan'
 import { stopCommandsFor } from './rules'
 import type { SessionRecord } from './sessions'
-import { planTakeover, projectOf, recordName } from './sessions'
+import { planTakeover, projectOf, recordName, TAKEOVER_WITHIN_MS } from './sessions'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 const CHECK_EVERY_MS = 60_000
@@ -309,8 +309,6 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
 async function resume($: EngineInterface, resetsAt: string): Promise<void> {
   const pause = await readPause($)
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
-  // The person disarmed this session during the pause: it stays put; meetPause names the reset later.
-  if (await isDeclined($, pause)) return
   // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
   // timer beside this one. The shared `done` status cannot be the claim: every session resumes.
   if (!(await claim($, `resume-${resetKey(pause)}-${await $.session.id()}`))) return
@@ -371,8 +369,6 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   // An instance left by a hot reload may fire the same arm beside this one: one wins the claim.
   if (!(await claim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`))) return
   await setArm($, null)
-  // The pause that armed this wake was cancelled: the person asked for no automatic resume.
-  if (arm.byPause && pause?.status === 'cancelled') return
   if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled')
     return resume($, pause.resetsAt)
   await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
@@ -398,21 +394,6 @@ async function beat($: EngineInterface): Promise<void> {
     beatAt: await $.clock.now(),
     arm: await read($, armedWake),
   })
-}
-
-// A session the pause wrapped up gets the pause's wake as its own arm, so its resume survives a restart.
-// An arm set by hand stays: it already resumes the session, at the pause's wake or after it. A session
-// with nothing saved only waits, and a new session would have nothing to pick up from it.
-async function armForPause($: EngineInterface, pause: Pause): Promise<void> {
-  if (!live.hasWork || (await isDeclined($, pause))) return
-  const current = await read($, armedWake)
-  if (current && !current.byPause) return
-  if (current?.resetsAt === pause.resetsAt && current.wakeAt === pause.wakeAt) return
-  const arm: ArmedWake = { kind: pause.kinds[0] ?? 'five_hour', resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
-  await setArm($, { ...arm, byPause: true })
-  // Its own timer clears it at the wake (or drops it after a cancel); the claims keep the pause's
-  // resume and this one from resuming the session twice.
-  await scheduleArm($, { ...arm, byPause: true })
 }
 
 // At start: the wake this session armed before a restart, or the wakes closed sessions left in this
@@ -452,23 +433,9 @@ async function armByHand($: EngineInterface, which: string): Promise<string> {
   )
 }
 
-// A disarm during a pause, kept as a claim on disk so a hot reload or a restart still honours it.
-const declineName = (pause: Pause, session: string) => `declined-${resetKey(pause)}-${session}`
-
-async function isDeclined($: EngineInterface, pause: Pause): Promise<boolean> {
-  const name = declineName(pause, await $.session.id()).replace(/[^\w-]/g, '_')
-  return $.fs.exists(`${await dataDir($)}/claims/${name}`).catch(() => false)
-}
-
-// During a pause it also declines that pause's resume, or the minute check would arm it right back.
+// Drops the arm set by hand. A pause's own resume is the pause's: /usage-guard cancel stops it.
 async function disarm($: EngineInterface): Promise<string> {
   const current = await read($, armedWake)
-  const pause = await readPause($)
-  if (pause?.status === 'active') {
-    await claim($, declineName(pause, await $.session.id()))
-    live.wakeTimer?.cancel()
-    live.wakeTimer = undefined
-  }
   live.armTimer?.cancel()
   live.armTimer = undefined
   await setArm($, null)
@@ -482,14 +449,9 @@ async function disarm($: EngineInterface): Promise<string> {
 async function act($: EngineInterface, pause: Pause): Promise<void> {
   if (await claim($, `${resetKey(pause)}-${await $.session.id()}`)) {
     await armWake($, pause)
-    await armForPause($, pause)
     await stopBackground($, pause)
     await wrapUp($, pause)
-    return
-  }
-  if (!live.wakeTimer) await armWake($, pause)
-  // An extension moves the wake later; a session that saved work since the pause began now has some.
-  await armForPause($, pause)
+  } else if (!live.wakeTimer) await armWake($, pause)
 }
 
 async function check($: EngineInterface): Promise<void> {
@@ -544,10 +506,11 @@ async function startTimers($: EngineInterface): Promise<void> {
 }
 
 // A session that starts during a pause: it has nothing to save yet, so it only waits for the reset.
-// One that starts after the reset resumes through its armed wake when it has one (its own from before
-// a restart, or one it took over); otherwise it is told to resume by hand.
+// One that starts after the reset resumes if it is the same session the pause met before a restart
+// (`catchUp`), or through an armed wake; otherwise it is told to resume by hand.
 async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   if (pause.wakeAt <= (await $.clock.now())) {
+    if (await catchUp($, pause)) return
     await writePause($, { ...pause, status: 'done' })
     if (await read($, armedWake)) return
     const text = 'Plan limits have reset since the last wrap-up. Run /session-start to resume the saved work.'
@@ -567,6 +530,18 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
       `at ${localTime(pause.wakeAt)}, when this session picks up the saved work. To skip the automatic ` +
       `resume, run /usage-guard cancel.`,
   )
+}
+
+// A restart of a session the pause met (its claim from that pause is already taken), after the wake: it
+// resumes as its timer would have, once (resume's own claim), unless the pause was cancelled. A new
+// session wins that claim and only marks it met. Its saved work is a day old at most: past that the
+// person has moved on, as with a takeover.
+async function catchUp($: EngineInterface, pause: Pause): Promise<boolean> {
+  const now = await $.clock.now()
+  if (pause.wakeAt > now || pause.wakeAt <= now - TAKEOVER_WITHIN_MS) return false
+  if (await claim($, `${resetKey(pause)}-${await $.session.id()}`)) return false
+  await resume($, pause.resetsAt)
+  return true
 }
 
 // yellow: the person may act (cancel the resume, run /session-start); blue: information; green: good news.
@@ -589,6 +564,7 @@ export const register: Register = (on, options) => {
     await restoreArm($).catch(() => undefined)
     const pause = await readPause($)
     if (pause?.status === 'active') await meetPause($, pause)
+    else if (pause?.status === 'done') await catchUp($, pause)
     await registerSurface($)
     await startTimers($)
     return result
@@ -677,7 +653,7 @@ export const register: Register = (on, options) => {
 async function closeRecord($: EngineInterface, session: string, isSwitch: boolean): Promise<void> {
   const arm = await read($, armedWake)
   if (isSwitch) {
-    // The process goes on as a new session: nothing this one did or declined carries over.
+    // The process goes on as a new session: nothing this one did carries over.
     live.hasWork = false
     live.armTimer?.cancel()
     live.armTimer = undefined
