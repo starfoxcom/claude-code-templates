@@ -523,6 +523,17 @@ async function clearEngineStore($: EngineInterface): Promise<void> {
   await $.process.run(['node', '-e', UNLINK_SCRIPT, dir, ...names], { timeoutMs: 20_000 })
 }
 
+// Marks the finished list whose leftovers just reached the model, so no later session shows them again.
+// Done when the note goes out, not at the start: a session that ends before its first prompt never saw
+// them, and the next new session carries them instead.
+async function markHandedOver($: EngineInterface, session: string | undefined): Promise<void> {
+  if (!session) return
+  const path = `${await dataDir($)}/${session}.json`
+  const previous = JSON.parse(String(await $.fs.read(path))) as Mirror
+  previous.handedOverAt = await $.clock.now()
+  await $.fs.write(path, JSON.stringify(previous, null, 1))
+}
+
 async function carryOver($: EngineInterface): Promise<void> {
   const mirror = await mirrorOf($)
   if (mirror.tasks.length > 0 || mirror.carried) return
@@ -544,9 +555,6 @@ async function carryOver($: EngineInterface): Promise<void> {
   mirror.carried = openTasks(previous)
   mirror.carriedFrom = previous.session
   mirror.changedAt = now
-  // The finished list is written back marked, so the next new session does not show it again.
-  previous.handedOverAt = now
-  await $.fs.write(`${dir}/${previous.session}.json`, JSON.stringify(previous, null, 1)).catch(() => undefined)
   await saveMirror($, mirror)
 }
 
@@ -641,6 +649,7 @@ export const register: Register = (on, options) => {
       notes.push(carriedText(mirror.carried))
       mirror.isCarryNoted = true
       await saveMirror($, mirror)
+      await markHandedOver($, mirror.carriedFrom).catch(() => undefined)
     }
     const note = live.afterCompact ? openListText(mirror, live.turn) : staleText(mirror, live.turn)
     live.afterCompact = false
