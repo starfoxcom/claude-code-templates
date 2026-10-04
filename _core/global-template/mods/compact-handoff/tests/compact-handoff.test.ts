@@ -1,7 +1,7 @@
 import type { On, SessionMessage } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { MKDIR_SCRIPT, PERSON_MARK, personWords } from '../hooks/register'
+import { HELP, MKDIR_SCRIPT, MODE_TEXT, PERSON_MARK, personWords } from '../hooks/register'
 
 const SESSION = 'sess-1'
 
@@ -35,13 +35,15 @@ type World = {
   runs: (readonly string[])[]
   forks: string[]
   registered: string[]
+  commands: { name: string; argumentHint?: string }[]
+  opened: string[]
   clock: ReturnType<typeof mock.clock>
 }
 type Run = { exitCode: number; stdout: string } | 'reject'
 
 function world(on: On, helperRuns: Record<string, Run> = {}): World {
   const clock = mock.clock(on, { now: Date.UTC(2026, 9, 2, 17, 0, 0) })
-  const seen: World = { writes: [], runs: [], forks: [], registered: [], clock }
+  const seen: World = { writes: [], runs: [], forks: [], registered: [], commands: [], opened: [], clock }
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   on('session.id', () => ({ value: SESSION }))
   on('session.usage', () => ({
@@ -71,6 +73,14 @@ function world(on: On, helperRuns: Record<string, Run> = {}): World {
     return { value: { tool: `mcp__compact-handoff__${e.name}` } }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => {
+    seen.commands.push({ name: e.name, argumentHint: e.argumentHint })
+    return { value: { command: e.name } as never }
+  })
+  on('ui.open', ($, e) => {
+    seen.opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
   return seen
 }
 
@@ -317,3 +327,17 @@ test('answers that repeat the carried pair after the kept tail are kept', async 
   expect(second.split('\ndo it').length - 1).toBe(2)
   expect(second.split('\nyes').length - 1).toBe(2)
 })
+
+for (const mode of ['on', 'off'] as const) {
+  test(`${mode}: /compact-handoff names the mode, opens its settings, and lists its verbs`, { options: { mode } }, async ($, on) => {
+    const seen = world(on)
+    await start($)
+    expect(seen.commands).toEqual([{ name: 'compact-handoff', argumentHint: '[help | settings]' }])
+    const run = (args: string) => $.command.run({ command: 'compact-handoff', args } as never)
+    expect(await run('')).toEqual(expect.objectContaining({ text: MODE_TEXT[mode] }))
+    expect(await run('help')).toEqual(expect.objectContaining({ text: HELP }))
+    expect(await run('mode')).toEqual(expect.objectContaining({ text: HELP }))
+    await run('settings')
+    expect(seen.opened).toEqual(['compact-handoff-settings'])
+  })
+}
