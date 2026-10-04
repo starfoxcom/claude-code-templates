@@ -48,6 +48,8 @@ export type Mirror = {
   // The previous session's unfinished tasks in this folder, shown for checking, never recreated here.
   carried?: MirrorTask[]
   carriedFrom?: string
+  // Set once the carried-over note reached the model; kept on disk so a hot reload never repeats it.
+  isCarryNoted?: boolean
   // While the session runs with open tasks it stamps aliveAt every minute; endedAt marks a clean end.
   // A session that is still running is never another session's predecessor.
   aliveAt?: number
@@ -109,7 +111,6 @@ const live: {
   // finishes one task and starts the next settles before overlap is judged.
   checkOverlap: boolean
   afterCompact: boolean
-  isCarryNoted: boolean
   isEngineCleared: boolean
   isAliveStarted: boolean
   nudgeAfter: number
@@ -121,7 +122,6 @@ const live: {
   isNudged: false,
   checkOverlap: false,
   afterCompact: false,
-  isCarryNoted: false,
   isEngineCleared: false,
   isAliveStarted: false,
   nudgeAfter: 3,
@@ -621,8 +621,11 @@ export const register: Register = (on, options) => {
     if (live.isTurnRunning) return next(e)
     const mirror = await mirrorOf($)
     const notes: string[] = []
-    if (!live.isCarryNoted && mirror.carried?.length) notes.push(carriedText(mirror.carried))
-    live.isCarryNoted = true
+    if (!mirror.isCarryNoted && mirror.carried?.length) {
+      notes.push(carriedText(mirror.carried))
+      mirror.isCarryNoted = true
+      await saveMirror($, mirror)
+    }
     const note = live.afterCompact ? openListText(mirror, live.turn) : staleText(mirror, live.turn)
     live.afterCompact = false
     if (note) notes.push(note)
