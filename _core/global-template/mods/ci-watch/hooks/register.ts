@@ -20,6 +20,14 @@ const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 const KEEP_SETTLED_MS = 60 * 60_000
+const HINT = '[help | settings | stop]'
+export const HELP = [
+  "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
+  '  /ci-watch           the watched PRs and their checks',
+  '  /ci-watch stop      stop watching every PR in this session',
+  '  /ci-watch settings  open the settings pane',
+  '  /ci-watch help      this list',
+].join('\n')
 
 const live = {
   pollMs: 60_000,
@@ -495,8 +503,7 @@ export const register: Register = (on, options) => {
         required: ['pr'],
       },
     })
-    const description = 'Show watched PRs; /ci-watch stop stops them, /ci-watch settings opens the settings'
-    await $.command.register({ name: 'ci-watch', description })
+    await $.command.register({ name: 'ci-watch', description: 'The PRs this session watches', argumentHint: HINT })
     return result
   })
 
@@ -554,14 +561,17 @@ export const register: Register = (on, options) => {
     return { result: `Watching ${repo}#${number}; you will be woken once its checks settle.` }
   })
 
+  // `/ci-watch [help | settings | stop]`; with no argument, the watched PRs. An unknown verb gets the help.
   on('command.run', { command: 'ci-watch' }, async ($, e, next) => {
-    if (e.args.trim() === 'settings') {
+    const verb = e.args.trim()
+    if (!['', 'settings', 'stop'].includes(verb)) return { text: HELP }
+    if (verb === 'settings') {
       await $.ui.open({ id: SETTINGS_PANE, title: 'CI watch settings', focus: true })
       return { text: 'Opened the ci-watch settings.' }
     }
     await startPolling($)
     if (await isRetired($)) return next(e)
-    if (e.args.trim() === 'stop') {
+    if (verb === 'stop') {
       live.watches = []
       live.generation++
       await save($)
