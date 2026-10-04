@@ -73,6 +73,18 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(opened).toEqual([PANE])
   })
 
+  test(`with nothing in progress the band names the next task with the open look on ${surface}`, async ($, on) => {
+    world(on, [LIST[0]!, { ...LIST[2]!, id: '4' }, LIST[2]!])
+    await start($)
+    const ui = await $.ui.mount({ plugin: 'tasks', surface, component: 'AbovePrompt', props: PROPS })
+    // The list's 📝 and its plain color, never dimmed: an open task is not a finished one.
+    const next = (await ui.find({ type: 'Text', text: /· 📝 next #3 Shadow-test it/ })) as never as {
+      props: Record<string, unknown>
+    }
+    expect(next).toBeDefined()
+    expect([next.props.color, next.props.dimColor]).toEqual([undefined, undefined])
+  })
+
   test(`the pane lists every task, finished ones included, on ${surface}`, async ($, on) => {
     world(on, LIST)
     await start($)
