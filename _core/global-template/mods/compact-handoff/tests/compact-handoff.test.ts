@@ -276,6 +276,19 @@ test("a message that starts with a `<` of the person's own is their words; the e
   expect(words).not.toContain('a task ended')
 })
 
+test("a plugin's wake-up and the interrupt note are not the person's words", async () => {
+  const wake = [
+    'The ci-watch plugin sent a message:',
+    '[ci-watch] PR #229: all checks settled; failed: Claude On-Demand.',
+    '',
+    'This is how the engine surfaces a prompt a plugin submits between turns. Address the message above.',
+  ].join('\n')
+  const words = personWords([said(wake), said('[Request interrupted by user]'), said('keep going')], 10_000)
+  expect(words).toContain('keep going')
+  expect(words).not.toContain('plugin sent a message')
+  expect(words).not.toContain('Request interrupted')
+})
+
 test('a message the last compaction kept beside its summary is carried once', async () => {
   const first = personWords([said('lock the rings'), said('bake the shadows')], 10_000)
   // The engine kept "bake the shadows" as the tail, so it is in the next list as well as in the block.

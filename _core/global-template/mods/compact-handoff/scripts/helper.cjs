@@ -133,6 +133,9 @@ const ENGINE_TAGS = [
   'bash-stderr',
 ]
 const ENGINE_TAG = new RegExp(`^<(?:${ENGINE_TAGS.join('|')})`)
+// The same pattern as NOT_PERSON in hooks/register.ts: a prompt a plugin submitted in the person's place, and
+// the engine's note that the person pressed Esc.
+const NOT_PERSON = /^(?:The [\w.-]+ plugin sent a message:|\[Request interrupted by user)/
 
 function stripInjected(text) {
   return text
@@ -146,6 +149,7 @@ function stripInjected(text) {
 function isPersonText(text) {
   return (
     !ENGINE_TAG.test(text) &&
+    !NOT_PERSON.test(text) &&
     !text.startsWith('[SYSTEM') &&
     !text.startsWith('This session is being continued') &&
     !text.startsWith(PERSON_MARK) &&
@@ -153,15 +157,8 @@ function isPersonText(text) {
   )
 }
 
-// What a transcript record says in the person's place: a queued prompt they typed, or a typed record's
-// text. Anything else (tool results, summaries, meta lines) says nothing.
-function recordText(record) {
-  const { attachment, message } = record
-  if (record.type === 'attachment' && attachment && attachment.type === 'queued_command') {
-    return attachment.origin && attachment.origin.kind === 'human' ? String(attachment.prompt || '').trim() : ''
-  }
-  if (record.type !== 'user' || record.isMeta || record.isCompactSummary || !message) return ''
-  const content = message.content
+// The text of a prompt: a string, or blocks where images sit beside the text.
+function textOf(content) {
   if (typeof content === 'string') return content.trim()
   if (!Array.isArray(content) || content.some(block => block.type === 'tool_result')) return ''
   return content
@@ -169,6 +166,19 @@ function recordText(record) {
     .map(block => block.text)
     .join('\n')
     .trim()
+}
+
+// What a transcript record says in the person's place: a queued prompt they typed, or a typed record's
+// text. Anything else (tool results, summaries, meta lines, prompts a plugin or a peer session submitted)
+// says nothing. Records from before the engine wrote `origin` have none and are read by their text.
+function recordText(record) {
+  const { attachment, message } = record
+  if (record.type === 'attachment' && attachment && attachment.type === 'queued_command') {
+    return attachment.origin && attachment.origin.kind === 'human' ? textOf(attachment.prompt) : ''
+  }
+  if (record.type !== 'user' || record.isMeta || record.isCompactSummary || !message) return ''
+  if (record.origin && record.origin.kind !== 'human') return ''
+  return textOf(message.content)
 }
 
 // The person's own messages since the last compaction, oldest first: typed
@@ -215,7 +225,7 @@ async function persons(sessionId) {
   console.log(JSON.stringify(found))
 }
 
-module.exports = { PERSON_MARK, MOD_TAGS, INJECTED_LINE, ENGINE_TAGS, ENGINE_TAG, isPersonText }
+module.exports = { PERSON_MARK, MOD_TAGS, INJECTED_LINE, ENGINE_TAGS, ENGINE_TAG, NOT_PERSON, isPersonText }
 
 if (require.main === module) {
   const [command, ...args] = process.argv.slice(2)
