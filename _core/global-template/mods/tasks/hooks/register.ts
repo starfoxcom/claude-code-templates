@@ -48,6 +48,10 @@ export type Mirror = {
   // The previous session's unfinished tasks in this folder, shown for checking, never recreated here.
   carried?: MirrorTask[]
   carriedFrom?: string
+  // While the session runs with open tasks it stamps aliveAt every minute; endedAt marks a clean end.
+  // A session that is still running is never another session's predecessor.
+  aliveAt?: number
+  endedAt?: number
 }
 
 type UpdateArgs = {
@@ -71,6 +75,9 @@ export const HOLD_HELP =
   'completing the task clears it too).'
 
 const KEEP_TASKS = 50
+const ALIVE_EVERY_MS = 60_000
+// Missed heartbeats this long mean the session is gone (closed without an end, or crashed).
+const ALIVE_STALE_MS = 3 * ALIVE_EVERY_MS
 const HINT = '[help | settings]'
 export const HELP = [
   '/tasks: keeps the task list honest and shows it in the band above the prompt.',
@@ -104,6 +111,7 @@ const live: {
   afterCompact: boolean
   isCarryNoted: boolean
   isEngineCleared: boolean
+  isAliveStarted: boolean
   nudgeAfter: number
 } = {
   turn: 0,
@@ -115,6 +123,7 @@ const live: {
   afterCompact: false,
   isCarryNoted: false,
   isEngineCleared: false,
+  isAliveStarted: false,
   nudgeAfter: 3,
 }
 
@@ -389,10 +398,21 @@ export function carriedText(carried: readonly MirrorTask[]): string {
   )
 }
 
-// The newest other session in the same folder that left open tasks.
-export function pickPredecessor(mirrors: readonly Mirror[], root: string, session: string): Mirror | undefined {
+// A session ended cleanly, stopped stamping, or never stamped (written before the stamps existed).
+export function isFinished(mirror: Mirror, now: number): boolean {
+  return mirror.endedAt !== undefined || mirror.aliveAt === undefined || now - mirror.aliveAt > ALIVE_STALE_MS
+}
+
+// The newest other finished session in the same folder that left open tasks.
+export function pickPredecessor(
+  mirrors: readonly Mirror[],
+  root: string,
+  session: string,
+  now: number,
+): Mirror | undefined {
   return mirrors
     .filter(mirror => mirror.session !== session && mirror.root === root && openTasks(mirror).length > 0)
+    .filter(mirror => isFinished(mirror, now))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
 
@@ -508,12 +528,36 @@ async function carryOver($: EngineInterface): Promise<void> {
       // A half-written or foreign file is skipped.
     }
   }
-  const previous = pickPredecessor(mirrors, mirror.root ?? '', mirror.session)
+  const previous = pickPredecessor(mirrors, mirror.root ?? '', mirror.session, await $.clock.now())
   if (!previous) return
   mirror.carried = openTasks(previous)
   mirror.carriedFrom = previous.session
   mirror.changedAt = await $.clock.now()
   await saveMirror($, mirror)
+}
+
+// Stamps this session's mirror as running. Only a list with open tasks can be carried over, so only
+// such a list is written; the stamp rides on the next save otherwise.
+async function stampAlive($: EngineInterface): Promise<void> {
+  const mirror = await mirrorOf($)
+  mirror.aliveAt = await $.clock.now()
+  delete mirror.endedAt
+  if (openTasks(mirror).length > 0) await saveMirror($, mirror)
+}
+
+// Once per load: a hot reload starts the module over without a session.start, so the first turn or
+// tool call after it starts the stamps again.
+async function startAlive($: EngineInterface): Promise<void> {
+  if (live.isAliveStarted) return
+  live.isAliveStarted = true
+  await stampAlive($).catch(() => undefined)
+  $.clock.every(ALIVE_EVERY_MS, () => void stampAlive($).catch(() => undefined))
+}
+
+async function markEnded($: EngineInterface): Promise<void> {
+  const mirror = await mirrorOf($)
+  mirror.endedAt = await $.clock.now()
+  if (mirror.tasks.length > 0 || mirror.carried) await saveMirror($, mirror)
 }
 
 export const register: Register = (on, options) => {
@@ -539,10 +583,20 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
     await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)
+    await startAlive($)
     return result
   })
 
+  // After a /clear the process goes on under a new session id with no session.start: the next save
+  // reads that session's own mirror.
+  on('session.end', async ($, e, next) => {
+    await markEnded($).catch(() => undefined)
+    live.mirror = undefined
+    return next(e)
+  })
+
   on('turn.start', async ($, e, next) => {
+    await startAlive($)
     live.turn += 1
     live.isTurnRunning = true
     live.toolsThisTurn = 0
