@@ -113,6 +113,21 @@ test('the effort comes from the main loop, never a subagent', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · GameProject/ })).toBeDefined()
 })
 
+const TURN_DONE = { turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'done' } as never
+
+test("a request's own effort beats an unchanged pick, even when it lands before the row starts", async ($, on) => {
+  const seen = world(on)
+  seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'max' } } }
+  // After a hot reload the turn's request comes first; the turn's end starts the row.
+  const step = { turnId: 't', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }
+  await drain($.turn.step(step as never))
+  await $.turn.complete(TURN_DONE)
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 high · / })).toBeDefined()
+  // A refresh with the same pick keeps it.
+  await seen.clock.advance(30_000)
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 high · / })).toBeDefined()
+})
+
 test('the effort picked in settings shows before the first request, and a new pick replaces it', async ($, on) => {
   const seen = world(on)
   seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
