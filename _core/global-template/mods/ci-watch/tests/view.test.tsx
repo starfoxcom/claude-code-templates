@@ -1,7 +1,7 @@
 import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 
-import { summary } from '../hooks/view'
+import { LOOKS, summary } from '../hooks/view'
 import type { Watch } from '../types'
 import { world } from './world'
 
@@ -13,28 +13,28 @@ const SUMMARY_CASES: { name: string; watch: Partial<Watch>; text: string; color:
   {
     name: 'running',
     watch: { checks: { a: 'pass', b: 'pending' } },
-    text: 'PR 7 · 1/2 done',
+    text: '⏳ PR 7 · 1/2 done',
     color: 'yellow',
   },
   {
     name: 'passed',
     watch: { checks: { a: 'pass', b: 'skipping' }, outcome: 'passed' },
-    text: 'PR 7 · all 2 passed',
+    text: '✅ PR 7 · all 2 passed',
     color: 'green',
   },
   {
     name: 'failed',
     watch: { checks: { a: 'fail', b: 'cancel', c: 'pass' } },
-    text: 'PR 7 · failed: a, b',
+    text: '❌ PR 7 · failed: a, b',
     color: 'red',
   },
   {
     name: 'timed out',
     watch: { checks: { a: 'pending' }, outcome: 'timeout' },
-    text: 'PR 7 · stuck pending',
+    text: '⏰ PR 7 · stuck pending',
     color: 'yellow',
   },
-  { name: 'no checks yet', watch: {}, text: 'PR 7 · 0/0 done', color: 'yellow' },
+  { name: 'no checks yet', watch: {}, text: '⏳ PR 7 · 0/0 done', color: 'yellow' },
 ]
 
 for (const { name, watch, text, color } of SUMMARY_CASES) {
@@ -42,6 +42,16 @@ for (const { name, watch, text, color } of SUMMARY_CASES) {
     expect(summary({ ...BASE, ...watch })).toEqual({ text, color })
   })
 }
+
+test('every check state has its own icon, colored by what it asks of you', () => {
+  expect(LOOKS).toEqual({
+    pass: { icon: '✅', color: 'green' },
+    fail: { icon: '❌', color: 'red' },
+    cancel: { icon: '🚫', color: 'red' },
+    pending: { icon: '⏳', color: 'yellow' },
+    skipping: { icon: '➖', color: 'gray' },
+  })
+})
 
 async function pushed($: Engine, surface: 'terminal' | 'desktop'): Promise<void> {
   if (surface === 'terminal') await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
@@ -58,10 +68,11 @@ for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'ci-watch', surface, component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: /PR 7 · failed: review/ })).toBeDefined()
     expect(await ui.find({ type: 'Link', href: 'https://github.com/o/r/pull/7' } as never)).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /✗ review/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /❌ review/ })).toBeUndefined()
     await ui.press({ key: 'ci-watch-checks-o/r#7' })
-    expect(await ui.find({ type: 'Text', text: /✗ review/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /… build/ })).toBeDefined()
+    // Each check in its state's icon and color, as the tasks list draws its states.
+    expect(await ui.find({ type: 'Text', text: /❌ review/, color: 'red' } as never)).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /⏳ build/, color: 'yellow' } as never)).toBeDefined()
   })
 
   test(`${surface}: stop forgets the watch, so the session is never woken for it`, async ($, on) => {
