@@ -79,6 +79,25 @@ test("prompts the mods submit and the lines they attach are not the person's wor
   assert.deepStrictEqual(found, ['keep the parser strict', '[link](https://example.com) is the spec to follow'])
 })
 
+test("a plugin's or a peer's prompt and the interrupt note are not the person's words", () => {
+  const wake = 'The ci-watch plugin sent a message:\n[ci-watch] PR #229: failed.\n\nAddress the message above.'
+  const found = transcript([
+    { ...user(wake), origin: { kind: 'plugin', name: 'ci-watch' } },
+    { ...user('from the templates session'), origin: { kind: 'peer' } },
+    // A record from before the engine wrote `origin` is read by its text.
+    user(wake),
+    user('[Request interrupted by user]'),
+    { ...user('keep going'), origin: { kind: 'human' } },
+  ])
+  assert.deepStrictEqual(found, ['keep going'])
+})
+
+test('a prompt typed mid-turn with images keeps its words', () => {
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }
+  const found = transcript([queued([{ type: 'text', text: 'look at this [Image #1]' }, image])])
+  assert.deepStrictEqual(found, ['look at this [Image #1]'])
+})
+
 test("no transcript for the session is a failure, so the hook falls back to the compaction's list", () => {
   const run = spawnSync(process.execPath, [HELPER, 'persons', 'other-session'], {
     env: { ...process.env, CLAUDE_CONFIG_DIR: configWith([user('first ask')]) },
@@ -112,6 +131,9 @@ test('the helper and the hooks module carry the same mark and the same injected-
   )
   const engineBuilt = /ENGINE_TAG = (new RegExp\(.+\))\s*$/m
   assert.strictEqual(engineBuilt.exec(source)?.[1], engineBuilt.exec(helperSource)?.[1])
+  const notPerson = /NOT_PERSON = (\/.+\/)\s*$/m
+  assert.ok(notPerson.exec(source), 'NOT_PERSON found in register.ts')
+  assert.strictEqual(notPerson.exec(source)?.[1], notPerson.exec(helperSource)?.[1])
   // And both read the same fixture the same way.
   const hooksLine = new RegExp(INJECTED_LINE.source)
   for (const line of [
