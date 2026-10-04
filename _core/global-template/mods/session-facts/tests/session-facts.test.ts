@@ -49,7 +49,7 @@ test('every prompt carries the local time, the context fill to compaction and pl
   expect(seen.length).toBe(1)
   expect(seen[0]).toContain('2026-10-02 09:00:00 America/Phoenix')
   // The budgets row's own text, so the State line copied from it reads like the row.
-  expect(seen[0]).toContain('| ctx ▰▰▰▰▰▰▱▱▱▱ 57% · 181k to compact |')
+  expect(seen[0]).toContain('| ctx 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ 57% · 181k to compact |')
   expect(seen[0]).toContain('plan used: 5-hour 3%, week 20%')
   expect(seen[0]).not.toContain('2026-10-04')
 })
@@ -84,7 +84,7 @@ const CONVERSATION = [{ role: 'user', text: 'old', toolUses: [] }] as never
 // A UTC-7 host whose engine still reports the fill from before the compaction until told otherwise.
 function compactingHost(on: On) {
   const usage = { tokens: 450_000 as number | undefined }
-  mock.clock(on, { now: NOON_UTC })
+  const clock = mock.clock(on, { now: NOON_UTC })
   on('process.run', () => ({
     value: { exitCode: 0, stdout: '420 America/Phoenix\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
@@ -102,11 +102,11 @@ function compactingHost(on: On) {
     seen.push(...(e.context ?? []))
     return { text: e.text, context: e.context }
   })
-  return { usage, seen }
+  return { usage, seen, clock }
 }
 
-test('a compaction is followed by a fresh facts line, and the next prompt names it once', async ($, on) => {
-  const { usage, seen } = compactingHost(on)
+test('a compaction is followed by a fresh facts line, and later lines name it for a quarter hour', async ($, on) => {
+  const { usage, seen, clock } = compactingHost(on)
   on('session.compact', () => ({ messages: [SUMMARY, KEPT], tokensAfter: 40_000 }) as never)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
 
@@ -116,18 +116,23 @@ test('a compaction is followed by a fresh facts line, and the next prompt names 
   expect([texts[0], texts[2]]).toEqual(['SUMMARY', 'kept'])
   // The size the compaction left, never the 450k the engine still reports from before it.
   expect(texts[1]).toContain('[session-facts] 2026-10-02 09:00:00 America/Phoenix')
-  expect(texts[1]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 8% · 427k to compact, just compacted at 09:00 |')
+  expect(texts[1]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 8% · 427k to compact · just compacted 09:00 |')
   expect(texts[1]).toContain('week 68%')
   expect(texts[1]).toContain('from before the compaction')
 
   usage.tokens = undefined
   await $.prompt.submit({ text: 'next' } as never)
-  expect(seen[0]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 8% · 427k to compact, just compacted at 09:00 |')
+  expect(seen[0]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 8% · 427k to compact · just compacted 09:00 |')
 
   usage.tokens = 60_000
+  await clock.advance(15 * 60_000 - 1)
+  await $.prompt.submit({ text: 'still close' } as never)
+  expect(seen[1]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 12% · 407k to compact · just compacted 09:00 |')
+
+  await clock.advance(1)
   await $.prompt.submit({ text: 'after that' } as never)
-  expect(seen[1]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 12% · 407k to compact |')
-  expect(seen[1]).not.toContain('just compacted')
+  expect(seen[2]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 12% · 407k to compact |')
+  expect(seen[2]).not.toContain('just compacted')
 })
 
 test('a compaction with no size afterwards says the fill is unknown, not the old one', async ($, on) => {
@@ -136,11 +141,11 @@ test('a compaction with no size afterwards says the fill is unknown, not the old
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
 
   const result = await $.session.compact({ trigger: 'manual', messages: CONVERSATION } as never)
-  expect(result.messages?.[1]?.text).toContain('| ctx --, just compacted at 09:00 |')
+  expect(result.messages?.[1]?.text).toContain('| ctx -- · just compacted 09:00 (unknown until the first response')
   // A response came before the next prompt: its fill is the fresh one.
   usage.tokens = 55_000
   await $.prompt.submit({ text: 'next' } as never)
-  expect(seen[0]).toContain('| ctx ▰▱▱▱▱▱▱▱▱▱ 11% · 412k to compact, just compacted at 09:00 |')
+  expect(seen[0]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 11% · 412k to compact · just compacted 09:00 |')
 })
 
 test('a precompute, a skipped compaction and a subagent compaction pass through untouched', async ($, on) => {

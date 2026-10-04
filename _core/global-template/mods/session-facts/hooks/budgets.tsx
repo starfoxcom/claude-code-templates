@@ -6,9 +6,13 @@ import type { Budgets, PlanWindow } from '../types'
 // Written by register.ts; each file names the state with its own literal reference.
 const budgets = atom({ plugin: 'session-facts', key: 'budgets' } as const, null)
 
-export type Chip = { text: string; color?: 'red' | 'yellow' | 'green' }
+export type Tone = 'red' | 'yellow' | 'green'
+/** A piece of a chip drawn in its own color; one without takes the chip's. */
+export type Part = { text: string; color?: Tone | 'gray' }
+export type Chip = { text: string; color?: Tone; parts?: Part[] }
 
 const BAR_CELLS = 10
+const SQUARES: Record<Tone, string> = { green: '🟩', yellow: '🟨', red: '🟥' }
 const PLAN_NAMES: Record<string, string> = { five_hour: '5h', seven_day: 'week' }
 
 function thousands(tokens: number): string {
@@ -22,26 +26,56 @@ export function shortLocal(epochMs: number, offsetMinutes: number): string {
   return `${day} ${local.toISOString().slice(11, 16)}`
 }
 
-function bar(ratio: number): string {
-  const filled = Math.min(BAR_CELLS, Math.max(0, Math.round(ratio * BAR_CELLS)))
-  return '▰'.repeat(filled) + '▱'.repeat(BAR_CELLS - filled)
+/** How full the context is against the compaction point: yellow at three quarters, red at nine tenths. */
+export function fillTone(ratio: number): Tone {
+  return ratio >= 0.9 ? 'red' : ratio >= 0.75 ? 'yellow' : 'green'
 }
 
 /**
- * Context fill against the compaction point, the figure the app's context meter shows. The facts
- * line carries the same text, so the State line reads like the row.
+ * Context fill against the compaction point, the figure the app's context meter shows. The row
+ * draws the filled cells in the fill's tone; the facts line, read on the phone where text has no
+ * color, draws the same cells as colored squares (`isSquares`). Same figures, same tone.
  */
-export function contextText(tokens: number | undefined, size: number, compactsAt?: number): string {
-  if (tokens === undefined) return 'ctx --'
+export function contextParts(tokens: number | undefined, size: number, compactsAt?: number, isSquares = false): Part[] {
+  if (tokens === undefined) return [{ text: 'ctx --' }]
+  const ratio = tokens / (compactsAt ?? size)
+  const tone = fillTone(ratio)
+  const filled = Math.min(BAR_CELLS, Math.max(0, Math.round(ratio * BAR_CELLS)))
+  const [full, empty] = isSquares ? [SQUARES[tone], '⬜'] : ['▰', '▱']
   const left = compactsAt ? ` · ${thousands(Math.max(0, compactsAt - tokens))} to compact` : ''
-  return `ctx ${bar(tokens / (compactsAt ?? size))} ${Math.round((tokens / size) * 100)}%${left}`
+  return [
+    { text: 'ctx ' },
+    { text: full.repeat(filled), color: tone },
+    { text: empty.repeat(BAR_CELLS - filled), color: 'gray' },
+    { text: ` ${Math.round((tokens / size) * 100)}%${left}` },
+  ]
 }
 
-export function contextChip(b: Budgets): Chip {
-  const text = contextText(b.tokens, b.size, b.compactsAt)
-  if (b.tokens === undefined) return { text }
-  const ratio = b.tokens / (b.compactsAt ?? b.size)
-  return { text, color: ratio >= 0.9 ? 'red' : ratio >= 0.75 ? 'yellow' : undefined }
+export function contextText(tokens: number | undefined, size: number, compactsAt?: number, isSquares = false): string {
+  return contextParts(tokens, size, compactsAt, isSquares)
+    .map(part => part.text)
+    .join('')
+}
+
+const JUST_COMPACTED_MS = 15 * 60_000
+
+/**
+ * ` · just compacted 09:00` for a quarter hour after a compaction, on the row and the facts line
+ * alike: every figure in the compaction's summary is from before it ran.
+ */
+export function compactedMark(compactedAt: number | undefined, offsetMinutes: number, now: number): string {
+  if (compactedAt === undefined || now - compactedAt >= JUST_COMPACTED_MS) return ''
+  return ` · just compacted ${shortLocal(compactedAt, offsetMinutes).slice(4)}`
+}
+
+// The bar always carries the fill's tone; the words turn only once it needs an eye.
+export function contextChip(b: Budgets, now: number): Chip {
+  const mark = compactedMark(b.compactedAt, b.offsetMinutes, now)
+  const parts = [...contextParts(b.tokens, b.size, b.compactsAt), { text: mark }]
+  const text = parts.map(part => part.text).join('')
+  if (b.tokens === undefined) return { text, parts }
+  const tone = fillTone(b.tokens / (b.compactsAt ?? b.size))
+  return { text, parts, color: tone === 'green' ? undefined : tone }
 }
 
 /** One chip per plan window; the reset time shows once a window passes the warning level. */
@@ -70,7 +104,7 @@ export function chipsOf(b: Budgets, now: number): Chip[] {
   const pause = pauseChip(b, now)
   const plan = pause ? [pause] : b.limits.map(limit => planChip(limit, b))
   const cache = cacheChip(b, now)
-  return [contextChip(b), ...plan, ...(cache ? [cache] : [])]
+  return [contextChip(b, now), ...plan, ...(cache ? [cache] : [])]
 }
 
 export function registerBudgetsView(on: On): void {
@@ -86,10 +120,14 @@ export function registerBudgetsView(on: On): void {
         <Box>
           {chips.map((chip, index) => (
             <Box key={`session-facts-chip-${index}`}>
-              <Text color={chip.color}>
-                {index > 0 ? ' · ' : ''}
-                {chip.text}
-              </Text>
+              <Text color={chip.color}>{index > 0 ? ' · ' : ''}</Text>
+              {(chip.parts ?? [{ text: chip.text }])
+                .filter(part => part.text)
+                .map((part, at) => (
+                  <Text key={`session-facts-chip-${index}-${at}`} color={part.color ?? chip.color}>
+                    {part.text}
+                  </Text>
+                ))}
             </Box>
           ))}
         </Box>
