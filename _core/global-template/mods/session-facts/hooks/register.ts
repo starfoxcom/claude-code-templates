@@ -173,8 +173,8 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
 }
 
 // The first request after a prompt is the one a cold cache makes pay for the whole conversation.
-async function noteCache($: EngineInterface, usage: TurnUsage): Promise<void> {
-  const at = await $.clock.now()
+// `at` is when it was sent: the API judged the cache then, not once the reply was done.
+function noteCache(usage: TurnUsage, at: number): void {
   const sinceLastMs = live.lastResponseAt === undefined ? undefined : at - live.lastResponseAt
   const isModelChange = live.lastModel !== undefined && live.lastModel !== usage.model
   const isFreshWindow = live.isWindowFresh || isModelChange
@@ -289,13 +289,16 @@ export const register: Register = (on, options) => {
 
   // Main's own requests only; a subagent keeps a cache of its own.
   on('turn.step', async function* ($, e, next) {
+    const sentAt = await $.clock.now()
     const result = yield* next(e)
-    if (e.agentId === undefined && e.index === 0 && result.usage) await noteCache($, result.usage)
+    if (e.agentId === undefined && e.index === 0 && result.usage) noteCache(result.usage, sentAt)
     return result
   })
 
+  // A compaction later in a turn starts the cache over for that turn only; by its end the cache is warm.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    live.isWindowFresh = false
     live.lastResponseAt = await $.clock.now()
     await saveMemory($)
     await refreshBudgets($)
