@@ -18,8 +18,11 @@ export type TasksView = {
   carried: TaskRow[]
 }
 
+/** The settings pane's own state: the last refusal per field. */
+export type SettingsView = { errors: Record<string, string> }
+
 declare module 'claude-code' {
   interface PluginState {
-    tasks: { view: TasksView | null }
+    tasks: { view: TasksView | null; settings: SettingsView | null }
   }
 }
