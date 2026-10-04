@@ -108,8 +108,22 @@ test("the main session's skill starts a run even while a subagent's skill is exp
   expect(seen.prompts.length).toBe(1)
 })
 
-test('whose skill: a main call, or no call at all, is the main session', () => {
-  expect(isMainSkill({ main: 0, agent: 0 })).toBe(true)
-  expect(isMainSkill({ main: 1, agent: 1 })).toBe(true)
-  expect(isMainSkill({ main: 0, agent: 1 })).toBe(false)
+test("a subagent's skill expanding inside the main session's Skill call starts no run", async ($, on) => {
+  const seen = world(on)
+  let isInner = false
+  seen.duringSkill = async () => {
+    if (isInner) return runSkill($)
+    isInner = true
+    return $.tool.call({ tool: 'Skill', skill: 'session-close', agentId: 'a1' } as never)
+  }
+  await $.tool.call({ tool: 'Skill', skill: 'other' } as never)
+  await endTurn($)
+  expect(seen.prompts).toEqual([])
+})
+
+test('whose skill: by the skill named in the calls in flight', () => {
+  expect(isMainSkill({ main: [], agent: [] }, 'a')).toBe(true)
+  expect(isMainSkill({ main: ['a'], agent: ['a'] }, 'a')).toBe(true)
+  expect(isMainSkill({ main: ['b'], agent: ['a'] }, 'a')).toBe(false)
+  expect(isMainSkill({ main: [], agent: ['b'] }, 'a')).toBe(true)
 })

@@ -12,15 +12,20 @@ export type Contracts = Record<string, Record<string, Step[]>>
 
 type Run = { skill: string; steps: Step[]; seen: Set<number>; isFollowedUp: boolean }
 
-// Skill tool calls in flight, the main session's and its subagents', counted apart.
-const live: { run?: Run; skillCalls: { main: number; agent: number } } = { skillCalls: { main: 0, agent: 0 } }
+// The skills of the Skill tool calls in flight, the main session's and its subagents' kept apart.
+type InFlight = { main: string[]; agent: string[] }
+const live: { run?: Run; inFlight: InFlight } = { inFlight: { main: [], agent: [] } }
 
 // The engine's skill.prompt event does not say whose loop expands the prompt, so it is told apart by
-// the Skill calls in flight: the main session's own call, or none at all (a typed /name), starts a
-// run. Left out: a /name typed while only a subagent's Skill call is expanding its prompt, a window
-// as short as that expansion; that one run is missed.
-export function isMainSkill(calls: { main: number; agent: number }): boolean {
-  return calls.main > 0 || calls.agent === 0
+// the skill named in the Skill calls in flight: a main-session call for it, or no call for it at all
+// (a typed /name), starts a run; a subagent's call for it alone does not. Left out: a /name typed
+// while a subagent's Skill call expands the very same skill; that one run is missed.
+export function isMainSkill(inFlight: InFlight, skill: string): boolean {
+  return inFlight.main.includes(skill) || !inFlight.agent.includes(skill)
+}
+
+export function skillName(input: unknown): string {
+  return String((input as { skill?: unknown }).skill ?? '').replace(/^\//, '')
 }
 
 export function missingSteps(run: Run): Step[] {
@@ -72,19 +77,20 @@ export const register: Register = on => {
   // every command instead would put this mod's name on each command's reply.
   on('skill.prompt', async ($, e, next) => {
     const result = await next(e)
-    if (isMainSkill(live.skillCalls)) await startRun($, e.skill)
+    if (isMainSkill(live.inFlight, e.skill)) await startRun($, e.skill)
     return result
   })
 
   on('tool.call', async ($, e, next) => {
-    // A Skill call expands its prompt inside this call: counted while it runs (see isMainSkill).
+    // A Skill call expands its prompt inside this call: its skill is held while it runs (see isMainSkill).
     if (e.tool === 'Skill') {
-      const whose = e.agentId ? 'agent' : 'main'
-      live.skillCalls[whose] += 1
+      const names = live.inFlight[e.agentId ? 'agent' : 'main']
+      const skill = skillName(e)
+      names.push(skill)
       try {
         return await next(e)
       } finally {
-        live.skillCalls[whose] -= 1
+        names.splice(names.indexOf(skill), 1)
       }
     }
     const result = await next(e)
