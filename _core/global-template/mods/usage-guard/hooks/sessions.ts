@@ -28,7 +28,8 @@ export function recordName(session: string): string {
 
 /**
  * What a starting session picks up from the records: its own wake from before a restart, or else the
- * wakes closed sessions left in its project, earliest first. Those move only when no other session in
+ * wakes closed sessions left in its project, latest first: the latest is after every window they waited
+ * on has reset, so taking it never wakes into one still used up. Those move only when no other session in
  * the project is open: which of two open sessions should carry the work is not this mod's guess.
  */
 export function planTakeover(
@@ -41,6 +42,6 @@ export function planTakeover(
   if (own) return { own, left: [] }
   const others = records.filter(record => record.project === project && record.session !== session)
   if (others.some(record => record.beatAt > now - ALIVE_MS)) return { left: [] }
-  const left = others.filter(record => record.arm).sort((a, b) => (a.arm?.wakeAt ?? 0) - (b.arm?.wakeAt ?? 0))
+  const left = others.filter(record => record.arm).sort((a, b) => (b.arm?.wakeAt ?? 0) - (a.arm?.wakeAt ?? 0))
   return { left }
 }
