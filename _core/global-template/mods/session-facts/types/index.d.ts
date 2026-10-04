@@ -7,6 +7,8 @@ export type Budgets = {
   tokens?: number
   size: number
   compactsAt?: number
+  /** When the last compaction of the main conversation ran. */
+  compactedAt?: number
   limits: PlanWindow[]
   /** When the prompt cache goes cold: the last response plus the cache lifetime. */
   cacheExpiresAt?: number
