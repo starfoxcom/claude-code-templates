@@ -49,8 +49,6 @@ const live: {
   isEnded: boolean
   /** A /clear or /resume moved this process to another session id: the next check-in starts over. */
   isRestorePending: boolean
-  /** The pause (its `resetKey`) whose resume the person disarmed here: the pause does not arm it again. */
-  declined?: string
   hasWork: boolean
   isStatusShown: boolean
   wakeTimer?: Timer
@@ -312,7 +310,7 @@ async function resume($: EngineInterface, resetsAt: string): Promise<void> {
   const pause = await readPause($)
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
   // The person disarmed this session during the pause: it stays put; meetPause names the reset later.
-  if (live.declined === resetKey(pause)) return
+  if (await isDeclined($, pause)) return
   // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
   // timer beside this one. The shared `done` status cannot be the claim: every session resumes.
   if (!(await claim($, `resume-${resetKey(pause)}-${await $.session.id()}`))) return
@@ -406,7 +404,7 @@ async function beat($: EngineInterface): Promise<void> {
 // An arm set by hand stays: it already resumes the session, at the pause's wake or after it. A session
 // with nothing saved only waits, and a new session would have nothing to pick up from it.
 async function armForPause($: EngineInterface, pause: Pause): Promise<void> {
-  if (!live.hasWork || live.declined === resetKey(pause)) return
+  if (!live.hasWork || (await isDeclined($, pause))) return
   const current = await read($, armedWake)
   if (current && !current.byPause) return
   if (current?.resetsAt === pause.resetsAt && current.wakeAt === pause.wakeAt) return
@@ -454,12 +452,20 @@ async function armByHand($: EngineInterface, which: string): Promise<string> {
   )
 }
 
+// A disarm during a pause, kept as a claim on disk so a hot reload or a restart still honours it.
+const declineName = (pause: Pause, session: string) => `declined-${resetKey(pause)}-${session}`
+
+async function isDeclined($: EngineInterface, pause: Pause): Promise<boolean> {
+  const name = declineName(pause, await $.session.id()).replace(/[^\w-]/g, '_')
+  return $.fs.exists(`${await dataDir($)}/claims/${name}`).catch(() => false)
+}
+
 // During a pause it also declines that pause's resume, or the minute check would arm it right back.
 async function disarm($: EngineInterface): Promise<string> {
   const current = await read($, armedWake)
   const pause = await readPause($)
   if (pause?.status === 'active') {
-    live.declined = resetKey(pause)
+    await claim($, declineName(pause, await $.session.id()))
     live.wakeTimer?.cancel()
     live.wakeTimer = undefined
   }
@@ -578,6 +584,8 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     await readZone($)
     await prepare($)
+    // A start after a /clear or /resume restores here; the pending check-in need not do it again.
+    live.isRestorePending = false
     await restoreArm($).catch(() => undefined)
     const pause = await readPause($)
     if (pause?.status === 'active') await meetPause($, pause)
@@ -669,6 +677,8 @@ export const register: Register = (on, options) => {
 async function closeRecord($: EngineInterface, session: string, isSwitch: boolean): Promise<void> {
   const arm = await read($, armedWake)
   if (isSwitch) {
+    // The process goes on as a new session: nothing this one did or declined carries over.
+    live.hasWork = false
     live.armTimer?.cancel()
     live.armTimer = undefined
     await update($, armedWake, () => null)

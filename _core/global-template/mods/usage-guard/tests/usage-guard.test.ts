@@ -5,7 +5,7 @@ import type { Pause } from '../hooks/plan'
 import { CLAIM, planArm, WRAP_UP_ARGS } from '../hooks/plan'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
 import type { SessionRecord } from '../hooks/sessions'
-import { ALIVE_MS, planTakeover } from '../hooks/sessions'
+import { ALIVE_MS, planTakeover, TAKEOVER_WITHIN_MS } from '../hooks/sessions'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
 // lookup is tested on its own below and the hook tests check that only the zone probe ran.
@@ -54,6 +54,12 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
   on('fs.write', ($, e) => {
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
+  })
+  // A claim exists once the helper made its folder.
+  on('fs.exists', ($, e) => {
+    const path = key(e.path)
+    const claimName = /\/claims\/([^/]+)$/.exec(path)?.[1]
+    return { value: claimName !== undefined ? seen.claims.has(claimName) : seen.files.has(path) }
   })
   on('fs.list', ($, e) => {
     const dir = `${key(e.path)}/`
@@ -509,6 +515,18 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
   expect(resumes(seen)).toHaveLength(1)
 })
 
+test('a disarm during a pause holds across a hot reload: the session does not resume', async ($, on) => {
+  const seen = world(on)
+  // As the hot-reload test above, after a disarm the earlier instance recorded as a claim on disk.
+  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-a' }))
+  seen.claims.add(`${KEY}-sess-a`)
+  seen.claims.add(`declined-${KEY}-sess-a`)
+  await $.turn.start({ turnId: 't2' } as never)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+})
+
 test('a session resumes once per reset, even beside an instance left by a hot reload', async ($, on) => {
   const seen = world(on)
   const pause = {
@@ -959,6 +977,11 @@ test('a takeover needs every other session of the project closed, and takes the 
   expect(planTakeover([record('x', closedAt + 1, null), record('y', 0, ARM_5H)], 'me', project, NOW)).toEqual({
     left: [],
   })
+  // A wake more than a day past stays put; one a moment younger moves.
+  const stale = { ...ARM_5H, wakeAt: NOW - TAKEOVER_WITHIN_MS }
+  expect(planTakeover([record('x', 0, stale)], 'me', project, NOW)).toEqual({ left: [] })
+  const recent = { ...stale, wakeAt: stale.wakeAt + 1 }
+  expect(planTakeover([record('x', 0, recent)], 'me', project, NOW).left.map(r => r.session)).toEqual(['x'])
   // Another project's sessions neither block nor move; no records, nothing to take.
   expect(planTakeover([record('x', NOW, ARM_5H, 'c:/repos/other')], 'me', project, NOW)).toEqual({ left: [] })
   expect(planTakeover([], 'me', project, NOW)).toEqual({ left: [] })
