@@ -457,3 +457,44 @@ test('a refused command name never stops the rest of the session start', async (
   await $.session.start({ cwd: 'C:/Repos/x' } as never)
   expect(mirror(seen).carried?.map(task => task.id)).toEqual(['7'])
 })
+
+test("a finished session's leftovers are carried over once, never into every later session", async ($, on) => {
+  const seen = world(on)
+  const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK] }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify(old))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  expect(mirror(seen).carried?.map(task => task.id)).toEqual(['7'])
+  // Marked only once the note reached the model: a session ending before its first prompt saw nothing.
+  expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBeUndefined()
+  await $.prompt.submit({ text: 'hi' } as never)
+  expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBe(NOW)
+})
+
+test('a list resumed and saved again after it was carried is not marked', async ($, on) => {
+  const seen = world(on)
+  const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK] }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify(old))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  const newer = { ...OPEN_TASK, id: '9', subject: 'added after the carry' }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify({ ...old, updatedAt: 50, tasks: [OPEN_TASK, newer] }))
+  await $.prompt.submit({ text: 'hi' } as never)
+  expect(JSON.parse(seen.files.get(`${DIR}/old.json`) ?? '{}').handedOverAt).toBeUndefined()
+})
+
+test('a list already handed over is not carried again', async ($, on) => {
+  const seen = world(on)
+  const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK], handedOverAt: 1 }
+  seen.files.set(`${DIR}/old.json`, JSON.stringify(old))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  expect(mirror(seen).carried).toBeUndefined()
+})
+
+test('a handed-over session that is resumed and saves its list is current again', async ($, on) => {
+  const seen = world(on)
+  const own = { session: 'sess-a', root: 'c:/repos/x', updatedAt: 5, turn: 2, tasks: [OPEN_TASK], handedOverAt: 1 }
+  seen.files.set(MIRROR_FILE, JSON.stringify(own))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  await turn($)
+  await create($, 'more work')
+  expect(mirror(seen).handedOverAt).toBeUndefined()
+})
