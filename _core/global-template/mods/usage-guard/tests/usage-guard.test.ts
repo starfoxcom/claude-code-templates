@@ -874,6 +874,9 @@ test('a disarm during a pause sticks: the minute check does not arm the session 
   await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
   await seen.clock.advance(60_000)
   expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+  // Nor does the pause's own wake: the session stays put at the reset.
+  await seen.clock.advance(WAKE - NOW - 60_000)
+  expect(resumes(seen)).toEqual([])
 })
 
 test("another session's cancel drops the arm the pause gave this session", async ($, on) => {
@@ -935,7 +938,7 @@ test('after a /clear beside another open session in the project, the arm stays f
   expect(resumes(seen)).toEqual([])
 })
 
-test('a takeover needs every other session of the project closed, and takes the earliest wake first', () => {
+test('a takeover needs every other session of the project closed, and takes the latest wake first', () => {
   const project = 'c:/repos/my-game'
   const later = { kind: 'seven_day', resetsAt: '2026-10-04T18:00:00.000Z', wakeAt: Date.UTC(2026, 9, 4, 18, 2) }
   const record = (session: string, beatAt: number, arm: SessionRecord['arm'], at = project): SessionRecord => ({
@@ -952,7 +955,7 @@ test('a takeover needs every other session of the project closed, and takes the 
   })
   // Checked in exactly ALIVE_MS ago is closed; a millisecond later it is still open.
   const closed = planTakeover([record('x', closedAt, later), record('y', 0, ARM_5H)], 'me', project, NOW)
-  expect(closed.left.map(r => r.session)).toEqual(['y', 'x'])
+  expect(closed.left.map(r => r.session)).toEqual(['x', 'y'])
   expect(planTakeover([record('x', closedAt + 1, null), record('y', 0, ARM_5H)], 'me', project, NOW)).toEqual({
     left: [],
   })
