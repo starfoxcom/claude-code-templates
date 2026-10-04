@@ -461,6 +461,8 @@ async function mirrorOf($: EngineInterface): Promise<Mirror> {
 
 // True when the mirror file was written.
 async function saveMirror($: EngineInterface, mirror: Mirror): Promise<boolean> {
+  // A session writing its own list makes it current again: a resumed session's new leftovers carry over.
+  delete mirror.handedOverAt
   mirror.updatedAt = await $.clock.now()
   mirror.turn = live.turn
   mirror.tasks.sort((a, b) => Number(a.id) - Number(b.id))
