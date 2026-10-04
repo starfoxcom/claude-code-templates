@@ -1,5 +1,7 @@
 import type { EngineInterface, Register, SessionCompactInput, SessionCompactResult, SessionMessage } from 'claude-code'
 
+import { register as settings, SETTINGS_PANE } from './settings'
+
 export const PERSON_MARK = "[compact-handoff] The person's messages, word for word"
 const MESSAGE_SPLIT = '\n--- message ---\n'
 const INDEX_HEAD = 'Older messages, kept only as an index (full text via the recall tool):'
@@ -60,6 +62,19 @@ export const ENGINE_TAGS = [
 export const ENGINE_TAG = new RegExp(`^<(?:${ENGINE_TAGS.join('|')})`)
 
 type Mode = 'off' | 'shadow' | 'on'
+
+const HINT = '[help | settings]'
+export const HELP = [
+  "/compact-handoff: at each compaction, keeps the person's messages word for word and writes a hand-off.",
+  '  /compact-handoff           the current mode',
+  '  /compact-handoff settings  open the settings pane',
+  '  /compact-handoff help      this list',
+].join('\n')
+export const MODE_TEXT: Record<Mode, string> = {
+  on: 'Mode on: the hand-off replaces the stock compaction summary.',
+  shadow: 'Mode shadow: stock compaction, with the hand-off written beside it for comparison.',
+  off: 'Mode off: stock compaction.',
+}
 
 export function handoffPrompt(limitTokens: number): string {
   return [
@@ -295,9 +310,22 @@ async function replace(
 
 export const register: Register = (on, options) => {
   const mode = (options.mode ?? 'on') as Mode
-  if (mode === 'off') return
+  settings(on, options)
 
+  // `/compact-handoff [help | settings]`; with no argument, the mode. Any other argument gets the help.
+  on('command.run', { command: 'compact-handoff' }, async ($, e) => {
+    const verb = e.args.trim()
+    if (verb === '') return { text: MODE_TEXT[mode] }
+    if (verb !== 'settings') return { text: HELP }
+    await $.ui.open({ id: SETTINGS_PANE, title: 'Compact hand-off settings', focus: true })
+    return { text: 'Opened the compact-handoff settings.' }
+  })
+
+  // The command registers in every mode, so mode off can still be turned back on from its pane.
   on('session.start', async ($, e, next) => {
+    const description = 'The compaction hand-off: its mode'
+    await $.command.register({ name: 'compact-handoff', description, argumentHint: HINT })
+    if (mode === 'off') return next(e)
     await $.tool.register({
       name: 'recall',
       description:
@@ -315,6 +343,8 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
     return next(e)
   })
+
+  if (mode === 'off') return
 
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => {
     const query = String((e as { query?: unknown }).query ?? '').trim()
