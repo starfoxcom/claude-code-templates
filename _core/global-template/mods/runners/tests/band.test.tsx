@@ -69,6 +69,7 @@ test('the pgrep pattern cannot match another pgrep looking for the same runner',
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`with no runners listed the band draws nothing of its own on ${surface}`, async ($, on) => {
     on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => ({ value: { command: e.name } as never }))
     on('ui.render', () => ({ type: 'Box', props: { key: 'beneath' }, children: [] }) as never)
     await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
     const props = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
@@ -81,6 +82,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 // A runner from the machine's own list file draws its row and buttons on both surfaces.
 const LISTED = [{ label: 'local', processes: ['Runner.Listener'], start: ['start-runners'], stop: [['stop-runners']] }]
 const LIST_FILE = 'C:/Users/me/.claude/mods-data/runners/runners.json'
+const registered: { name: string; argumentHint?: string }[] = []
 
 function machine(on: On, isUp: () => boolean) {
   const runs: string[][] = []
@@ -97,6 +99,10 @@ function machine(on: On, isUp: () => boolean) {
     return { value: { exitCode: 0, stdout: out, stderr: '' } } as never
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => {
+    registered.push(e)
+    return { value: { command: e.name } as never }
+  })
   on('ui.render', () => ({ type: 'Box', props: { key: 'beneath' }, children: [] }) as never)
   return { runs, clock }
 }
@@ -122,3 +128,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ key: 'runner-stop-0' })).toBeDefined()
   })
 }
+
+test('/runners shows its arguments in the menu, lists them on help and names each runner', async ($, on) => {
+  const { clock } = machine(on, () => true)
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  expect(registered.find(command => command.name === 'runners')?.argumentHint).toBe('[help | settings]')
+  const help = (await $.command.run({ command: 'runners', args: 'help' } as never)) as { text: string }
+  for (const line of help.text.split('\n').slice(1)) expect(line).toMatch(/^ {2}\/runners( \w+)? +\S/)
+  // An unknown word gets the same list.
+  expect(await $.command.run({ command: 'runners', args: 'bogus' } as never)).toEqual(help)
+  await clock.advance(1_000)
+  expect(await $.command.run({ command: 'runners', args: '' } as never)).toEqual({ text: '⚙ local on' })
+})
+
+test('/runners with no runners listed says how to add one', async ($, on) => {
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  const answer = (await $.command.run({ command: 'runners', args: '' } as never)) as { text: string }
+  expect(answer.text).toContain('No runners listed. Add one to ~/.claude/mods-data/runners/runners.json')
+})
