@@ -1,9 +1,11 @@
 import type { On, SessionRateLimit } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import type { Pause } from '../hooks/register'
-import { CLAIM, planArm, WRAP_UP_ARGS } from '../hooks/register'
+import type { Pause } from '../hooks/plan'
+import { CLAIM, planArm, WRAP_UP_ARGS } from '../hooks/plan'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
+import type { SessionRecord } from '../hooks/sessions'
+import { ALIVE_MS, planTakeover } from '../hooks/sessions'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
 // lookup is tested on its own below and the hook tests check that only the zone probe ran.
@@ -53,11 +55,17 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
   })
+  on('fs.list', ($, e) => {
+    const dir = `${key(e.path)}/`
+    const names = [...seen.files.keys()].filter(path => path.startsWith(dir)).map(path => path.slice(dir.length))
+    return { value: names.map(name => ({ name, kind: 'file', size: 0, mtimeMs: 0 })) as never }
+  })
   on('process.run', ($, e) => {
     seen.runs.push([...e.argv])
     let out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
-    if (e.argv[2] === CLAIM) {
-      const name = e.argv[4] ?? ''
+    // With no name the helper only makes the folders.
+    if (e.argv[2] === CLAIM && e.argv[4] !== undefined) {
+      const name = e.argv[4]
       seen.duringClaim?.(name)
       out = seen.claims.has(name) ? 'taken\n' : 'won\n'
       seen.claims.add(name)
@@ -80,6 +88,7 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     registered.push(e)
     return { value: { command: e.name } as never }
   })
+  on('tool.register', () => ({ value: { tool: 'mcp__usage-guard__arm' } }) as never)
   on('command.run', ($, e) => {
     seen.commands.push({ command: e.command, args: e.args })
     return {}
@@ -145,7 +154,10 @@ test('crossing the line wraps up, stops background work and resumes after the re
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
 
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.at(-1)).toEqual({ command: 'session-start', args: '' })
+  // The session goes on by itself: no /session-start, whose plan would wait for the person's OK.
+  expect(resumes(seen)).toHaveLength(1)
+  expect(resumes(seen)[0]).toContain("without waiting for the person's OK")
+  expect(seen.commands.map(c => c.command)).toEqual(['session-close'])
   expect(pauseOf(seen)?.status).toBe('done')
 })
 
@@ -276,7 +288,7 @@ test('a session opened during a pause only waits, then resumes', async ($, on) =
   expect(seen.commands).toEqual([])
   expect(cardOf(seen)?.text).toContain('Work resumes on its own at Fri 2026-10-02 12:02')
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands).toEqual([{ command: 'session-start', args: '' }])
+  expect(resumes(seen)).toHaveLength(1)
 })
 
 test('a session opened after the reset is told to resume by hand', async ($, on) => {
@@ -306,7 +318,7 @@ test('cancel stops the automatic resume', async ($, on) => {
 
   expect(answer.text).toContain('cancelled')
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('a session that changed nothing only waits near the limit, then resumes', async ($, on) => {
@@ -321,8 +333,13 @@ test('a session that changed nothing only waits near the limit, then resumes', a
   expect(seen.commands).toEqual([])
   expect(cardOf(seen)?.id).toBe(`paused:${RESET}`)
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands).toEqual([{ command: 'session-start', args: '' }])
+  expect(resumes(seen)).toHaveLength(1)
 })
+
+// The resumes this session submitted: the automatic "continue now" prompt, never /session-start.
+function resumes(seen: World): string[] {
+  return seen.prompts.filter(text => text.startsWith('[usage-guard] ') && text.includes('Continue the pending work'))
+}
 
 function cardOf(seen: World): { id: string; text: string; dismissed: boolean } | undefined {
   const text = seen.files.get(CARD_FILE)
@@ -374,7 +391,7 @@ test('the card cancels the automatic resume', async ($, on) => {
   expect(pauseOf(seen)?.status).toBe('cancelled')
   expect(cardOf(seen)?.id).toBe(`cancelled:${RESET}`)
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('the resume replaces the pause card', async ($, on) => {
@@ -418,7 +435,7 @@ test('a session that loses the pause claim still stops its own project once', as
   expect(seen.claims.has(`stop-${KEY}-c__repos_my-game`)).toBe(true)
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.at(-1)).toEqual({ command: 'session-start', args: '' })
+  expect(resumes(seen)).toHaveLength(1)
 })
 
 test('a session that loses the pause claim honours a cancel written since the winner paused', async ($, on) => {
@@ -468,7 +485,7 @@ test('a cancel of an extended pause holds against a session still reading the ea
 
   expect(pauseOf(seen)?.status).toBe('cancelled')
   expect(pauseOf(seen)?.resetsAt).toBe(WEEKLY)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('after a hot reload during a pause, the first turn arms the wake timer again', async ($, on) => {
@@ -489,7 +506,7 @@ test('after a hot reload during a pause, the first turn arms the wake timer agai
 
   expect(seen.commands).toEqual([])
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands).toEqual([{ command: 'session-start', args: '' }])
+  expect(resumes(seen)).toHaveLength(1)
 })
 
 test('a session resumes once per reset, even beside an instance left by a hot reload', async ($, on) => {
@@ -582,9 +599,9 @@ test('an armed session resumes after the reset it named, below the line and with
   expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Armed') }))
 
   await seen.clock.advance(WAKE - NOW - 1)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
   await seen.clock.advance(1)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(resumes(seen)).toHaveLength(1)
   // Nothing is shared: no pause, no wrap-up, no card for the other sessions.
   expect(pauseOf(seen)).toBeUndefined()
   expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
@@ -597,7 +614,7 @@ test('disarm drops the armed wake', async ($, on) => {
   const answer = await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
   expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Disarmed') }))
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('an arm for the reset a pause already resumes at does not resume the session twice', async ($, on) => {
@@ -609,7 +626,7 @@ test('an arm for the reset a pause already resumes at does not resume the sessio
   expect(pauseOf(seen)?.status).toBe('active')
 
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(resumes(seen)).toHaveLength(1)
 })
 
 test('arming names a known reset, or says why it cannot', () => {
@@ -647,7 +664,7 @@ test('an arm resumes the session once when a pause for its reset began after the
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   await seen.clock.advance(30_000)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(resumes(seen)).toHaveLength(1)
   expect(pauseOf(seen)?.status).toBe('done')
 })
 
@@ -669,9 +686,9 @@ test('an armed wake that comes due during a pause leaves the resume to the pause
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
 
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
   await seen.clock.advance(weeklyWake - WAKE)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(resumes(seen)).toHaveLength(1)
 })
 
 test('an armed wake another instance of this module already fired does not resume again', async ($, on) => {
@@ -681,7 +698,7 @@ test('an armed wake another instance of this module already fired does not resum
   // The instance a hot reload left behind won the claim first.
   seen.claims.add(`arm-${KEY}-sess-a`)
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test('a cancel in this session also drops its armed wake', async ($, on) => {
@@ -692,7 +709,7 @@ test('a cancel in this session also drops its armed wake', async ($, on) => {
   await endTurn($)
   await $.command.run({ command: 'usage-guard', args: 'cancel' } as never)
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
 })
 
 test("another session's cancel leaves this session's own arm in place", async ($, on) => {
@@ -710,7 +727,7 @@ test("another session's cancel leaves this session's own arm in place", async ($
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(cancelled))
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(resumes(seen)).toHaveLength(1)
 })
 
 test('an arm that met a longer pause still resumes the session after another session cancels it', async ($, on) => {
@@ -729,14 +746,14 @@ test('an arm that met a longer pause still resumes the session after another ses
   }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
   await seen.clock.advance(WAKE - NOW)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toEqual([])
+  expect(resumes(seen)).toEqual([])
   // The status still names the arm, now at the pause's wake.
   const status = await $.command.run({ command: 'usage-guard', args: '' } as never)
   expect(status).toEqual(expect.objectContaining({ text: expect.stringContaining('Armed to resume') }))
   // Session B cancels the pause: no pause resume comes, and the arm resumes this session once.
   seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'cancelled' }))
   await seen.clock.advance(laterWake - WAKE)
-  expect(seen.commands.filter(c => c.command === 'session-start')).toHaveLength(1)
+  expect(resumes(seen)).toHaveLength(1)
 })
 
 const registered: { name: string; argumentHint?: string }[] = []
@@ -750,4 +767,172 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
   const lines = ['/usage-guard cancel', '/usage-guard arm 5h|week', '/usage-guard disarm', '/usage-guard settings']
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
+})
+
+const SESSIONS_DIR = 'C:/Users/me/.claude/mods-data/usage-guard/sessions'
+const ARM_5H = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }
+
+function recordOf(seen: World, session: string): SessionRecord | undefined {
+  const text = seen.files.get(`${SESSIONS_DIR}/${session}.json`)
+  return text === undefined ? undefined : (JSON.parse(text) as SessionRecord)
+}
+
+// A record an earlier process left on disk.
+function leave(seen: World, record: SessionRecord): void {
+  seen.files.set(`${SESSIONS_DIR}/${record.session}.json`, JSON.stringify(record))
+}
+
+test('an arm set by hand is saved with the session, so a restart of that session still resumes', async ($, on) => {
+  const seen = world(on)
+  leave(seen, { session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
+  await start($)
+
+  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+})
+
+test('arming and disarming by hand write the record, and every minute the session checks in', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  expect(recordOf(seen, 'sess-a')).toEqual({ session: 'sess-a', project: 'c:/repos/my-game', beatAt: NOW, arm: null })
+
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
+  await seen.clock.advance(60_000)
+  expect(recordOf(seen, 'sess-a')?.beatAt).toBe(NOW + 60_000)
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+})
+
+test('the automatic pause arms a session it wraps up; a restart after the reset still resumes it', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  expect(recordOf(seen, 'sess-a')?.arm).toEqual({ ...ARM_5H, byPause: true })
+})
+
+test('a session restarted after the reset of its pause resumes once, with no "by hand" card', async ($, on) => {
+  const seen = world(on)
+  // The reset passed while the session was closed: its wake was two minutes ago.
+  const resetsAt = '2026-10-02T16:56:00.000Z'
+  const wakeAt = NOW - 2 * 60_000
+  const pause: Pause = {
+    status: 'active',
+    kinds: ['five_hour'],
+    percentUsed: 93,
+    resetsAt,
+    wakeAt,
+    triggeredBy: 'sess-a',
+  }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  const arm = { kind: 'five_hour', resetsAt, wakeAt, byPause: true }
+  leave(seen, { session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm })
+  await start($)
+  await seen.clock.advance(0)
+
+  expect(resumes(seen)).toHaveLength(1)
+  expect(cardOf(seen)?.id).toBe(`reset:${resetsAt}`)
+  expect(pauseOf(seen)?.status).toBe('done')
+})
+
+test("a new session alone in the project takes over a closed session's arm, and only once", async ($, on) => {
+  const seen = world(on)
+  leave(seen, { session: 'sess-old', project: 'c:/repos/my-game', beatAt: NOW - 10 * 60_000, arm: ARM_5H })
+  await start($)
+
+  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
+  expect(recordOf(seen, 'sess-old')?.arm).toBeNull()
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
+test('with another session open in the project, or the arm in another project, nothing moves', async ($, on) => {
+  const seen = world(on)
+  leave(seen, { session: 'sess-old', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
+  leave(seen, { session: 'sess-open', project: 'c:/repos/my-game', beatAt: NOW - 30_000, arm: null })
+  leave(seen, { session: 'sess-far', project: 'c:/repos/other', beatAt: 0, arm: ARM_5H })
+  await start($)
+
+  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+  expect(recordOf(seen, 'sess-old')?.arm).toEqual(ARM_5H)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+})
+
+test("another session's cancel drops the arm the pause gave this session", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  const pause = pauseOf(seen)
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, status: 'cancelled' }))
+
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+})
+
+test('an ending session is closed at once and keeps its arm; a /clear hands it on', async ($, on) => {
+  const seen = world(on)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
+  expect(recordOf(seen, 'sess-a')).toEqual({ session: 'sess-a', project: 'c:/repos/my-game', beatAt: 0, arm: ARM_5H })
+  await $.session.end({ reason: 'clear', sessionId: 'sess-a', resume: { id: 'sess-a' } } as never)
+  expect(recordOf(seen, 'sess-a')?.arm).toBeNull()
+})
+
+test('a takeover needs every other session of the project closed, and takes the earliest wake first', () => {
+  const project = 'c:/repos/my-game'
+  const later = { kind: 'seven_day', resetsAt: '2026-10-04T18:00:00.000Z', wakeAt: Date.UTC(2026, 9, 4, 18, 2) }
+  const record = (session: string, beatAt: number, arm: SessionRecord['arm'], at = project): SessionRecord => ({
+    session,
+    project: at,
+    beatAt,
+    arm,
+  })
+  const closedAt = NOW - ALIVE_MS
+  // Its own arm wins over everything else.
+  expect(planTakeover([record('me', 0, ARM_5H), record('x', 0, later)], 'me', project, NOW)).toEqual({
+    own: ARM_5H,
+    left: [],
+  })
+  // Checked in exactly ALIVE_MS ago is closed; a millisecond later it is still open.
+  const closed = planTakeover([record('x', closedAt, later), record('y', 0, ARM_5H)], 'me', project, NOW)
+  expect(closed.left.map(r => r.session)).toEqual(['y', 'x'])
+  expect(planTakeover([record('x', closedAt + 1, null), record('y', 0, ARM_5H)], 'me', project, NOW)).toEqual({
+    left: [],
+  })
+  // Another project's sessions neither block nor move; no records, nothing to take.
+  expect(planTakeover([record('x', NOW, ARM_5H, 'c:/repos/other')], 'me', project, NOW)).toEqual({ left: [] })
+  expect(planTakeover([], 'me', project, NOW)).toEqual({ left: [] })
+})
+
+test('the session arms itself with the arm tool, and the arm counts as no work to save', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  const arm = (action: string, window?: string) =>
+    $.tool.call({ tool: 'mcp__usage-guard__arm', action, ...(window ? { window } : {}) } as never) as Promise<{
+      result: string
+    }>
+
+  expect((await arm('arm', 'day')).result).toContain('/usage-guard arm 5h')
+  expect((await arm('arm', '5h')).result).toContain('Armed')
+  expect((await arm('status')).result).toContain('Armed to resume at Fri 2026-10-02 12:02')
+  expect(recordOf(seen, 'sess-a')?.arm).toEqual(ARM_5H)
+
+  // Near the line the session only waits: arming changed nothing the wrap-up must save.
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+  expect((await arm('disarm')).result).toBe('Nothing was armed.')
 })
