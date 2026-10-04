@@ -549,6 +549,33 @@ test('after a hot reload, a session with no work on record waits and says what i
   expect(NO_WORK_NOTICE).not.toContain('saved no work')
 })
 
+test('a failed resume claim resumes nothing and leaves no work claim for another instance to find', async ($, on) => {
+  const seen = world(on)
+  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-a' }))
+  seen.claims.add(`${KEY}-sess-a`)
+  seen.failClaims = new Set([`resume-${KEY}-sess-a`])
+  await $.turn.start({ turnId: 't2' } as never)
+  await seen.clock.advance(WAKE - NOW)
+
+  expect(resumes(seen)).toEqual([])
+  // Had it asked, an instance a hot reload left beside it would win the resume claim for real, find
+  // this work claim taken and resume a session that saved nothing.
+  expect(seen.claims.has(`work-${KEY}-sess-a`)).toBe(false)
+  expect(pauseOf(seen)?.status).toBe('done')
+})
+
+test('a failed arm claim resumes nothing, so a second instance cannot resume the session twice', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  seen.failClaims = new Set([`arm-${KEY}-sess-a`])
+  await seen.clock.advance(WAKE - NOW)
+
+  expect(resumes(seen)).toEqual([])
+  expect(seen.claims.has(`arm-${KEY}-sess-a`)).toBe(false)
+})
+
 test('a session resumes once per reset, even beside an instance left by a hot reload', async ($, on) => {
   const seen = world(on)
   const pause = {
