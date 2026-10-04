@@ -17,6 +17,8 @@ type World = {
   old: string[]
   commands: { name: string; argumentHint?: string }[]
   opened: string[]
+  /** The engine refuses the command name, as it does a built-in's. */
+  isCommandRefused?: boolean
 }
 
 function world(on: On): World {
@@ -52,6 +54,7 @@ function world(on: On): World {
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => {
+    if (seen.isCommandRefused) throw new Error(`"/${e.name}" refused: it is a built-in command`)
     seen.commands.push({ name: e.name, argumentHint: e.argumentHint })
     return { value: { command: e.name } as never }
   })
@@ -378,13 +381,23 @@ test("after a reload the engine's store is left alone, even a subagent task matc
   expect(mirror(seen).tasks.map(task => [task.id, task.status])).toEqual([['1', 'pending']])
 })
 
-test('/tasks opens the list or its settings, and help or anything else lists its verbs', async ($, on) => {
+test('/task-list opens the list or its settings, and help or anything else lists its verbs', async ($, on) => {
   const seen = world(on)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(seen.commands).toEqual([{ name: 'tasks', argumentHint: '[help | settings]' }])
-  const run = (args: string) => $.command.run({ command: 'tasks', args } as never)
+  expect(seen.commands).toEqual([{ name: 'task-list', argumentHint: '[help | settings]' }])
+  const run = (args: string) => $.command.run({ command: 'task-list', args } as never)
   expect(await run('')).toEqual(expect.objectContaining({ text: 'Opened the task list.' }))
   expect(await run('settings')).toEqual(expect.objectContaining({ text: 'Opened the tasks settings.' }))
   expect(seen.opened).toEqual(['tasks', 'tasks-settings'])
   for (const args of ['help', 'lists']) expect(await run(args)).toEqual(expect.objectContaining({ text: HELP }))
+})
+
+test('a refused command name never stops the rest of the session start', async ($, on) => {
+  const seen = world(on)
+  seen.isCommandRefused = true
+  const old = { session: 'old', root: 'c:/repos/x', updatedAt: 5, turn: 9 }
+  const task = { id: '7', subject: 'go', status: 'pending', createdTurn: 1 }
+  seen.files.set('C:/Users/me/.claude/mods-data/tasks/old.json', JSON.stringify({ ...old, tasks: [task] }))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  expect(mirror(seen).carried?.map(task => task.id)).toEqual(['7'])
 })
