@@ -13,11 +13,14 @@ function world(on: On, status = DIRTY) {
     gitCalls: 0,
     status,
     isModelDown: false,
+    /** What settings.read answers: the effort picks a test sets. */
+    settings: {} as Record<string, unknown>,
     clock: mock.clock(on, { now: 0 }),
     /** A git read waits on this, answering with the status it saw when it started. */
     gate: undefined as Promise<void> | undefined,
     commands: [] as { name: string; argumentHint?: string }[],
   }
+  on('settings.read', () => ({ value: seen.settings }))
   on('session.model', () => {
     if (seen.isModelDown) throw new Error('no model yet')
     return { value: 'claude-opus-5-5[1m]' }
@@ -112,12 +115,11 @@ test('the effort comes from the main loop, never a subagent', async ($, on) => {
 
 test('the effort picked in settings shows before the first request, and a new pick replaces it', async ($, on) => {
   const seen = world(on)
-  let settings: Record<string, unknown> = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
-  on('settings.read', () => ({ value: settings }))
+  seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
   await start($, 'terminal')
   const ui = await mount($, 'terminal')
   expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · GameProject/ })).toBeDefined()
-  settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
+  seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
   await seen.clock.advance(30_000)
   const after = await mount($, 'terminal')
   expect(await after.find({ type: 'Text', text: /Opus 5\.5 medium · GameProject/ })).toBeDefined()

@@ -68,7 +68,7 @@ async function readOnce($: EngineInterface): Promise<void> {
   try {
     const config = $.settings.read().catch(() => ({}))
     const [model, root, git] = await Promise.all([$.session.model(), $.session.root(), readGit($)])
-    takeEffort(await config, model)
+    takeEffort((await config) ?? {}, model)
     const next: SessionLine = { model: modelName(model), effort: live.effort, project: baseName(root), git }
     await update($, line, () => next)
   } catch {
