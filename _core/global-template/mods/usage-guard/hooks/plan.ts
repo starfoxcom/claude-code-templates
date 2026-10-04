@@ -84,12 +84,12 @@ export function limitName(pause: Pause): string {
 // sessions acting on one pause at the same moment exactly one wins each claim:
 // `pause-<reset>`, the session that writes the pause and stops its project's
 // background work; `<reset>-<session>`, that session has wrapped up (or, opened
-// during the pause, only waits). The helper also makes the data folders (claims
-// and the session records), which the engine's fs cannot, and sweeps entries
-// older than two weeks. With no name it only does that.
+// during the pause, only waits); `work-<reset>-<session>`, it wrapped up with
+// work, so it resumes by itself. The helper also makes the claims folder, which
+// the engine's fs cannot, and sweeps claims older than two weeks.
 export const CLAIM =
   'const fs=require("fs"),p=require("path");const [d,n]=process.argv.slice(1);' +
-  'for(const s of ["claims","sessions"]){const c=p.join(d,s);fs.mkdirSync(c,{recursive:true});' +
+  'for(const s of ["claims"]){const c=p.join(d,s);fs.mkdirSync(c,{recursive:true});' +
   'for(const x of fs.readdirSync(c)){try{const f=p.join(c,x);' +
   'if(Date.now()-fs.statSync(f).mtimeMs>12096e5)fs.rmSync(f,{recursive:true})}catch{}}}' +
   'if(n){try{fs.mkdirSync(p.join(d,"claims",n));console.log("won")}' +
@@ -114,4 +114,9 @@ export function joinPause(shared: Pause, planned: Pause): Pause {
     percentUsed: Math.max(shared.percentUsed, planned.percentUsed),
     episode: shared.episode ?? shared.resetsAt,
   }
+}
+
+// The whole path names the project: two repos may share a folder name (`~/work/app`, `~/clients/x/app`).
+export function projectOf(root: string): string {
+  return root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
