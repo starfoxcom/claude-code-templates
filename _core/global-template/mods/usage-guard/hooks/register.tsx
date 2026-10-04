@@ -31,8 +31,6 @@ const READ_ZONE = [
   '-e',
   'console.log(new Date().getTimezoneOffset() + " " + Intl.DateTimeFormat().resolvedOptions().timeZone)',
 ]
-// The engine's tool-name types list only tools already live, so a new install compiles with a cast.
-const ARM_TOOL = 'mcp__usage-guard__arm'
 
 type Zone = { offsetMinutes: number; name: string }
 
@@ -172,8 +170,7 @@ async function refresh($: EngineInterface): Promise<void> {
 }
 
 // A cancel here also drops this session's own armed wake: the person at this session asked for no
-// automatic resume. A hand arm in another session is the person's own request there and stays; an arm
-// the session set itself (the tool) does not outrank the person's cancel and is dropped at its wake.
+// automatic resume. An arm in another session is that session's own explicit request and stays.
 async function cancelPause($: EngineInterface, pause: Pause): Promise<void> {
   live.wakeTimer?.cancel()
   await disarm($)
@@ -270,6 +267,8 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
 }
 
 async function resume($: EngineInterface, resetsAt: string, isArmed = false): Promise<void> {
+  // Read first: an arm for this reset counts even if its own timer clears it while this one runs.
+  const isArmedHere = isArmed || (await read($, armedWake))?.resetsAt === resetsAt
   const pause = await readPause($)
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
   // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
@@ -280,17 +279,26 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
   await showCard($, `reset:${resetsAt}`, 'Plan limits have reset. Sessions are resuming their saved work.')
   // Only a session that saved work, or one armed, goes on by itself. Another session in the project
   // would rebuild the same hand-off and work the same tasks beside it, with nobody watching either.
-  const isArmedHere = isArmed || (await read($, armedWake))?.resetsAt === pause.resetsAt
-  if (!isArmedHere && !(await hadWork($, pause))) {
-    return notice($, 'Plan limits have reset. This session saved no work, so it waits for you.')
-  }
+  const work = isArmedHere || (await hadWork($, pause))
+  if (work === null) return notice($, 'Plan limits have reset. Whether this session saved work could not be ' +
+    'confirmed, so it waits for you; resume it by hand.')
+  if (!work) return notice($, 'Plan limits have reset. This session saved no work, so it waits for you.')
   await resumeWork($, 'Plan limits have reset: resuming the saved work.')
 }
 
 // A wrap-up with work leaves a claim (this instance remembers it as handled, another finds it taken).
 // Asking makes the claim for a session without one, which is harmless: its resume claim is taken.
-async function hadWork($: EngineInterface, pause: Pause): Promise<boolean> {
-  return !(await claim($, `work-${resetKey(pause)}-${await $.session.id()}`))
+// Unknown (null) when the helper fails: a session told it saved nothing would never be resumed by hand.
+async function hadWork($: EngineInterface, pause: Pause): Promise<boolean | null> {
+  const name = `work-${resetKey(pause)}-${await $.session.id()}`
+  if (live.handled.has(name)) return true
+  live.handled.add(name)
+  try {
+    const { exitCode, stdout } = await runClaimHelper($, name)
+    return exitCode === 0 ? stdout.trim() === 'taken' : null
+  } catch {
+    return null
+  }
 }
 
 // Never the project's /session-start: a ritual that proposes a plan and waits for an OK would wake the
@@ -343,23 +351,20 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   }
   // An instance left by a hot reload may fire the same arm beside this one: one wins the claim.
   if (!(await claim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`))) return
+  // The arm stays set until the resume has run, so the pause's own timer, firing beside this one, sees it.
+  if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled') await resume($, pause.resetsAt, true)
+  else await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
   await setArm($, null)
-  // An arm the session set itself yields to the person's cancel of the pause for its reset.
-  if (arm.byTool && pause?.status === 'cancelled' && pause.resetsAt === arm.resetsAt) return
-  if (pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled')
-    return resume($, pause.resetsAt, true)
-  await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
 }
 
 async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
   await update($, armedWake, () => arm)
 }
 
-async function armByHand($: EngineInterface, which: string, isTool = false): Promise<string> {
+async function armByHand($: EngineInterface, which: string): Promise<string> {
   const { rateLimits } = await $.session.usage()
-  const plan = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
-  if (typeof plan === 'string') return plan
-  const planned: ArmedWake = isTool ? { ...plan, byTool: true } : plan
+  const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
+  if (typeof planned === 'string') return planned
   await setArm($, planned)
   await scheduleArm($, planned)
   return (
@@ -531,8 +536,6 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     // Core marks a call read-only (true) or leaves the flag out, never false: any
     // answered call without the mark may have changed something.
-    // Arming through this mod's own tool is no work the wrap-up has to save.
-    if ((e.tool as string) === ARM_TOOL) return result
     if (!result.deny && !result.isError && result.isReadOnly !== true) live.hasWork = true
     return result
   })
@@ -546,7 +549,6 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: 'usage-guard' }, async ($, e) => ({ text: await runCommand($, e.args) }))
-  on('tool.call', { tool: ARM_TOOL as never }, async ($, e) => ({ result: await runTool($, e as ArmToolInput) }))
 }
 
 async function registerSurface($: EngineInterface): Promise<void> {
@@ -555,31 +557,6 @@ async function registerSurface($: EngineInterface): Promise<void> {
     description: 'Usage pause status. Also: cancel, arm 5h|week (resume after that reset), disarm, settings',
     argumentHint: ARGUMENT_HINT,
   })
-  await $.tool.register({
-    name: 'arm',
-    description:
-      'Resume this session by itself after a plan reset. arm (window "5h" or "week"): after that reset, the ' +
-      'session gets a prompt to continue its pending work, with no approval wait; it holds across a restart. ' +
-      'disarm: drop it. status: the pause and the armed wake. Arm before stopping near a plan limit.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['arm', 'disarm', 'status'] },
-        window: { type: 'string', enum: ['5h', 'week'] },
-      },
-      required: ['action'],
-    },
-  })
-}
-
-type ArmToolInput = { action?: string; window?: string }
-
-// The arm tool: the session arms itself the way `/usage-guard arm` does. A cancel stays the person's,
-// since it stops every session's resume.
-async function runTool($: EngineInterface, input: ArmToolInput): Promise<string> {
-  if (input.action === 'arm') return armByHand($, input.window ?? '', true)
-  if (input.action === 'disarm') return disarm($)
-  return runCommand($, '')
 }
 
 const ARGUMENT_HINT = '[help | settings | arm 5h|week | disarm | cancel]'
