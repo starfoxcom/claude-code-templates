@@ -87,12 +87,37 @@ export function planChip(limit: PlanWindow, b: Budgets): Chip {
   return { text: `${name} ${used}%${reset}`, color: used >= b.wrapUpAt ? 'red' : 'yellow' }
 }
 
-/** Shown only once the prompt cache is about to go cold. */
+const CACHE_NOTICE_MS = 15 * 60_000
+const MISS_NAMES: Record<string, string> = {
+  expired: 'cache expired',
+  early: 'cache broke early',
+  short: 'cache lasts 5m',
+}
+
+/** A recent miss the API's counts confirmed, other than one that comes by design. */
+function cacheNotice(b: Budgets, now: number): string | undefined {
+  const check = b.cacheCheck
+  if (!check?.miss || now - check.at >= CACHE_NOTICE_MS) return undefined
+  return MISS_NAMES[check.miss]
+}
+
+/**
+ * Quiet while the cache is warm. Near the end of its lifetime it counts down and names the cold
+ * start: what the next request writes to the cache again if it expires. For a quarter hour after a
+ * confirmed miss it says what happened and what it cost.
+ */
 export function cacheChip(b: Budgets, now: number): Chip | undefined {
   if (b.cacheExpiresAt === undefined || b.tokens === undefined) return undefined
+  const notice = cacheNotice(b, now)
   const minutes = Math.floor((b.cacheExpiresAt - now) / 60_000)
-  if (minutes > b.cacheWarnMinutes) return undefined
-  return minutes <= 0 ? { text: 'cache cold', color: 'red' } : { text: `cache ${minutes}m`, color: 'yellow' }
+  if (minutes <= b.cacheWarnMinutes) {
+    const left = minutes <= 0 ? 'likely expired' : `${minutes}m left`
+    const text = `${notice ? `${notice} · ` : 'cache '}${left} · cold start ${thousands(b.tokens)}`
+    return { text, color: minutes <= 0 ? 'red' : 'yellow' }
+  }
+  if (!notice) return undefined
+  const text = `${notice} · resent ${thousands(b.cacheCheck?.resent ?? 0)}`
+  return { text, color: b.cacheCheck?.miss === 'expired' ? undefined : 'yellow' }
 }
 
 export function pauseChip(b: Budgets, now: number): Chip | undefined {
