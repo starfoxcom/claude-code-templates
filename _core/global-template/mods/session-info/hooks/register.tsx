@@ -9,6 +9,12 @@ const line = atom({ plugin: 'session-info', key: 'line' } as const, null)
 const isExpanded = atom({ plugin: 'session-info', key: 'isExpanded' } as const, false)
 
 const GIT_TIMEOUT_MS = 5_000
+const HINT = '[help | settings]'
+export const HELP = [
+  '/session-info: the row with the model, the project and the branch with its changes.',
+  '  /session-info settings  open the settings pane',
+  '  /session-info help      this list',
+].join('\n')
 
 const live: {
   isStarted: boolean
@@ -84,14 +90,15 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    const description = 'Session row: /session-info settings opens its settings'
-    await $.command.register({ name: 'session-info', description })
+    const description = 'The session row: model, project and branch'
+    await $.command.register({ name: 'session-info', description, argumentHint: HINT })
     await start($)
     return result
   })
 
-  on('command.run', { command: 'session-info' }, async ($, e, next) => {
-    if (e.args.trim() !== 'settings') return next(e)
+  // `/session-info [help | settings]`; any other argument, or none, gets the help.
+  on('command.run', { command: 'session-info' }, async ($, e) => {
+    if (e.args.trim() !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Session info settings', focus: true })
     return { text: 'Opened the session-info settings.' }
   })
