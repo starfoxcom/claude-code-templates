@@ -63,6 +63,7 @@ test('an unreadable host zone and window fall back instead of failing the prompt
     value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: [] },
   }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('turn.complete', () => ({ text: '' }))
   let seen: readonly string[] = []
   on('prompt.submit', ($, e) => {
     seen = e.context ?? []
@@ -76,6 +77,11 @@ test('an unreadable host zone and window fall back instead of failing the prompt
   expect(seen[0]).toContain('| ctx -- (unknown until the first response of this window)')
   // A fresh session has no plan figures before its first response: the line says so instead of dropping them.
   expect(seen[0]).toContain('| plan used: unknown until the first response |')
+
+  // Past a response the list is still empty: an account with no plan windows, so the line names none.
+  await $.turn.complete({ turnId: 't', answer: '', durationMs: 1, reason: 'answer' } as never)
+  await $.prompt.submit({ text: 'again' } as never)
+  expect(seen[0]).not.toContain('plan used')
 })
 
 const SUMMARY = { role: 'user', text: 'SUMMARY', toolUses: [] }
