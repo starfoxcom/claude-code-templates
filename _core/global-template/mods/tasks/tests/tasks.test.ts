@@ -417,3 +417,13 @@ test('a running session stamps its open list, and its end marks it finished', as
   expect(mirror(seen).aliveAt).toBe(NOW)
   expect(mirror(seen).endedAt).toBe(NOW)
 })
+
+test('a hot reload never repeats the carried-over note', async ($, on) => {
+  const seen = world(on)
+  // This session's own mirror, as a reloaded module finds it: the note already went out.
+  const own = { session: 'sess-a', root: 'c:/repos/x', updatedAt: 5, turn: 2, tasks: [] }
+  seen.files.set(MIRROR_FILE, JSON.stringify({ ...own, carried: [OPEN_TASK], isCarryNoted: true }))
+  await turn($)
+  const answer = (await $.prompt.submit({ text: 'hi' } as never)) as never as { context?: string[] }
+  expect((answer.context ?? []).join(' ')).not.toContain('left unfinished')
+})
