@@ -477,3 +477,13 @@ test('a list already handed over is not carried again', async ($, on) => {
   await $.session.start({ cwd: 'C:/Repos/x' } as never)
   expect(mirror(seen).carried).toBeUndefined()
 })
+
+test('a handed-over session that is resumed and saves its list is current again', async ($, on) => {
+  const seen = world(on)
+  const own = { session: 'sess-a', root: 'c:/repos/x', updatedAt: 5, turn: 2, tasks: [OPEN_TASK], handedOverAt: 1 }
+  seen.files.set(MIRROR_FILE, JSON.stringify(own))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  await turn($)
+  await create($, 'more work')
+  expect(mirror(seen).handedOverAt).toBeUndefined()
+})
