@@ -388,3 +388,32 @@ test('/tasks opens the list or its settings, and help or anything else lists its
   expect(seen.opened).toEqual(['tasks', 'tasks-settings'])
   for (const args of ['help', 'lists']) expect(await run(args)).toEqual(expect.objectContaining({ text: HELP }))
 })
+
+const NOW = Date.UTC(2026, 9, 2, 19, 0, 0)
+const OTHER = 'C:/Users/me/.claude/mods-data/tasks/other.json'
+const OPEN_TASK = { id: '7', subject: 'keep going', status: 'in_progress', createdTurn: 1 }
+
+for (const { name, stamps, isCarried } of [
+  { name: 'a session still running', stamps: { aliveAt: NOW - 60_000 }, isCarried: false },
+  { name: 'a session that ended', stamps: { aliveAt: NOW - 60_000, endedAt: NOW - 30_000 }, isCarried: true },
+  { name: 'a session whose stamps stopped', stamps: { aliveAt: NOW - 10 * 60_000 }, isCarried: true },
+]) {
+  test(`carry-over from ${name}: ${isCarried ? 'carried' : 'left alone'}`, async ($, on) => {
+    const seen = world(on)
+    const other = { session: 'other', root: 'c:/repos/x', updatedAt: 5, turn: 9, tasks: [OPEN_TASK], ...stamps }
+    seen.files.set(OTHER, JSON.stringify(other))
+    await $.session.start({ cwd: 'C:/Repos/x' } as never)
+    expect(mirror(seen).carried?.map(task => task.id)).toEqual(isCarried ? ['7'] : undefined)
+  })
+}
+
+test('a running session stamps its open list, and its end marks it finished', async ($, on) => {
+  const seen = world(on)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }))
+  await $.session.start({ cwd: 'C:/Repos/x' } as never)
+  await turn($)
+  await create($, 'work')
+  await $.session.end({ reason: 'other', sessionId: 'sess-a' } as never)
+  expect(mirror(seen).aliveAt).toBe(NOW)
+  expect(mirror(seen).endedAt).toBe(NOW)
+})
