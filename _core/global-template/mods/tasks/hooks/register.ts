@@ -48,10 +48,15 @@ export type Mirror = {
   // The previous session's unfinished tasks in this folder, shown for checking, never recreated here.
   carried?: MirrorTask[]
   carriedFrom?: string
+  // The carried list's `updatedAt` when it was read: a list saved again since then is not marked.
+  carriedUpdatedAt?: number
   // Set once the carried-over note reached the model; kept on disk so a hot reload never repeats it.
   isCarryNoted?: boolean
   // Marks a clean end (session.end). The running stamp lives in its own `<session>.alive` file.
   endedAt?: number
+  // Set on a finished session's list once a newer session carried its leftovers: they are shown
+  // once, in that session, never again in every session after it.
+  handedOverAt?: number
 }
 
 type UpdateArgs = {
@@ -415,7 +420,8 @@ export function pickPredecessor(
   now: number,
 ): Mirror | undefined {
   return mirrors
-    .filter(mirror => mirror.session !== session && mirror.root === root && openTasks(mirror).length > 0)
+    .filter(mirror => mirror.session !== session && mirror.root === root && !mirror.handedOverAt)
+    .filter(mirror => openTasks(mirror).length > 0)
     .filter(mirror => isFinished(mirror.endedAt, aliveAt.get(mirror.session), now))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
 }
@@ -457,6 +463,8 @@ async function mirrorOf($: EngineInterface): Promise<Mirror> {
 
 // True when the mirror file was written.
 async function saveMirror($: EngineInterface, mirror: Mirror): Promise<boolean> {
+  // A session writing its own list makes it current again: a resumed session's new leftovers carry over.
+  delete mirror.handedOverAt
   mirror.updatedAt = await $.clock.now()
   mirror.turn = live.turn
   mirror.tasks.sort((a, b) => Number(a.id) - Number(b.id))
@@ -519,6 +527,19 @@ async function clearEngineStore($: EngineInterface): Promise<void> {
   await $.process.run(['node', '-e', UNLINK_SCRIPT, dir, ...names], { timeoutMs: 20_000 })
 }
 
+// Marks the finished list whose leftovers just reached the model, so no later session shows them again.
+// Done when the note goes out, not at the start: a session that ends before its first prompt never saw
+// them, and the next new session carries them instead. A list resumed and saved again after it was carried
+// holds tasks this session never showed, so it stays unmarked for the next new session.
+async function markHandedOver($: EngineInterface, carrier: Mirror): Promise<void> {
+  if (!carrier.carriedFrom) return
+  const path = `${await dataDir($)}/${carrier.carriedFrom}.json`
+  const previous = JSON.parse(String(await $.fs.read(path))) as Mirror
+  if (previous.updatedAt !== carrier.carriedUpdatedAt) return
+  previous.handedOverAt = await $.clock.now()
+  await $.fs.write(path, JSON.stringify(previous, null, 1))
+}
+
 async function carryOver($: EngineInterface): Promise<void> {
   const mirror = await mirrorOf($)
   if (mirror.tasks.length > 0 || mirror.carried) return
@@ -536,9 +557,11 @@ async function carryOver($: EngineInterface): Promise<void> {
   }
   const previous = pickPredecessor(mirrors, aliveAt, mirror.root ?? '', mirror.session, await $.clock.now())
   if (!previous) return
+  const now = await $.clock.now()
   mirror.carried = openTasks(previous)
   mirror.carriedFrom = previous.session
-  mirror.changedAt = await $.clock.now()
+  mirror.carriedUpdatedAt = previous.updatedAt
+  mirror.changedAt = now
   await saveMirror($, mirror)
 }
 
@@ -633,6 +656,7 @@ export const register: Register = (on, options) => {
       notes.push(carriedText(mirror.carried))
       mirror.isCarryNoted = true
       await saveMirror($, mirror)
+      await markHandedOver($, mirror).catch(() => undefined)
     }
     const note = live.afterCompact ? openListText(mirror, live.turn) : staleText(mirror, live.turn)
     live.afterCompact = false
