@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Watch } from '../types'
 import {
   claimWake,
+  HELP,
   isPushOrPr,
   mergedNumber,
   settle,
@@ -378,4 +379,14 @@ test('a push in another folder is looked up there', () => {
   expect(targetFolder("Set-Location 'D:/a b'; git push", true, true)).toBe('D:/a b')
   // Elsewhere a one-letter top folder is real.
   expect(targetFolder('git -C /u/me/wt push -q', false)).toBe('/u/me/wt')
+})
+
+test('/ci-watch shows its verbs in the menu, and help or an unknown verb lists them', async ($, on) => {
+  const { seen } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  expect(seen.commands).toEqual([{ name: 'ci-watch', argumentHint: '[help | settings | stop]' }])
+  for (const args of ['help', 'stopp']) {
+    const answer = await $.command.run({ command: 'ci-watch', args } as never)
+    expect(answer).toEqual(expect.objectContaining({ text: HELP }))
+  }
 })
