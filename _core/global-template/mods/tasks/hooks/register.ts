@@ -400,7 +400,8 @@ export function carriedText(carried: readonly MirrorTask[]): string {
 // file of its own so the stamp never rewrites a task list. A session is finished when it never
 // stamped (gone before the stamps existed), stopped stamping, or ended after its last stamp.
 export function isFinished(endedAt: number | undefined, aliveAt: number | undefined, now: number): boolean {
-  if (aliveAt === undefined || now - aliveAt > ALIVE_STALE_MS) return true
+  // A stamp that is not a number (a damaged or foreign file) counts as no stamp.
+  if (aliveAt === undefined || !Number.isFinite(aliveAt) || now - aliveAt > ALIVE_STALE_MS) return true
   return endedAt !== undefined && endedAt >= aliveAt
 }
 
