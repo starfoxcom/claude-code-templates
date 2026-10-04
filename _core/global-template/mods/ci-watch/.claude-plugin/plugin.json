@@ -8,7 +8,7 @@
       "type": "number",
       "title": "Poll every (seconds)",
       "description": "How often the PR checks are read with gh. Local only: no plan usage.",
-      "default": 60
+      "default": 30
     },
     "timeoutMinutes": {
       "type": "number",

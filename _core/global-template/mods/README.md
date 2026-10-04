@@ -31,7 +31,7 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
 
 | Mod | Option | Default | Meaning |
 |---|---|---|---|
-| `ci-watch` | `pollSeconds` | `60` | How often the PR checks are read with `gh`. |
+| `ci-watch` | `pollSeconds` | `30` | How often the PR checks are read with `gh`. |
 | `ci-watch` | `timeoutMinutes` | `60` | A watch still pending after this long wakes the session with what is stuck. |
 | `compact-handoff` | `mode` | `on` | `off`: stock compaction. `shadow`: stock compaction plus the hand-off written beside it for comparison (double work on every compaction; use only for A/B runs). `on`: the hand-off replaces the stock summary. |
 | `guards` | `mode` | `shadow` | `shadow` never blocks: it logs what it would block, and what any guard script registered beside it blocked, to `mods-data/guards/decisions.jsonl`. `enforce` blocks. Switch to `enforce` after a shadow period shows the mod agrees with your scripts. |
