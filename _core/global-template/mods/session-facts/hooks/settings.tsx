@@ -26,12 +26,15 @@ export function isOwnRow(row: Pick<ConfigRow, 'key' | 'provider'>): boolean {
 }
 
 // Shown when none of the rows is this plugin's: what /config did list (or why it could not), so one
-// look on that surface tells why the pane is empty.
+// look on that surface tells why the pane is empty. The rows other plugins own are the telling ones (none
+// at all: that surface lists no plugin settings), so they are named and the engine's own only counted.
 export function emptyNote(listed: readonly Pick<ConfigRow, 'key' | 'provider'>[] | Error): string {
   if (listed instanceof Error) return `No settings for ${PLUGIN} here: /config could not be listed (${listed.message}).`
-  const sample = listed.slice(0, 5).map(row => `${row.key} (${row.provider?.plugin ?? 'no owner'})`)
+  const fromPlugins = listed.filter(row => row.provider?.plugin !== 'engine')
+  const sample = fromPlugins.slice(0, 5).map(row => `${row.key} (${row.provider?.plugin ?? 'no owner'})`)
   const such = sample.length > 0 ? `, such as ${sample.join(', ')}` : ''
-  return `No settings for ${PLUGIN} here: /config listed ${listed.length} row(s)${such}.`
+  const count = `${listed.length} row(s), ${fromPlugins.length} of them from plugins${such}`
+  return `No settings for ${PLUGIN} here: /config listed ${count}.`
 }
 
 // A number field's text as the value to write, or why it cannot be one.
