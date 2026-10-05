@@ -9,6 +9,14 @@ const SURFACES = ['terminal', 'desktop'] as const
 const DIRTY = '## develop...origin/develop [ahead 2, behind 1]\n M a.ts\n M b.ts\n?? c.ts\n'
 const SETTINGS = 'mods-data/session-info/settings.json'
 
+// The test runner has timers; the mod sandbox's types do not list them.
+declare function setTimeout(callback: () => void, ms: number): unknown
+
+/** A short real wait: room for other work to go ahead (a bound, never what a test waits on to pass). */
+function moment(ms = 100): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 function world(on: On, status = DIRTY) {
   const seen = {
     gitCalls: 0,
@@ -242,6 +250,21 @@ test('/session-info phone gives the row as text, ending with the help hint', asy
   expect(lines[0]).toMatch(/^🧭 /)
   expect(lines[1]).toMatch(/^🌿 /)
   expect(lines.at(-1)).toBe('/session-info help for more')
+})
+
+test('/session-info phone that lands while a reloaded start still reads git waits for the row', async ($, on) => {
+  const seen = world(on)
+  let open = () => undefined as void
+  seen.gate = new Promise(resolve => (open = resolve))
+  const started = start($, 'terminal')
+  for (let i = 0; i < 50 && seen.gitCalls === 0; i++) await moment(10)
+  expect(seen.gitCalls).toBeGreaterThan(0)
+  // The command lands mid-start: git is answered once the command is, or a moment if it waits for the start.
+  const phone = $.command.run({ command: 'session-info', args: 'phone' } as never) as Promise<{ text: string }>
+  await Promise.race([phone, moment()])
+  open()
+  await started
+  expect((await phone).text.split('\n')[0]).toMatch(/^🧭 /)
 })
 
 test('a bare /session-info typed over Remote Control answers with the phone text', async ($, on) => {

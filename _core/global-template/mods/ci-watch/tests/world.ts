@@ -16,6 +16,8 @@ export type Seen = {
   duringChecks?: () => unknown
   /** Runs inside a read of the state file, after the text was read. */
   duringStateRead?: () => unknown
+  /** Runs inside each folder make, before it returns (the owner claim makes its folder first). */
+  duringMkdir?: () => unknown
   /** `gh pr checks` fails (network, auth) with nothing on stdout. */
   isChecksDown?: boolean
   /** Folder makes and file writes, in order. */
@@ -74,7 +76,10 @@ export function world(on: On) {
   })
   on('process.run', async ($, e) => {
     const args = e.argv.join(' ')
-    if (e.argv[2] === MKDIR_SCRIPT) seen.order.push(`mkdir ${e.argv[3]}`)
+    if (e.argv[2] === MKDIR_SCRIPT) {
+      seen.order.push(`mkdir ${e.argv[3]}`)
+      await seen.duringMkdir?.()
+    }
     if (e.argv[2] === SWEEP_SCRIPT) seen.order.push(`sweep ${e.argv.slice(3).join(' ')}`)
     if (args.includes('pr checks')) seen.checksRead++
     if (args.includes('pr checks')) await seen.duringChecks?.()
@@ -111,4 +116,12 @@ export function world(on: On) {
   // The engine's own band beneath the plugins: empty.
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   return { seen, clock }
+}
+
+// The test runner has timers; the mod sandbox's types do not list them.
+declare function setTimeout(callback: () => void, ms: number): unknown
+
+/** A short real wait: room for other work to go ahead (a bound, never what a test waits on to pass). */
+export function moment(ms = 100): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
