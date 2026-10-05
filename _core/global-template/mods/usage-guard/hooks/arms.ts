@@ -22,7 +22,9 @@ export function parseSavedArm(text: string): ArmedWake | undefined {
     const arm = JSON.parse(text) as Partial<ArmedWake> | null
     if (!arm || typeof arm.kind !== 'string' || typeof arm.resetsAt !== 'string') return undefined
     if (typeof arm.wakeAt !== 'number' || !Number.isFinite(arm.wakeAt)) return undefined
-    return { kind: arm.kind, resetsAt: arm.resetsAt, wakeAt: arm.wakeAt, isQuestioned: arm.isQuestioned === true }
+    const armedIn = typeof arm.armedIn === 'string' ? { armedIn: arm.armedIn } : {}
+    const isQuestioned = arm.isQuestioned === true
+    return { kind: arm.kind, resetsAt: arm.resetsAt, wakeAt: arm.wakeAt, isQuestioned, ...armedIn }
   } catch {
     return undefined
   }

@@ -283,6 +283,18 @@ test('open tasks are the ones not completed, not dropped and not on hold', () =>
   expect(countOpenTasks('{}')).toBeUndefined()
 })
 
+test('an arm set beside open tasks still resumes fully after a /clear starts an empty list', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [{ status: 'in_progress' }])
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(quietWakes(seen)).toEqual([])
+})
+
 test('an armed session with nothing pending gets the one-line prompt at a pause reset too', async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [])
@@ -419,6 +431,8 @@ test('a saved arm is scheduled ahead, caught up within the window, and dropped p
 test('only a whole arm reads back from its file', () => {
   const arm = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }
   expect(parseSavedArm(JSON.stringify(arm))).toEqual({ ...arm, isQuestioned: false })
+  const set = { ...arm, armedIn: 'sess-a', session: 'sess-b' }
+  expect(parseSavedArm(JSON.stringify(set))).toEqual({ ...arm, isQuestioned: false, armedIn: 'sess-a' })
   expect(parseSavedArm('null')).toBeUndefined()
   expect(parseSavedArm('{"kind":"five_hour","resetsAt":"x"}')).toBeUndefined()
   expect(parseSavedArm('not json')).toBeUndefined()

@@ -332,9 +332,11 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
 }
 
 // An armed session goes on with its work, or, with nothing pending, only says so: the person asked for
-// the wake-up, and a full resume would rebuild a hand-off for no work.
+// the wake-up, and a full resume would rebuild a hand-off for no work. A /clear starts an empty task
+// list, so the list of the session the arm was set in counts too.
 async function resumeArmed($: EngineInterface, limit: string, text: string): Promise<void> {
-  if ((await openTasks($)) !== 0) return resumeWork($, text)
+  const armedIn = (await read($, armedWake))?.armedIn
+  if ((await openTasks($)) !== 0 || (armedIn && (await openTasks($, armedIn)) !== 0)) return resumeWork($, text)
   await notice($, quietResumeText(limit))
   void $.prompt.submit({ text: quietResumePrompt(limit) }).catch(() => undefined)
 }
@@ -479,9 +481,9 @@ async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
   return saved
 }
 
-// The open tasks in this session's list, from the tasks mod's copy: none when that mod keeps lists but
-// none for this session. Undefined without the tasks mod, or when the list cannot be read.
-async function openTasks($: EngineInterface): Promise<number | undefined> {
+// The open tasks in a session's list (this one's by default), from the tasks mod's copy: none when that
+// mod keeps lists but none for the session. Undefined without the tasks mod, or when the list cannot be read.
+async function openTasks($: EngineInterface, sessionId?: string): Promise<number | undefined> {
   const dir = (await dataDir($)).replace(/usage-guard$/, 'tasks')
   try {
     await $.fs.list(dir)
@@ -489,7 +491,7 @@ async function openTasks($: EngineInterface): Promise<number | undefined> {
     return undefined
   }
   try {
-    return countOpenTasks(String(await $.fs.read(`${dir}/${await $.session.id()}.json`)))
+    return countOpenTasks(String(await $.fs.read(`${dir}/${sessionId ?? (await $.session.id())}.json`)))
   } catch {
     return 0
   }
@@ -505,7 +507,8 @@ async function armByHand($: EngineInterface, which: string, option: string): Pro
   const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
   if (typeof planned === 'string') return planned
   const isEmpty = (await openTasks($)) === 0
-  await setArm($, isEmpty ? { ...planned, isQuestioned: true } : planned)
+  const arm = { ...planned, armedIn: await $.session.id() }
+  await setArm($, isEmpty ? { ...arm, isQuestioned: true } : arm)
   await scheduleArm($, planned)
   const lines = [
     `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
