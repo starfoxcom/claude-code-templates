@@ -39,14 +39,20 @@ const live = {
   isUnsaved: false,
   /** Counts the changes made outside a poll (a new watch, a stop, a merge), so a poll can tell. */
   generation: 0,
+  /** Saved with the watches: a reload mid-turn loads it, since that turn started in the old module. */
+  isTurnRunning: false,
 }
 
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
-// stopped or dropped meanwhile stays gone.
+// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent.
 function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   const same = (a: Watch, b: Watch) =>
     a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
-  return current.map(w => polled.find(p => same(p, w)) ?? w)
+  return current.map(w => {
+    const p = polled.find(p => same(p, w))
+    if (!p) return w
+    return Boolean(p.wakePending) === Boolean(w.wakePending) ? p : { ...p, wakePending: w.wakePending }
+  })
 }
 
 export function settle(
@@ -231,7 +237,7 @@ async function save($: EngineInterface): Promise<void> {
   try {
     const path = await statePath($)
     await ensureDir($, path.slice(0, path.lastIndexOf('/')))
-    await $.fs.write(path, JSON.stringify({ watches: live.watches }))
+    await $.fs.write(path, JSON.stringify({ watches: live.watches, isTurnRunning: live.isTurnRunning }))
     live.isUnsaved = false
   } catch {
     // Memory stays the truth (the file may lack a new watch or still hold stopped ones), and the next
@@ -242,18 +248,32 @@ async function save($: EngineInterface): Promise<void> {
   await publish($)
 }
 
-async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {
+type Saved = { watches?: Watch[]; isTurnRunning?: boolean }
+
+async function readState($: EngineInterface): Promise<Saved | undefined> {
   try {
-    const saved = JSON.parse(String(await $.fs.read(await statePath($)))) as { watches?: Watch[] }
-    return saved.watches
+    return JSON.parse(String(await $.fs.read(await statePath($)))) as Saved
   } catch {
     return undefined
   }
 }
 
+async function readSaved($: EngineInterface): Promise<Watch[] | undefined> {
+  return (await readState($))?.watches
+}
+
 async function load($: EngineInterface): Promise<void> {
-  live.watches = (await readSaved($)) ?? []
+  const saved = await readState($)
+  live.watches = saved?.watches ?? []
+  live.isTurnRunning = Boolean(saved?.isTurnRunning)
   await publish($)
+}
+
+// Saved at once: an instance loaded by a reload mid-turn reads it from the file.
+async function setTurnRunning($: EngineInterface, isRunning: boolean): Promise<void> {
+  if (live.isTurnRunning === isRunning) return
+  live.isTurnRunning = isRunning
+  await save($)
 }
 
 // The band's stop button: forget one watch, as `/ci-watch stop` forgets them all.
@@ -263,7 +283,8 @@ async function stopOne($: EngineInterface, key: string): Promise<void> {
   await save($)
 }
 
-// True when the saved file already records this watch as settled: another instance woke the session.
+// True when the saved file already records this watch as settled: another instance woke the session, or
+// holds the wake pending, which the live instance sends.
 function isRecorded(saved: readonly Watch[] | undefined, watch: Watch): boolean {
   const there = saved?.find(w => w.repo === watch.repo && w.number === watch.number && w.headSha === watch.headSha)
   return there?.outcome !== undefined
@@ -458,10 +479,31 @@ async function poll($: EngineInterface): Promise<void> {
   // right before waking: a settlement it already records was sent by the other instance. This
   // instance's record is written before its prompt goes out.
   const recorded = toWake.length > 0 ? await readSaved($) : undefined
+  // Each wake is marked pending in the same save that records its outcome; sendHeld sends it.
+  const due = new Set(toWake.filter(w => !isRecorded(recorded, w) && claimWake(w)))
+  if (due.size > 0) live.watches = live.watches.map(w => (due.has(w) ? { ...w, wakePending: true } : w))
   if (changed || live.isUnsaved) await save($)
-  for (const watch of toWake) {
-    if (!isRecorded(recorded, watch) && claimWake(watch))
-      void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
+  if (!live.isTurnRunning) await sendHeld($)
+}
+
+// Pending wakes go out once no turn runs: a wake that settles mid-turn waits for the turn's end, since
+// the engine would only run it then anyway, and by then the turn may have merged the PR or pushed a fix.
+// The mark lives in the saved file, so a reload mid-turn sends it from the new module. Each is checked
+// again first: a watch stopped or replaced meanwhile is no longer listed, and a PR merged or closed, or
+// one whose head moved on (its new commit has a watch of its own), wakes nothing. Taken from memory in
+// one step and saved as sent before any prompt goes out, so no wake goes twice.
+async function sendHeld($: EngineInterface): Promise<void> {
+  if (await isRetired($)) return
+  const held = live.watches.filter(w => w.wakePending)
+  if (held.length === 0) return
+  live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
+  live.generation++
+  await save($)
+  for (const watch of held) {
+    if (await isClosed($, watch.repo, watch.number)) continue
+    const head = await headOf($, watch.repo, watch.number)
+    if (head && head !== watch.headSha) continue
+    void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
   }
 }
 
@@ -513,13 +555,27 @@ export const register: Register = (on, options) => {
       },
     })
     await $.command.register({ name: 'ci-watch', description: 'The PRs this session watches', argumentHint: HINT })
+    // A new start runs no turn yet, whatever a session that ended mid-turn saved.
+    await setTurnRunning($, false)
     return result
   })
 
   // startPolling first: a freshly loaded instance claims the owner file before any check.
   on('turn.start', async ($, e, next) => {
     await startPolling($)
+    if (!(await isRetired($))) await setTurnRunning($, true)
     return next(e)
+  })
+
+  // A reload mid-turn ends the turn in the new module: it loads the watches, pending wakes included.
+  on('turn.complete', async ($, e, next) => {
+    await startPolling($)
+    if (await isRetired($)) return next(e)
+    await setTurnRunning($, false)
+    const result = await next(e)
+    // From a timer: the turn's own hook is still running, and the wake is a turn of its own.
+    $.clock.after(0, () => void sendHeld($).catch(() => undefined))
+    return result
   })
 
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
