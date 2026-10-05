@@ -28,9 +28,8 @@ export type Plan = {
   texts: { where: string; text: string; creditOnly?: boolean }[]
   /** Body files the command hands to git or gh, as written (relative to `cwd` when not absolute).
    * `written`: this same command writes the file, and what it writes was read from the command text. */
-  /** `folder`: where a relative path resolves, as the command stands where the file is named.
-   * `isLiteral`: written by a `cat` of a literal here-doc, so the text read is exactly the file's. */
-  files: { where: string; path: string; written?: boolean; isLiteral?: boolean; folder?: Folder }[]
+  /** `folder`: where a relative path resolves, as the command stands where the file is named. */
+  files: { where: string; path: string; written?: boolean; folder?: Folder }[]
   /** Files the command itself writes (`> file`). */
   written: string[]
   branches: string[]
@@ -223,7 +222,6 @@ export function inspect(command: string, powershell: boolean): Plan {
     const writer = r.writers.get(norm(f.path))
     if (!writer) continue
     f.written = true
-    f.isLiteral = isLiteralWrite(writer.st)
     feed(writer.st, { ...r, ps: writer.ps }, `${f.where} (file ${f.path})`)
   }
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
@@ -254,13 +252,6 @@ const RAW_WRITES = [
   String.raw`\bgh\b${REST}\bapi\b(?=${REST}(?:${API_WRITE}))`,
   String.raw`\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b${REST}api\.github\.com`,
 ].map(source => new RegExp(source, 'i'))
-
-// `cat > f <<'EOF'`: the file holds the here-doc as typed. `printf`, `echo -e` and the like expand escapes
-// the reading leaves as typed, so their files are not read as exact text.
-function isLiteralWrite(st: Statement): boolean {
-  const { name } = programOf(st)
-  return /^(cat|type|get-content|gc)$/.test(name) && st.heredocs.length > 0 && !st.hasDynamicBody
-}
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 

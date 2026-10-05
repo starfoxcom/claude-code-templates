@@ -70,6 +70,13 @@ function fileAt(path: string, folder: Folder | undefined, cwd: string, session: 
   return osPath(path, base, isBash)
 }
 
+// A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a file
+// of the same name in the session folder is a different file: it is never read.
+function isUnplaced(plan: Plan, path: string, folder: Folder | undefined): boolean {
+  const isFolderUnknown = folder ? folder.isUnknown : plan.isCwdUnknown
+  return Boolean(isFolderUnknown) && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)
+}
+
 // The body files the command reads: the first reason to block, or undefined. Files that cannot be read
 // for a known cause are named unread instead.
 async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, isBash: boolean) {
@@ -77,10 +84,7 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, 
   const session = await $.session.cwd()
   for (const { where, path, written: fromCommand, folder } of plan.files) {
     const full = fileAt(path, folder, cwd, session, isBash)
-    // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a
-    // file of the same name in the session folder is a different file: it is never read.
-    const isFolderUnknown = folder ? folder.isUnknown : plan.isCwdUnknown
-    if (isFolderUnknown && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)) {
+    if (isUnplaced(plan, path, folder)) {
       if (!fromCommand) plan.unread.push(where)
       continue
     }
@@ -116,17 +120,13 @@ async function prRules($: Engine): Promise<PrRules | undefined> {
   }
 }
 
-// The PR body exactly as it will be sent: a literal here-doc on stdin, what a `cat` here-doc in this
-// command writes to the body file, or the file on disk. Undefined for any other route.
+// The PR body exactly as it will be sent: a literal here-doc on stdin, or a file already on disk where
+// the command's folder is known. Undefined for any other route, among them a body file this same command
+// writes (its text as the command reading holds it may differ from what lands in the file).
 async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: boolean) {
   if (call.bodyFile === '-') return call.stdinBody
   const file = call.filePath === undefined ? undefined : plan.files.find(f => f.path === call.filePath)
-  if (!file) return undefined
-  if (file.written) {
-    if (!file.isLiteral) return undefined
-    const label = `${file.where} (file ${file.path})`
-    return plan.texts.filter(t => t.where === label && !t.creditOnly).map(t => t.text).join('\n') || undefined
-  }
+  if (!file || file.written || isUnplaced(plan, file.path, file.folder)) return undefined
   try {
     return String(await $.fs.read(fileAt(file.path, file.folder, cwd, await $.session.cwd(), isBash)))
   } catch {
@@ -148,7 +148,14 @@ async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash:
       plan.unread.push(`the PR body (format check, ${call.action})`)
       continue
     }
-    const reason = checkBody(text, call.title, rule)
+    let reason: string | undefined
+    try {
+      reason = checkBody(text, call.title, rule)
+    } catch {
+      // A pattern in pr-body.json that does not compile: the body goes unjudged, the other checks still run.
+      plan.unread.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)
+      continue
+    }
     if (reason) return reason
   }
   return undefined
@@ -167,8 +174,6 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
   }
   const fileReason = await checkFiles($, plan, cwd, mayName, isBash)
   if (fileReason) return fileReason
-  const prReason = await checkPr($, plan, cwd, repo, isBash)
-  if (prReason) return `PR-body contract: ${prReason}`
   for (const branch of plan.branches) {
     const v = checkBranch(branch, mayName)
     if (v) return describe(v, `the new branch name "${branch}" (it lands in merge commit titles)`)
@@ -184,7 +189,9 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
     // A diff past the output cap was read only in part: the rest is named unread, never passed as clean.
     if (diff.isCut) plan.unread.push('the lines the commit adds past the first part of its diff')
   }
-  return undefined
+  // Last: a credit anywhere outranks the PR format.
+  const prReason = await checkPr($, plan, cwd, repo, isBash)
+  return prReason ? `PR-body contract: ${prReason}` : undefined
 }
 
 async function log($: Engine, entry: Record<string, unknown>) {

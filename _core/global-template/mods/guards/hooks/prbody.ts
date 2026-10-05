@@ -28,6 +28,14 @@ export type PrCall = {
 /** A word as the command reading hands it over: its text, and whether the shell builds it at run time. */
 export type PrWord = { text: string; dynamic?: boolean }
 
+// The `gh pr create|edit` flags that take the next word as their value.
+const VALUE_FLAGS = new Set(
+  (
+    '-t --title -b --body -F --body-file -B --base -H --head -R --repo -a --assignee -l --label -m --milestone ' +
+    '-p --project -r --reviewer -T --template --add-label --remove-label --add-reviewer --remove-reviewer ' +
+    '--add-assignee --remove-assignee --add-project --remove-project'
+  ).split(' '),
+)
 const FILL = /^(?:-f|-w|--fill|--fill-first|--fill-verbose|--web)$/
 
 // The value of a flag spelled `--flag value`, `--flag=value` or `-xvalue`.
@@ -48,8 +56,8 @@ export function readPr(
   const words = given.map(w => w.text)
   for (let i = 0; i < words.length; i++) {
     const w = words[i] ?? ''
-    // A splat or an unquoted variable in a flag's place (never a flag's own value) may carry any flag.
-    const isFlagValue = (words[i - 1] ?? '').startsWith('-') && !(words[i - 1] ?? '').includes('=')
+    // A splat or an unquoted variable in a flag's place (never a value-taking flag's value) may carry any flag.
+    const isFlagValue = VALUE_FLAGS.has(words[i - 1] ?? '')
     if (/^[@$]/.test(w) && (given[i]?.dynamic || w.startsWith('@')) && !isFlagValue) call.isUnknown = true
     if (FILL.test(w)) call.isFilled = true
     else if (/^(?:-b|--body)(?:=|$)/.test(w) || /^-b./.test(w)) call.isInline = true
@@ -61,10 +69,11 @@ export function readPr(
   return call
 }
 
-/** The rule for a repo: the first listed name the repo's name contains (case-insensitive). */
+/** The rule for a repo: of the listed names the repo's name contains (case-insensitive), the longest. */
 export function ruleFor(rules: PrRules | undefined, repo: string): RepoRule | undefined {
   const name = repo.toLowerCase()
-  const key = Object.keys(rules?.repos ?? {}).find(k => k && name.includes(k.toLowerCase()))
+  const keys = Object.keys(rules?.repos ?? {}).filter(k => k && name.includes(k.toLowerCase()))
+  const key = keys.sort((a, b) => b.length - a.length)[0]
   return key === undefined ? undefined : rules?.repos[key]
 }
 
