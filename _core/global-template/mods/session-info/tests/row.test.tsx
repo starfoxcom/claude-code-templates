@@ -214,7 +214,7 @@ test('one git read at a time: a slow read never lands over a checkout made while
 test('/session-info shows its verbs in the menu, and help or anything else lists them', async ($, on) => {
   const seen = world(on)
   await start($, 'terminal')
-  expect(seen.commands).toEqual([{ name: 'session-info', argumentHint: '[help | settings | phone]' }])
+  expect(seen.commands).toEqual([{ name: 'session-info', argumentHint: '[help | settings | set | phone]' }])
   for (const args of ['', 'help', 'setings']) {
     const answer = await $.command.run({ command: 'session-info', args } as never)
     expect(answer).toEqual(expect.objectContaining({ text: HELP }))

@@ -1,11 +1,11 @@
-import type { ConfigRow, ConfigSetInput, On } from 'claude-code'
+import type { On } from 'claude-code'
 import type { Engine, Mounted } from 'claude-code/testing'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
-import { READ_ONLY_NOTE, parseNumber } from '../hooks/settings'
+import { effectiveValues, kindOf, parseValue, settingsList } from '../hooks/settings'
 
-// The settings pane over faked /config rows: the engine's own validation draws it on each surface,
-// and every change goes through config.set as the /config menu's would.
+// The settings pane and `/session-info set` over a faked settings file and manifest: the engine's own
+// validation draws the pane on each surface, and every change lands in the mod's own file.
 const PANE = 'session-info-settings'
 const PANE_PROPS = {
   title: 'Session info settings',
@@ -15,156 +15,148 @@ const PANE_PROPS = {
   scroll: { top: 0 },
   view: {},
 } as never
-const ENGINE = { plugin: 'engine', tier: 'core' } as never
-const ROWS: ConfigRow[] = [
-  {
-    key: 'theme',
-    label: 'Theme',
-    kind: 'choice',
-    value: 'dark',
-    options: ['dark', 'light'],
-    provider: ENGINE,
-    isLocked: false,
-  },
-  {
-    key: 'session-info.refreshSeconds',
-    label: 'First field',
-    description: 'The first field.',
-    kind: 'number',
-    value: 90,
-    provider: ENGINE,
-    isLocked: false,
-  },
-  {
-    key: 'session-info.maxFiles',
-    label: 'Second field',
-    kind: 'number',
-    value: 2,
-    provider: ENGINE,
-    isLocked: true,
-  },
-]
+const FILE = 'C:/Users/me/.claude/mods-data/session-info/settings.json'
+const FIELDS = {
+  wrapUpAt: { type: 'number', title: 'Wrap up at (% used)', description: 'Sessions wrap up here.' },
+  wakeDelayMinutes: { type: 'number', title: 'Resume delay (minutes)' },
+}
 
-function world(on: On, deny?: string) {
-  const writes: Pick<ConfigSetInput, 'key' | 'value'>[] = []
+function world(on: On, saved?: Record<string, unknown>) {
+  const files = new Map<string, string>()
+  if (saved) files.set(FILE, JSON.stringify(saved))
   const opened: string[] = []
-  on('config.list', () => ({ value: ROWS }))
-  on('config.set', ($, e) => {
-    writes.push({ key: e.key, value: e.value })
-    return deny ? { deny } : { value: e.value }
+  let isFolderMissing = !saved
+  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('config.describe', ($, e) => ({ label: e.label, description: e.description, isHidden: e.isHidden }))
+  on('fs.read', ($, e) => {
+    const path = String(e.path).replace(/\\/g, '/')
+    if (path.endsWith('plugin.json')) return { value: JSON.stringify({ userConfig: FIELDS }) }
+    const text = files.get(path)
+    if (text === undefined) throw new Error('no such file')
+    return { value: text }
+  })
+  on('fs.write', ($, e) => {
+    // The first save finds the folder missing until it is made.
+    if (isFolderMissing) throw new Error('no such folder')
+    files.set(String(e.path).replace(/\\/g, '/'), e.text)
+    return { value: undefined }
+  })
+  on('process.run', () => {
+    isFolderMissing = false
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.open', ($, e) => {
     opened.push(e.id)
     return { value: { isPlaced: true } }
   })
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { writes, opened }
+  const savedNow = () => JSON.parse(files.get(FILE) ?? '{}') as Record<string, unknown>
+  return { savedNow, opened }
 }
 
-// The pane's props are faked whole, so the mount is typed by hand: a field-drawing surface's Pane.
-const mountPane = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal') =>
-  $.ui.mount({
-    plugin: 'session-info',
-    surface,
-    component: 'Pane',
-    requestId: PANE,
-    props: PANE_PROPS,
-  } as never) as Promise<Mounted<'terminal' | 'desktop', 'Pane'>>
+type Pane = Mounted<'terminal' | 'desktop', 'Pane'>
+const mountPane = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal'): Promise<Pane> =>
+  $.ui.mount({ plugin: 'session-info', surface, component: 'Pane', requestId: PANE, props: PANE_PROPS } as never)
+const run = async ($: Engine, args: string) =>
+  ((await $.command.run({ command: 'session-info', args } as never)) as { text: string }).text
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the settings pane lists this mod's rows and saves a change on ${surface}`, async ($, on) => {
+  test(`the pane draws every field from the manifest and saves to the mod's file on ${surface}`, async ($, on) => {
     const seen = world(on)
     const ui = await mountPane($, surface)
-    expect(await ui.find({ key: 'setting-refreshSeconds' })).toBeDefined()
-    expect(await ui.find({ key: 'setting-maxFiles' })).toBeDefined()
-    // Another plugin's row and the engine's own stay out of this pane.
-    expect(await ui.find({ key: 'setting-theme' })).toBeUndefined()
-    // A row a trusted source owns is shown, never offered for change.
-    expect(await ui.find({ key: 'session-info-set-maxFiles' })).toBeUndefined()
-
-    await ui.input({ key: 'session-info-set-refreshSeconds', text: '85' })
-    expect(seen.writes).toEqual([{ key: 'session-info.refreshSeconds', value: 85 }])
+    expect(await ui.find({ type: 'Text', text: 'Wrap up at (% used)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Sessions wrap up here.' })).toBeDefined()
+    expect(await ui.find({ key: 'session-info-set-wakeDelayMinutes' })).toBeDefined()
+    await ui.input({ key: 'session-info-set-wrapUpAt', text: '85' })
+    // The folder was missing on the first save: it is made, and the save goes through.
+    expect(seen.savedNow()).toEqual({ wrapUpAt: 85 })
+    expect(await ui.find({ type: 'Text', text: 'Saved: 85.' })).toBeDefined()
   })
 }
 
-test('a refused change shows its reason under the field', async ($, on) => {
-  world(on, 'Must be between 50 and 99')
+test('a save keeps the values another session saved a moment ago', async ($, on) => {
+  const seen = world(on, { wakeDelayMinutes: 5 })
   const ui = await mountPane($)
-  await ui.input({ key: 'session-info-set-refreshSeconds', text: '120' })
-  expect(await ui.find({ type: 'Text', text: /Must be between 50 and 99/ })).toBeDefined()
+  await ui.input({ key: 'session-info-set-wrapUpAt', text: '85' })
+  expect(seen.savedNow()).toEqual({ wakeDelayMinutes: 5, wrapUpAt: 85 })
 })
 
 test('text that is not a number is refused before anything is written', async ($, on) => {
-  const seen = world(on)
+  const seen = world(on, {})
   const ui = await mountPane($)
-  await ui.input({ key: 'session-info-set-refreshSeconds', text: 'ninety' })
-  expect(seen.writes).toEqual([])
+  await ui.input({ key: 'session-info-set-wrapUpAt', text: 'ninety' })
+  expect(seen.savedNow()).toEqual({})
   expect(await ui.find({ type: 'Text', text: /"ninety" is not a number/ })).toBeDefined()
 })
 
-test('numbers parse from trimmed text; empty and non-numeric text do not', () => {
-  expect(parseNumber(' 85 ')).toEqual({ value: 85 })
-  expect(parseNumber('0')).toEqual({ value: 0 })
-  expect('error' in parseNumber('')).toBe(true)
-  expect('error' in parseNumber('ninety')).toBe(true)
-  expect('error' in parseNumber('Infinity')).toBe(true)
+test("a pane opened again starts clean, with no earlier save's outcome under its fields", async ($, on) => {
+  world(on, {})
+  const ui = await mountPane($)
+  await ui.input({ key: 'session-info-set-wrapUpAt', text: 'ninety' })
+  expect(await run($, 'settings')).toBe('Opened the session-info settings.')
+  // Mounted again on the other surface: the same pane cannot mount twice on one.
+  const again = await mountPane($, 'desktop')
+  expect(await again.find({ type: 'Text', text: /is not a number/ })).toBeUndefined()
 })
 
 test('/session-info settings opens the pane', async ($, on) => {
   const seen = world(on)
-  const answer = await $.command.run({ command: 'session-info', args: 'settings' } as never)
+  expect(await run($, 'settings')).toBe('Opened the session-info settings.')
   expect(seen.opened).toEqual([PANE])
-  expect(answer).toEqual(expect.objectContaining({ text: 'Opened the session-info settings.' }))
 })
 
-// The Desktop app lists no plugin rows in /config: the pane shows the mod's values read-only, named by
-// the manifest, and offers nothing to change there.
-const TITLES = { userConfig: { refreshSeconds: { title: 'Recheck git every (seconds)' } } }
-
-function noPluginRows(on: On, list: () => unknown) {
-  on('config.list', list as never)
-  on('fs.read', ($, e) => {
-    if (String((e as { path?: string }).path).endsWith('plugin.json')) return { value: JSON.stringify(TITLES) }
-    throw new Error('no such file')
-  })
-  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-}
-
-test('a /config with no plugin rows shows the values read-only, named by the manifest', async ($, on) => {
-  noPluginRows(on, () => ({ value: ROWS.filter(row => row.key === 'theme') }))
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeDefined()
-  expect(await ui.find({ key: 'setting-refreshSeconds' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Recheck git every (seconds)' })).toBeDefined()
-  expect(await ui.find({ key: 'session-info-set-refreshSeconds' })).toBeUndefined()
+test('/session-info set lists the settings, saves one, and refuses an unknown name or a bad value', async ($, on) => {
+  const seen = world(on, { wakeDelayMinutes: 5 })
+  const list = await run($, 'set')
+  expect(list).toContain('change one with /session-info set <name> <value>')
+  expect(list).toMatch(/wakeDelayMinutes +5 +Resume delay \(minutes\)/)
+  expect(await run($, 'set wrapUpAt 85')).toBe(
+    'Saved: wrapUpAt is 85 for every session (the others within a minute).',
+  )
+  expect(seen.savedNow()).toEqual({ wakeDelayMinutes: 5, wrapUpAt: 85 })
+  expect(await run($, 'set nope 1')).toBe('No setting named "nope". /session-info set lists the settings.')
+  expect(await run($, 'set wrapUpAt lots')).toBe('"lots" is not a number /session-info set lists the settings.')
+  expect(seen.savedNow()).toEqual({ wakeDelayMinutes: 5, wrapUpAt: 85 })
 })
 
-test('a /config that cannot be listed says so, not that the app hides the rows', async ($, on) => {
-  noPluginRows(on, () => ({ deny: 'no menu here' }))
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: /could not be listed \(.*no menu here.*\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeUndefined()
+test("the mod's /config rows are hidden; other rows are left alone", async ($, on) => {
+  world(on)
+  const provider = { plugin: 'engine', tier: 'core' } as never
+  const describe = (key: string) =>
+    $.config.describe({ key, label: key, isHidden: false, provider } as never) as Promise<{ isHidden: boolean }>
+  expect((await describe('session-info.wrapUpAt')).isHidden).toBe(true)
+  expect((await describe('session-info@inline.wrapUpAt')).isHidden).toBe(true)
+  expect((await describe('other-mod.wrapUpAt')).isHidden).toBe(false)
+  expect((await describe('theme')).isHidden).toBe(false)
 })
 
-test('a row listed under a qualified key is this mod\'s and saves under that same key', async ($, on) => {
-  const writes: string[] = []
-  const qualified = ROWS.map(row => ({ ...row, key: row.key.replace('session-info.', 'session-info@inline.') }))
-  on('config.list', () => ({ value: [...qualified, { ...qualified[1], key: 'session-info-extra.refreshSeconds' }] }))
-  on('config.set', ($, e) => {
-    writes.push(e.key)
-    return { value: e.value }
-  })
-  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeUndefined()
-  await ui.input({ key: 'session-info-set-refreshSeconds', text: '45' })
-  expect(writes).toEqual(['session-info@inline.refreshSeconds'])
+test('the effective values: a saved value that fits its field, over the loaded options', () => {
+  const options = { wrapUpAt: 90, wakeDelayMinutes: 2 }
+  expect(effectiveValues(options, { wrapUpAt: 85 }, FIELDS)).toEqual({ wrapUpAt: 85, wakeDelayMinutes: 2 })
+  // A value of the wrong kind, or for a field the manifest does not declare, is ignored.
+  expect(effectiveValues(options, { wrapUpAt: 'lots', other: 1 }, FIELDS)).toEqual(options)
 })
 
-test('rows of another plugin in /config name what was listed, not an app that hides them', async ($, on) => {
-  const other = { ...ROWS[0], key: 'other-mod.level', provider: { plugin: 'other-mod', tier: 'user' } as never }
-  noPluginRows(on, () => ({ value: [ROWS[0], other] }))
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: /No settings for session-info here: .*other-mod\.level/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeUndefined()
+test('values parse by their kind', () => {
+  const choice = { type: 'string', options: ['a', 'b'] }
+  expect(kindOf({ type: 'boolean' })).toBe('boolean')
+  expect(kindOf(choice)).toBe('choice')
+  expect(parseValue({ type: 'number' }, ' 85 ')).toEqual({ value: 85 })
+  expect('error' in parseValue({ type: 'number' }, '')).toBe(true)
+  expect('error' in parseValue({ type: 'number' }, 'Infinity')).toBe(true)
+  expect(parseValue({ type: 'boolean' }, 'on')).toEqual({ value: true })
+  expect(parseValue({ type: 'boolean' }, 'OFF')).toEqual({ value: false })
+  expect('error' in parseValue({ type: 'boolean' }, 'maybe')).toBe(true)
+  expect(parseValue(choice, 'b')).toEqual({ value: 'b' })
+  expect(parseValue(choice, 'c')).toEqual({ error: '"c" is not one of: a, b' })
+  expect(parseValue({ type: 'string' }, 'any text')).toEqual({ value: 'any text' })
+})
+
+test('the list shows each setting with its value and title', () => {
+  const text = settingsList({ wrapUpAt: 90, wakeDelayMinutes: 2 }, FIELDS)
+  expect(text.split('\n').slice(1)).toEqual([
+    '  wrapUpAt          90  Wrap up at (% used)',
+    '  wakeDelayMinutes  2  Resume delay (minutes)',
+  ])
 })

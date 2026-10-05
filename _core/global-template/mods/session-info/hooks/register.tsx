@@ -3,16 +3,17 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { GitState, SessionLine } from '../types'
 import { GIT_STATUS, modelName, parseStatus, phoneText } from './git'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 const line = atom({ plugin: 'session-info', key: 'line' } as const, null)
 const isExpanded = atom({ plugin: 'session-info', key: 'isExpanded' } as const, false)
 
 const GIT_TIMEOUT_MS = 5_000
-const HINT = '[help | settings | phone]'
+const HINT = '[help | settings | set | phone]'
 export const HELP = [
   '/session-info: the row with the model, the project and the branch with its changes.',
   '  /session-info settings  open the settings pane',
+  '  /session-info set       change a setting: set <name> <value>; alone, list them',
   '  /session-info phone     the same as text, for phone chats',
   '  /session-info help      this list',
 ].join('\n')
@@ -113,12 +114,26 @@ async function start($: EngineInterface): Promise<void> {
   if (live.refreshMs > 0) $.clock.every(live.refreshMs, () => void refresh($))
 }
 
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: EngineInterface): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/session-info/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  live.refreshMs = Math.max(0, Number(options.refreshSeconds ?? 30)) * 1000
-  live.maxFiles = Math.max(1, Number(options.maxFiles ?? 8))
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.refreshMs = Math.max(0, Number(values.refreshSeconds ?? 30)) * 1000
+    live.maxFiles = Math.max(1, Number(values.maxFiles ?? 8))
+  })
 
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const result = await next(e)
     const description = 'The session row: model, project and branch'
     await $.command.register({ name: 'session-info', description, argumentHint: HINT })

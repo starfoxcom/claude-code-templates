@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { PANE, phoneText } from './view'
 
 // This mod is the main session's task list: it answers TaskCreate, TaskUpdate,
@@ -84,11 +84,12 @@ const COMMAND = 'task-list'
 const ALIVE_EVERY_MS = 60_000
 // Missed heartbeats this long mean the session is gone (closed without an end, or crashed).
 const ALIVE_STALE_MS = 3 * ALIVE_EVERY_MS
-const HINT = '[help | settings | phone]'
+const HINT = '[help | settings | set | phone]'
 export const HELP = [
   '/task-list: keeps the task list honest and shows it in the band above the prompt.',
   '  /task-list           open the task list',
   '  /task-list settings  open the settings pane',
+  '  /task-list set       change a setting: set <name> <value>; alone, list them',
   '  /task-list phone     the same as text, for phone chats',
   '  /task-list help      this list',
 ].join('\n')
@@ -588,9 +589,21 @@ async function markEnded($: EngineInterface): Promise<void> {
   if (mirror.tasks.length > 0 || mirror.carried) await saveMirror($, mirror)
 }
 
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: EngineInterface): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/tasks/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  live.nudgeAfter = Number(options.nudgeAfterTools ?? 3)
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.nudgeAfter = Number(values.nudgeAfterTools ?? 3)
+  })
 
   // `/task-list [help | settings]`; with no argument, the task list. Any other argument gets the help.
   // Not `/tasks`: that name is a built-in command, and the engine refuses it.
@@ -606,6 +619,8 @@ export const register: Register = (on, options) => {
   })
 
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const result = await next(e)
     // A refused command must never cost the rest of the start: the list, the carry-over, the band.
     await $.command

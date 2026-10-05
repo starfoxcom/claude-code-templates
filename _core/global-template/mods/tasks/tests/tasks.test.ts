@@ -385,7 +385,7 @@ test("after a reload the engine's store is left alone, even a subagent task matc
 test('/task-list opens the list or its settings, and help or anything else lists its verbs', async ($, on) => {
   const seen = world(on)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(seen.commands).toEqual([{ name: 'task-list', argumentHint: '[help | settings | phone]' }])
+  expect(seen.commands).toEqual([{ name: 'task-list', argumentHint: '[help | settings | set | phone]' }])
   const run = (args: string) => $.command.run({ command: 'task-list', args } as never)
   expect(await run('')).toEqual(expect.objectContaining({ text: 'Opened the task list.' }))
   expect(await run('settings')).toEqual(expect.objectContaining({ text: 'Opened the tasks settings.' }))
