@@ -2,7 +2,7 @@ import type { SessionCompactResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 import { catchUpOf, parseSavedArm } from '../hooks/arms'
-import { CACHE_LIFE_MS, outcomeOf, outcomeText, shouldCompactAtPause } from '../hooks/compact'
+import { CACHE_LIFE_MS, measured, outcomeOf, outcomeText, shouldCompactAtPause } from '../hooks/compact'
 import { countOpenTasks, EMPTY_ARM_NOTE, WRAP_UP_ARGS } from '../hooks/plan'
 import type { World } from './world'
 import {
@@ -44,9 +44,12 @@ test('a session that resumes by itself compacts once its wrap-up turn ends, and 
   await seen.clock.advance(1_000)
   expect(seen.compactions).toHaveLength(1)
   expect(seen.compactions[0]).toContain('resumes its saved work on its own')
-  expect(seen.statuses.at(-1)).toContain('compacted to 30k')
+  expect(seen.statuses.at(-1)).toMatch(/· compacted$/)
+  // The engine's own 30k leaves out what every request carries: the next reply's size is the real one.
+  seen.context = { ...seen.context, tokens: 125_000 }
   // Once: later turns during the pause compact nothing more.
   await endTurn($)
+  expect(seen.statuses.at(-1)).toContain('compacted to 125k')
   await seen.clock.advance(1_000)
   expect(seen.compactions).toHaveLength(1)
 })
@@ -82,11 +85,12 @@ test('a session with nothing saved compacts nothing at the pause', async ($, on)
 test('a compaction at the pause that freed nothing says so instead of claiming it worked', async ($, on) => {
   const seen = world(on)
   seen.context = { ...seen.context, tokens: 400_000 }
-  seen.compactResult = { messages: SUMMARY, tokensBefore: 400_000, tokensAfter: 400_000 }
+  // The engine claims 30k, but the first reply after it is as big as before.
   await crossAndWrapUp($, seen)
   await endTurn($)
   await seen.clock.advance(1_000)
   expect(seen.compactions).toHaveLength(1)
+  await endTurn($)
   expect(seen.statuses.at(-1)).toContain('compaction freed nothing')
 })
 
@@ -95,6 +99,7 @@ const status = async ($: Engine) =>
 
 test('arm with compact compacts a moment later, whatever the context size, then resumes later', async ($, on) => {
   const seen = world(on)
+  seen.context = { ...seen.context, tokens: 400_000 }
   await start($)
   const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h compact' } as never)
   const { text } = answer as { text: string }
@@ -105,7 +110,10 @@ test('arm with compact compacts a moment later, whatever the context size, then 
   await seen.clock.advance(1_000)
   expect(seen.compactions).toHaveLength(1)
   // /usage-guard repeats how it went, for a surface the transcript note does not reach.
-  expect(await status($)).toContain('Compacted: context went from 400k to 30k tokens.')
+  expect(await status($)).toContain('Compacted from 400k tokens; the new size shows after the next reply.')
+  seen.context = { ...seen.context, tokens: 125_000 }
+  await endTurn($)
+  expect(await status($)).toContain('Compacted: context went from 400k to 125k tokens.')
   await seen.clock.advance(WAKE - NOW - 1_000)
   expect(resumes(seen)).toHaveLength(1)
 })
@@ -143,19 +151,16 @@ test('a pause compacts only with the setting on, at or above it, and with the wa
   expect(shouldCompactAtPause(fill(50), 25, NOW + CACHE_LIFE_MS, NOW)).toBe(false)
 })
 
-test('a compaction counts as freeing context only when its sizes show it', () => {
+test('a compaction is measured by the first reply after it, never by the engine own count', () => {
   const messages = [{ role: 'user' as const, text: 's', toolUses: [] }]
-  const text = (result: SessionCompactResult) => outcomeText(outcomeOf(result))
-  expect(text({ messages, tokensBefore: 412_000, tokensAfter: 31_400 })).toBe(
-    'Compacted: context went from 412k to 31k tokens.',
-  )
-  expect(text({ messages, tokensBefore: 100_000, tokensAfter: 100_000 })).toBe(
+  const ran = outcomeOf({ messages, tokensBefore: 193_000, tokensAfter: 22_000 }, 192_000)
+  expect(outcomeText(ran)).toBe('Compacted from 192k tokens; the new size shows after the next reply.')
+  expect(outcomeText(outcomeOf({ messages }))).toBe('Compacted; the new size shows after the next reply.')
+  expect(outcomeText(measured(192_000, 125_000))).toBe('Compacted: context went from 192k to 125k tokens.')
+  expect(outcomeText(measured(100_000, 100_000))).toBe(
     'The compaction did not free context (100k before, 100k after), so the session keeps its full context.',
   )
-  expect(text({ messages, tokensBefore: 100_000 })).toBe(
-    'The compaction did not free context: its size afterwards was not reported, so the session keeps its full context.',
-  )
-  expect(text({ skip: 'vetoed' })).toBe('Not compacted: vetoed')
+  expect(outcomeText(outcomeOf({ skip: 'vetoed' }))).toBe('Not compacted: vetoed')
 })
 
 // This session's list as the tasks mod keeps it.

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type { ArmedWake, UsageCard } from '../types'
 import {
@@ -11,7 +11,7 @@ import {
   quietResumeText,
 } from './arms'
 import type { CompactOutcome, Fill } from './compact'
-import { outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
+import { measured, outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
 import type { Pause } from './plan'
 import {
   CLAIM,
@@ -33,7 +33,8 @@ import {
 import { stopCommandsFor } from './rules'
 import { register as phone } from './phone'
 import { register as settings, SETTINGS_PANE } from './settings'
-import type { Card, CardButton, Zone } from './texts'
+import type { Card, CardButton } from './texts'
+import type { Live } from './live'
 import {
   ARGUMENT_HINT,
   CANCELLED_TEXT,
@@ -56,33 +57,9 @@ const REFRESH_MS = 2_000
 const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
 const band = atom({ plugin: 'usage-guard', key: 'band' } as const, null)
 const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
-// Module state: a hot reload starts it over, which is safe because the pause
+// Module state (its type in live.ts): a hot reload starts it over, which is safe because the pause
 // itself lives in the shared file.
-const live: {
-  zone: Zone
-  isTurnRunning: boolean
-  isStarted: boolean
-  /** The session id whose tool calls changed something: a /clear goes on under a new id with none. */
-  workSession?: string
-  isStatusShown: boolean
-  wakeTimer?: Timer
-  /** The wake the person armed by hand (`armedWake`), counting down in this module. */
-  armTimer?: Timer
-  /** A wrap-up due when the running turn ends: the pause it is for. */
-  pendingWrapUp?: Pause
-  /** A wrap-up started: once its turn ends, the session may compact before the pause. */
-  compactAfterTurn?: Pause
-  /** How this session's last compaction went, with its time, for /usage-guard to repeat. */
-  lastCompaction?: string
-  /** Claims this module already holds or found taken, so a 60-second check spawns no helper. */
-  handled: Set<string>
-  wrapUpAt: number
-  delayMinutes: number
-  compactAbovePercent: number
-  catchUpMinutes: number
-  /** The folder for saved arms exists: made once per module load, before the first save. */
-  isArmsDirMade: boolean
-} = {
+const live: Live = {
   zone: { offsetMinutes: 0, name: 'UTC' },
   isTurnRunning: false,
   isStarted: false,
@@ -306,16 +283,35 @@ async function readFill($: EngineInterface): Promise<Fill | undefined> {
 // Never from a command or a turn's own hook, which the engine refuses: always from a timer after it. The
 // engine also refuses while a turn runs; that refusal, like a hook's veto, is reported. How it went is a
 // note in the transcript, and /usage-guard repeats it, since a note may not reach every surface.
-async function compactNow($: EngineInterface): Promise<CompactOutcome> {
+async function compactNow($: EngineInterface, pausedUntil?: string): Promise<CompactOutcome> {
+  const before = (await readFill($))?.tokens
   let outcome: CompactOutcome
   try {
-    outcome = outcomeOf(await $.session.compact({ instructions: PAUSE_INSTRUCTIONS }))
+    outcome = outcomeOf(await $.session.compact({ instructions: PAUSE_INSTRUCTIONS }), before)
   } catch (err) {
     outcome = { kind: 'not-run', reason: err instanceof Error ? err.message : String(err) }
   }
+  live.measuring = outcome.kind === 'measuring' ? { before: outcome.before, pausedUntil } : undefined
+  await reportCompaction($, outcome)
+  return outcome
+}
+
+async function reportCompaction($: EngineInterface, outcome: CompactOutcome): Promise<void> {
   live.lastCompaction = `${localTime(await $.clock.now())}: ${outcomeText(outcome)}`
   await notice($, outcomeText(outcome))
-  return outcome
+}
+
+// The first reply after a compaction carries its real size: only then is it called freed or not.
+async function measureCompaction($: EngineInterface): Promise<void> {
+  const pending = live.measuring
+  const after = pending && (await readFill($))?.tokens
+  if (!pending || after === undefined) return
+  live.measuring = undefined
+  if (pending.before === undefined) return
+  const outcome = measured(pending.before, after)
+  await reportCompaction($, outcome)
+  if (pending.pausedUntil && live.isStatusShown)
+    setStatus($, `Plan limit near: paused until ${pending.pausedUntil} · ${outcomeMark(outcome)}`)
 }
 
 // The wrap-up's turn has ended: a session that resumes by itself compacts now, while its cache is warm,
@@ -325,7 +321,7 @@ async function compactAtPause($: EngineInterface, owed: Pause): Promise<void> {
   const pause = await readPause($)
   if (pause?.status !== 'active' || resetKey(pause) !== resetKey(owed)) return
   if (!shouldCompactAtPause(await readFill($), live.compactAbovePercent, pause.wakeAt, await $.clock.now())) return
-  const outcome = await compactNow($)
+  const outcome = await compactNow($, localTime(pause.wakeAt))
   setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)} · ${outcomeMark(outcome)}`)
 }
 
@@ -745,6 +741,7 @@ export const register: Register = (on, options) => {
     live.isTurnRunning = false
     const result = await next(e)
     scheduleOwedCompaction($)
+    await measureCompaction($).catch(() => undefined)
     await runPendingWrapUp($).catch(() => undefined)
     await check($).catch(() => undefined)
     return result
