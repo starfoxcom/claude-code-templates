@@ -218,6 +218,9 @@ test('without the rules file no PR body is checked', { options: { mode: 'enforce
 
 const lastEntry = (seen: { files: Map<string, string> }) =>
   JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+// The last logged command named its PR body unread (for whichever reason).
+const isPrUnread = (seen: { files: Map<string, string> }) =>
+  (lastEntry(seen).unread ?? []).some((u: string) => u.startsWith('the PR body'))
 
 test('a body file the same command writes is named unread; a here-doc on stdin is checked', {
   options: { mode: 'enforce' },
@@ -227,7 +230,7 @@ test('a body file the same command writes is named unread; a here-doc on stdin i
     `cat > /tmp/b.md <<'EOF'\n${body}EOF\ngh pr create --title "feat: x" --body-file /tmp/b.md`
   const short = await bash($, write('## What\n- add it\n\n## Why\nmissing\n'))
   expect((short as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
+  expect(isPrUnread(seen)).toBe(true)
   const piped = await bash($, `gh pr create --title "feat: x" --body-file - <<'EOF'\n## Why\nb\nEOF`)
   expect(String((piped as { deny?: string }).deny)).toContain('`## What` is missing')
   expect(seen.ran).toHaveLength(1)
@@ -239,7 +242,7 @@ test('a relative body file under a folder built at run time is never judged from
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
   const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
   expect((result as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
+  expect(isPrUnread(seen)).toBe(true)
 })
 
 test('an invalid pattern in the rules file leaves the PR unjudged and the credit checks running', {
@@ -269,17 +272,33 @@ test('a PR body that cannot be read exactly is named unread, never blocked', { o
   ]
   for (const command of routes) {
     expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
-    expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
+    expect(isPrUnread(seen)).toBe(true)
   }
   expect(seen.ran).toHaveLength(routes.length)
 })
 
-test('a body path built from a variable is read', { options: { mode: 'enforce' } }, async ($, on) => {
-  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': '## What\n- add it\n' })
-  const built = await bash($, 'F=short.md; gh pr create --title "feat: x" --body-file "$F"')
-  expect(String((built as { deny?: string }).deny)).toContain('`## Why` is missing')
-  expect(seen.ran).toEqual([])
-})
+// Only a command that is the PR call alone is judged: anything before it (a `cd`, a variable, a
+// subshell) or around it (`bash -c`) could change which repo, folder or text gh really uses.
+const NOT_ALONE = [
+  'F=short.md; gh pr create --title "feat: x" --body-file "$F"',
+  '(cd sub && make) && gh pr create --title "feat: x" --body-file short.md',
+  'bash -c "gh pr create -t t -F - <<\'EOF\'\n$BODY\nEOF"',
+  'gh pr create -R "$OWNER/$REPO" -t t --body x',
+  'gh pr create -t t -F a.md -F short.md',
+  "gh pr create -t $'docs(x): y' -F short.md",
+]
+for (const command of NOT_ALONE) {
+  test(`a PR call that is not plain and alone is named unread, never blocked: ${command}`, {
+    options: { mode: 'enforce' },
+  }, async ($, on) => {
+    // Every file any of them may name exists, so only the PR check could block.
+    const short = '## What\n- add it\n'
+    const files = { 'C:/Repos/my-game/a.md': short, 'C:/Repos/my-game/sub/short.md': short }
+    const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': short, ...files })
+    expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+    expect(isPrUnread(seen)).toBe(true)
+  })
+}
 
 const NOT_PLAIN = 'the PR body (format check, create: not a single plain PR call)'
 
@@ -321,7 +340,7 @@ test('two here-docs on one PR call are named unread', { options: { mode: 'enforc
   const seen = world(on, { [RULES]: ROW_RULE })
   const command = `gh pr create --title "feat: x" --body-file - <<'A' <<'B'\n${FULL}A\n## Why\nb\nB`
   expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
+  expect(isPrUnread(seen)).toBe(true)
 })
 
 test('a PR edit with no title is judged without the board row, which is named unread', {
