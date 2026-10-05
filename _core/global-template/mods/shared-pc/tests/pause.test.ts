@@ -92,3 +92,13 @@ test('/pc phone gives the seat as text with a square for who holds it', async ($
   const phone = (await $.command.run({ command: 'pc', args: 'phone' } as never)) as { text: string }
   expect(phone.text.split('\n')).toEqual(['🟩 Seat: free', '/pc help for more'])
 })
+
+test('a bare /pc typed over Remote Control answers with the phone text', async ($, on) => {
+  mock.clock(on)
+  fakeHost(on, null)
+  await $.session.start({ source: 'startup', cwd: ROOT } as never)
+  const answer = (await $.command.run({ command: 'pc', args: '', origin: { kind: 'bridge' } } as never)) as {
+    text: string
+  }
+  expect(answer.text.split('\n')).toEqual(['🟩 Seat: free', '/pc help for more'])
+})

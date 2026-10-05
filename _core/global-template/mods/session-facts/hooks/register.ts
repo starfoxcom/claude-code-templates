@@ -311,13 +311,16 @@ export const register: Register = (on, options) => {
 
   // `/session-facts [help | settings | phone]`; any other argument, or none, gets the help.
   on('command.run', { command: 'session-facts' }, async ($, e) => {
-    if (e.args.trim() === 'phone') {
+    // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+    // row draws: the bare command answers with the phone text.
+    const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
+    if (verb === 'phone') {
       await refreshBudgets($)
       const shown = await read($, budgets)
       const text = shown ? phoneText(shown, await $.clock.now()) : 'The budgets are not read yet.'
       return { text: `${text}\n/session-facts help for more` }
     }
-    if (e.args.trim() !== 'settings') return { text: HELP }
+    if (verb !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Session facts settings', focus: true })
     return { text: 'Opened the session-facts settings.' }
   })
