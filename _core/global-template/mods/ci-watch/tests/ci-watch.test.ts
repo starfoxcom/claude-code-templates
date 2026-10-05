@@ -35,18 +35,15 @@ test('a failure settles only after every check is done, two quiet polls in a row
   expect(wakeText(final)).toContain('failed: build, review')
 })
 
-test('once a check ran on this head, the first poll with every check done settles', () => {
-  const running = settle(BASE, { build: 'pass', review: 'pending' }, 1, HOUR, 60_000, true)
-  expect(running.hasRun).toBe(true)
-  expect(running.outcome).toBeUndefined()
-  const done = settle(running, { build: 'pass', review: 'fail' }, 2, HOUR, 60_000, true)
-  expect(done.outcome).toBe('failed')
-})
-
-test('a running check read before GitHub names the new head does not count', () => {
-  const stale = settle(BASE, { build: 'pending' }, 1, HOUR, 60_000, false)
-  expect(stale.hasRun).toBeUndefined()
-  expect(settle(stale, { build: 'pass' }, 2, HOUR, 60_000, true).outcome).toBeUndefined()
+test('a check that goes back to pending after every check finished keeps the watch waiting', () => {
+  // The routine review ends, then the deep tier it escalated to starts again a few seconds later.
+  const running = settle(BASE, { review: 'pass', deep: 'pending' }, 1_000, HOUR, POLL_MS)
+  const quiet = settle(running, { review: 'pass', deep: 'pass' }, 31_000, HOUR, POLL_MS)
+  expect(quiet.outcome).toBeUndefined()
+  const escalated = settle(quiet, { review: 'pass', deep: 'pending' }, 61_000, HOUR, POLL_MS)
+  expect(escalated.outcome).toBeUndefined()
+  const done = settle(escalated, { review: 'pass', deep: 'fail' }, 91_000, HOUR, POLL_MS)
+  expect(settle(done, { review: 'pass', deep: 'fail' }, 121_000, HOUR, POLL_MS).outcome).toBe('failed')
 })
 
 test('two quiet polls seconds apart do not settle: the checks must stay quiet a full poll interval', () => {
@@ -278,7 +275,7 @@ test('a settlement another instance woke the session for during the gh calls is 
   expect(seen.prompts).toEqual([])
 })
 
-test('a failure wakes the session once, on the first poll after every check is done', async ($, on) => {
+test('a failure wakes the session once, after every check stays done for a full poll', async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
@@ -289,8 +286,10 @@ test('a failure wakes the session once, on the first poll after every check is d
   await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
 
-  // A check was seen running on this head, so the results are this commit's: no quiet wait.
+  // Done, then quiet for a full poll: a check that went back to pending in between would hold it.
   seen.rows = [{ name: 'review', bucket: 'pass' }]
+  await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
   await clock.advance(POLL_MS)
   expect(seen.prompts.length).toBe(1)
   await clock.advance(POLL_MS)

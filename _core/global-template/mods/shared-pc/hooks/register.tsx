@@ -51,6 +51,9 @@ type Reply = {
   mine?: 'seat' | 'line' | 'none'
   position?: number
   note?: string
+  /** `drop` only: whether it freed this session's seat, and whether it took it out of the line. */
+  freed?: boolean
+  left?: boolean
 } & Partial<State>
 
 const EMPTY: State = { seat: null, line: [], nextUp: null, requests: [], updatedAt: 0 }
@@ -306,7 +309,8 @@ async function setUp($: Engine) {
     name: 'pc',
     description:
       'Shared PC seat (one session at a time runs heavy work; heavy commands queue automatically). ' +
-      'hold: claim the PC for a measurement window (minutes 1-60). release: free it early. status: the line. ' +
+      'hold: claim the PC for a measurement window (minutes 1-60). release: free it early, or leave the line. ' +
+      'status: the line. ' +
       'request_next: ask the person to let this session go next; give a concrete reason (a window closing, ' +
       'the person waiting on this result, a short job stuck behind a long one).',
     inputSchema: {
@@ -621,11 +625,16 @@ async function toolAction($: Engine, input: ToolInput): Promise<string> {
       const pausedUntil = await usagePauseEnd($)
       if (pausedUntil) return `Refused: the plan-usage pause is on until ${clockTime(pausedUntil)}.`
       const reply = await change($, ['hold', ctx.me, String(input.minutes ?? 15), input.reason ?? 'measurement'])
+      if (reply.error) return `Hold failed: ${reply.error}`
       return reply.mine === 'seat' ? 'Hold active.' : `Hold queued: #${reply.position} in line.`
     }
-    case 'release':
-      await change($, ['release', ctx.me])
-      return 'Released.'
+    case 'release': {
+      // The seat and the place in line go in one write: never "released" while still waiting in line.
+      const reply = await change($, ['drop', ctx.me])
+      if (reply.error) return `Release failed: ${reply.error}`
+      if (reply.freed) return 'Released.'
+      return reply.left ? 'Left the line.' : 'Nothing to release: this session held no seat and was not in line.'
+    }
     case 'request_next': {
       const reason = input.reason?.trim()
       if (!reason) return 'Refused: request_next needs a concrete reason.'
