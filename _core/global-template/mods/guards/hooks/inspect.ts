@@ -17,6 +17,8 @@
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
 import { stripPaths } from './policy'
+import { readPr } from './prbody'
+import type { PrCall } from './prbody'
 import { parse, programOf } from './shell'
 import type { Statement, Word } from './shell'
 
@@ -43,6 +45,10 @@ export type Plan = {
   isCwdUnknown?: boolean
   block?: string
   isWrite: boolean
+  /** Each `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
+  prs: PrCall[]
+  /** Every `gh` statement in the command: the PR-body contract judges only a command with one. */
+  ghCalls: number
 }
 
 /** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
@@ -65,6 +71,8 @@ type Reading = {
   /** Write statements found so far. */
   writes: number
   method?: string
+  /** The command's only statement, when it has just one at the top: no `cd`, subshell or wrapper around it. */
+  alone?: Statement
 }
 
 // `attached`: a flag whose value can only be attached (`-S<keyid>`, `--gpg-sign=<keyid>`); it never takes
@@ -193,7 +201,17 @@ const GH_WRITES: Record<string, string[]> = {
 }
 
 export function inspect(command: string, powershell: boolean): Plan {
-  const plan: Plan = { texts: [], files: [], written: [], branches: [], diff: null, unread: [], isWrite: false }
+  const plan: Plan = {
+    texts: [],
+    files: [],
+    written: [],
+    branches: [],
+    diff: null,
+    unread: [],
+    isWrite: false,
+    prs: [],
+    ghCalls: 0,
+  }
   const r: Reading = {
     plan,
     folder: { isUnknown: false },
@@ -203,7 +221,9 @@ export function inspect(command: string, powershell: boolean): Plan {
     stdin: 0,
     writes: 0,
   }
-  read(parse(command, powershell), r)
+  const statements = parse(command, powershell)
+  if (statements.length === 1) r.alone = statements[0]
+  read(statements, r)
   // A body file this same command writes is read from the statement that writes it.
   for (const f of [...plan.files]) {
     const writer = r.writers.get(norm(f.path))
@@ -563,6 +583,7 @@ function ghSpec(group: string, action: string): Spec {
 
 function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
+  plan.ghCalls++
   const { gi, ai } = ghWords(args, r)
   const group = args[gi]?.text ?? ''
   const action = args[ai]?.text ?? ''
@@ -585,7 +606,18 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     return undefined
   }
   const where = write(plan, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
+  const before = plan.files.length
   walk(rest, ghSpec(group, action), r, where)
+  if (group === 'pr' && (action === 'create' || action === 'edit')) {
+    // Stdin is read exactly only from a literal here-doc: a pipe or a `< file` may feed it instead.
+    const isLiteral = st.heredocs.length === 1 && !st.hasDynamicBody && !st.pipeIn && st.reads.length === 0
+    const stdinBody = isLiteral ? st.heredocs.join('\n') : undefined
+    const filePath = plan.files.slice(before).find(f => f.where === where)?.path
+    // The PR call is the whole command, typed as `gh ...` itself: nothing before it moves the folder,
+    // sets a variable or wraps it in another shell.
+    const isAlone = r.alone === st && st.inner.length === 0 && st.words[0]?.text === 'gh'
+    plan.prs.push(readPr(action, rest, { stdinBody, filePath, isAlone }))
+  }
   return where
 }
 
