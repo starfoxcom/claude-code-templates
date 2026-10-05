@@ -30,8 +30,6 @@ export type Live = {
   catchUpMinutes: number
   /** The folder for saved arms exists: made once per module load, before the first save. */
   isArmsDirMade: boolean
-  /** The file the standing arm was saved to: the session id may change under it (a /clear). */
-  armFile?: string
 }
 
 /** The state a fresh module load starts from. */

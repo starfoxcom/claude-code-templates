@@ -328,12 +328,12 @@ test('a /clear moves the saved arm to the new session id at once, before any tur
   expect(savedArm(seen)).toBe('null')
 })
 
-test('a /clear after a hot reload still moves the saved arm and clears the old copy', async ($, on) => {
+test('a /clear right after a hot reload moves the saved arm and clears the old copy', async ($, on) => {
   const seen = world(on)
   on('classic.SessionStart', () => ({}) as never)
   // A reload starts the module over but keeps plugin state: the test holds the arm's state the way the
-  // engine would, with the arm also on disk under this id, and no session.start.
-  const arm = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }
+  // engine would, with the arm also on disk under this id, and nothing has run in the new module yet.
+  const arm = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE, session: 'sess-a' }
   let held: unknown = arm
   let version = 1
   const isArm = (e: unknown) => (e as { key: string }).key === 'armed'
@@ -344,10 +344,14 @@ test('a /clear after a hot reload still moves the saved arm and clears the old c
     return { value: { isSet: true, version: ++version } as never }
   })
   seen.files.set(ARM_FILE, JSON.stringify(arm))
-  await endTurn($)
   seen.sessionId = 'sess-b'
   await $.classic.SessionStart({ source: 'clear', session_id: 'sess-b' })
-  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt).toBe(WAKE)
+  const moved = () => parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt
+  expect(moved()).toBe(WAKE)
+  expect(savedArm(seen)).toBe('null')
+  // The first turn after it restarts the timers and leaves both files as they are.
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  expect(moved()).toBe(WAKE)
   expect(savedArm(seen)).toBe('null')
 })
 
