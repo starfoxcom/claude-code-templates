@@ -67,7 +67,6 @@ const ctx = {
   light: [] as RegExp[],
   heavy: [] as RegExp[],
   last: EMPTY,
-  isWorking: false,
   isSetUp: false,
   // Why the mod could not start in this session; shown as a card until dismissed.
   offReason: '',
@@ -133,8 +132,6 @@ export const register: Register = on => {
   on('command.run', { command: 'pc' }, async ($, e) => ({ text: await commandAction($, e.args) }))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Remembered for the answer delivery: a running turn gets a note, an idle session a wake-up prompt.
-    ctx.isWorking = e.props.isWorking
     // What core and the other mods draw here (usage-guard's card among them) stays, above the band.
     const inner = await next(e)
     if (e.props.hasSurvey) return inner
@@ -392,8 +389,7 @@ async function refresh($: Engine) {
 }
 
 // Every session shows a new skip-the-line request as its own card for 30 s (toBand), then as the box
-// above the prompt. The asking session alone takes the answer: a note during a turn, a wake-up prompt
-// while idle, then `ack` clears it.
+// above the prompt. The asking session alone takes the answer as a prompt of its own, then `ack` clears it.
 async function handleRequests($: Engine, s: State) {
   for (const ask of s.requests) {
     const key = `${ask.session}:${ask.at}`
@@ -406,9 +402,9 @@ async function handleRequests($: Engine, s: State) {
           : '[shared-pc] The person declined your request to go next. Carry on: heavy commands still run, waiting ' +
             'their normal turn in line.'
       await pcctl($, ['ack', ctx.me])
-      // A session that asked may be waiting on the answer, so an idle one is woken.
-      if (ctx.isWorking) await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
-      else await $.prompt.submit({ text })
+      // A prompt, never a note added to the transcript: the session may be waiting on the answer, and a
+      // note sent mid-turn woke nothing once the turn ended. Submitted during a turn, it runs right after.
+      await $.prompt.submit({ text }).catch(() => undefined)
     }
   }
 }
