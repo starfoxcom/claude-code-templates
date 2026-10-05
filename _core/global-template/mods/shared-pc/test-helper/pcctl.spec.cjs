@@ -95,9 +95,8 @@ test('release hands the seat to the front of the line', () => {
 test('release also gives up a reservation, so the free seat goes to whoever claims it', () => {
   const sb = sandbox()
   ;['b', 'c'].forEach(id => sb.register(id))
-  // An approved request on an idle machine reserves the next seat for the requester.
-  sb.run('ask', 'b', 'GPU window')
-  sb.run('answer', 'b', 'approve')
+  // Sent to the front of the line on an idle machine, a session holds a reservation for the next seat.
+  sb.run('next', 'b')
   assert.strictEqual(sb.state().nextUp.session, 'b')
   sb.run('release', 'b')
   assert.strictEqual(sb.state().nextUp, null)
@@ -463,4 +462,27 @@ test('session end frees the seat and removes the registry file', () => {
   sb.run('end', 'a')
   assert.strictEqual(sb.state().seat.session, 'b')
   assert.ok(!fs.existsSync(path.join(sb.dir, 'sessions', 'a.json')))
+})
+
+test('a request with nobody ahead is refused and shows no card', () => {
+  const sb = sandbox()
+  ;['a', 'b'].forEach(id => sb.register(id))
+  assert.ok(sb.run('ask', 'b', 'please').error, 'the PC is free: nothing to ask')
+  sb.run('claim', 'a', 'x')
+  assert.ok(sb.run('ask', 'a', 'please').error, 'the seat holder has nobody ahead')
+  assert.deepStrictEqual(sb.state().requests, [])
+})
+
+test('an open request ends when the PC goes free with nobody ahead of its session', () => {
+  const sb = sandbox()
+  ;['a', 'b'].forEach(id => sb.register(id))
+  sb.run('claim', 'a', 'x')
+  // b asks without waiting in line: when a lets go, the seat is free and the card has nothing to ask.
+  sb.run('ask', 'b', 'please')
+  assert.strictEqual(sb.state().requests.length, 1)
+  sb.run('done', 'a')
+  sb.run('release', 'a')
+  const s = sb.state()
+  assert.strictEqual(s.seat, null)
+  assert.deepStrictEqual(s.requests, [])
 })
