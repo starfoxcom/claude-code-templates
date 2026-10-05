@@ -401,9 +401,38 @@ test('a push in another folder is looked up there', () => {
 test('/ci-watch shows its verbs in the menu, and help or an unknown verb lists them', async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  expect(seen.commands).toEqual([{ name: 'ci-watch', argumentHint: '[help | settings | stop]' }])
+  expect(seen.commands).toEqual([{ name: 'ci-watch', argumentHint: '[help | settings | stop | phone]' }])
   for (const args of ['help', 'stopp']) {
     const answer = await $.command.run({ command: 'ci-watch', args } as never)
     expect(answer).toEqual(expect.objectContaining({ text: HELP }))
   }
+})
+
+test('/ci-watch answers in the row words, and phone adds each check and the link', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  const ask = async (args: string) =>
+    ((await $.command.run({ command: 'ci-watch', args } as never)) as { text: string }).text.split('\n')
+  expect(await ask('phone')).toEqual(['No PR is being watched.', '/ci-watch help for more'])
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.rows = [
+    { name: 'review', bucket: 'pass' },
+    { name: 'build', bucket: 'pending' },
+  ]
+  await clock.advance(POLL_MS)
+  // A count of finished checks, never of passed ones under the word "done".
+  expect(await ask('')).toEqual(['⏳ PR 7 · 1/2 done (o/r)'])
+  // The checks in the row's own order, which is the order they were first seen.
+  const phone = await ask('phone')
+  expect(phone[0]).toBe('⏳ PR 7 · 1/2 done')
+  expect(phone.slice(1, 3).sort()).toEqual(['   ⏳ build', '   ✅ review'])
+  expect(phone.slice(3)).toEqual(['   https://github.com/o/r/pull/7', '/ci-watch help for more'])
+})
+
+test('a bare /ci-watch typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  const bridge = { command: 'ci-watch', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n')).toEqual(['No PR is being watched.', '/ci-watch help for more'])
 })

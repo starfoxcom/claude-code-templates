@@ -48,6 +48,8 @@ export type World = {
   hasTasksMod?: boolean
   /** How many of the next attempts to make the arms folder fail; a write into it fails until one works. */
   mkdirFailures?: number
+  /** The mod's manifest as the main module reads it beside its settings file; none by default. */
+  manifest?: string
   isArmsDirMissing?: boolean
 }
 
@@ -70,7 +72,8 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
   on('fs.read', ($, e) => {
-    const text = seen.files.get(key(e.path))
+    const isManifest = key(e.path).endsWith('/.claude-plugin/plugin.json')
+    const text = isManifest ? seen.manifest : seen.files.get(key(e.path))
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
