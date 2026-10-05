@@ -33,9 +33,11 @@ async function wakeText($: EngineInterface, offer: AdoptOffer): Promise<string> 
   return formatLocal(offer.arm.wakeAt, scan.zone)
 }
 
-// The offer and its card text; an answered one (a note shown) is left alone.
-async function lookForOffer($: EngineInterface): Promise<void> {
-  if ((await read($, state))?.note) return
+// The offer and its card text; an answered one (a note shown) is left alone until its Dismiss, or until
+// a command asks (`isAsked`): the command answers with the note itself, and where no card draws (the
+// phone) nothing else would ever clear it.
+async function lookForOffer($: EngineInterface, isAsked = false): Promise<void> {
+  if (!isAsked && (await read($, state))?.note) return
   const now = await $.clock.now()
   const dir = `${await dataDir($)}/arms`
   const entries = await $.fs.list(dir).catch(() => [])
@@ -152,7 +154,7 @@ export const register: Register = on => {
   on('command.run', { command: 'usage-guard' }, async ($, e, next) => {
     const [verb, option] = e.args.trim().split(/\s+/)
     startScans($)
-    await lookForOffer($).catch(() => undefined)
+    await lookForOffer($, true).catch(() => undefined)
     if (verb !== 'adopt') return next(e)
     if (option && option !== 'drop') return { text: 'Use: /usage-guard adopt [drop]' }
     return { text: await answer($, option !== 'drop') }
