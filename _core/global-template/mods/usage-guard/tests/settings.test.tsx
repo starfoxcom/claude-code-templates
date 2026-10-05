@@ -221,3 +221,11 @@ test('/usage-guard settings opens the pane', async ($, on) => {
   expect(seen.opened).toEqual([PANE])
   expect(answer).toEqual(expect.objectContaining({ text: 'Opened the usage-guard settings.' }))
 })
+
+test('rows of another plugin in /config name what was listed, not an app that hides them', async ($, on) => {
+  const other = { ...THEME, key: 'other-mod.level', provider: { plugin: 'other-mod', tier: 'user' } as never }
+  noPluginRows(on, () => ({ value: [THEME, other] }))
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /No settings for usage-guard here: .*other-mod\.level/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeUndefined()
+})
