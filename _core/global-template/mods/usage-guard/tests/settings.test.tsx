@@ -2,7 +2,7 @@ import type { ConfigRow, ConfigSetInput, On } from 'claude-code'
 import type { Engine, Mounted } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 
-import { parseNumber } from '../hooks/settings'
+import { emptyNote, parseNumber, READ_ONLY_NOTE, shownValue } from '../hooks/settings'
 
 // The settings pane over faked /config rows: the engine's own validation draws it on each surface,
 // and every change goes through config.set as the /config menu's would.
@@ -100,32 +100,62 @@ test('rows whose key names where the plugin came from are still this mod, saved 
   expect(writes).toEqual([{ key: 'usage-guard@inline.wrapUpAt', value: 85 }])
 })
 
-test('a pane with no rows of its own says what /config listed', async ($, on) => {
-  on('config.list', () => ({ value: [THEME] }))
-  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  const ui = await mountPane($, 'desktop')
-  // Only the engine's own rows: that surface lists no plugin settings at all.
-  expect(await ui.find({ type: 'Text', text: /listed 1 row\(s\), 0 of them from plugins\.$/ })).toBeDefined()
-})
-
-test("a pane with no rows of its own names other plugins' rows, not the engine's", async ($, on) => {
-  const other = { ...THEME, key: 'ci-watch.pollSeconds', provider: { plugin: 'ci-watch', tier: 'user' } as never }
-  on('config.list', () => ({ value: [THEME, other] }))
-  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  const ui = await mountPane($, 'desktop')
-  const text = /listed 2 row\(s\), 1 of them from plugins, such as ci-watch\.pollSeconds \(ci-watch\)\.$/
-  expect(await ui.find({ type: 'Text', text })).toBeDefined()
-})
-
-test('a pane whose /config cannot be listed says why', async ($, on) => {
-  on('config.list', () => {
-    throw new Error('no menu here')
+// The Desktop app lists no plugin rows in /config: the pane shows the mod's values read-only, named by
+// the manifest's titles, and says where to change them.
+const MANIFEST = JSON.stringify({ userConfig: { wrapUpAt: { title: 'Wrap up at (% used)' } } })
+function noPluginRows(on: On, list: () => unknown) {
+  on('config.list', list as never)
+  on('fs.read', ($, e) => {
+    if (String((e as { path?: string }).path).endsWith('plugin.json')) return { value: MANIFEST }
+    throw new Error('no such file')
   })
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+}
+
+test('a surface whose /config has no plugin rows shows the values read-only', async ($, on) => {
+  noPluginRows(on, () => ({ value: [THEME] }))
   const ui = await mountPane($, 'desktop')
-  // A hook that throws is skipped, so the list fails as one with no answer at all would.
-  const text = /No settings for usage-guard here: \/config could not be listed \(/
-  expect(await ui.find({ type: 'Text', text })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Wrap up at (% used)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '90' })).toBeDefined()
+  // A field the manifest gives no title shows by its own name.
+  expect(await ui.find({ type: 'Text', text: 'wakeDelayMinutes' })).toBeDefined()
+  // Nothing to edit: the fields would write to rows this surface does not have.
+  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeUndefined()
+})
+
+test('a /config that cannot be listed shows the values read-only too', async ($, on) => {
+  noPluginRows(on, () => {
+    throw new Error('no menu here')
+  })
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '90' })).toBeDefined()
+})
+
+test('the read-only note names the terminal menu and this mod command', () => {
+  expect(READ_ONLY_NOTE).toContain('Change them in the terminal: /config (or /usage-guard settings there).')
+})
+
+test('read-only values: a switch as On or Off, an empty one as not set', () => {
+  expect([shownValue(true), shownValue(false), shownValue(25), shownValue(''), shownValue(undefined)]).toEqual([
+    'On',
+    'Off',
+    '25',
+    '(not set)',
+    '(not set)',
+  ])
+})
+
+// With no values to show, the pane says what /config listed, or why it could not.
+test("with nothing to show, the note names other plugins' rows, not the engine's", () => {
+  const other = { ...THEME, key: 'ci-watch.pollSeconds', provider: { plugin: 'ci-watch', tier: 'user' } as never }
+  expect(emptyNote([THEME])).toBe('No settings for usage-guard here: /config listed 1 row(s), 0 of them from plugins.')
+  const named = /2 row\(s\), 1 of them from plugins, such as ci-watch\.pollSeconds \(ci-watch\)\.$/
+  expect(emptyNote([THEME, other])).toMatch(named)
+  expect(emptyNote(new Error('no menu here'))).toBe(
+    'No settings for usage-guard here: /config could not be listed (no menu here).',
+  )
 })
 
 test('a refused change shows its reason under the field', async ($, on) => {
