@@ -38,7 +38,10 @@ async function phoneText($: EngineInterface, status: string): Promise<string> {
 export const register: Register = on => {
   // The plain command's answer is asked down the chain: the engine refuses a command run from inside one.
   on('command.run', { command: 'usage-guard' }, async ($, e, next) => {
-    if (e.args.trim() !== 'phone') return next(e)
+    // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+    // card draws: the bare command answers with the phone text too.
+    const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
+    if (verb !== 'phone') return next(e)
     const status = (await next({ ...e, args: '' })).text ?? ''
     return { text: await phoneText($, status) }
   })
