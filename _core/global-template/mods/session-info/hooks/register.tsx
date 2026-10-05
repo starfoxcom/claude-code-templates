@@ -19,7 +19,8 @@ export const HELP = [
 ].join('\n')
 
 const live: {
-  isStarted: boolean
+  /** The load's one start (the first read, then the timer), awaited by every hook that needs the row. */
+  started?: Promise<void>
   effort?: string
   /** The effort picked for the model in settings, as last read; a change there is a new pick. */
   selected?: string
@@ -30,7 +31,6 @@ const live: {
   reading?: Promise<void>
   isReadAgainWanted: boolean
 } = {
-  isStarted: false,
   refreshMs: 30_000,
   maxFiles: 8,
   isReadAgainWanted: false,
@@ -106,12 +106,13 @@ async function refresh($: EngineInterface): Promise<void> {
 }
 
 // A hot reload starts the module over without a new session.start, and a Desktop session starts with no
-// surface and draws only once one attaches: every entry point below starts the row, once per load.
-async function start($: EngineInterface): Promise<void> {
-  if (live.isStarted) return
-  live.isStarted = true
-  await refresh($)
-  armRefresh($)
+// surface and draws only once one attaches: every entry point below starts the row, once per load, and
+// waits for that one start (a command that lands mid-start gets the row, not "not read yet").
+function start($: EngineInterface): Promise<void> {
+  live.started ??= refresh($)
+    .then(() => armRefresh($))
+    .catch(() => undefined)
+  return live.started
 }
 
 // A new interval from the settings file takes over at the next tick of the old one. At 0 (no refresh)
@@ -185,7 +186,7 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (live.isStarted) await refresh($)
+    if (live.started) await refresh($)
     else await start($)
     return result
   })
