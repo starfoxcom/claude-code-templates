@@ -85,6 +85,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect([next.props.color, next.props.dimColor]).toEqual([undefined, undefined])
   })
 
+  test(`the band stays one line when narrow: only the task's name gives way, on ${surface}`, async ($, on) => {
+    world(on, [...LIST, { id: '4', subject: 'Wait on it', status: 'pending', hold: 'the logs' }])
+    await start($)
+    const ui = await $.ui.mount({ plugin: 'tasks', surface, component: 'AbovePrompt', props: PROPS })
+    const props = async (key: string) =>
+      ((await ui.find({ key })) as never as { props: Record<string, unknown> } | undefined)?.props
+    // The counts and the List button keep their width, so nothing they hold wraps to a second row.
+    for (const key of ['tasks-done', 'tasks-open', 'tasks-held', 'tasks-list-slot'])
+      expect((await props(key))?.flexShrink).toBe(0)
+    expect(await props('tasks-current')).toEqual(expect.objectContaining({ flexShrink: 1, minWidth: 0 }))
+    const name = (await ui.find({ type: 'Text', text: /🔨 #2 Building the guards mod/ })) as never as {
+      props: Record<string, unknown>
+    }
+    expect(name.props.wrap).toBe('truncate-end')
+  })
+
   test(`the pane lists every task, finished ones included, on ${surface}`, async ($, on) => {
     world(on, LIST)
     await start($)
