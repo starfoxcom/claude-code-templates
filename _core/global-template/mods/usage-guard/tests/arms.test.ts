@@ -169,10 +169,13 @@ function tasksFile(seen: World, tasks: { status: string; hold?: string }[]): voi
   seen.files.set(`${TASKS_DIR}/${seen.sessionId}.json`, JSON.stringify({ session: seen.sessionId, tasks }))
 }
 
+// A card stays mounted while the clock runs to the wake, redrawn at every refresh: past the 5 s default.
+const LONG = { timeoutMs: 15_000 }
+
 const arm5h = async ($: Engine) =>
   ((await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)) as { text: string }).text
 
-test('an arm with nothing pending is set, says so, and the card keeps it', async ($, on) => {
+test('an arm with nothing pending is set, says so, and the card keeps it', LONG, async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [{ status: 'completed' }, { status: 'pending', hold: 'Alex at the PC' }])
   await start($)
@@ -181,8 +184,11 @@ test('an arm with nothing pending is set, says so, and the card keeps it', async
   expect(text).toContain(EMPTY_ARM_NOTE)
   const ui = await mountCard($)
   expect(await ui.find({ key: 'usage-arm-question' })).toBeDefined()
+  // The question already says when the session wakes: the slim line waits for the answer.
+  expect(await ui.find({ key: 'usage-arm-line' })).toBeUndefined()
   await ui.press({ key: 'usage-arm-keep' })
   expect(await ui.find({ key: 'usage-arm-question' })).toBeUndefined()
+  expect(await ui.find({ key: 'usage-arm-line' })).toBeDefined()
   // The press answers: a confirmation takes the card's place until dismissed.
   expect(await ui.find({ type: 'Text', text: /^Kept: this session resumes at Fri 2026-10-02 12:02/ })).toBeDefined()
   await ui.press({ key: 'usage-arm-note-dismiss' })
@@ -204,6 +210,31 @@ test("an arm with nothing pending is dropped by the card's cancel", async ($, on
   expect(await ui.find({ type: 'Text', text: /^Disarmed: this session will not resume on its own\.$/ })).toBeDefined()
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toEqual([])
+})
+
+test('a standing arm shows a slim line with its wake, and its Disarm drops the arm', LONG, async ($, on) => {
+  const seen = world(on)
+  await start($)
+  const ui = await mountCard($)
+  expect(await ui.find({ key: 'usage-arm-line' })).toBeUndefined()
+  await arm5h($)
+  await ui.redraw()
+  expect(await ui.find({ type: 'Text', text: /^⏰ resumes Fri 12:02 · after the 5-hour reset/ })).toBeDefined()
+  await ui.press({ key: 'usage-arm-disarm' })
+  expect(await ui.find({ key: 'usage-arm-line' })).toBeUndefined()
+  // The press answers as the card's cancel does.
+  expect(await ui.find({ type: 'Text', text: /^Disarmed: this session will not resume on its own\.$/ })).toBeDefined()
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+})
+
+test('the slim line gives way to the pause card, which already says when work resumes', async ($, on) => {
+  const seen = world(on)
+  await crossAndWrapUp($, seen)
+  await arm5h($)
+  const ui = await mountCard($)
+  expect(await ui.find({ key: 'usage-card' })).toBeDefined()
+  expect(await ui.find({ key: 'usage-arm-line' })).toBeUndefined()
 })
 
 test('an arm with nothing pending in a session that never made a list still asks', async ($, on) => {
