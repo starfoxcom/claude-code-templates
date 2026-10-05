@@ -1,12 +1,14 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import { inspect } from './inspect'
-import type { Plan } from './inspect'
+import type { Folder, Plan } from './inspect'
 import { checkAddedLines, checkBranch, checkText, describe } from './policy'
+import { checkBody, checkCall, hasRow, ruleFor } from './prbody'
+import type { PrCall, PrRules } from './prbody'
 import { register as settings, SETTINGS_PANE } from './settings'
 
-// guards: one in-process check on every Bash and PowerShell call, replacing the attribution and
-// `gh run watch` scripts. It reads the command (which program, which flags, which message) instead of
+// guards: one in-process check on every Bash and PowerShell call, replacing the attribution,
+// `gh run watch` and PR-body scripts. It reads the command (which program, which flags, which message) instead of
 // scanning raw text, so paths, branch names and flags never trip it. Hot reload watches this file only:
 // change it after editing shell.ts, inspect.ts or policy.ts.
 //
@@ -61,19 +63,28 @@ async function git($: Engine, cwd: string, args: string[]): Promise<string> {
   return (await gitRun($, cwd, args)).out
 }
 
+// A body file's full path: from the folder in effect where it is named; a file read through a pipe
+// keeps the command's.
+function fileAt(path: string, folder: Folder | undefined, cwd: string, session: string, isBash: boolean) {
+  const base = !folder ? cwd : folder.path === undefined ? session : osPath(folder.path, session, isBash)
+  return osPath(path, base, isBash)
+}
+
+// A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a file
+// of the same name in the session folder is a different file: it is never read.
+function isUnplaced(plan: Plan, path: string, folder: Folder | undefined): boolean {
+  const isFolderUnknown = folder ? folder.isUnknown : plan.isCwdUnknown
+  return Boolean(isFolderUnknown) && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)
+}
+
 // The body files the command reads: the first reason to block, or undefined. Files that cannot be read
 // for a known cause are named unread instead.
 async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, isBash: boolean) {
   const written = new Set(plan.written.map(p => osPath(p, cwd, isBash).toLowerCase()))
   const session = await $.session.cwd()
   for (const { where, path, written: fromCommand, folder } of plan.files) {
-    // The folder in effect where the file is named; a file read through a pipe keeps the command's.
-    const base = !folder ? cwd : folder.path === undefined ? session : osPath(folder.path, session, isBash)
-    const full = osPath(path, base, isBash)
-    // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a
-    // file of the same name in the session folder is a different file: it is never read.
-    const isFolderUnknown = folder ? folder.isUnknown : plan.isCwdUnknown
-    if (isFolderUnknown && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)) {
+    const full = fileAt(path, folder, cwd, session, isBash)
+    if (isUnplaced(plan, path, folder)) {
       if (!fromCommand) plan.unread.push(where)
       continue
     }
@@ -97,6 +108,63 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, 
     if (v) return describe(v, `${where} (file ${path})`)
   }
   return undefined
+}
+
+// The repos whose PRs follow the PR-body contract, from mods-data/guards/pr-body.json; none without it.
+async function prRules($: Engine): Promise<PrRules | undefined> {
+  try {
+    const rules = JSON.parse(String(await $.fs.read(`${live.dir}/pr-body.json`))) as PrRules
+    return rules && typeof rules.repos === 'object' ? rules : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// The PR body exactly as it will be sent: a literal here-doc on stdin, or a file already on disk where
+// the command's folder is known. Undefined for any other route, among them a body file this same command
+// writes (its text as the command reading holds it may differ from what lands in the file).
+async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: boolean) {
+  if (call.bodyFile === '-') return call.stdinBody
+  // Another statement naming the same path may sit in another folder: which entry is the PR's is a guess.
+  const files = plan.files.filter(f => f.path === call.filePath)
+  const file = files.length === 1 ? files[0] : undefined
+  if (!file || file.written || isUnplaced(plan, file.path, file.folder)) return undefined
+  try {
+    return String(await $.fs.read(fileAt(file.path, file.folder, cwd, await $.session.cwd(), isBash)))
+  } catch {
+    return undefined
+  }
+}
+
+// The PR call, judged only in its plain form: the command's one gh statement, with a title written out.
+// With other gh statements the repo, the body file or the title may belong to one of them, so the
+// body is named unread instead, which the shadow log shows; it never blocks and never passes in silence.
+async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash: boolean) {
+  const [call] = plan.prs
+  if (!call) return undefined
+  const isPlain =
+    plan.prs.length === 1 && plan.ghCalls === 1 && call.isAlone && !call.isTitleDynamic && !call.isUnknown
+  const rules = await prRules($)
+  if (!rules) return undefined
+  // Before the repo's rule: another statement's `--repo` may have named the wrong repo.
+  if (!isPlain) return void plan.unread.push(`the PR body (format check, ${call.action}: not a single plain PR call)`)
+  const rule = ruleFor(rules, repo)
+  if (!rule) return undefined
+  const early = checkCall(call)
+  if (early) return early
+  if (call.bodyFile === undefined) return undefined
+  const text = await prBody($, plan, call, cwd, isBash)
+  if (text === undefined) return void plan.unread.push(`the PR body (format check, ${call.action})`)
+  try {
+    const reason = checkBody(text, call.hasTitle ? call.title : undefined, rule)
+    // No title: whether this PR may skip the board row is unknown, so a missing row is named unread.
+    if (!reason && !call.hasTitle && rule.row && !hasRow(text, rule))
+      plan.unread.push(`the PR body's board row (format check, ${call.action}: no --title to judge it)`)
+    return reason
+  } catch {
+    // A pattern in pr-body.json that does not compile: the body goes unjudged, the other checks still run.
+    return void plan.unread.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)
+  }
 }
 
 // The first reason to block, or undefined.
@@ -127,7 +195,9 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
     // A diff past the output cap was read only in part: the rest is named unread, never passed as clean.
     if (diff.isCut) plan.unread.push('the lines the commit adds past the first part of its diff')
   }
-  return undefined
+  // Last: a credit anywhere outranks the PR format.
+  const prReason = await checkPr($, plan, cwd, repo, isBash)
+  return prReason ? `PR-body contract: ${prReason}` : undefined
 }
 
 async function log($: Engine, entry: Record<string, unknown>) {
