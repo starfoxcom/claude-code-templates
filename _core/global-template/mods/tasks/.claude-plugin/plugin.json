@@ -9,6 +9,12 @@
       "title": "Ask for a task list after (tool calls)",
       "description": "When a turn has run this many tool calls with no task list open, the model is asked to create one. 0 turns the nudge off.",
       "default": 3
+    },
+    "keepGoing": {
+      "type": "boolean",
+      "title": "Keep going when work is left",
+      "description": "When a turn ends with a task that is not on hold and nothing pending to wake the session (a CI watch, a plan-limit pause, or a pause whose automatic resume was cancelled, until its reset), the model is prompted to carry on. Stops after two prompts in a row that change nothing on the list, and never after an interrupted turn.",
+      "default": true
     }
   }
 }
