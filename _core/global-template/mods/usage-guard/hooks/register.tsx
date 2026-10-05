@@ -6,23 +6,8 @@ import { catchUpOf, caughtUpText, missedArmText, parseSavedArm, quietResumePromp
 import type { CompactOutcome, Fill } from './compact'
 import { measured, outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
 import type { Pause } from './plan'
-import {
-  CLAIM,
-  countOpenTasks,
-  covers,
-  EMPTY_ARM_NOTE,
-  hotLimits,
-  NO_WORK_NOTICE,
-  joinPause,
-  LIMIT_NAMES,
-  limitName,
-  planArm,
-  planPause,
-  projectOf,
-  resetKey,
-  resumePrompt,
-  WRAP_UP_ARGS,
-} from './plan'
+import { CLAIM, countOpenTasks, covers, EMPTY_ARM_NOTE, hotLimits, joinPause, LIMIT_NAMES, limitName } from './plan'
+import { NO_WORK_NOTICE, planArm, planPause, projectOf, resetKey, resumePrompt, WRAP_UP_ARGS } from './plan'
 import { stopCommandsFor } from './rules'
 import { drawArmLine, drawCards } from './cards'
 import { register as phone } from './phone'
@@ -608,9 +593,12 @@ async function startTimers($: EngineInterface): Promise<void> {
   await refresh($)
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) await act($, pause)
-  // A wake armed before a hot reload: the module's timer went with the old instance. Before a restart:
-  // the state went with the process, and the saved arm stands in.
-  const arm = (await read($, armedWake)) ?? (await restoreArm($))
+  // A wake armed before a hot reload: the module's timer and its note of the arm's file went with the old
+  // instance (the file is this id's: a /clear before the reload moved it). Before a restart: the state
+  // went with the process, and the saved arm stands in.
+  const held = await read($, armedWake)
+  if (held) live.armFile = await armPath($)
+  const arm = held ?? (await restoreArm($))
   if (arm) await scheduleArm($, arm)
   $.clock.every(CHECK_EVERY_MS, () => void followSession($).then(() => check($)).catch(() => undefined))
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
