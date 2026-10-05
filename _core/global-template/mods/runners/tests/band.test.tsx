@@ -132,13 +132,18 @@ for (const surface of ['terminal', 'desktop'] as const) {
 test('/runners shows its arguments in the menu, lists them on help and names each runner', async ($, on) => {
   const { clock } = machine(on, () => true)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(registered.find(command => command.name === 'runners')?.argumentHint).toBe('[help | settings]')
+  expect(registered.find(command => command.name === 'runners')?.argumentHint).toBe('[help | settings | phone]')
   const help = (await $.command.run({ command: 'runners', args: 'help' } as never)) as { text: string }
   for (const line of help.text.split('\n').slice(1)) expect(line).toMatch(/^ {2}\/runners( \w+)? +\S/)
   // An unknown word gets the same list.
   expect(await $.command.run({ command: 'runners', args: 'bogus' } as never)).toEqual(help)
   await clock.advance(1_000)
   expect(await $.command.run({ command: 'runners', args: '' } as never)).toEqual({ text: '⚙ local on' })
+  const phone = { text: '🟩 ⚙ local on\n/runners help for more' }
+  expect(await $.command.run({ command: 'runners', args: 'phone' } as never)).toEqual(phone)
+  // Typed bare over Remote Control, where no row draws, it answers with the phone text.
+  const bridge = { command: 'runners', args: '', origin: { kind: 'bridge' } }
+  expect(await $.command.run(bridge as never)).toEqual(phone)
 })
 
 test('/runners with no runners listed says how to add one', async ($, on) => {
