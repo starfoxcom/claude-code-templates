@@ -300,6 +300,26 @@ test('a disarm after a /clear also drops the copy saved under the old session id
   expect(savedArm(seen)).toBe('null')
 })
 
+test('after a /clear, the next turn moves the saved arm to the new session id', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt).toBe(WAKE)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('after a /clear while idle, the minute check moves the saved arm to the new session id', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await seen.clock.advance(60_000)
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt).toBe(WAKE)
+  expect(savedArm(seen)).toBe('null')
+})
+
 test('a session started again before its wake schedules the saved arm', async ($, on) => {
   const seen = world(on)
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
