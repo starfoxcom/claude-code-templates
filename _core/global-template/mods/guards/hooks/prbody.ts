@@ -71,10 +71,13 @@ export function readPr(
     ...found,
   }
   const words = given.map(w => w.text)
+  let isNextValue = false
   for (let i = 0; i < words.length; i++) {
     const w = words[i] ?? ''
+    // A value-taking flag's value is that value only: it is never read again as a flag of its own.
+    const isFlagValue = isNextValue
+    isNextValue = !isFlagValue && VALUE_FLAGS.has(w)
     // A splat or an unquoted variable in a flag's place (never a value-taking flag's value) may carry any flag.
-    const isFlagValue = VALUE_FLAGS.has(words[i - 1] ?? '')
     if (/^[@$]/.test(w) && (given[i]?.dynamic || w.startsWith('@')) && !isFlagValue) call.isUnknown = true
     // Only plain spellings are judged; any other is named unread, never read a second, different way.
     if (/^-[A-Za-z]./.test(w) && !isFlagValue) call.isUnknown = true
@@ -82,6 +85,7 @@ export function readPr(
     if (!w.startsWith('-') && w.includes('/') && !isFlagValue) call.isUnknown = true
     // Any word the shell may change (a variable, `$'...'`, `$(...)`, a backtick): judged only as typed.
     if (given[i]?.dynamic || /[$`]/.test(w)) call.isUnknown = true
+    if (isFlagValue) continue
     if (FILL.test(w)) call.isFilled = true
     else if (/^(?:-b|--body)(?:=|$)/.test(w) || /^-b./.test(w)) call.isInline = true
     const title = valueAt(words, i, '--title', '-t')
