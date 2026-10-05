@@ -42,6 +42,8 @@ export type World = {
   compactResult: SessionCompactResult | Error
   /** Every text the status line was given, undefined for a cleared one. */
   statuses: (string | undefined)[]
+  /** The engine refuses the command's registration, as it may after a reload. */
+  refuseRegister?: boolean
   /** The tasks mod keeps its lists here; without it the folder cannot be listed. */
   hasTasksMod?: boolean
 }
@@ -110,6 +112,7 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
     ],
   }))
   on('command.register', ($, e) => {
+    if (seen.refuseRegister) throw new Error('already registered')
     registered.push(e)
     return { value: { command: e.name } as never }
   })
