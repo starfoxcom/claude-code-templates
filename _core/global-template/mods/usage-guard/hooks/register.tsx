@@ -581,7 +581,7 @@ async function check($: EngineInterface): Promise<void> {
     // Of several sessions crossing the line together, one writes the pause. The
     // others write the same pause only if the winner has not yet, so a cancel
     // written in between is not undone.
-    const isWinner = await claim($, `pause-${resetKey(planned)}`)
+    await claim($, `pause-${resetKey(planned)}`)
     // Read again after the claim: another session may have paused for a different reset meanwhile.
     const shared = await readPause($)
     const isSharedLive = shared?.status === 'active' && shared.wakeAt > now

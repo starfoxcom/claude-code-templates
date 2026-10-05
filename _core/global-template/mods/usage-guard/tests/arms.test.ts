@@ -1,4 +1,3 @@
-import type { SessionCompactResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 import { catchUpOf, parseSavedArm } from '../hooks/arms'
@@ -17,7 +16,6 @@ import {
   RESET,
   resumes,
   start,
-  SUMMARY,
   TASKS_DIR,
   WAKE,
   world,
