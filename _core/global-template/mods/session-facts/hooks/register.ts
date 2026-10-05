@@ -6,7 +6,7 @@ import { compactedMark, contextText, phoneText, registerBudgetsView } from './bu
 import { checkCache, nextLifetime, parseMemory, PREPARE_DIR, READ_CACHE_LINES, writtenLifetime } from './cache'
 import type { SharedPlan } from './plan'
 import { parseSharedPlan, planPart, SHARED_PLAN_FILE, sharedPlanText } from './plan'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 // The hooks run in a sandbox with no time zone of its own, so the host's
 // UTC offset and zone name are read once per load and again every hour
@@ -25,10 +25,11 @@ type Compaction = { at: number }
 
 const UTC: Zone = { offsetMinutes: 0, name: 'UTC (host zone unread)' }
 
-const HINT = '[help | settings | phone]'
+const HINT = '[help | settings | set | phone]'
 export const HELP = [
   '/session-facts: the budgets row (context, plan usage, cache) and the time and budgets line on every prompt.',
   '  /session-facts settings  open the settings pane',
+  '  /session-facts set       change a setting: set <name> <value>; alone, list them',
   '  /session-facts phone     the same as text, for phone chats',
   '  /session-facts help      this list',
 ].join('\n')
@@ -294,15 +295,29 @@ async function setUp($: EngineInterface): Promise<void> {
   $.clock.every(BUDGETS_EVERY_MS, () => void refreshBudgets($))
 }
 
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: EngineInterface): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/session-facts/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  live.planWarnAt = Number(options.planWarnAt ?? 75)
-  live.cacheWarnMinutes = Number(options.cacheWarnMinutes ?? 10)
-  live.cacheTtlMs = Number(options.cacheTtlMinutes ?? 60) * 60_000
   live.cacheLifetimeMs = live.cacheTtlMs
   registerBudgetsView(on)
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.planWarnAt = Number(values.planWarnAt ?? 75)
+    live.cacheWarnMinutes = Number(values.cacheWarnMinutes ?? 10)
+    live.cacheTtlMs = Number(values.cacheTtlMinutes ?? 60) * 60_000
+  })
 
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const description = 'The budgets row and the facts line on every prompt'
     await $.command.register({ name: 'session-facts', description, argumentHint: HINT }).catch(() => undefined)
     await setUp($)

@@ -132,7 +132,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 test('/runners shows its arguments in the menu, lists them on help and names each runner', async ($, on) => {
   const { clock } = machine(on, () => true)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(registered.find(command => command.name === 'runners')?.argumentHint).toBe('[help | settings | phone]')
+  expect(registered.find(command => command.name === 'runners')?.argumentHint).toBe('[help | settings | set | phone]')
   const help = (await $.command.run({ command: 'runners', args: 'help' } as never)) as { text: string }
   for (const line of help.text.split('\n').slice(1)) expect(line).toMatch(/^ {2}\/runners( \w+)? +\S/)
   // An unknown word gets the same list.
