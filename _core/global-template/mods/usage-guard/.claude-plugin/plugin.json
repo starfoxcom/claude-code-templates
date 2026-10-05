@@ -15,6 +15,12 @@
       "title": "Resume delay (minutes)",
       "description": "How long after the limit resets the sessions resume work.",
       "default": 2
+    },
+    "compactAbovePercent": {
+      "type": "number",
+      "title": "Compact before a pause above (% context)",
+      "description": "A session that will resume on its own compacts after its wrap-up when its context is above this share and the reset is more than an hour away, so the resume starts from a summary instead of reading the whole context with a cold cache. 0 turns it off.",
+      "default": 25
     }
   }
 }
