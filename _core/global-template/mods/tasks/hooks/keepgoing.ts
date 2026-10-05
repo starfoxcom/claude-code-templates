@@ -32,14 +32,16 @@ export function hasPendingWake(ciWatchState: string | undefined): boolean {
 }
 
 /**
- * A plan-limit pause that still wakes the session, by usage-guard's own test: active with its wake still
- * ahead. A pause whose wake passed while no session was open stays "active" on disk until one starts.
+ * A plan-limit pause that still holds the session until its wake: active (usage-guard wakes it), or
+ * cancelled (the person declined any automatic resume before the reset). A pause whose wake passed while no
+ * session was open stays "active" on disk until one starts; past its wake, neither holds anything back.
  */
-export function isPauseLive(pauseFile: string | undefined, now: number): boolean {
+export function isPauseHolding(pauseFile: string | undefined, now: number): boolean {
   if (!pauseFile) return false
   try {
     const pause = JSON.parse(pauseFile) as { status?: string; wakeAt?: number }
-    return pause.status === 'active' && typeof pause.wakeAt === 'number' && pause.wakeAt > now
+    const isHeld = pause.status === 'active' || pause.status === 'cancelled'
+    return isHeld && typeof pause.wakeAt === 'number' && pause.wakeAt > now
   } catch {
     return false
   }

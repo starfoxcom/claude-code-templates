@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import { hasPendingWake, isPauseLive, keepGoingText, MAX_IDLE_PROMPTS, workable } from './keepgoing'
+import { hasPendingWake, isPauseHolding, keepGoingText, MAX_IDLE_PROMPTS, workable } from './keepgoing'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { PANE, phoneText } from './view'
 
@@ -612,7 +612,7 @@ async function keepGoing($: EngineInterface): Promise<void> {
   const tasks = workable(mirror)
   if (tasks.length === 0) return
   if (hasPendingWake(await peerFile($, 'ci-watch', `${await $.session.id()}.json`))) return
-  if (isPauseLive(await peerFile($, 'usage-guard', 'pause.json'), await $.clock.now())) return
+  if (isPauseHolding(await peerFile($, 'usage-guard', 'pause.json'), await $.clock.now())) return
   const isIdle = live.idlePrompts > 0 && live.promptedAt === mirror.changedAt
   if (isIdle && live.idlePrompts >= MAX_IDLE_PROMPTS) return
   live.idlePrompts = isIdle ? live.idlePrompts + 1 : 1
