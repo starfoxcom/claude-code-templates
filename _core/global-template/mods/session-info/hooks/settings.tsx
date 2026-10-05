@@ -133,8 +133,9 @@ export const register: Register = (on, options) => {
     const listed = await $.config.list().catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))
     const rows = listed instanceof Error ? [] : listed.filter(isOwnRow)
     const errors = (await read($, view))?.errors ?? {}
-    // No row of this plugin's, yet the plugin has values: this surface leaves plugin rows out of /config.
-    const isReadOnly = rows.length === 0 && Object.keys(options).length > 0
+    // A list with no row of this plugin's, yet the plugin has values: this surface leaves plugin rows out of
+    // /config. A list that failed says so instead: it tells nothing about the surface.
+    const isReadOnly = !(listed instanceof Error) && rows.length === 0 && Object.keys(options).length > 0
     const titles = isReadOnly ? await titlesOf($) : {}
     const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
     return (
