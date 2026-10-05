@@ -1,8 +1,8 @@
-import { atom, update } from 'claude-code'
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, TurnUsage } from 'claude-code'
 
 import type { Budgets, CacheCheck } from '../types'
-import { compactedMark, contextText, registerBudgetsView } from './budgets'
+import { compactedMark, contextText, phoneText, registerBudgetsView } from './budgets'
 import { checkCache, nextLifetime, parseMemory, PREPARE_DIR, READ_CACHE_LINES, writtenLifetime } from './cache'
 import type { SharedPlan } from './plan'
 import { parseSharedPlan, planPart, SHARED_PLAN_FILE, sharedPlanText } from './plan'
@@ -25,10 +25,11 @@ type Compaction = { at: number; tokensAfter?: number }
 
 const UTC: Zone = { offsetMinutes: 0, name: 'UTC (host zone unread)' }
 
-const HINT = '[help | settings]'
+const HINT = '[help | settings | phone]'
 export const HELP = [
   '/session-facts: the budgets row (context, plan usage, cache) and the time and budgets line on every prompt.',
   '  /session-facts settings  open the settings pane',
+  '  /session-facts phone     the same as text, for phone chats',
   '  /session-facts help      this list',
 ].join('\n')
 
@@ -307,8 +308,14 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // `/session-facts [help | settings]`; any other argument, or none, gets the help.
+  // `/session-facts [help | settings | phone]`; any other argument, or none, gets the help.
   on('command.run', { command: 'session-facts' }, async ($, e) => {
+    if (e.args.trim() === 'phone') {
+      await refreshBudgets($)
+      const shown = await read($, budgets)
+      const text = shown ? phoneText(shown, await $.clock.now()) : 'The budgets are not read yet.'
+      return { text: `${text}\n/session-facts help for more` }
+    }
     if (e.args.trim() !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Session facts settings', focus: true })
     return { text: 'Opened the session-facts settings.' }
