@@ -129,11 +129,14 @@ function isPersonMessage(message: SessionMessage): boolean {
 
 // Earlier compactions carried the person's words forward in a block of ours;
 // read them back so every compaction keeps the whole history, oldest first.
+// A plugin's prompt that a version before the filter carried is dropped here,
+// or it would ride along in every later hand-off.
 function carriedForward(messages: readonly SessionMessage[]): { kept: string[]; index: string[] } {
   const block = messages.find(message => message.text.startsWith(PERSON_MARK))
   if (!block) return { kept: [], index: [] }
-  const [head = '', ...kept] = block.text.split(MESSAGE_SPLIT)
-  const index = head.split('\n').filter(line => line.startsWith('- '))
+  const [head = '', ...carried] = block.text.split(MESSAGE_SPLIT)
+  const kept = carried.filter(text => !NOT_PERSON.test(text.trim()))
+  const index = head.split('\n').filter(line => line.startsWith('- ') && !NOT_PERSON.test(line.slice(2)))
   return { kept, index }
 }
 
