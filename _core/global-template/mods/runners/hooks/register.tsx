@@ -244,12 +244,16 @@ export const register: Register = (on, options) => {
     await start($)
     await $.command.register({
       name: 'runners',
-      description: "The local CI runners' state. Also: settings, help",
+      description: "The local CI runners' state. Also: settings, phone, help",
       argumentHint: ARGUMENT_HINT,
     })
     return result
   })
-  on('command.run', { command: 'runners' }, async ($, e) => ({ text: await runCommand($, e.args) }))
+  // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+  // row draws: the bare command answers with the phone text.
+  on('command.run', { command: 'runners' }, async ($, e) => ({
+    text: await runCommand($, e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')),
+  }))
   // A Desktop session joins its surface after session.start, and a hot reload skips session.start.
   on('session.attach', async ($, e, next) => {
     const result = await next(e)
@@ -292,22 +296,24 @@ export const register: Register = (on, options) => {
   })
 }
 
-const ARGUMENT_HINT = '[help | settings]'
+const ARGUMENT_HINT = '[help | settings | phone]'
 const HELP = [
   '/runners: the local CI runners in a row above the prompt, with Start and Stop.',
   "  /runners           each runner's state",
   '  /runners settings  open the settings pane',
+  '  /runners phone     the same as text, for phone chats',
   '  /runners help      this list',
 ].join('\n')
 
-// `/runners [help | settings]`; with no argument, each runner's last reading. Another word gets the list.
+// `/runners [help | settings | phone]`; with no argument, each runner's last reading. Another word gets
+// the list. `phone` marks each runner with a coloured square, as the row's colour does not reach a chat.
 async function runCommand($: Engine, args: string): Promise<string> {
   const verb = args.trim().split(/\s+/)[0] ?? ''
   if (verb === 'settings') {
     await $.ui.open({ id: SETTINGS_PANE, title: 'Runners settings', focus: true })
     return 'Opened the runners settings.'
   }
-  if (verb) return HELP
+  if (verb && verb !== 'phone') return HELP
   if (live.runners.length === 0)
     return (
       'No runners listed. Add one to ~/.claude/mods-data/runners/runners.json (or hooks/rules.ts): ' +
@@ -316,5 +322,8 @@ async function runCommand($: Engine, args: string): Promise<string> {
   const rows = (await read($, view))?.rows ?? []
   if (rows.length === 0) return 'Reading the runners; ask again in a moment.'
   const now = await $.clock.now()
-  return rows.map(row => `⚙ ${rowText(row, now, ms => clockTime(ms, live.zoneOffset))}`).join('\n')
+  const lines = rows.map(row => `⚙ ${rowText(row, now, ms => clockTime(ms, live.zoneOffset))}`)
+  if (verb !== 'phone') return lines.join('\n')
+  const marked = lines.map((line, i) => `${rows[i]?.isOn ? '🟩' : '⬜'} ${line}`)
+  return [...marked, '/runners help for more'].join('\n')
 }
