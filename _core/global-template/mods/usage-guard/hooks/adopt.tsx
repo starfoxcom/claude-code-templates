@@ -134,7 +134,7 @@ export const register: Register = on => {
   })
 
   // Desktop, the editor and the phone app start like an SDK session; their surface joins afterwards.
-  on('session.attach', { surface: /^(desktop|vscode|mobile)$/ }, async ($, e, next) => {
+  on('session.attach', { surface: ['desktop', 'vscode', 'mobile'] }, async ($, e, next) => {
     const result = await next(e)
     startScans($)
     return result
