@@ -451,7 +451,11 @@ async function saveArm($: EngineInterface, arm: ArmedWake | null): Promise<void>
       await $.process.run(['node', '-e', MKDIR_SCRIPT, `${await dataDir($)}/arms`], { timeoutMs: 10_000 })
       live.isArmsDirMade = true
     }
-    await $.fs.write(await armPath($), JSON.stringify(arm, null, 2))
+    // The arm's own file is cleared even when the session id moved on since it was saved (a /clear).
+    const path = await armPath($)
+    if (live.armFile && live.armFile !== path) await $.fs.write(live.armFile, 'null')
+    await $.fs.write(path, JSON.stringify(arm, null, 2))
+    live.armFile = arm ? path : undefined
   } catch {
     // Kept in this process's state only.
   }
@@ -462,7 +466,9 @@ async function saveArm($: EngineInterface, arm: ArmedWake | null): Promise<void>
 async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
   let saved: ArmedWake | undefined
   try {
-    saved = parseSavedArm(String(await $.fs.read(await armPath($))))
+    const path = await armPath($)
+    saved = parseSavedArm(String(await $.fs.read(path)))
+    if (saved) live.armFile = path
   } catch {
     return undefined
   }
