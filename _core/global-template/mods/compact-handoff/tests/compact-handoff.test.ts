@@ -362,7 +362,7 @@ for (const mode of ['on', 'off'] as const) {
   test(name, { options: { mode } }, async ($, on) => {
     const seen = world(on)
     await start($)
-    expect(seen.commands).toEqual([{ name: 'compact-handoff', argumentHint: '[help | settings]' }])
+    expect(seen.commands).toEqual([{ name: 'compact-handoff', argumentHint: '[help | settings | set]' }])
     const run = (args: string) => $.command.run({ command: 'compact-handoff', args } as never)
     expect(await run('')).toEqual(expect.objectContaining({ text: MODE_TEXT[mode] }))
     expect(await run('help')).toEqual(expect.objectContaining({ text: HELP }))
