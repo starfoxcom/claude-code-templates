@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { modelName, parseStatus } from '../hooks/git'
+import { modelName, parseStatus, phoneText } from '../hooks/git'
 
 const STATUS_CASES = [
   {
@@ -78,3 +78,21 @@ for (const [id, want] of MODEL_CASES) {
     expect(modelName(id)).toBe(want)
   })
 }
+
+test('the phone text is the row: model and project, then the branch, arrows, changes and files', () => {
+  const git = { branch: 'develop', ahead: 2, behind: 1, changed: [' M a.ts', ' M b.ts', '?? c.ts'] }
+  const shown = { model: 'Opus 5.5', effort: 'high', project: 'Emberholm', git }
+  expect(phoneText(shown, 8).split('\n')).toEqual([
+    '🧭 Opus 5.5 high · Emberholm',
+    '🌿 develop · ↑2 ↓1 · 3 changed',
+    '    M a.ts',
+    '    M b.ts',
+    '   ?? c.ts',
+  ])
+  // Arrows only when non-zero, "clean" with nothing changed, and the list capped like the row's.
+  const quiet = { ...shown, effort: undefined, git: { branch: 'main', ahead: 0, behind: 0, changed: [] } }
+  expect(phoneText(quiet, 8).split('\n')).toEqual(['🧭 Opus 5.5 · Emberholm', '🌿 main · clean'])
+  expect(phoneText(shown, 2).split('\n').slice(2)).toEqual(['    M a.ts', '    M b.ts', '   … and 1 more'])
+  const none = { ...shown, git: { ahead: 0, behind: 0, changed: [] } }
+  expect(phoneText(none, 8).split('\n')[1]).toBe('🌿 no branch (not a git repository, or a detached HEAD)')
+})
