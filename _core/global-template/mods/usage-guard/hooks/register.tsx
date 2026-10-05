@@ -731,6 +731,9 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     live.isTurnRunning = false
     const result = await next(e)
+    // A reload in the middle of a turn: the turn's start ran in the module before it, so its end restarts
+    // the timers, or a saved arm would wait idle past its wake.
+    await startTimers($).catch(() => undefined)
     scheduleOwedCompaction($)
     await measureCompaction($).catch(() => undefined)
     await runPendingWrapUp($).catch(() => undefined)

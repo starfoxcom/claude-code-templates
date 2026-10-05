@@ -382,6 +382,15 @@ test('after a hot reload while idle, a command restores the saved arm and its ti
   expect(resumes(seen)).toHaveLength(1)
 })
 
+test('after a hot reload in the middle of a turn, its end restores the saved arm and its timer', async ($, on) => {
+  const seen = world(on)
+  // The turn started in the module before the reload; only its end reaches the new one.
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
+  await endTurn($)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
 test('after a hot reload while idle, disarm finds the saved arm and drops it', async ($, on) => {
   const seen = world(on)
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
