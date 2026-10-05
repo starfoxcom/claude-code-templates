@@ -1,5 +1,5 @@
 import { atom, read } from 'claude-code'
-import type { On } from 'claude-code'
+import type { EngineInterface, On } from 'claude-code'
 
 import type { Budgets, PlanWindow } from '../types'
 
@@ -7,9 +7,10 @@ import type { Budgets, PlanWindow } from '../types'
 const budgets = atom({ plugin: 'session-facts', key: 'budgets' } as const, null)
 
 export type Tone = 'red' | 'yellow' | 'green'
-/** A piece of a chip drawn in its own color; one without takes the chip's. */
-export type Part = { text: string; color?: Tone | 'gray' }
-export type Chip = { text: string; color?: Tone; parts?: Part[] }
+/** A piece of a chip drawn in its own color; one without takes the chip's. `isCell`: the bar's cells. */
+export type Part = { text: string; color?: Tone | 'gray'; isCell?: boolean }
+/** `bar`: the context fill, which Desktop draws as a bar in place of the cells. */
+export type Chip = { text: string; color?: Tone; parts?: Part[]; bar?: { ratio: number; tone: Tone } }
 
 const BAR_CELLS = 10
 const SQUARES: Record<Tone, string> = { green: '🟩', yellow: '🟨', red: '🟥' }
@@ -45,8 +46,8 @@ export function contextParts(tokens: number | undefined, size: number, compactsA
   const left = compactsAt ? ` · ${thousands(Math.max(0, compactsAt - tokens))} to compact` : ''
   return [
     { text: 'ctx ' },
-    { text: full.repeat(filled), color: tone },
-    { text: empty.repeat(BAR_CELLS - filled), color: 'gray' },
+    { text: full.repeat(filled), color: tone, isCell: true },
+    { text: empty.repeat(BAR_CELLS - filled), color: 'gray', isCell: true },
     { text: ` ${Math.round((tokens / size) * 100)}%${left}` },
   ]
 }
@@ -74,8 +75,25 @@ export function contextChip(b: Budgets, now: number): Chip {
   const parts = [...contextParts(b.tokens, b.size, b.compactsAt), { text: mark }]
   const text = parts.map(part => part.text).join('')
   if (b.tokens === undefined) return { text, parts }
-  const tone = fillTone(b.tokens / (b.compactsAt ?? b.size))
-  return { text, parts, color: tone === 'green' ? undefined : tone }
+  const ratio = b.tokens / (b.compactsAt ?? b.size)
+  const tone = fillTone(ratio)
+  return { text, parts, color: tone === 'green' ? undefined : tone, bar: { ratio, tone } }
+}
+
+const BAR_WIDTH = 80
+const BAR_HEIGHT = 10
+const HEX: Record<Tone, string> = { green: '#3fb950', yellow: '#d29922', red: '#f85149' }
+
+/**
+ * Desktop's drawing of the context bar: one rounded track, filled to the same share in the same tone as
+ * the cells the terminal draws. Only the drawing differs; the figures and tones are the cells'.
+ */
+export function barSvg(ratio: number, tone: Tone): string {
+  const fill = Math.round(Math.min(1, Math.max(0, ratio)) * BAR_WIDTH)
+  const track = `<rect x="0" y="2" width="${BAR_WIDTH}" height="6" rx="3" fill="#8b949e" fill-opacity="0.35"/>`
+  const filled = fill > 0 ? `<rect x="0" y="2" width="${fill}" height="6" rx="3" fill="${HEX[tone]}"/>` : ''
+  const size = `width="${BAR_WIDTH}" height="${BAR_HEIGHT}" viewBox="0 0 ${BAR_WIDTH} ${BAR_HEIGHT}"`
+  return `<svg xmlns="http://www.w3.org/2000/svg" ${size}>${track}${filled}</svg>`
 }
 
 /** One chip per plan window; the reset time shows once a window passes the warning level. */
@@ -164,6 +182,25 @@ export function phoneText(b: Budgets, now: number): string {
   return [...lines, ...(until ? [`🟥 PAUSED until ${until}`] : plans), phoneCacheLine(b, now)].join('\n')
 }
 
+type Ui = ReturnType<EngineInterface['ui']['resolve']>
+
+// One piece of a chip. Where the surface draws vectors (Desktop, the editor), the cells become one bar in
+// their place; the terminal keeps its cells, and the phone app keeps text like its chat.
+function drawPart(ui: Ui, chip: Chip, part: Part, key: string, isRich: boolean) {
+  if (isRich && part.isCell && chip.bar && 'Svg' in ui) {
+    if (part.color === 'gray') return null
+    const alt = `context ${Math.round(chip.bar.ratio * 100)}% of the way to compaction`
+    const source = barSvg(chip.bar.ratio, chip.bar.tone)
+    return <ui.Svg key={key} source={source} alt={alt} width={BAR_WIDTH} height={BAR_HEIGHT} />
+  }
+  if (!part.text) return null
+  return (
+    <ui.Text key={key} color={part.color ?? chip.color} wrap="truncate-end">
+      {part.text}
+    </ui.Text>
+  )
+}
+
 // In a narrow band (a side pane takes room) the row wraps by whole chips: a chip that does not fit moves
 // to the next line in one piece. Only a chip wider than the band alone shrinks, cut short with an ellipsis.
 export function registerBudgetsView(on: On): void {
@@ -171,7 +208,9 @@ export function registerBudgetsView(on: On): void {
     const inner = await next(e)
     const shown = await read($, budgets)
     if (e.props.hasSurvey || !shown) return inner
-    const { Box, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Text } = ui
+    const isRich = e.surface === 'desktop' || e.surface === 'vscode'
     const chips = chipsOf(shown, await $.clock.now())
     return (
       <Box flexDirection="column">
@@ -180,13 +219,9 @@ export function registerBudgetsView(on: On): void {
           {chips.map((chip, index) => (
             <Box key={`session-facts-chip-${index}`} flexShrink={1} minWidth={0}>
               <Text color={chip.color}>{index > 0 ? ' · ' : ''}</Text>
-              {(chip.parts ?? [{ text: chip.text }])
-                .filter(part => part.text)
-                .map((part, at) => (
-                  <Text key={`session-facts-chip-${index}-${at}`} color={part.color ?? chip.color} wrap="truncate-end">
-                    {part.text}
-                  </Text>
-                ))}
+              {(chip.parts ?? [{ text: chip.text }]).map((part, at) =>
+                drawPart(ui, chip, part, `session-facts-chip-${index}-${at}`, isRich),
+              )}
             </Box>
           ))}
         </Box>
