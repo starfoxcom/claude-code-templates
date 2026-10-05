@@ -187,3 +187,46 @@ test('off Windows a one-letter top folder is read where it is, not as a drive', 
   await bash($, 'gh pr create --title t --body-file /u/me/b.md')
   expect(seen.files.get(LOG)).toContain('file /u/me/b.md')
 })
+
+const RULES = 'C:/Users/me/.claude/mods-data/guards/pr-body.json'
+const ROW_RULE = JSON.stringify({ repos: { 'my-game': { row: '^Resolves #\\d+$', noRow: '^(docs|chore)\\(' } } })
+const FULL = '## What\n- add it\n\n## Why\nmissing\n\nResolves #4\n'
+
+test('the PR-body contract blocks a body without its sections', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
+  const result = await bash($, 'gh pr create --title "feat: x" --body-file b.md')
+  expect(String((result as { deny?: string }).deny)).toContain('PR-body contract: `## Why` is missing')
+  expect(seen.ran).toEqual([])
+})
+
+test('the PR-body contract passes a full body and checks only listed repos', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': FULL })
+  expect((await bash($, 'gh pr create --title "feat: x" --body-file b.md') as { deny?: string }).deny).toBeUndefined()
+  // Another repo, named with --repo, has no rule: an inline body passes there.
+  expect((await bash($, 'gh pr create -R o/other --title t --body "x"') as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(2)
+})
+
+test('without the rules file no PR body is checked', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  expect((await bash($, 'gh pr create --title t --body "x"') as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(1)
+})
+
+test('a body file the same command writes is checked from what it writes', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on, { [RULES]: ROW_RULE })
+  const write = (body: string) =>
+    `cat > /tmp/b.md <<'EOF'\n${body}EOF\ngh pr create --title "feat: x" --body-file /tmp/b.md`
+  expect((await bash($, write(FULL)) as { deny?: string }).deny).toBeUndefined()
+  const short = await bash($, write('## What\n- add it\n\n## Why\nmissing\n'))
+  expect(String((short as { deny?: string }).deny)).toContain('no board-row line')
+  const piped = await bash($, `gh pr create --title "feat: x" --body-file - <<'EOF'\n## Why\nb\nEOF`)
+  expect(String((piped as { deny?: string }).deny)).toContain('`## What` is missing')
+  expect(seen.ran).toHaveLength(1)
+})

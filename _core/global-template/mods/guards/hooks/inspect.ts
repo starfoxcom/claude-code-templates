@@ -17,6 +17,8 @@
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
 import { stripPaths } from './policy'
+import { readPr } from './prbody'
+import type { PrCall } from './prbody'
 import { parse, programOf } from './shell'
 import type { Statement, Word } from './shell'
 
@@ -43,6 +45,8 @@ export type Plan = {
   isCwdUnknown?: boolean
   block?: string
   isWrite: boolean
+  /** A `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
+  pr?: PrCall
 }
 
 /** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
@@ -586,6 +590,10 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   }
   const where = write(plan, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
   walk(rest, ghSpec(group, action), r, where)
+  if (group === 'pr' && (action === 'create' || action === 'edit')) {
+    const stdinBody = st.heredocs.length > 0 ? st.heredocs.join('\n') : undefined
+    plan.pr = readPr(action, rest.map(w => w.text), stdinBody)
+  }
   return where
 }
 
