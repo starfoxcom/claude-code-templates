@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { ArmedWake, UsageCard } from '../types'
+import type { CompactOutcome, Fill } from './compact'
+import { outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
 import type { Pause } from './plan'
 import {
   CLAIM,
@@ -22,6 +24,8 @@ import { stopCommandsFor } from './rules'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 const CHECK_EVERY_MS = 60_000
+// A beat after a command or the wrap-up's turn ends before compacting, so the engine is between turns.
+const COMPACT_DELAY_MS = 1_000
 // How often the card above the prompt re-reads the shared files, so a Dismiss
 // or a cancel in one session shows in the others.
 const REFRESH_MS = 2_000
@@ -49,10 +53,15 @@ const live: {
   armTimer?: Timer
   /** A wrap-up due when the running turn ends: the pause it is for. */
   pendingWrapUp?: Pause
+  /** A wrap-up started: once its turn ends, the session may compact before the pause. */
+  compactAfterTurn?: Pause
+  /** How this session's last compaction went, with its time, for /usage-guard to repeat. */
+  lastCompaction?: string
   /** Claims this module already holds or found taken, so a 60-second check spawns no helper. */
   handled: Set<string>
   wrapUpAt: number
   delayMinutes: number
+  compactAbovePercent: number
 } = {
   zone: { offsetMinutes: 0, name: 'UTC' },
   isTurnRunning: false,
@@ -61,6 +70,7 @@ const live: {
   handled: new Set(),
   wrapUpAt: 90,
   delayMinutes: 2,
+  compactAbovePercent: 25,
 }
 
 async function dataDir($: EngineInterface): Promise<string> {
@@ -261,6 +271,7 @@ async function runPendingWrapUp($: EngineInterface): Promise<void> {
 
 async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
+  live.compactAfterTurn = pause
   if (await hasCommand($, 'session-close')) {
     void $.command.run({ command: 'session-close', args: WRAP_UP_ARGS }).catch(() => undefined)
   } else {
@@ -268,6 +279,53 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
       .submit({ text: `[usage-guard] ${WRAP_UP_ARGS} Work resumes automatically at ${resumeAt}.` })
       .catch(() => undefined)
   }
+}
+
+// Measured against the compaction window, as the context meter is; the model's whole window stands in
+// when the engine reports none. The plain summary is estimated locally and costs nothing.
+async function readFill($: EngineInterface): Promise<Fill | undefined> {
+  try {
+    const { context } = await $.session.usage({ breakdown: 'summary' })
+    const size = context.breakdown?.rawMaxTokens ?? context.window
+    if (context.tokens === undefined || !size) return undefined
+    return { tokens: context.tokens, percent: Math.round((context.tokens / size) * 100) }
+  } catch {
+    return undefined
+  }
+}
+
+// Never from a command or a turn's own hook, which the engine refuses: always from a timer after it. The
+// engine also refuses while a turn runs; that refusal, like a hook's veto, is reported. How it went is a
+// note in the transcript, and /usage-guard repeats it, since a note may not reach every surface.
+async function compactNow($: EngineInterface): Promise<CompactOutcome> {
+  let outcome: CompactOutcome
+  try {
+    outcome = outcomeOf(await $.session.compact({ instructions: PAUSE_INSTRUCTIONS }))
+  } catch (err) {
+    outcome = { kind: 'not-run', reason: err instanceof Error ? err.message : String(err) }
+  }
+  live.lastCompaction = `${localTime(await $.clock.now())}: ${outcomeText(outcome)}`
+  await notice($, outcomeText(outcome))
+  return outcome
+}
+
+// The wrap-up's turn has ended: a session that resumes by itself compacts now, while its cache is warm,
+// so the resume after the reset starts from the summary instead of reading the whole context cold.
+// Only this work session gets here; the setting and the time to the wake decide whether it is worth it.
+async function compactAtPause($: EngineInterface, owed: Pause): Promise<void> {
+  const pause = await readPause($)
+  if (pause?.status !== 'active' || resetKey(pause) !== resetKey(owed)) return
+  if (!shouldCompactAtPause(await readFill($), live.compactAbovePercent, pause.wakeAt, await $.clock.now())) return
+  const outcome = await compactNow($)
+  setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)} · ${outcomeMark(outcome)}`)
+}
+
+// Taken before the turn's own wrap-up starts, so a wrap-up started at this turn's end waits for its own.
+function scheduleOwedCompaction($: EngineInterface): void {
+  const owed = live.compactAfterTurn
+  if (!owed) return
+  live.compactAfterTurn = undefined
+  $.clock.after(COMPACT_DELAY_MS, () => void compactAtPause($, owed).catch(() => undefined))
 }
 
 // When a claim helper fails at the wake: whether this session should go on by itself is not known.
@@ -382,16 +440,21 @@ async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> 
   await update($, armedWake, () => arm)
 }
 
-async function armByHand($: EngineInterface, which: string): Promise<string> {
+// `compact`: the person asked for it, so it runs whatever the context's size or the time to the wake.
+async function armByHand($: EngineInterface, which: string, option: string): Promise<string> {
+  if (option !== '' && option !== 'compact')
+    return `Unknown option "${option}". Use: /usage-guard arm 5h|week [compact]`
   const { rateLimits } = await $.session.usage()
   const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
   if (typeof planned === 'string') return planned
   await setArm($, planned)
   await scheduleArm($, planned)
-  return (
+  const armed =
     `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
     `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`
-  )
+  if (option !== 'compact') return armed
+  $.clock.after(COMPACT_DELAY_MS, () => void compactNow($).catch(() => undefined))
+  return `${armed}\nCompacting this session in a moment; /usage-guard then says how it went.`
 }
 
 // Drops the arm set by hand. A pause's own resume is the pause's: /usage-guard cancel stops it.
@@ -495,6 +558,7 @@ function cardTone(id: string): 'green' | 'blue' | 'yellow' {
 export const register: Register = (on, options) => {
   live.wrapUpAt = Number(options.wrapUpAt ?? 90)
   live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
+  live.compactAbovePercent = Number(options.compactAbovePercent ?? 25)
   settings(on, options)
 
   on('session.start', async ($, e, next) => {
@@ -564,6 +628,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     live.isTurnRunning = false
     const result = await next(e)
+    scheduleOwedCompaction($)
     await runPendingWrapUp($).catch(() => undefined)
     await check($).catch(() => undefined)
     return result
@@ -575,40 +640,43 @@ export const register: Register = (on, options) => {
 async function registerSurface($: EngineInterface): Promise<void> {
   await $.command.register({
     name: 'usage-guard',
-    description: 'Usage pause status. Also: cancel, arm 5h|week (resume after that reset), disarm, settings',
+    description: 'Usage pause status. Also: cancel, arm 5h|week [compact] (resume after that reset), disarm, settings',
     argumentHint: ARGUMENT_HINT,
   })
 }
 
-const ARGUMENT_HINT = '[help | settings | arm 5h|week | disarm | cancel]'
+const ARGUMENT_HINT = '[help | settings | arm 5h|week [compact] | disarm | cancel]'
 const HELP = [
   '/usage-guard: pauses a session before a plan window runs out and resumes it after the reset.',
-  '  /usage-guard              the pause status and the wrap-up level',
-  '  /usage-guard cancel       cancel the active pause: no automatic resume',
-  '  /usage-guard arm 5h|week  resume this session after that window resets',
-  '  /usage-guard disarm       drop the armed resume',
-  '  /usage-guard settings     open the settings pane',
-  '  /usage-guard help         this list',
+  '  /usage-guard                      the pause status and the wrap-up level',
+  '  /usage-guard cancel               cancel the active pause: no automatic resume',
+  '  /usage-guard arm 5h|week          resume this session after that window resets',
+  '  /usage-guard arm 5h|week compact  the same, and compact the session now',
+  '  /usage-guard disarm               drop the armed resume',
+  '  /usage-guard settings             open the settings pane',
+  '  /usage-guard help                 this list',
 ].join('\n')
 
-// `/usage-guard [help | settings | arm 5h|week | disarm | cancel]`; with no argument, the status.
+// `/usage-guard [help | settings | arm 5h|week [compact] | disarm | cancel]`; with no argument, the status.
 async function runCommand($: EngineInterface, args: string): Promise<string> {
-  const [verb = '', which = ''] = args.trim().split(/\s+/)
+  const [verb = '', which = '', option = ''] = args.trim().split(/\s+/)
   if (verb === 'help') return HELP
   if (verb === 'settings') {
     await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
     return 'Opened the usage-guard settings.'
   }
-  if (verb === 'arm') return armByHand($, which)
+  if (verb === 'arm') return armByHand($, which, option)
   if (verb === 'disarm') return disarm($)
   const arm = await read($, armedWake)
   const armedText = arm ? ` Armed to resume at ${localTime(arm.wakeAt)}.` : ''
+  const compacted = live.lastCompaction ? `\nLast compaction, ${live.lastCompaction}` : ''
   const pause = await readPause($)
   if (!pause || pause.status !== 'active')
-    return `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}`
+    return `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}${compacted}`
   if (verb === 'cancel') {
     await cancelPause($, pause)
     return 'Usage pause cancelled: no automatic resume.'
   }
-  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. Resumes at ${localTime(pause.wakeAt)}.${armedText}`
+  const resumes = `Resumes at ${localTime(pause.wakeAt)}.`
+  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. ${resumes}${armedText}${compacted}`
 }
