@@ -21,6 +21,10 @@ import {
   world,
 } from './world'
 
+
+// For tests that run hours or days of minute checks through the fake clock.
+const LONG = { timeoutMs: 15_000 }
+
 test('below the line nothing happens', async ($, on) => {
   const seen = world(on)
   await start($)
@@ -263,7 +267,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('the card cancels the automatic resume', async ($, on) => {
+test('the card cancels the automatic resume', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
@@ -611,7 +615,7 @@ test('an arm resumes the session once when a pause for its reset began after the
   expect(pauseOf(seen)?.status).toBe('done')
 })
 
-test('an armed wake that comes due during a pause leaves the resume to the pause', async ($, on) => {
+test('an armed wake that comes due during a pause leaves the resume to the pause', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
