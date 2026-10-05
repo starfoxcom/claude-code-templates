@@ -459,7 +459,8 @@ for (const [label, during, wakes] of CASES) {
     expect(seen.prompts).toEqual([])
     await during(seen, $)
     await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
-    await clock.advance(10)
+    // Sent by the first poll after the turn ends.
+    await clock.advance(POLL_MS)
     expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(wakes)
   })
 }
@@ -479,18 +480,21 @@ const PENDING_WATCH: Watch = {
   wakePending: true,
 }
 type Clock = { advance: (ms: number) => Promise<unknown> }
-const RELOAD_STARTS: [string, (clock: Clock, $: Engine) => Promise<unknown>][] = [
-  ['at the turn end', async () => undefined],
+// Each start returns the notes its tool result carried into the turn, and how many it should carry.
+const RELOAD_STARTS: [string, (clock: Clock, $: Engine) => Promise<string[]>, number][] = [
+  ['at the turn end, sent as a wake', async () => [], 0],
   [
-    'at a tool call inside the turn, holding it until the turn ends',
+    'at a tool call inside the turn, carried on its result',
     async (clock, $) => {
-      await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+      const result = (await $.tool.call({ tool: 'Bash', command: 'git status' } as never)) as { context?: string[] }
       await clock.advance(POLL_MS)
+      return result.context ?? []
     },
+    1,
   ],
 ]
-for (const [label, first] of RELOAD_STARTS) {
-  test(`a wake held by the module before a reload is sent once by the new one, first run ${label}`, async (
+for (const [label, first, noteCount] of RELOAD_STARTS) {
+  test(`a wake held by the module before a reload reaches the session once, first run ${label}`, async (
     $,
     on,
   ) => {
@@ -498,12 +502,16 @@ for (const [label, first] of RELOAD_STARTS) {
     seen.isReadable = true
     on('turn.complete', () => ({ text: '' }))
     seen.files.set(STATE, JSON.stringify({ watches: [PENDING_WATCH], isTurnRunning: true }))
-    await first(clock, $)
-    expect(seen.prompts).toEqual([])
+    const notes = await first(clock, $)
+    expect([seen.prompts, notes.length]).toEqual([[], noteCount])
     await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
-    await clock.advance(10)
+    // Never sent from the turn's end itself: by the first poll after it.
+    await clock.advance(1)
+    expect(seen.prompts).toEqual([])
+    await clock.advance(POLL_MS)
     for (let i = 0; i < 3; i++) await clock.advance(POLL_MS)
-    expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(1)
+    const delivered = [...seen.prompts, ...notes].filter(text => text.includes('o/r#7: all 1 checks settled'))
+    expect(delivered).toHaveLength(1)
     expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches[0].wakePending).toBeUndefined()
   })
 }
@@ -515,4 +523,65 @@ test('a session that ended mid-turn does not hold its wakes after a new start', 
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   await clock.advance(POLL_MS)
   expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(1)
+})
+
+test('a refused wake is saved as pending and sent by the next poll', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  seen.refusals = 1
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  for (let i = 0; i < 5 && seen.refusals; i++) await clock.advance(POLL_MS)
+  expect([seen.refusals, seen.prompts]).toEqual([0, []])
+  expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches[0].wakePending).toBe(true)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(1)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(1)
+})
+
+test('a wake refused three times is not tried again', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  seen.refusals = 10
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  for (let i = 0; i < 8; i++) await clock.advance(POLL_MS)
+  expect([seen.refusals, seen.prompts]).toEqual([7, []])
+  expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches[0].wakePending).toBeUndefined()
+})
+
+test('a newer load that takes over while a tool runs keeps the note and the file', async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  seen.files.set(STATE, JSON.stringify({ watches: [PENDING_WATCH], isTurnRunning: true }))
+  on('tool.call', { tool: 'Read' }, () => {
+    seen.files.set(OWNER, 'a-newer-instance')
+    return { result: {} as never }
+  })
+  const before = seen.files.get(STATE)
+  const read = (await $.tool.call({ tool: 'Read', file_path: 'a' } as never)) as { context?: string[] }
+  expect(read.context ?? []).toEqual([])
+  expect(seen.files.get(STATE)).toBe(before)
+})
+
+test('checks that finish mid-turn reach the turn on its next tool result, once', async ($, on) => {
+  const { seen, clock } = world(on)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: {} as never }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+  seen.bucket = 'pass'
+  for (let i = 0; i < 3; i++) await clock.advance(POLL_MS)
+  const read = (await $.tool.call({ tool: 'Read', file_path: 'a' } as never)) as { context?: string[] }
+  expect(read.context?.some(text => text.includes('o/r#7: all 1 checks settled'))).toBe(true)
+  const again = (await $.tool.call({ tool: 'Read', file_path: 'b' } as never)) as { context?: string[] }
+  expect(again.context ?? []).toEqual([])
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
 })
