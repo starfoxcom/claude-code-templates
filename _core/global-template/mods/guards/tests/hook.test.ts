@@ -187,3 +187,227 @@ test('off Windows a one-letter top folder is read where it is, not as a drive', 
   await bash($, 'gh pr create --title t --body-file /u/me/b.md')
   expect(seen.files.get(LOG)).toContain('file /u/me/b.md')
 })
+
+const RULES = 'C:/Users/me/.claude/mods-data/guards/pr-body.json'
+const ROW_RULE = JSON.stringify({ repos: { 'my-game': { row: '^Resolves #\\d+$', noRow: '^(docs|chore)\\(' } } })
+const FULL = '## What\n- add it\n\n## Why\nmissing\n\nResolves #4\n'
+
+test('the PR-body contract blocks a body without its sections', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
+  const result = await bash($, 'gh pr create --title "feat: x" --body-file b.md')
+  expect(String((result as { deny?: string }).deny)).toContain('PR-body contract: `## Why` is missing')
+  expect(seen.ran).toEqual([])
+})
+
+test('the PR-body contract passes a full body and checks only listed repos', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': FULL })
+  expect((await bash($, 'gh pr create --title "feat: x" --body-file b.md') as { deny?: string }).deny).toBeUndefined()
+  // Another repo, named with --repo, has no rule: an inline body passes there.
+  expect((await bash($, 'gh pr create -R o/other --title t --body "x"') as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(2)
+})
+
+test('without the rules file no PR body is checked', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  expect((await bash($, 'gh pr create --title t --body "x"') as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(1)
+})
+
+const lastEntry = (seen: { files: Map<string, string> }) =>
+  JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+// The last logged command named its PR body unread (for whichever reason).
+const isPrUnread = (seen: { files: Map<string, string> }) =>
+  (lastEntry(seen).unread ?? []).some((u: string) => u.startsWith('the PR body'))
+
+test('a body file the same command writes is named unread; a here-doc on stdin is checked', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE })
+  const write = (body: string) =>
+    `cat > /tmp/b.md <<'EOF'\n${body}EOF\ngh pr create --title "feat: x" --body-file /tmp/b.md`
+  const short = await bash($, write('## What\n- add it\n\n## Why\nmissing\n'))
+  expect((short as { deny?: string }).deny).toBeUndefined()
+  expect(isPrUnread(seen)).toBe(true)
+  const piped = await bash($, `gh pr create --title "feat: x" --body-file - <<'EOF'\n## Why\nb\nEOF`)
+  expect(String((piped as { deny?: string }).deny)).toContain('`## What` is missing')
+  expect(seen.ran).toHaveLength(1)
+})
+
+test('a relative body file under a folder built at run time is never judged from the session folder', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
+  const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(isPrUnread(seen)).toBe(true)
+})
+
+test('an invalid pattern in the rules file leaves the PR unjudged and the credit checks running', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const bad = JSON.stringify({ repos: { 'my-game': { row: '^(Resolves' } } })
+  const seen = world(on, { [RULES]: bad, 'C:/Repos/my-game/b.md': FULL })
+  const pr = await bash($, 'gh pr create --title "feat: x" --body-file b.md')
+  expect((pr as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain('the PR body (pr-body.json has an invalid pattern for my-game)')
+  const credit = await bash($, `gh pr create --title "feat: x" --body-file b.md --body '${AI_TRAILER}'`)
+  expect(String((credit as { deny?: string }).deny)).toContain('AI credit')
+})
+
+test('a PR body that cannot be read exactly is named unread, never blocked', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': FULL })
+  const routes = [
+    // printf expands escapes the reading leaves as typed.
+    `printf '## What\\n- add it\\n\\n## Why\\nmissing\\n\\nResolves #4\\n' > /tmp/b.md && ` +
+      'gh pr create --title t --body-file /tmp/b.md',
+    'cat b.md | gh pr create --title "feat: x" --body-file -',
+    'gh pr create --title "feat: x" --body-file - < b.md',
+    'cat b.md > c.md && gh pr create --title "feat: x" --body-file c.md',
+  ]
+  for (const command of routes) {
+    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
+    expect(isPrUnread(seen)).toBe(true)
+  }
+  expect(seen.ran).toHaveLength(routes.length)
+})
+
+// Only a command that is the PR call alone is judged: anything before it (a `cd`, a variable, a
+// subshell) or around it (`bash -c`) could change which repo, folder or text gh really uses.
+const NOT_ALONE = [
+  'F=short.md; gh pr create --title "feat: x" --body-file "$F"',
+  '(cd sub && make) && gh pr create --title "feat: x" --body-file short.md',
+  'bash -c "gh pr create -t t -F - <<\'EOF\'\n$BODY\nEOF"',
+  'gh pr create -R "$OWNER/$REPO" -t t --body x',
+  'gh pr create -t t -F a.md -F short.md',
+  "gh pr create -t $'docs(x): y' -F short.md",
+  'gh pr edit https://github.com/o/other/pull/5 --body-file short.md',
+  // Unquoted here-doc: the shell joins `- add it\` with the next line, so gh gets no `## Why` heading.
+  'gh pr create -t "feat: x" -F - <<EOF\n## What\n- add it\\\n## Why\nb\n\nResolves #1\nEOF',
+]
+for (const command of NOT_ALONE) {
+  test(`a PR call that is not plain and alone is named unread, never blocked: ${command}`, {
+    options: { mode: 'enforce' },
+  }, async ($, on) => {
+    // Every file any of them may name exists, so only the PR check could block.
+    const short = '## What\n- add it\n'
+    const files = { 'C:/Repos/my-game/a.md': short, 'C:/Repos/my-game/sub/short.md': short }
+    const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': short, ...files })
+    expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+    expect(isPrUnread(seen)).toBe(true)
+  })
+}
+
+const NOT_PLAIN = 'the PR body (format check, create: not a single plain PR call)'
+
+test('a PowerShell splat is never blocked for flags it may carry', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE })
+  on('tool.call', { tool: 'PowerShell' }, () => ({ result: {} as never }))
+  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
+  const result = await $.tool.call({ tool: 'PowerShell', command: 'gh pr create @params' } as never)
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+// Only a command whose one gh statement is the PR call is judged: with more, the repo, the body file or
+// the title could belong to another statement. Each of these is named unread, never blocked.
+const SHORT = { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': '## What\n- add it\n' }
+
+test('two PR calls in one command are named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, SHORT)
+  const both = await bash($, 'gh pr create --title "feat: x" --body-file short.md && gh pr edit 5 --add-label bug')
+  expect((both as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+test('another gh call naming a repo leaves the PR unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, SHORT)
+  const command = 'gh pr view 12 -R o/other --json body && gh pr create --title "feat: x" --body-file short.md'
+  expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+test('a title built at run time is named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, SHORT)
+  const result = await bash($, 'gh pr create --title "$T" --body-file short.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+test('two here-docs on one PR call are named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE })
+  const command = `gh pr create --title "feat: x" --body-file - <<'A' <<'B'\n${FULL}A\n## Why\nb\nB`
+  expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+  expect(isPrUnread(seen)).toBe(true)
+})
+
+const NAMES = 'C:/Users/me/.claude/mods-data/guards/names.json'
+const NAME_RULE = JSON.stringify({ repos: { 'my-game': { names: ['oldkeep'], words: ['OK'] } } })
+
+test('a banned name is blocked in a commit message, a body file and a new branch', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [NAMES]: NAME_RULE, 'C:/Repos/my-game/msg.txt': 'fix: match the OK width\n' })
+  const message = await bash($, `git commit -m 'feat: port the Oldkeep sky'`)
+  expect(String((message as { deny?: string }).deny)).toContain('"Oldkeep" named in the commit message')
+  const file = await bash($, 'git commit -F msg.txt')
+  expect(String((file as { deny?: string }).deny)).toContain('"OK" named in')
+  const branch = await bash($, 'git checkout -b feature/ok-like-oldkeep')
+  expect(String((branch as { deny?: string }).deny)).toContain('"oldkeep" named in the new branch name')
+  expect(seen.ran).toEqual([])
+})
+
+test('banned names apply only to the listed repos and never to the command text', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [NAMES]: NAME_RULE })
+  // Another repo, named with --repo: not on the list.
+  expect((await bash($, 'gh issue create -R o/board --title "Oldkeep notes" --body "x"') as { deny?: string }).deny)
+    .toBeUndefined()
+  // A path in the command is not a message.
+  expect((await bash($, 'git -C ../Oldkeep-Translator commit -m "fix: x"') as { deny?: string }).deny)
+    .toBeUndefined()
+  expect(seen.ran).toHaveLength(2)
+})
+
+test('a malformed names file checks no name', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [NAMES]: '{"repos":{"my-game":{"names":"oldkeep"}}}' })
+  expect((await bash($, `git commit -m 'feat: port the Oldkeep sky'`) as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(1)
+})
+test('a PR edit with no title is judged without the board row, which is named unread', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- a\n\n## Why\nb\n' })
+  const result = await bash($, 'gh pr edit 7 --body-file b.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain("the PR body's board row (format check, edit: no --title to judge it)")
+  const short = await bash($, 'gh pr edit 7 --body-file short.md')
+  expect(short).toBeDefined()
+})
+
+// Spellings gh reads one way and a plain reading another: each is named unread, never blocked.
+const ODD_SPELLINGS = [
+  'gh pr create -dF b.md -t "feat: x"',
+  'gh pr create -tfeat -F b.md',
+  'gh pr create --title "feat: x" --body-file "$(cat name.txt)"',
+  "gh pr create --title \"feat: x\" -F - <<< $'## What\\n- a\\n\\n## Why\\nb\\n\\nResolves #1'",
+]
+// A body the check would refuse (no board row), so a misread spelling shows as a block.
+const NO_ROW = '## What\n- a\n\n## Why\nb\n'
+for (const command of ODD_SPELLINGS) {
+  test(`an odd spelling is named unread, never blocked: ${command}`, { options: { mode: 'enforce' } }, async (
+    $,
+    on,
+  ) => {
+    const files = { [RULES]: ROW_RULE, 'C:/Repos/my-game/name.txt': 'b.md\n', 'C:/Repos/my-game/b.md': NO_ROW }
+    const seen = world(on, files)
+    expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+    expect(lastEntry(seen).unread?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
+  })
+}
