@@ -127,3 +127,20 @@ export function joinPause(shared: Pause, planned: Pause): Pause {
 export function projectOf(root: string): string {
   return root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 }
+
+// Said when a session is armed with nothing pending: the wake-up would find no work to go on with.
+export const EMPTY_ARM_NOTE =
+  'Nothing is pending here (no open task that is not on hold), so the wake-up will have nothing to do. ' +
+  'Keep it, or cancel it with /usage-guard disarm.'
+
+// The open tasks in the tasks mod's copy of a session's list: not completed, not dropped, not on hold. A
+// task on hold waits on the person, so waking for it only says it still waits. Undefined when unreadable.
+export function countOpenTasks(text: string): number | undefined {
+  try {
+    const { tasks } = JSON.parse(text) as { tasks?: { status?: string; hold?: string; droppedAt?: number }[] }
+    if (!Array.isArray(tasks)) return undefined
+    return tasks.filter(task => task.status !== 'completed' && !task.hold && task.droppedAt === undefined).length
+  } catch {
+    return undefined
+  }
+}
