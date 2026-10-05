@@ -46,6 +46,9 @@ export type World = {
   refuseRegister?: boolean
   /** The tasks mod keeps its lists here; without it the folder cannot be listed. */
   hasTasksMod?: boolean
+  /** How many of the next attempts to make the arms folder fail; a write into it fails until one works. */
+  mkdirFailures?: number
+  isArmsDirMissing?: boolean
 }
 
 export function world(on: On, root = 'C:/Repos/my-game'): World {
@@ -76,12 +79,21 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
     return { value: [] as never }
   })
   on('fs.write', ($, e) => {
+    if (seen.isArmsDirMissing && key(e.path).includes('/arms/')) throw new Error('ENOENT')
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
   })
   on('process.run', ($, e) => {
     seen.runs.push([...e.argv])
     let out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
+    if (e.argv[0] === 'node' && String(e.argv[2]).includes('mkdirSync')) {
+      seen.isArmsDirMissing = (seen.mkdirFailures ?? 0) > 0
+      if (seen.isArmsDirMissing) {
+        seen.mkdirFailures = (seen.mkdirFailures ?? 0) - 1
+        const failed = { exitCode: 1, stdout: '', stderr: 'EPERM', isStdoutTruncated: false, isStderrTruncated: false }
+        return { value: failed }
+      }
+    }
     if (e.argv[2] === CLAIM) {
       const name = e.argv[4] ?? ''
       seen.duringClaim?.(name)

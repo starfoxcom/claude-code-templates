@@ -440,8 +440,9 @@ async function armPath($: EngineInterface, sessionId?: string): Promise<string> 
 async function saveArm($: EngineInterface, arm: ArmedWake | null, earlier?: string): Promise<void> {
   try {
     if (!live.isArmsDirMade) {
-      await $.process.run(['node', '-e', MKDIR_SCRIPT, `${await dataDir($)}/arms`], { timeoutMs: 10_000 })
-      live.isArmsDirMade = true
+      const made = await $.process.run(['node', '-e', MKDIR_SCRIPT, `${await dataDir($)}/arms`], { timeoutMs: 10_000 })
+      live.isArmsDirMade = made.exitCode === 0
+      if (!live.isArmsDirMade) return // Tried again at the next save.
     }
     if (earlier && earlier !== arm?.session) await $.fs.write(await armPath($, earlier), 'null')
     await $.fs.write(await armPath($, arm?.session), JSON.stringify(arm, null, 2))
