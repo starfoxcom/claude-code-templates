@@ -10,6 +10,10 @@ import { cardTone } from './texts'
 // `/usage-guard phone`: what the card above the prompt and the status line show at the PC, as plain
 // text for a chat that draws neither (the phone app, the web). Colour becomes a square in the card's tone.
 const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
+const adopt = atom({ plugin: 'usage-guard', key: 'adopt' } as const, null)
+const OFFER_LINE =
+  '🟨 A closed session in this project missed its armed resume: /usage-guard adopt runs it here, ' +
+  '/usage-guard adopt drop forgets it.'
 const SQUARES: Record<Tone, string> = { green: '🟩', blue: '🟦', yellow: '🟨' }
 
 async function readShared<T>($: EngineInterface, name: string): Promise<T | undefined> {
@@ -31,6 +35,7 @@ async function phoneText($: EngineInterface, status: string): Promise<string> {
   const card = await readShared<UsageCard>($, 'card.json')
   if (card && !card.dismissed) lines.push(`${SQUARES[cardTone(card.id)]} ${card.text}`)
   if ((await read($, armedWake))?.isQuestioned) lines.push(`🟨 ${EMPTY_ARM_NOTE}`)
+  if ((await read($, adopt))?.offer) lines.push(OFFER_LINE)
   lines.push('/usage-guard help for more')
   return lines.join('\n')
 }
