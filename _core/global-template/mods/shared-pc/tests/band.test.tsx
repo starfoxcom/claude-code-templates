@@ -74,3 +74,37 @@ test('a session where the mod cannot start shows a card until dismissed', { time
   const again = await $.ui.mount({ plugin: 'shared-pc', surface: 'terminal', component: 'AbovePrompt', props })
   expect(await again.find({ key: 'off-dismiss' })).toBeUndefined()
 })
+
+test('declining a request answers with a card saying so', { timeoutMs: 15_000 }, async ($, on) => {
+  let state: typeof STATE = STATE
+  on('session.id', () => ({ value: ME }))
+  on('session.root', () => ({ value: 'C:/Repos/app' }))
+  on('process.run', (_$, e) => {
+    const argv = (e as { argv: string[] }).argv
+    // The helper records the answer: the request is no longer open.
+    if (argv.includes('answer')) state = { ...STATE, requests: [] }
+    const stdout = argv.includes('where')
+      ? JSON.stringify({ dir: 'C:/fake/shared-pc', aliveMs: 45_000, lingerMs: 60_000 })
+      : JSON.stringify({ ...state, mine: 'none', position: 0 })
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('fs.read', (_$, e) => {
+    const path = String((e as { path?: string }).path ?? '').replace(/\\/g, '/')
+    if (path.endsWith('state.json')) return { value: JSON.stringify(state) }
+    return { value: JSON.stringify({ id: 'other-id', name: 'my-game·49ab', lastBeat: Date.now() }) }
+  })
+  on('fs.write', () => ({ value: undefined }))
+  on('command.register', () => ({ value: { command: 'pc' } }))
+  on('tool.register', () => ({ value: { tool: 'mcp__shared-pc__pc' } }))
+  mock.clock(on)
+  on('session.start', () => ({ cwd: 'C:/Repos/app' }) as never)
+  on('session.append', () => ({}) as never)
+  on('ui.render', () => ({ type: 'Box', props: { key: 'beneath' }, children: [] }) as never)
+
+  await $.session.start({ source: 'startup', cwd: 'C:/Repos/app' } as never)
+  const props = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
+  const drawn = await $.ui.mount({ plugin: 'shared-pc', surface: 'terminal', component: 'AbovePrompt', props })
+  await drawn.press({ key: 'card-decline' })
+  expect(await drawn.find({ type: 'Text', text: /Declined: other-id keeps its place in the line\./ })).toBeDefined()
+  expect(await drawn.find({ key: 'card-decline' })).toBeUndefined()
+})
