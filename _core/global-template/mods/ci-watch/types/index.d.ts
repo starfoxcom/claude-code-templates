@@ -12,6 +12,8 @@ export type Watch = {
   settledAt?: number
   /** Set when the watch starts; names its wake claim (see `claimWake`). */
   id?: string
+  /** Settled, its wake not sent yet: it goes out once no turn runs. Saved, so a reload sends it. */
+  wakePending?: boolean
 }
 
 /** The settings pane's own state: the last refusal per field. */
