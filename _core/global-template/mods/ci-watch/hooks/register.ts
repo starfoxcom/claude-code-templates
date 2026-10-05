@@ -2,6 +2,7 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
+import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
 
@@ -151,12 +152,17 @@ function finishedAgo(watch: Watch, now?: number): string {
 }
 
 export function wakeText(watch: Watch, now?: number): string {
-  return `${outcomeText(watch)}${finishedAgo(watch, now)}`
+  return `${outcomeText(watch, now)}${finishedAgo(watch, now)}`
 }
 
-function outcomeText(watch: Watch): string {
+function outcomeText(watch: Watch, now?: number): string {
   const entries = Object.entries(watch.checks)
   const pr = `PR ${watch.repo}#${watch.number}`
+  // Not settled: the wake names GitHub's incident while the checks wait.
+  if (!watch.outcome && watch.incident) {
+    const minutes = Math.round(((now ?? watch.startedAt) - watch.startedAt) / 60_000)
+    return incidentText(pr, minutes, watch.incident)
+  }
   const failed = entries.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
   if (watch.outcome === 'failed') {
     return (
@@ -428,6 +434,28 @@ async function recheckSettled($: EngineInterface, watch: Watch, now: number): Pr
   return { repo: watch.repo, number: watch.number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
 }
 
+// GitHub's status, read at most every few minutes and only while some watch waits long past a normal run.
+const status: { readAt?: number; incident?: string } = {}
+async function readIncident($: EngineInterface, now: number): Promise<string | undefined> {
+  if (status.readAt !== undefined && now - status.readAt < STATUS_EVERY_MS) return status.incident
+  status.readAt = now
+  const r = await $.process.run(['node', '-e', STATUS_SCRIPT], { timeoutMs: 20_000 }).catch(() => null)
+  status.incident = r && r.exitCode === 0 ? actionsIncident(r.stdout) : undefined
+  return status.incident
+}
+
+// A watch whose checks sit pending past STUCK_MS while GitHub reports an Actions incident wakes the session
+// once with the incident's name (the row shows it too), instead of waiting out the time limit in silence.
+// Returns whether a watch changed.
+async function noteIncidents($: EngineInterface, now: number): Promise<boolean> {
+  const isWaiting = (w: Watch) => !w.outcome && !w.incident && now - w.startedAt > STUCK_MS
+  if (!live.watches.some(isWaiting)) return false
+  const incident = await readIncident($, now)
+  if (!incident) return false
+  live.watches = live.watches.map(w => (isWaiting(w) ? { ...w, incident, wakePending: true } : w))
+  return true
+}
+
 async function poll($: EngineInterface): Promise<void> {
   // Start from the saved state: a hot reload can leave an earlier instance's timer running beside
   // this one, and reading the file keeps a watch the other already settled from waking twice. With
@@ -459,6 +487,7 @@ async function poll($: EngineInterface): Promise<void> {
             stablePolls: 0,
             checks: {},
             quietSince: undefined,
+            incident: undefined,
           }
         : current
     let checks: Record<string, string> | undefined
@@ -496,6 +525,7 @@ async function poll($: EngineInterface): Promise<void> {
   // Each wake is marked pending in the same save that records its outcome; sendHeld sends it.
   const due = new Set(toWake.filter(w => !isRecorded(recorded, w) && claimWake(w)))
   if (due.size > 0) live.watches = live.watches.map(w => (due.has(w) ? { ...w, wakePending: true } : w))
+  if (await noteIncidents($, now)) changed = true
   if (changed || live.isUnsaved) await save($)
   if (!live.isTurnRunning) await sendHeld($)
 }
