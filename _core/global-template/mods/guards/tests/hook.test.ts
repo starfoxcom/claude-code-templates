@@ -13,7 +13,9 @@ function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Wind
   on('session.id', () => ({ value: 'sess-a' }))
   on('session.cwd', () => ({ value: 'C:/Repos/my-game' }) as never)
   on('fs.read', ($, e) => {
-    const text = seen.files.get(e.path.replaceAll('\\', '/'))
+    const path = e.path.replaceAll('\\', '/')
+    // The manifest, wherever the plugin root is: a test that needs it lists it as `plugin.json`.
+    const text = seen.files.get(path.endsWith('/plugin.json') ? 'plugin.json' : path)
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
@@ -41,6 +43,15 @@ async function bash($: Engine, command: string) {
   await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
   return $.tool.call({ tool: 'Bash', command } as never)
 }
+
+test("the mode saved in the mod's settings file applies from the session's start", async ($, on) => {
+  const manifest = JSON.stringify({ userConfig: { mode: { type: 'string', options: ['shadow', 'enforce'] } } })
+  const saved = { 'plugin.json': manifest, 'C:/Users/me/.claude/mods-data/guards/settings.json': '{"mode":"enforce"}' }
+  const seen = world(on, saved)
+  const result = await bash($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
+  expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
+  expect(seen.ran).toEqual([])
+})
 
 test('in shadow mode a credit is logged, never blocked', async ($, on) => {
   const seen = world(on)
@@ -346,6 +357,40 @@ test('two here-docs on one PR call are named unread', { options: { mode: 'enforc
   expect(isPrUnread(seen)).toBe(true)
 })
 
+const NAMES = 'C:/Users/me/.claude/mods-data/guards/names.json'
+const NAME_RULE = JSON.stringify({ repos: { 'my-game': { names: ['oldkeep'], words: ['OK'] } } })
+
+test('a banned name is blocked in a commit message, a body file and a new branch', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [NAMES]: NAME_RULE, 'C:/Repos/my-game/msg.txt': 'fix: match the OK width\n' })
+  const message = await bash($, `git commit -m 'feat: port the Oldkeep sky'`)
+  expect(String((message as { deny?: string }).deny)).toContain('"Oldkeep" named in the commit message')
+  const file = await bash($, 'git commit -F msg.txt')
+  expect(String((file as { deny?: string }).deny)).toContain('"OK" named in')
+  const branch = await bash($, 'git checkout -b feature/ok-like-oldkeep')
+  expect(String((branch as { deny?: string }).deny)).toContain('"oldkeep" named in the new branch name')
+  expect(seen.ran).toEqual([])
+})
+
+test('banned names apply only to the listed repos and never to the command text', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [NAMES]: NAME_RULE })
+  // Another repo, named with --repo: not on the list.
+  expect((await bash($, 'gh issue create -R o/board --title "Oldkeep notes" --body "x"') as { deny?: string }).deny)
+    .toBeUndefined()
+  // A path in the command is not a message.
+  expect((await bash($, 'git -C ../Oldkeep-Translator commit -m "fix: x"') as { deny?: string }).deny)
+    .toBeUndefined()
+  expect(seen.ran).toHaveLength(2)
+})
+
+test('a malformed names file checks no name', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [NAMES]: '{"repos":{"my-game":{"names":"oldkeep"}}}' })
+  expect((await bash($, `git commit -m 'feat: port the Oldkeep sky'`) as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(1)
+})
 test('a PR edit with no title is judged without the board row, which is named unread', {
   options: { mode: 'enforce' },
 }, async ($, on) => {

@@ -37,7 +37,7 @@ function world(on: On, stats?: Record<string, unknown>) {
 test('/guards shows its arguments in the menu and lists them on help', async ($, on) => {
   const { registered, opened } = world(on)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(registered.find(command => command.name === 'guards')?.argumentHint).toBe('[help | settings]')
+  expect(registered.find(command => command.name === 'guards')?.argumentHint).toBe('[help | settings | set]')
   const help = (await $.command.run({ command: 'guards', args: 'help' } as never)) as { text: string }
   for (const line of help.text.split('\n').slice(1)) expect(line).toMatch(/^ {2}\/guards( \w+)? +\S/)
   // An unknown word gets the same list.

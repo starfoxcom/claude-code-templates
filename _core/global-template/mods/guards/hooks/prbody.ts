@@ -104,7 +104,7 @@ export function readPr(
 }
 
 /** The rule for a repo: of the listed names the repo's name contains (case-insensitive), the longest. */
-export function ruleFor(rules: PrRules | undefined, repo: string): RepoRule | undefined {
+export function ruleFor<T>(rules: { repos: Record<string, T> } | undefined, repo: string): T | undefined {
   const name = repo.toLowerCase()
   const keys = Object.keys(rules?.repos ?? {}).filter(k => k && name.includes(k.toLowerCase()))
   const key = keys.sort((a, b) => b.length - a.length)[0]
