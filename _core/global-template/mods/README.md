@@ -65,7 +65,7 @@ Write `mods-data/guards/pr-body.json` to make `guards` check pull request bodies
 { "repos": { "my-game": { "row": "^(Resolves|Part of) #\\d+\\s*$", "noRow": "^(docs|chore)\\(" } } }
 ```
 
-There, `gh pr create` and `gh pr edit` must pass the body as a file (`--body-file`, never inline `--body`, `--fill` or `--web`), and the body needs `## What` with a bullet, `## Why` with text, and `## Notes` only when it is filled. `row` (optional) is a line every PR body carries, such as its issue link; titles matching `noRow` carry none. A body file the same command writes is checked from what it writes. Without the file, no PR body is checked.
+There, `gh pr create` and `gh pr edit` must pass the body as a file (`--body-file`, never inline `--body`, `--fill` or `--web`), and the body needs `## What` with a bullet, `## Why` with text, and `## Notes` only when it is filled. `row` (optional) is a line every PR body carries, such as its issue link; titles matching `noRow` carry none. A body is checked only where it can be read exactly: a file on disk, a here-doc on stdin, or a `cat` here-doc the same command writes to the body file. A body made any other way (`printf`, a pipe, `< file`, a PowerShell splat) is logged as unread in `decisions.jsonl`, never blocked. Without the file, no PR body is checked.
 
 ### What guards cannot see
 
