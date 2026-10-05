@@ -26,6 +26,8 @@ export type Seen = {
   prState: string
   /** The head commit `gh pr view` reports (default `a1`). */
   head?: string
+  /** How many prompts a hook drops before one enters. */
+  refusals?: number
   /** Each slash command registered, with its argument hint. */
   commands: { name: string; argumentHint?: string }[]
 }
@@ -91,6 +93,10 @@ export function world(on: On) {
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('prompt.submit', ($, e) => {
+    if (seen.refusals) {
+      seen.refusals--
+      return { drop: 'refused' }
+    }
     seen.prompts.push(e.text)
     return { text: e.text }
   })

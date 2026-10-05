@@ -142,7 +142,18 @@ export function mergedNumber(command: string, isPowerShell = false): number | un
   return named ? Number(named[1]) : 0
 }
 
-export function wakeText(watch: Watch): string {
+// How long ago the checks finished, so a late wake shows its delay.
+function finishedAgo(watch: Watch, now?: number): string {
+  if (now === undefined || watch.settledAt === undefined) return ''
+  const minutes = Math.max(0, Math.round((now - watch.settledAt) / 60_000))
+  return minutes === 0 ? ' Checks finished just now.' : ` Checks finished ${minutes} min ago.`
+}
+
+export function wakeText(watch: Watch, now?: number): string {
+  return `${outcomeText(watch)}${finishedAgo(watch, now)}`
+}
+
+function outcomeText(watch: Watch): string {
   const entries = Object.entries(watch.checks)
   const pr = `PR ${watch.repo}#${watch.number}`
   const failed = entries.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
@@ -293,10 +304,12 @@ function isRecorded(saved: readonly Watch[] | undefined, watch: Watch): boolean 
 // A last guard against a second wake from the same instance (two of its polls settling one watch). A
 // hot reload's instances may not share this global (see the owner file above), so across instances the
 // owner file and `isRecorded` are what keep a wake to one.
+const wakeKey = (watch: Watch) => `${watch.id ?? ''}|${watch.repo}#${watch.number}@${watch.headSha}`
+
 export function claimWake(watch: Watch): boolean {
   const shared = globalThis as { __ciWatchWoken?: Set<string> }
   const woken = (shared.__ciWatchWoken ??= new Set())
-  const key = `${watch.id ?? ''}|${watch.repo}#${watch.number}@${watch.headSha}`
+  const key = wakeKey(watch)
   if (woken.has(key)) return false
   woken.add(key)
   return true
@@ -486,8 +499,8 @@ async function poll($: EngineInterface): Promise<void> {
   if (!live.isTurnRunning) await sendHeld($)
 }
 
-// Pending wakes go out once no turn runs: a wake that settles mid-turn waits for the turn's end, since
-// the engine would only run it then anyway, and by then the turn may have merged the PR or pushed a fix.
+// Pending wakes go out from a poll while no turn runs; one that settles mid-turn rides the turn's next
+// tool result instead (takeNotes), and what no tool result carried goes out from the first poll after it.
 // The mark lives in the saved file, so a reload mid-turn sends it from the new module. Each is checked
 // again first: a watch stopped or replaced meanwhile is no longer listed, and a PR merged or closed, or
 // one whose head moved on (its new commit has a watch of its own), wakes nothing. Taken from memory in
@@ -503,8 +516,53 @@ async function sendHeld($: EngineInterface): Promise<void> {
     if (await isClosed($, watch.repo, watch.number)) continue
     const head = await headOf($, watch.repo, watch.number)
     if (head && head !== watch.headSha) continue
-    void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
+    const text = wakeText(watch, await $.clock.now())
+    // A refused wake (a hook drops the prompt, or the call fails) is marked pending again for the next poll.
+    void $.prompt
+      .submit({ text })
+      .then(
+        sent => sent.drop !== undefined,
+        () => true,
+      )
+      .then(isRefused => (isRefused ? markPending($, watch) : undefined))
+      .catch(() => undefined)
   }
+}
+
+// Tries per wake: a hook that drops every prompt is not asked again each minute.
+const MAX_TRIES = 3
+const refusals = new Map<string, number>()
+
+// Saved, not only set in memory: every poll starts from the file. A newer load owns the file once this
+// one is retired, so then only the flag is laid on its copy, and that load sends the wake.
+async function markPending($: EngineInterface, watch: Watch): Promise<void> {
+  const count = (refusals.get(wakeKey(watch)) ?? 0) + 1
+  refusals.set(wakeKey(watch), count)
+  if (count >= MAX_TRIES) return
+  const isSame = (w: Watch) => w.id === watch.id && w.headSha === watch.headSha
+  const mark = (list: Watch[]) => list.map(w => (isSame(w) ? { ...w, wakePending: true } : w))
+  if (await isRetired($)) {
+    const saved = await readState($)
+    if (saved?.watches) await $.fs.write(await statePath($), JSON.stringify({ ...saved, watches: mark(saved.watches) }))
+    return
+  }
+  live.watches = mark(live.watches)
+  live.generation++
+  await save($)
+}
+
+// As the old Monitor did: checks that finish while a turn runs reach it at once, on the next tool result,
+// instead of waiting for the turn's end. Each is taken from the pending list in one step and saved.
+async function takeNotes($: EngineInterface): Promise<string[]> {
+  // A newer load may have taken over while the tool ran: the notes and the file are its own.
+  if (!live.isTurnRunning || (await isRetired($))) return []
+  const due = live.watches.filter(w => w.wakePending)
+  if (due.length === 0) return []
+  live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
+  live.generation++
+  await save($)
+  const now = await $.clock.now()
+  return due.map(w => wakeText(w, now))
 }
 
 // A hot reload starts the module over without a new session.start: the next
@@ -572,16 +630,29 @@ export const register: Register = (on, options) => {
     await startPolling($)
     if (await isRetired($)) return next(e)
     await setTurnRunning($, false)
+    // What is still pending (no tool result carried it) goes out from the next poll, between turns: a
+    // prompt submitted from the turn's own end was seen to vanish.
+    return next(e)
+  })
+
+  // The other common tools carry a finished watch into the running turn too.
+  on('tool.call', { tool: ['Read', 'Edit', 'Write', 'Grep', 'Glob'] }, async ($, e, next) => {
+    await startPolling($)
+    if (await isRetired($)) return next(e)
     const result = await next(e)
-    // From a timer: the turn's own hook is still running, and the wake is a turn of its own.
-    $.clock.after(0, () => void sendHeld($).catch(() => undefined))
-    return result
+    if (e.agentId !== undefined || 'deny' in result) return result
+    const notes = await takeNotes($)
+    return notes.length > 0 ? { ...result, context: [...(result.context ?? []), ...notes] } : result
   })
 
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     await startPolling($)
     if (await isRetired($)) return next(e)
-    const result = await next(e)
+    const answered = await next(e)
+    // A finished watch rides on this result; a subagent's call or a refused one carries none.
+    const notes = e.agentId !== undefined || 'deny' in answered ? [] : await takeNotes($)
+    const isPlain = 'deny' in answered || notes.length === 0
+    const result = isPlain ? answered : { ...answered, context: [...(answered.context ?? []), ...notes] }
     const command = String((e as { command?: unknown }).command ?? '')
     const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
     if (result.deny !== undefined || result.isError) return result
