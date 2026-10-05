@@ -606,10 +606,10 @@ async function readSettings($: EngineInterface): Promise<void> {
   applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
 }
 
-// The time zone and the two timers (pause check, shared card refresh), once per module load.
-async function startTimers($: EngineInterface): Promise<void> {
-  if (live.isStarted) return
-  live.isStarted = true
+// The time zone and the two timers (pause check, shared card refresh), once per module load. Every caller
+// waits for the one start: a command that lands mid-start (a reload's) sees the arm it restores.
+const startTimers = ($: EngineInterface): Promise<void> => (live.started ??= startOnce($).catch(() => undefined))
+async function startOnce($: EngineInterface): Promise<void> {
   await readSettings($)
   await readZone($)
   await refresh($)

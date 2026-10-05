@@ -9,6 +9,7 @@ import {
   cardOf,
   doWork,
   endTurn,
+  moment,
   mountCard,
   NOW,
   PAUSE_FILE,
@@ -586,6 +587,24 @@ test('after a hot reload in the middle of a turn, its end restores the saved arm
   await endTurn($)
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toHaveLength(1)
+})
+
+test('a disarm that lands while a reloaded start is still restoring the saved arm drops it', async ($, on) => {
+  const seen = world(on)
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
+  // The reload's start reads the saved arm; the disarm lands during that read and waits for the start,
+  // which holds the read until the disarm is answered, or a moment if the disarm waits for it.
+  let disarm: Promise<unknown> | undefined
+  seen.duringRead = path => {
+    if (path !== ARM_FILE || disarm) return
+    disarm = $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+    return Promise.race([disarm, moment()])
+  }
+  await start($)
+  expect(((await disarm) as { text: string }).text).toContain('Disarmed')
+  expect(savedArm(seen)).toBe('null')
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
 })
 
 test('after a hot reload while idle, disarm finds the saved arm and drops it', async ($, on) => {
