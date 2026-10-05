@@ -281,6 +281,20 @@ test('an open request ends when its session dies or gets the seat anyway', () =>
   assert.strictEqual(sb.run('status', 'a').requests.length, 0)
 })
 
+test('a request ends in the same write that hands its session the seat', () => {
+  const sb = sandbox()
+  ;['a', 'b'].forEach(id => sb.register(id))
+  sb.run('claim', 'a', 'x')
+  sb.run('claim', 'b', 'x')
+  sb.run('ask', 'b', 'please')
+  sb.run('done', 'a')
+  sb.run('release', 'a')
+  // Read straight from the file: no later command may be needed to sweep it.
+  const s = sb.state()
+  assert.strictEqual(s.seat.session, 'b')
+  assert.deepStrictEqual(s.requests, [])
+})
+
 test('a stale mutex left by a crash is broken', () => {
   const sb = sandbox()
   sb.register('a')

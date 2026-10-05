@@ -306,7 +306,7 @@ async function setUp($: Engine) {
     name: 'pc',
     description:
       'Shared PC seat (one session at a time runs heavy work; heavy commands queue automatically). ' +
-      'hold: claim the PC for a measurement window (minutes 1-60). release: free it early. status: the line. ' +
+      'hold: claim the PC for a measurement window (minutes 1-60). release: free it early, or leave the line. status: the line. ' +
       'request_next: ask the person to let this session go next; give a concrete reason (a window closing, ' +
       'the person waiting on this result, a short job stuck behind a long one).',
     inputSchema: {
@@ -623,9 +623,13 @@ async function toolAction($: Engine, input: ToolInput): Promise<string> {
       const reply = await change($, ['hold', ctx.me, String(input.minutes ?? 15), input.reason ?? 'measurement'])
       return reply.mine === 'seat' ? 'Hold active.' : `Hold queued: #${reply.position} in line.`
     }
-    case 'release':
-      await change($, ['release', ctx.me])
-      return 'Released.'
+    case 'release': {
+      // Frees the seat; a session only waiting in line leaves it instead, so it is never left there.
+      const freed = await change($, ['release', ctx.me])
+      if (freed.mine !== 'line') return 'Released.'
+      const left = await change($, ['leave', ctx.me])
+      return left.mine === 'line' ? `Still #${left.position} in line.` : 'Left the line.'
+    }
     case 'request_next': {
       const reason = input.reason?.trim()
       if (!reason) return 'Refused: request_next needs a concrete reason.'

@@ -227,15 +227,6 @@ function normalize(s, all) {
     return keep
   })
   if (s.nextUp && (t > s.nextUp.until || !isAlive(all, s.nextUp.session))) s.nextUp = null
-  // Skip-the-line requests: shown in every session until answered; an unanswered one ends when its
-  // session dies, gets the seat anyway, or after 15 minutes. An answered one waits for its session to
-  // read it (`ack`), unless that session died.
-  s.requests = s.requests.filter(r => {
-    if (!isAlive(all, r.session)) return false
-    if (r.answer) return true
-    const isServed = s.seat && s.seat.session === r.session && s.seat.since > r.at
-    return !isServed && t - r.at < REQUEST_TTL_MS
-  })
   if (s.seat) {
     const seat = s.seat
     let reason = null
@@ -252,6 +243,16 @@ function normalize(s, all) {
     const reserved = s.nextUp && !s.line.some(e => e.session === s.nextUp.session)
     if (!reserved) grant(s, s.line.shift())
   }
+  // Skip-the-line requests: shown in every session until answered; an unanswered one ends when its
+  // session dies, gets the seat anyway, or after 15 minutes. An answered one waits for its session to
+  // read it (`ack`), unless that session died. Swept after the seat changes hands, so a request whose
+  // session was just granted the seat ends in the same pass.
+  s.requests = s.requests.filter(r => {
+    if (!isAlive(all, r.session)) return false
+    if (r.answer) return true
+    const isServed = s.seat && s.seat.session === r.session && s.seat.since > r.at
+    return !isServed && t - r.at < REQUEST_TTL_MS
+  })
   return s
 }
 
