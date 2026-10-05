@@ -39,16 +39,19 @@ const live = {
 }
 
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
-// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. It is
-// carried only onto the same head: a wake held for an older one (an incident's) never reaches a new head.
+// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. So is
+// an incident's note, while the watch is still unsettled on the same head (the poll drops it otherwise).
+// The polled copy itself is kept whenever nothing differs: the poll finds its settled watches by identity.
 function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   const same = (a: Watch, b: Watch) =>
     a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
   return current.map(w => {
     const p = polled.find(p => same(p, w))
     if (!p) return w
-    const isKept = Boolean(p.wakePending) === Boolean(w.wakePending) || p.headSha !== w.headSha
-    return isKept ? p : { ...p, wakePending: w.wakePending }
+    const incidentPending = !p.outcome && p.headSha === w.headSha ? w.incidentPending : p.incidentPending
+    const isKept =
+      Boolean(p.wakePending) === Boolean(w.wakePending) && Boolean(p.incidentPending) === Boolean(incidentPending)
+    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending }
   })
 }
 
@@ -358,7 +361,15 @@ async function noteIncidents($: EngineInterface, now: number): Promise<boolean> 
   if (!live.watches.some(isWaiting)) return false
   const incident = await readIncident($, now)
   if (!incident) return false
-  live.watches = live.watches.map(w => (isWaiting(w) ? { ...w, incident, wakePending: true } : w))
+  // Another load may have noted it while this one read GitHub (two stay active when the owner file cannot
+  // be written): its saved note stands, and is taken over without a second wake.
+  const saved = await readSaved($)
+  const notedAs = (w: Watch) => saved?.find(s => s.id === w.id && s.headSha === w.headSha && s.incident)?.incident
+  live.watches = live.watches.map(w => {
+    if (!isWaiting(w)) return w
+    const noted = notedAs(w)
+    return noted ? { ...w, incident: noted } : { ...w, incident, incidentPending: true }
+  })
   return true
 }
 
@@ -394,8 +405,7 @@ async function poll($: EngineInterface): Promise<void> {
             checks: {},
             quietSince: undefined,
             incident: undefined,
-            // A wake held for the old head (an incident's) would go out as the new head's settlement.
-            wakePending: undefined,
+            incidentPending: undefined,
           }
         : current
     let checks: Record<string, string> | undefined
@@ -411,11 +421,13 @@ async function poll($: EngineInterface): Promise<void> {
       // A failed read (network, auth, no checks yet) is not a quiet poll: the count stands and the
       // next poll tries again. Only the time limit can settle the watch meanwhile.
     }
-    const next = checks
+    const polled = checks
       ? settle(base, checks, now, live.timeoutMs, live.pollMs)
       : now - base.startedAt > live.timeoutMs
         ? { ...base, outcome: 'timeout' as const, settledAt: now }
         : base
+    // Settled: its own wake says it all, so an incident note not sent yet is dropped.
+    const next = polled.outcome && polled.incidentPending ? { ...polled, incidentPending: undefined } : polled
     kept.push(next)
     changed = true
     if (next.outcome) settled.push(next)
@@ -446,11 +458,14 @@ async function poll($: EngineInterface): Promise<void> {
 // again first: a watch stopped or replaced meanwhile is no longer listed, and a PR merged or closed, or
 // one whose head moved on (its new commit has a watch of its own), wakes nothing. Taken from memory in
 // one step and saved as sent before any prompt goes out, so no wake goes twice.
+const isHeld = (w: Watch) => Boolean(w.wakePending || w.incidentPending)
+const asSent = (w: Watch): Watch => (isHeld(w) ? { ...w, wakePending: undefined, incidentPending: undefined } : w)
+
 async function sendHeld($: EngineInterface): Promise<void> {
   if (await isRetired($)) return
-  const held = live.watches.filter(w => w.wakePending)
+  const held = live.watches.filter(isHeld)
   if (held.length === 0) return
-  live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
+  live.watches = live.watches.map(asSent)
   live.generation++
   await save($)
   for (const watch of held) {
@@ -483,7 +498,11 @@ async function markPending($: EngineInterface, watch: Watch): Promise<void> {
   refusals.set(triesKey(watch), count)
   if (count >= MAX_TRIES) return
   const isSame = (w: Watch) => w.id === watch.id && w.headSha === watch.headSha
-  const mark = (list: Watch[]) => list.map(w => (isSame(w) ? { ...w, wakePending: true } : w))
+  // An incident's note is marked again only while the watch is still unsettled: once it settled, its own
+  // wake goes out instead.
+  const marked = (w: Watch): Watch =>
+    watch.outcome ? { ...w, wakePending: true } : w.outcome ? w : { ...w, incidentPending: true }
+  const mark = (list: Watch[]) => list.map(w => (isSame(w) ? marked(w) : w))
   if (await isRetired($)) {
     const saved = await readState($)
     if (saved?.watches) await $.fs.write(await statePath($), JSON.stringify({ ...saved, watches: mark(saved.watches) }))
@@ -499,9 +518,9 @@ async function markPending($: EngineInterface, watch: Watch): Promise<void> {
 async function takeNotes($: EngineInterface): Promise<string[]> {
   // A newer load may have taken over while the tool ran: the notes and the file are its own.
   if (!live.isTurnRunning || (await isRetired($))) return []
-  const due = live.watches.filter(w => w.wakePending)
+  const due = live.watches.filter(isHeld)
   if (due.length === 0) return []
-  live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
+  live.watches = live.watches.map(asSent)
   live.generation++
   await save($)
   const now = await $.clock.now()

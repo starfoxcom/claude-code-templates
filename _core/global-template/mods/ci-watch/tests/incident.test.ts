@@ -159,3 +159,46 @@ test('a held incident wake stays off a moved head when another watch changes dur
   await clock.advance(POLL_MS)
   expect(seen.prompts.filter(text => text.includes('settled with no failure'))).toEqual([])
 })
+
+test('an incident note taken by a tool while the watch settles still leaves the settlement wake', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.status = ACTIONS
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'text' }) as never)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+  for (let i = 0; i < 31; i++) await clock.advance(POLL_MS)
+  seen.bucket = 'pass'
+  await clock.advance(POLL_MS)
+  // The settling poll waits on gh while a tool call carries the incident note into the turn.
+  let carried: unknown
+  seen.duringChecks = async () => {
+    seen.duringChecks = undefined
+    carried = await $.tool.call({ tool: 'Read', file_path: 'C:/repo/a.txt' } as never)
+  }
+  await clock.advance(POLL_MS)
+  expect(JSON.stringify(carried)).toContain('GitHub reports an open incident')
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('settled with no failure'))).toHaveLength(1)
+})
+
+test('an incident another load noted while this one read GitHub is not sent twice', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let i = 0; i < 30; i++) await clock.advance(POLL_MS)
+  // The other load (both active: the owner file could not be written) notes and sends it meanwhile.
+  seen.status = ACTIONS
+  seen.duringStatus = () => {
+    const saved = JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: { incident?: string }[] }
+    for (const watch of saved.watches) watch.incident = 'Incident with Actions'
+    seen.files.set(STATE, JSON.stringify(saved))
+  }
+  for (let i = 0; i < 3; i++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
+  expect(seen.files.get(STATE)).toContain('Incident with Actions')
+})
