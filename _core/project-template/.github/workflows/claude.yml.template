@@ -183,15 +183,21 @@ jobs:
         id: failure_class
         if: steps.claude_attempt_1.outcome == 'failure'
         run: |
-          # The action saves the CLI's messages to a file on disk. Only its final
-          # `result` message is read. The rest of that file, and the job log
-          # (which prints the whole prompt), hold the PR's own body, diff and
-          # comments, whose words must not decide the failure class. A model cap
-          # reads "You've reached your <model> limit" with HTTP 429, the plan cap
-          # "You've hit your limit · resets …". A missing or unreadable file
-          # counts as transient: the cost is one same-model retry.
-          RESULT=$(jq -c '[.[]? | select(.type == "result")] | last // empty'             "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
-          if printf '%s' "$RESULT" | grep -qiE 'rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
+          # The action saves the CLI's messages to a file on disk. Only two
+          # fields of its final `result` message are read, both written by the
+          # CLI: the API's HTTP status, and the result text when `is_error` is
+          # set (then it is the API's error, not the model's words). Everything
+          # else can carry the PR's own words: the job log prints the whole
+          # prompt, the other messages hold the diff and comments, and the
+          # result's own fields hold the model's final text and the commands it
+          # was refused. A model cap returns HTTP 429, the plan cap reads
+          # "You've hit your limit · resets …". A missing or unreadable file,
+          # or a cap reported anywhere else, counts as transient: the cost is
+          # one same-model retry.
+          RESULT=$(jq -r '[.[]? | select(.type == "result")] | last // empty
+            | "status=\(.api_error_status // "") \(if .is_error == true then .result // "" else "" end)"' \
+            "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
+          if printf '%s' "$RESULT" | grep -qiE '^status=429|rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit'; then
             echo "::warning::Usage limit detected in attempt 1 — skipping the same-model retry, falling back to the backup model"
             echo "usage_limit=true" >> "$GITHUB_OUTPUT"
           else
