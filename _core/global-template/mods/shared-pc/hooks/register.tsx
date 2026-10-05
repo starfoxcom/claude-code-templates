@@ -404,7 +404,7 @@ async function handleRequests($: Engine, s: State) {
       await pcctl($, ['ack', ctx.me])
       // A prompt, never a note added to the transcript: the session may be waiting on the answer, and a
       // note sent mid-turn woke nothing once the turn ended. Submitted during a turn, it runs right after.
-      await $.prompt.submit({ text }).catch(() => undefined)
+      void $.prompt.submit({ text }).catch(() => undefined)
     }
   }
 }
@@ -617,8 +617,8 @@ async function toolAction($: Engine, input: ToolInput): Promise<string> {
       const reply = await change($, ['ask', ctx.me, reason])
       if (reply.error) return `Request failed: ${reply.error}`
       return (
-        'Request shown to the person in every session. Their answer arrives as a note; keep to light work ' +
-        'meanwhile.'
+        'Request shown to the person in every session. Their answer arrives as a new prompt after this ' +
+        'turn; keep to light work meanwhile.'
       )
     }
     default:
