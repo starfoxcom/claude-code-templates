@@ -78,6 +78,8 @@ export function readPr(
     if (/^[@$]/.test(w) && (given[i]?.dynamic || w.startsWith('@')) && !isFlagValue) call.isUnknown = true
     // Only plain spellings are judged; any other is named unread, never read a second, different way.
     if (/^-[A-Za-z]./.test(w) && !isFlagValue) call.isUnknown = true
+    // A PR named by URL (or a branch with a slash) may live in another repo than the folder's.
+    if (!w.startsWith('-') && w.includes('/') && !isFlagValue) call.isUnknown = true
     // Any word the shell may change (a variable, `$'...'`, `$(...)`, a backtick): judged only as typed.
     if (given[i]?.dynamic || /[$`]/.test(w)) call.isUnknown = true
     if (FILL.test(w)) call.isFilled = true
