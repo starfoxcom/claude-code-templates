@@ -26,6 +26,13 @@ export function isOwnRow(row: Pick<ConfigRow, 'key' | 'provider'>): boolean {
   return row.provider?.plugin === PLUGIN || owner === PLUGIN || owner.startsWith(`${PLUGIN}@`)
 }
 
+// True when /config listed fine yet holds no plugin's row at all, ours or another's: that surface leaves
+// plugin settings out of its list (the Desktop app does). Other plugins' rows there mean ours are missing
+// for some other reason, which emptyNote names; a failed list says nothing about the surface.
+export function leavesPluginsOut(listed: readonly Pick<ConfigRow, 'key' | 'provider'>[] | Error): boolean {
+  return !(listed instanceof Error) && !listed.some(row => isOwnRow(row) || row.provider?.plugin !== 'engine')
+}
+
 // Shown when none of the rows is this plugin's: what /config did list (or why it could not), so one
 // look on that surface tells why the pane is empty. The rows other plugins own are the telling ones (none
 // at all: that surface lists no plugin settings), so they are named and the engine's own only counted.
@@ -159,9 +166,9 @@ export const register: Register = (on, options) => {
     const listedRows = listed instanceof Error ? [] : listed.filter(isOwnRow)
     const shown = await read($, view)
     const errors = shown?.errors ?? {}
-    // Listed, yet no row of ours while we have values: this surface leaves plugin rows out of /config, so the
-    // pane draws them from the manifest and tries each change anyway. A failed list tells nothing of that.
-    const isUnlisted = !(listed instanceof Error) && listedRows.length === 0 && Object.keys(options).length > 0
+    // This surface leaves plugin rows out of /config: the pane draws ours from the manifest and tries each
+    // change anyway.
+    const isUnlisted = leavesPluginsOut(listed) && Object.keys(options).length > 0
     const rows = isUnlisted ? unlistedRows(options, await fieldsOf($)) : listedRows
     const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
     return (
