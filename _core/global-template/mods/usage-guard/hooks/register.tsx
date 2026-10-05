@@ -672,8 +672,10 @@ export const register: Register = (on, options) => {
     await readZone($)
     const pause = await readPause($)
     if (pause?.status === 'active') await meetPause($, pause)
-    await registerSurface($)
+    // The timers (and with them a saved arm) first: a refused command must never cost the arm's wake,
+    // and a start after a reload may find /usage-guard already registered.
     await startTimers($)
+    await registerSurface($).catch(() => undefined)
     return result
   })
 
