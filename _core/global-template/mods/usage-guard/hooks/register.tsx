@@ -31,6 +31,7 @@ import {
   WRAP_UP_ARGS,
 } from './plan'
 import { stopCommandsFor } from './rules'
+import { register as phone } from './phone'
 import { register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton, Zone } from './texts'
 import {
@@ -668,6 +669,7 @@ export const register: Register = (on, options) => {
   live.compactAbovePercent = Number(options.compactAbovePercent ?? 25)
   live.catchUpMinutes = Number(options.catchUpMinutes ?? 30)
   settings(on, options)
+  phone(on, options)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
