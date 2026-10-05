@@ -68,12 +68,21 @@ test('a rule applies to every repo whose name contains its key', () => {
   expect(ruleFor(undefined, 'emberholm')).toBeUndefined()
 })
 
-test('a word that may stand for several flags makes the call unknown, never judged', () => {
+test('a word the shell may change makes the call unknown, never judged', () => {
   expect(pr('create', ['@params']).isUnknown).toBe(true)
   expect(pr('create', [dyn('$ARGS')]).isUnknown).toBe(true)
-  expect(pr('create', ['--title', dyn('$T'), '--body-file', 'b.md']).isUnknown).toBe(false)
-  expect(pr('create', [dyn('--title=$T'), '--body-file', 'b.md']).isUnknown).toBe(false)
+  // A value too: a repo, title or label built at run time is not the text the check would read.
+  expect(pr('create', ['-R', dyn('$OWNER/$REPO'), '--body-file', 'b.md']).isUnknown).toBe(true)
+  expect(pr('create', [dyn('--title=$T'), '--body-file', 'b.md']).isUnknown).toBe(true)
+  // An ANSI-C string reaches the reading with its quotes gone and the `$` left in front.
+  expect(pr('create', ['-t', '$docs(x): y', '--body-file', 'b.md']).isUnknown).toBe(true)
+  expect(pr('create', ['--title', 'feat: x', '--body-file', 'b.md']).isUnknown).toBe(false)
   expect(checkCall(pr('create', ['@params']))).toBeUndefined()
+})
+
+test('a second body file makes the call unknown: gh sends the last one', () => {
+  expect(pr('create', ['-t', 't', '-F', 'a.md', '-F', 'b.md']).isUnknown).toBe(true)
+  expect(pr('create', ['-t', 't', '-F', 'b.md']).isUnknown).toBe(false)
 })
 
 test("a section ends at the repo's own board-row line, whatever its verb", () => {
@@ -85,11 +94,6 @@ test("a section ends at the repo's own board-row line, whatever its verb", () =>
   expect(checkBody('## What\n- a\n## Why\nResolves #4', 'feat: x', {})).toBeUndefined()
 })
 
-test('a variable after a flag that takes no value may carry any flag', () => {
-  expect(pr('create', ['--draft', dyn('$FLAGS')]).isUnknown).toBe(true)
-  expect(pr('create', ['-d', dyn('$FLAGS')]).isUnknown).toBe(true)
-  expect(pr('create', ['--label', dyn('$L'), '--body-file', 'b.md']).isUnknown).toBe(false)
-})
 
 test('of overlapping repo keys the longest wins, whatever the file order', () => {
   const short = { row: 'a' }
@@ -107,7 +111,7 @@ test('a title built at run time is marked, in every spelling', () => {
 })
 
 test('the value of --recover is a value, never a flag', () => {
-  expect(pr('create', ['--recover', dyn('$STATE'), '--body-file', 'b.md']).isUnknown).toBe(false)
+  expect(pr('create', ['--recover', '-x.json', '--body-file', 'b.md']).isUnknown).toBe(false)
 })
 
 test('a row pattern matches a whole line, so a bullet that mentions it neither ends a section nor counts', () => {
