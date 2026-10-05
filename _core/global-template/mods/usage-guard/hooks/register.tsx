@@ -7,7 +7,9 @@ import { outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactA
 import type { Pause } from './plan'
 import {
   CLAIM,
+  countOpenTasks,
   covers,
+  EMPTY_ARM_NOTE,
   hotLimits,
   NO_WORK_NOTICE,
   joinPause,
@@ -232,8 +234,9 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   if (live.workSession !== (await $.session.id())) {
     await notice(
       $,
-      `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, waiting. Work resumes on ` +
-        `its own at ${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`,
+      `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, so this session does not ` +
+        `wake by itself at ${resumeAt}; /usage-guard arm 5h|week sets it to. /usage-guard cancel skips the ` +
+        'automatic resume of the sessions that saved work.',
     )
     return
   }
@@ -440,6 +443,24 @@ async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> 
   await update($, armedWake, () => arm)
 }
 
+// The open tasks in this session's list, from the tasks mod's copy: none when that mod keeps lists but
+// none for this session. Undefined without the tasks mod, or when the list cannot be read.
+async function openTasks($: EngineInterface): Promise<number | undefined> {
+  const dir = (await dataDir($)).replace(/usage-guard$/, 'tasks')
+  try {
+    await $.fs.list(dir)
+  } catch {
+    return undefined
+  }
+  try {
+    return countOpenTasks(String(await $.fs.read(`${dir}/${await $.session.id()}.json`)))
+  } catch {
+    return 0
+  }
+}
+
+// An arm with nothing pending is still set, since the person asked for it, but says so and asks: a card
+// above the prompt where there is one, and the answer itself names the command for a surface without it.
 // `compact`: the person asked for it, so it runs whatever the context's size or the time to the wake.
 async function armByHand($: EngineInterface, which: string, option: string): Promise<string> {
   if (option !== '' && option !== 'compact')
@@ -447,14 +468,25 @@ async function armByHand($: EngineInterface, which: string, option: string): Pro
   const { rateLimits } = await $.session.usage()
   const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
   if (typeof planned === 'string') return planned
-  await setArm($, planned)
+  const isEmpty = (await openTasks($)) === 0
+  await setArm($, isEmpty ? { ...planned, isQuestioned: true } : planned)
   await scheduleArm($, planned)
-  const armed =
+  const lines = [
     `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
-    `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`
-  if (option !== 'compact') return armed
-  $.clock.after(COMPACT_DELAY_MS, () => void compactNow($).catch(() => undefined))
-  return `${armed}\nCompacting this session in a moment; /usage-guard then says how it went.`
+      `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`,
+  ]
+  if (isEmpty) lines.push(EMPTY_ARM_NOTE)
+  if (option === 'compact') {
+    $.clock.after(COMPACT_DELAY_MS, () => void compactNow($).catch(() => undefined))
+    lines.push('Compacting this session in a moment; /usage-guard then says how it went.')
+  }
+  return lines.join('\n')
+}
+
+// The card's Keep: the arm stands, and the question goes.
+async function keepArm($: EngineInterface): Promise<void> {
+  const current = await read($, armedWake)
+  if (current?.isQuestioned) await setArm($, { ...current, isQuestioned: false })
 }
 
 // Drops the arm set by hand. A pause's own resume is the pause's: /usage-guard cancel stops it.
@@ -549,10 +581,44 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   )
 }
 
+type Tone = 'green' | 'blue' | 'yellow'
+
 // yellow: the person may act (cancel the resume, run /session-start); blue: information; green: good news.
-function cardTone(id: string): 'green' | 'blue' | 'yellow' {
+function cardTone(id: string): Tone {
   if (id.startsWith('reset:')) return 'green'
   return id.startsWith('cancelled:') ? 'blue' : 'yellow'
+}
+
+type CardButton = { key: string; label: string; isPrimary?: boolean; onPress: () => unknown }
+type Card = { key: string; tone: Tone; text: string; buttons: CardButton[] }
+
+// What shows above the prompt: the shared card every session draws (pause, resume, cancel), then this
+// session's own question about an arm set with nothing pending.
+async function cardsAbove($: EngineInterface): Promise<Card[]> {
+  const cards: Card[] = []
+  const shown = await read($, band)
+  if (shown?.card) {
+    const buttons: CardButton[] = [
+      { key: 'usage-dismiss', label: 'Dismiss', isPrimary: true, onPress: () => dismissCard($) },
+    ]
+    if (shown.canCancel) {
+      const label = 'Cancel auto-resume (all sessions)'
+      buttons.push({ key: 'usage-cancel', label, onPress: () => cancelFromCard($) })
+    }
+    cards.push({ key: 'usage-card', tone: cardTone(shown.card.id), text: shown.card.text, buttons })
+  }
+  const arm = await read($, armedWake)
+  if (arm?.isQuestioned) {
+    const text =
+      `Armed to resume at ${localTime(arm.wakeAt)}, but nothing is pending here (no open task that is not on ` +
+      'hold), so the wake-up will have nothing to do.'
+    const buttons: CardButton[] = [
+      { key: 'usage-arm-keep', label: 'Keep it', isPrimary: true, onPress: () => keepArm($) },
+      { key: 'usage-arm-cancel', label: 'Cancel the resume', onPress: () => disarm($) },
+    ]
+    cards.push({ key: 'usage-arm-question', tone: 'yellow', text, buttons })
+  }
+  return cards
 }
 
 export const register: Register = (on, options) => {
@@ -571,39 +637,45 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // The card: the same bordered look as shared-pc's, drawn above whatever the
-  // other mods draw there. It stays until someone dismisses it, in any session.
+  // The cards: the same bordered look as shared-pc's, drawn above whatever the
+  // other mods draw there. Each stays until it is answered or dismissed.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inner = await next(e)
     if (e.props.hasSurvey) return inner
-    const shown = await read($, band)
-    if (!shown?.card) return inner
-    const tone = cardTone(shown.card.id)
+    const cards = await cardsAbove($)
+    if (cards.length === 0) return inner
     const { Box, Button, Text } = $.ui.resolve(e)
+    const width = Math.max(30, Math.min(64, e.props.bodyColumns - 2))
     return (
       <Box flexDirection="column">
-        <Box
-          alignSelf="flex-end"
-          width={Math.max(30, Math.min(64, e.props.bodyColumns - 2))}
-          flexDirection="column"
-          borderStyle="double"
-          borderColor={tone}
-          backgroundColor="black"
-          paddingX={1}
-        >
-          <Text bold color="black" backgroundColor={tone}>
-            {' USAGE GUARD '}
-          </Text>
-          <Text bold color={tone} wrap="wrap">
-            {shown.card.text}
-          </Text>
-          <Box>
-            <Button key="usage-dismiss" label="Dismiss" variant="primary" onPress={() => dismissCard($)} />
-            {shown.canCancel && (
-              <Button key="usage-cancel" label="Cancel auto-resume (all sessions)" onPress={() => cancelFromCard($)} />
-            )}
+        {cards.map(card => (
+          <Box
+            key={card.key}
+            alignSelf="flex-end"
+            width={width}
+            flexDirection="column"
+            borderStyle="double"
+            borderColor={card.tone}
+            backgroundColor="black"
+            paddingX={1}
+          >
+            <Text bold color="black" backgroundColor={card.tone}>
+              {' USAGE GUARD '}
+            </Text>
+            <Text bold color={card.tone} wrap="wrap">
+              {card.text}
+            </Text>
+            <Box>
+              {card.buttons.map(({ key, label, isPrimary, onPress }) =>
+                isPrimary ? (
+                  <Button key={key} label={label} variant="primary" onPress={onPress} />
+                ) : (
+                  <Button key={key} label={label} onPress={onPress} />
+                ),
+              )}
+            </Box>
           </Box>
-        </Box>
+        ))}
         {inner}
       </Box>
     )

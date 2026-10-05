@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import { CACHE_LIFE_MS, outcomeOf, outcomeText, shouldCompactAtPause } from '../hooks/compact'
 import type { Pause } from '../hooks/plan'
-import { CLAIM, NO_WORK_NOTICE, planArm, WRAP_UP_ARGS } from '../hooks/plan'
+import { CLAIM, countOpenTasks, EMPTY_ARM_NOTE, NO_WORK_NOTICE, planArm, WRAP_UP_ARGS } from '../hooks/plan'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
 
 // The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
@@ -16,6 +16,7 @@ const RESET = '2026-10-02T19:00:00.000Z'
 const WAKE = Date.parse(RESET) + 2 * 60_000
 const PAUSE_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/pause.json'
 const CARD_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/card.json'
+const TASKS_DIR = 'C:/Users/me/.claude/mods-data/tasks'
 const KEY = String(Date.parse(RESET))
 const SUMMARY = [{ role: 'user' as const, text: 'summary', toolUses: [] }]
 
@@ -40,6 +41,8 @@ type World = {
   compactResult: SessionCompactResult | Error
   /** Every text the status line was given, undefined for a cleared one. */
   statuses: (string | undefined)[]
+  /** The tasks mod keeps its lists here; without it the folder cannot be listed. */
+  hasTasksMod?: boolean
 }
 
 function world(on: On, root = 'C:/Repos/my-game'): World {
@@ -64,6 +67,10 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     const text = seen.files.get(key(e.path))
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
+  })
+  on('fs.list', ($, e) => {
+    if (!seen.hasTasksMod || key(e.path) !== TASKS_DIR) throw new Error('ENOENT')
+    return { value: [] as never }
   })
   on('fs.write', ($, e) => {
     seen.files.set(key(e.path), e.text)
@@ -1009,4 +1016,70 @@ test('a compaction counts as freeing context only when its sizes show it', () =>
     'The compaction did not free context: its size afterwards was not reported, so the session keeps its full context.',
   )
   expect(text({ skip: 'vetoed' })).toBe('Not compacted: vetoed')
+})
+
+// This session's list as the tasks mod keeps it.
+function tasksFile(seen: World, tasks: { status: string; hold?: string }[]): void {
+  seen.hasTasksMod = true
+  seen.files.set(`${TASKS_DIR}/${seen.sessionId}.json`, JSON.stringify({ session: seen.sessionId, tasks }))
+}
+
+const arm5h = async ($: Engine) =>
+  ((await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)) as { text: string }).text
+
+test('an arm with nothing pending is set, says so, and the card keeps it', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [{ status: 'completed' }, { status: 'pending', hold: 'Alex at the PC' }])
+  await start($)
+  const text = await arm5h($)
+  expect(text).toContain('Armed: this session resumes')
+  expect(text).toContain(EMPTY_ARM_NOTE)
+  const ui = await mountCard($)
+  expect(await ui.find({ key: 'usage-arm-question' })).toBeDefined()
+  await ui.press({ key: 'usage-arm-keep' })
+  expect(await ui.find({ key: 'usage-arm-question' })).toBeUndefined()
+  // Kept: the arm still resumes the session at its wake.
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
+test("an arm with nothing pending is dropped by the card's cancel", async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [])
+  await start($)
+  await arm5h($)
+  const ui = await mountCard($)
+  await ui.press({ key: 'usage-arm-cancel' })
+  expect(await ui.find({ key: 'usage-arm-question' })).toBeUndefined()
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+})
+
+test('an arm with nothing pending in a session that never made a list still asks', async ($, on) => {
+  const seen = world(on)
+  seen.hasTasksMod = true
+  await start($)
+  expect(await arm5h($)).toContain(EMPTY_ARM_NOTE)
+})
+
+test('an arm with an open task, or without the tasks mod to tell, asks nothing', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  // No tasks mod: whether anything is pending is not known, so nothing is said.
+  expect(await arm5h($)).not.toContain(EMPTY_ARM_NOTE)
+  tasksFile(seen, [{ status: 'in_progress' }])
+  expect(await arm5h($)).not.toContain(EMPTY_ARM_NOTE)
+  const ui = await mountCard($)
+  expect(await ui.find({ key: 'usage-arm-question' })).toBeUndefined()
+})
+
+test('open tasks are the ones not completed, not dropped and not on hold', () => {
+  const list = (tasks: unknown[]) => JSON.stringify({ tasks })
+  expect(countOpenTasks(list([]))).toBe(0)
+  expect(countOpenTasks(list([{ status: 'pending' }, { status: 'in_progress' }]))).toBe(2)
+  expect(countOpenTasks(list([{ status: 'completed' }]))).toBe(0)
+  expect(countOpenTasks(list([{ status: 'pending', hold: 'a decision' }]))).toBe(0)
+  expect(countOpenTasks(list([{ status: 'pending', droppedAt: 1 }]))).toBe(0)
+  expect(countOpenTasks('not json')).toBeUndefined()
+  expect(countOpenTasks('{}')).toBeUndefined()
 })

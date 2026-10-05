@@ -31,6 +31,8 @@ export type ArmedWake = {
   kind: string
   resetsAt: string
   wakeAt: number
+  /** Armed with nothing pending: the card above the prompt asks to keep or cancel it, until answered. */
+  isQuestioned?: boolean
 }
 
 declare module 'claude-code' {
