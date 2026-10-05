@@ -1,67 +1,36 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
 import type { ArmedWake, UsageCard } from '../types'
+import { catchUpOf, caughtUpText, missedArmText, parseSavedArm, quietResumePrompt, quietResumeText } from './arms'
+import type { CompactOutcome, Fill } from './compact'
+import { measured, outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
 import type { Pause } from './plan'
-import {
-  CLAIM,
-  covers,
-  hotLimits,
-  NO_WORK_NOTICE,
-  joinPause,
-  LIMIT_NAMES,
-  limitName,
-  planArm,
-  planPause,
-  projectOf,
-  resetKey,
-  resumePrompt,
-  WRAP_UP_ARGS,
-} from './plan'
+import { CLAIM, countOpenTasks, covers, EMPTY_ARM_NOTE, hotLimits, joinPause, LIMIT_NAMES, limitName } from './plan'
+import { NO_WORK_NOTICE, planArm, planPause, projectOf, resetKey, resumePrompt, WRAP_UP_ARGS } from './plan'
 import { stopCommandsFor } from './rules'
+import { drawArmLine, drawCards } from './cards'
+import { register as phone } from './phone'
 import { register as settings, SETTINGS_PANE } from './settings'
+import type { Card, CardButton } from './texts'
+import type { Live } from './live'
+import { newLive } from './live'
+import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, formatLocal, HELP, pausedText } from './texts'
+import { questionText, READ_ZONE, UNCONFIRMED_NOTICE, zoneOf } from './texts'
 
 const CHECK_EVERY_MS = 60_000
+// A beat after a command or the wrap-up's turn ends before compacting, so the engine is between turns.
+const COMPACT_DELAY_MS = 1_000
 // How often the card above the prompt re-reads the shared files, so a Dismiss
 // or a cancel in one session shows in the others.
 const REFRESH_MS = 2_000
+const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
 const band = atom({ plugin: 'usage-guard', key: 'band' } as const, null)
 const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
-const READ_ZONE = [
-  'node',
-  '-e',
-  'console.log(new Date().getTimezoneOffset() + " " + Intl.DateTimeFormat().resolvedOptions().timeZone)',
-]
-
-type Zone = { offsetMinutes: number; name: string }
-
-// Module state: a hot reload starts it over, which is safe because the pause
+const armNote = atom({ plugin: 'usage-guard', key: 'armNote' } as const, null)
+// Module state (its type in live.ts): a hot reload starts it over, which is safe because the pause
 // itself lives in the shared file.
-const live: {
-  zone: Zone
-  isTurnRunning: boolean
-  isStarted: boolean
-  /** The session id whose tool calls changed something: a /clear goes on under a new id with none. */
-  workSession?: string
-  isStatusShown: boolean
-  wakeTimer?: Timer
-  /** The wake the person armed by hand (`armedWake`), counting down in this module. */
-  armTimer?: Timer
-  /** A wrap-up due when the running turn ends: the pause it is for. */
-  pendingWrapUp?: Pause
-  /** Claims this module already holds or found taken, so a 60-second check spawns no helper. */
-  handled: Set<string>
-  wrapUpAt: number
-  delayMinutes: number
-} = {
-  zone: { offsetMinutes: 0, name: 'UTC' },
-  isTurnRunning: false,
-  isStarted: false,
-  isStatusShown: false,
-  handled: new Set(),
-  wrapUpAt: 90,
-  delayMinutes: 2,
-}
+const live: Live = newLive()
 
 async function dataDir($: EngineInterface): Promise<string> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
@@ -111,17 +80,15 @@ async function claim($: EngineInterface, name: string): Promise<boolean> {
 async function readZone($: EngineInterface): Promise<void> {
   try {
     const { exitCode, stdout } = await $.process.run(READ_ZONE, { timeoutMs: 10_000 })
-    const [offset, name] = stdout.trim().split(' ')
-    if (exitCode === 0 && Number.isFinite(Number(offset)) && name) live.zone = { offsetMinutes: Number(offset), name }
+    const zone = exitCode === 0 ? zoneOf(stdout) : undefined
+    if (zone) live.zone = zone
   } catch {
     // UTC stays; the times shown say so.
   }
 }
 
 function localTime(ms: number): string {
-  const local = new Date(ms - live.zone.offsetMinutes * 60_000)
-  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][local.getUTCDay()]
-  return `${day} ${local.toISOString().slice(0, 16).replace('T', ' ')} (${live.zone.name})`
+  return formatLocal(ms, live.zone)
 }
 
 // A note in this session's transcript. What the person sees is the card above
@@ -180,24 +147,12 @@ async function cancelPause($: EngineInterface, pause: Pause): Promise<void> {
   await disarm($)
   await writePause($, { ...pause, status: 'cancelled' })
   setStatus($, undefined)
-  await showCard(
-    $,
-    `cancelled:${pause.resetsAt}`,
-    'Automatic resume cancelled for every session. Run /session-start in a session when you want to pick its ' +
-      'saved work back up.',
-  )
+  await showCard($, `cancelled:${pause.resetsAt}`, CANCELLED_TEXT)
 }
 
 async function cancelFromCard($: EngineInterface): Promise<void> {
   const pause = await readPause($)
   if (pause?.status === 'active') await cancelPause($, pause)
-}
-
-function pausedText(pause: Pause): string {
-  return (
-    `${limitName(pause)} plan usage at ${pause.percentUsed}%. Sessions save their work and pause. Work ` +
-    `resumes on its own at ${localTime(pause.wakeAt)}.`
-  )
 }
 
 async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
@@ -218,12 +173,13 @@ async function stopBackground($: EngineInterface, pause: Pause): Promise<void> {
 async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
   setStatus($, `Plan limit near: paused until ${resumeAt}`)
-  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
+  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause, localTime(pause.wakeAt)))
   if (live.workSession !== (await $.session.id())) {
     await notice(
       $,
-      `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, waiting. Work resumes on ` +
-        `its own at ${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`,
+      `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, so this session does not ` +
+        `wake by itself at ${resumeAt}; /usage-guard arm 5h|week sets it to. /usage-guard cancel skips the ` +
+        'automatic resume of the sessions that saved work.',
     )
     return
   }
@@ -261,6 +217,7 @@ async function runPendingWrapUp($: EngineInterface): Promise<void> {
 
 async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
+  live.compactAfterTurn = pause
   if (await hasCommand($, 'session-close')) {
     void $.command.run({ command: 'session-close', args: WRAP_UP_ARGS }).catch(() => undefined)
   } else {
@@ -270,14 +227,76 @@ async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
   }
 }
 
-// When a claim helper fails at the wake: whether this session should go on by itself is not known.
-const UNCONFIRMED_NOTICE =
-  'Plan limits have reset. Whether this session should go on by itself could not be confirmed, so it waits ' +
-  'for you; resume it by hand.'
+// Measured against the compaction window, as the context meter is; the model's whole window stands in
+// when the engine reports none. The plain summary is estimated locally and costs nothing.
+async function readFill($: EngineInterface): Promise<Fill | undefined> {
+  try {
+    const { context } = await $.session.usage({ breakdown: 'summary' })
+    const size = context.breakdown?.rawMaxTokens ?? context.window
+    if (context.tokens === undefined || !size) return undefined
+    return { tokens: context.tokens, percent: Math.round((context.tokens / size) * 100) }
+  } catch {
+    return undefined
+  }
+}
+
+// Never from a command or a turn's own hook, which the engine refuses: always from a timer after it. The
+// engine also refuses while a turn runs; that refusal, like a hook's veto, is reported. How it went is a
+// note in the transcript, and /usage-guard repeats it, since a note may not reach every surface.
+async function compactNow($: EngineInterface, pausedUntil?: string): Promise<CompactOutcome> {
+  const before = (await readFill($))?.tokens
+  let outcome: CompactOutcome
+  try {
+    outcome = outcomeOf(await $.session.compact({ instructions: PAUSE_INSTRUCTIONS }), before)
+  } catch (err) {
+    outcome = { kind: 'not-run', reason: err instanceof Error ? err.message : String(err) }
+  }
+  live.measuring = outcome.kind === 'measuring' ? { before: outcome.before, pausedUntil } : undefined
+  await reportCompaction($, outcome)
+  return outcome
+}
+
+async function reportCompaction($: EngineInterface, outcome: CompactOutcome): Promise<void> {
+  live.lastCompaction = `${localTime(await $.clock.now())}: ${outcomeText(outcome)}`
+  await notice($, outcomeText(outcome))
+}
+
+// The first reply after a compaction carries its real size: only then is it called freed or not.
+async function measureCompaction($: EngineInterface): Promise<void> {
+  const pending = live.measuring
+  const after = pending && (await readFill($))?.tokens
+  if (!pending || after === undefined) return
+  live.measuring = undefined
+  if (pending.before === undefined) return
+  const outcome = measured(pending.before, after)
+  await reportCompaction($, outcome)
+  if (pending.pausedUntil && live.isStatusShown)
+    setStatus($, `Plan limit near: paused until ${pending.pausedUntil} · ${outcomeMark(outcome)}`)
+}
+
+// The wrap-up's turn has ended: a session that resumes by itself compacts now, while its cache is warm,
+// so the resume after the reset starts from the summary instead of reading the whole context cold.
+// Only this work session gets here; the setting and the time to the wake decide whether it is worth it.
+async function compactAtPause($: EngineInterface, owed: Pause): Promise<void> {
+  const pause = await readPause($)
+  if (pause?.status !== 'active' || resetKey(pause) !== resetKey(owed)) return
+  if (!shouldCompactAtPause(await readFill($), live.compactAbovePercent, pause.wakeAt, await $.clock.now())) return
+  const outcome = await compactNow($, localTime(pause.wakeAt))
+  setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)} · ${outcomeMark(outcome)}`)
+}
+
+// Taken before the turn's own wrap-up starts, so a wrap-up started at this turn's end waits for its own.
+function scheduleOwedCompaction($: EngineInterface): void {
+  const owed = live.compactAfterTurn
+  if (!owed) return
+  live.compactAfterTurn = undefined
+  $.clock.after(COMPACT_DELAY_MS, () => void compactAtPause($, owed).catch(() => undefined))
+}
 
 async function resume($: EngineInterface, resetsAt: string, isArmed = false): Promise<void> {
   // Read first: an arm for this reset counts even if its own timer clears it while this one runs.
-  const isArmedHere = isArmed || (await read($, armedWake))?.resetsAt === resetsAt
+  const held = await read($, armedWake)
+  const isArmedHere = isArmed || held?.resetsAt === resetsAt
   const pause = await readPause($)
   if (!pause || pause.resetsAt !== resetsAt || pause.status === 'cancelled') return
   // Each session resumes once per reset, even when an instance left by a hot reload still runs its own
@@ -292,12 +311,23 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
   if (won === null) return notice($, UNCONFIRMED_NOTICE)
   // Only a session that saved work, or one armed, goes on by itself. Another session in the project
   // would rebuild the same hand-off and work the same tasks beside it, with nobody watching either.
-  const work = isArmedHere || (await hadWork($, pause))
+  const work = await hadWork($, pause)
+  const text = 'Plan limits have reset: resuming the saved work.'
+  if (work === true) return resumeWork($, text)
+  if (isArmedHere) return resumeArmed($, limitName(pause), text, held?.armedIn)
   if (work === null) return notice($, UNCONFIRMED_NOTICE)
   // Worded as what is on record, not what happened: a wrap-up whose own claim failed before a hot
   // reload, or one before a /clear, saved work that left no claim under this session's id.
-  if (!work) return notice($, NO_WORK_NOTICE)
-  await resumeWork($, 'Plan limits have reset: resuming the saved work.')
+  return notice($, NO_WORK_NOTICE)
+}
+
+// An armed session goes on with its work, or, with nothing pending, only says so: the person asked for
+// the wake-up, and a full resume would rebuild a hand-off for no work. A /clear starts an empty task
+// list, so the list of the session the arm was set in counts too. Callers pass it: the arm may be gone.
+async function resumeArmed($: EngineInterface, limit: string, text: string, armedIn?: string): Promise<void> {
+  if ((await openTasks($)) !== 0 || (armedIn && (await openTasks($, armedIn)) !== 0)) return resumeWork($, text)
+  await notice($, quietResumeText(limit))
+  void $.prompt.submit({ text: quietResumePrompt(limit) }).catch(() => undefined)
 }
 
 // A wrap-up with work leaves a claim (this instance remembers it as handled, another finds it taken).
@@ -359,7 +389,8 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   }
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) {
-    const later: ArmedWake = { ...arm, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
+    // From the arm as it stands, not as this timer was set: its question, its sessions are kept.
+    const later: ArmedWake = { ...current, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
     await setArm($, later)
     await scheduleArm($, later)
     return
@@ -372,26 +403,143 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   const isPauseReset = pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled'
   if (won === null) await notice($, UNCONFIRMED_NOTICE)
   else if (isPauseReset) await resume($, arm.resetsAt, true)
-  else await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
+  else {
+    const limit = LIMIT_NAMES[arm.kind] ?? arm.kind
+    const text = `The ${limit} reset you armed for has passed: resuming the saved work.`
+    await resumeArmed($, limit, text, current.armedIn)
+  }
   // Cleared only if still this arm: the person may have set another while the resume ran.
   const now = await read($, armedWake)
   if (now?.resetsAt === arm.resetsAt && now.kind === arm.kind) await setArm($, null)
 }
 
+// The arm in plugin state names the session its saved copy is filed under. A hot reload keeps that state
+// while it starts this module over, and a /clear changes the id, so every save and move reads the file
+// from the arm itself: the copy under an earlier id is always the one cleared. An arm whose save failed
+// keeps naming the earlier file while that may still hold it, so the next save or disarm clears it.
 async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
-  await update($, armedWake, () => arm)
+  const before = await read($, armedWake)
+  const filed = arm && { ...arm, session: await $.session.id() }
+  await update($, armedWake, () => filed)
+  const isSaved = await saveArm($, filed, before?.session)
+  if (isSaved || !filed || !before?.session) return
+  const isSame = (now: ArmedWake | null) => now?.session === filed.session && now.wakeAt === filed.wakeAt
+  await update($, armedWake, now => (now && isSame(now) ? { ...now, session: before.session } : now))
 }
 
-async function armByHand($: EngineInterface, which: string): Promise<string> {
+async function armPath($: EngineInterface, sessionId?: string): Promise<string> {
+  return `${await dataDir($)}/arms/${sessionId ?? (await $.session.id())}.json`
+}
+
+// False when a write failed, never a throw: the arm still stands in this process. The earlier copy is
+// cleared first, in the folder that already holds it, so a failed folder check never leaves it live.
+async function saveArm($: EngineInterface, arm: ArmedWake | null, earlier?: string): Promise<boolean> {
+  try {
+    if (!arm) return (await $.fs.write(await armPath($, earlier), 'null'), true)
+    if (earlier && earlier !== arm.session) await $.fs.write(await armPath($, earlier), 'null')
+    if (!live.isArmsDirMade) {
+      const made = await $.process.run(['node', '-e', MKDIR_SCRIPT, `${await dataDir($)}/arms`], { timeoutMs: 10_000 })
+      live.isArmsDirMade = made.exitCode === 0
+      if (!live.isArmsDirMade) return false // Tried again at the next save.
+    }
+    await $.fs.write(await armPath($, arm.session), JSON.stringify(arm, null, 2))
+    return true
+  } catch {
+    return false
+  }
+}
+
+// A /clear moves the session to a new id with no session.start: the saved copy follows the standing arm
+// there (the classic SessionStart hook sees the new id; the next turn or minute check catch a miss), so a
+// restart that resumes the newest conversation still finds it.
+async function followSession($: EngineInterface, sessionId?: string): Promise<void> {
+  const arm = await read($, armedWake)
+  const current = sessionId ?? (await $.session.id())
+  if (!arm?.session || arm.session === current) return
+  // State moves only once the copy has: a failed save is tried again by the next turn or minute check.
+  const moved = { ...arm, session: current }
+  if (!(await saveArm($, moved, arm.session))) return
+  await update($, armedWake, now => (now?.session === arm.session ? moved : now))
+}
+
+// A session started again (a restart, a resume) finds the arm it saved: scheduled again, caught up
+// within the setting's window, or dropped with a note. A hot reload keeps the arm in state instead.
+async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
+  const text = await $.fs.read(await armPath($)).catch(() => '')
+  const parsed = parseSavedArm(String(text))
+  if (!parsed) return undefined
+  const saved = { ...parsed, session: await $.session.id() }
+  const limit = LIMIT_NAMES[saved.kind] ?? saved.kind
+  const action = catchUpOf(saved.wakeAt, await $.clock.now(), live.catchUpMinutes)
+  if (action === 'drop') {
+    await setArm($, null)
+    await notice($, missedArmText(limit, localTime(saved.wakeAt), live.catchUpMinutes))
+    return undefined
+  }
+  await update($, armedWake, () => saved)
+  if (action === 'fire') await notice($, caughtUpText(limit, localTime(saved.wakeAt)))
+  return saved
+}
+
+// The open tasks in a session's list (this one's by default), from the tasks mod's copy: none when that
+// mod keeps lists but none for the session. Undefined without the tasks mod, or when the list cannot be read.
+async function openTasks($: EngineInterface, sessionId?: string): Promise<number | undefined> {
+  const dir = (await dataDir($)).replace(/usage-guard$/, 'tasks')
+  try {
+    await $.fs.list(dir)
+  } catch {
+    return undefined
+  }
+  try {
+    return countOpenTasks(String(await $.fs.read(`${dir}/${sessionId ?? (await $.session.id())}.json`)))
+  } catch {
+    return 0
+  }
+}
+
+// An arm with nothing pending is still set, since the person asked for it, but says so and asks: a card
+// above the prompt where there is one, and the answer itself names the command for a surface without it.
+// `compact`: the person asked for it, so it runs whatever the context's size or the time to the wake.
+async function armByHand($: EngineInterface, which: string, option: string): Promise<string> {
+  if (option !== '' && option !== 'compact')
+    return `Unknown option "${option}". Use: /usage-guard arm 5h|week [compact]`
   const { rateLimits } = await $.session.usage()
   const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
   if (typeof planned === 'string') return planned
-  await setArm($, planned)
-  await scheduleArm($, planned)
-  return (
+  const isEmpty = (await openTasks($)) === 0
+  const base = { ...planned, armedIn: await $.session.id() }
+  const arm = isEmpty ? { ...base, isQuestioned: true } : base
+  await setArm($, arm)
+  await scheduleArm($, arm)
+  const lines = [
     `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
-    `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`
-  )
+      `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`,
+  ]
+  if (isEmpty) lines.push(EMPTY_ARM_NOTE)
+  if (option === 'compact') {
+    $.clock.after(COMPACT_DELAY_MS, () => void compactNow($).catch(() => undefined))
+    lines.push('Compacting this session in a moment; /usage-guard then says how it went.')
+  }
+  return lines.join('\n')
+}
+
+// The card's Keep: the arm stands, and the question goes.
+// A press always answers: the card turns into a one-line confirmation, and the same line is a note in
+// the transcript for a surface that draws no card.
+async function keepArm($: EngineInterface): Promise<void> {
+  const current = await read($, armedWake)
+  if (!current?.isQuestioned) return
+  await setArm($, { ...current, isQuestioned: false })
+  await confirmPress($, `Kept: this session resumes at ${localTime(current.wakeAt)}.`)
+}
+
+async function cancelFromArmCard($: EngineInterface): Promise<void> {
+  await confirmPress($, await disarm($))
+}
+
+async function confirmPress($: EngineInterface, text: string): Promise<void> {
+  await update($, armNote, () => text)
+  await notice($, text)
 }
 
 // Drops the arm set by hand. A pause's own resume is the pause's: /usage-guard cancel stops it.
@@ -433,7 +581,7 @@ async function check($: EngineInterface): Promise<void> {
     // Of several sessions crossing the line together, one writes the pause. The
     // others write the same pause only if the winner has not yet, so a cancel
     // written in between is not undone.
-    const isWinner = await claim($, `pause-${resetKey(planned)}`)
+    await claim($, `pause-${resetKey(planned)}`)
     // Read again after the claim: another session may have paused for a different reset meanwhile.
     const shared = await readPause($)
     const isSharedLive = shared?.status === 'active' && shared.wakeAt > now
@@ -455,10 +603,11 @@ async function startTimers($: EngineInterface): Promise<void> {
   await refresh($)
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) await act($, pause)
-  // A wake armed before a hot reload: the module's timer went with the old instance.
-  const arm = await read($, armedWake)
+  // A wake armed before a hot reload: the module's timer went with the old instance. Before a restart:
+  // the state went with the process, and the saved arm stands in.
+  const arm = (await read($, armedWake)) ?? (await restoreArm($))
   if (arm) await scheduleArm($, arm)
-  $.clock.every(CHECK_EVERY_MS, () => void check($).catch(() => undefined))
+  $.clock.every(CHECK_EVERY_MS, () => void followSession($).then(() => check($)).catch(() => undefined))
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
 }
 
@@ -477,7 +626,7 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   // A project no session had open when the pause began still has its background work stopped.
   await stopBackground($, pause)
   setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
-  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
+  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause, localTime(pause.wakeAt)))
   await notice(
     $,
     `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes at ` +
@@ -486,61 +635,83 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   )
 }
 
-// yellow: the person may act (cancel the resume, run /session-start); blue: information; green: good news.
-function cardTone(id: string): 'green' | 'blue' | 'yellow' {
-  if (id.startsWith('reset:')) return 'green'
-  return id.startsWith('cancelled:') ? 'blue' : 'yellow'
+// What shows above the prompt: the shared card every session draws (pause, resume, cancel), then this
+// session's own question about an arm set with nothing pending.
+async function cardsAbove($: EngineInterface): Promise<Card[]> {
+  const cards: Card[] = []
+  const shown = await read($, band)
+  if (shown?.card) {
+    const buttons: CardButton[] = [
+      { key: 'usage-dismiss', label: 'Dismiss', isPrimary: true, onPress: () => dismissCard($) },
+    ]
+    if (shown.canCancel) {
+      const label = 'Cancel auto-resume (all sessions)'
+      buttons.push({ key: 'usage-cancel', label, onPress: () => cancelFromCard($) })
+    }
+    cards.push({ key: 'usage-card', tone: cardTone(shown.card.id), text: shown.card.text, buttons })
+  }
+  const arm = await read($, armedWake)
+  if (arm?.isQuestioned) {
+    const text = questionText(localTime(arm.wakeAt))
+    const buttons: CardButton[] = [
+      { key: 'usage-arm-keep', label: 'Keep it', isPrimary: true, onPress: () => keepArm($) },
+      { key: 'usage-arm-cancel', label: 'Cancel the resume', onPress: () => cancelFromArmCard($) },
+    ]
+    cards.push({ key: 'usage-arm-question', tone: 'yellow', text, buttons })
+  }
+  const note = await read($, armNote)
+  if (note) {
+    const clear = () => update($, armNote, () => null)
+    const dismiss = { key: 'usage-arm-note-dismiss', label: 'Dismiss', isPrimary: true, onPress: clear }
+    cards.push({ key: 'usage-arm-note', tone: 'blue', text: note, buttons: [dismiss] })
+  }
+  return cards
+}
+
+// The slim line while an arm stands, so a scheduled wake is never out of sight. It gives way to the arm's
+// own question and to the shared pause card, which already say when the session resumes.
+async function armLine($: EngineInterface): Promise<string | undefined> {
+  const arm = await read($, armedWake)
+  if (!arm || arm.isQuestioned || (await read($, band))?.card) return undefined
+  return armLineText(arm.wakeAt, arm.kind, live.zone)
 }
 
 export const register: Register = (on, options) => {
   live.wrapUpAt = Number(options.wrapUpAt ?? 90)
   live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
+  live.compactAbovePercent = Number(options.compactAbovePercent ?? 25)
+  live.catchUpMinutes = Number(options.catchUpMinutes ?? 30)
   settings(on, options)
+  phone(on, options)
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await readZone($)
     const pause = await readPause($)
     if (pause?.status === 'active') await meetPause($, pause)
-    await registerSurface($)
+    // The timers (and with them a saved arm) first: a refused command must never cost the arm's wake,
+    // and a start after a reload may find /usage-guard already registered.
     await startTimers($)
+    await registerSurface($).catch(() => undefined)
     return result
   })
 
-  // The card: the same bordered look as shared-pc's, drawn above whatever the
-  // other mods draw there. It stays until someone dismisses it, in any session.
+  // The cards, drawn above whatever the other mods draw there, each staying until it is answered or
+  // dismissed; then, under those mods' rows, the slim line of a standing arm.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inner = await next(e)
     if (e.props.hasSurvey) return inner
-    const shown = await read($, band)
-    if (!shown?.card) return inner
-    const tone = cardTone(shown.card.id)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const cards = await cardsAbove($)
+    const line = await armLine($)
+    if (cards.length === 0 && !line) return inner
+    const ui = $.ui.resolve(e)
+    const { Box } = ui
+    const width = Math.max(30, Math.min(64, e.props.bodyColumns - 2))
     return (
       <Box flexDirection="column">
-        <Box
-          alignSelf="flex-end"
-          width={Math.max(30, Math.min(64, e.props.bodyColumns - 2))}
-          flexDirection="column"
-          borderStyle="double"
-          borderColor={tone}
-          backgroundColor="black"
-          paddingX={1}
-        >
-          <Text bold color="black" backgroundColor={tone}>
-            {' USAGE GUARD '}
-          </Text>
-          <Text bold color={tone} wrap="wrap">
-            {shown.card.text}
-          </Text>
-          <Box>
-            <Button key="usage-dismiss" label="Dismiss" variant="primary" onPress={() => dismissCard($)} />
-            {shown.canCancel && (
-              <Button key="usage-cancel" label="Cancel auto-resume (all sessions)" onPress={() => cancelFromCard($)} />
-            )}
-          </Box>
-        </Box>
+        {drawCards(ui, cards, width)}
         {inner}
+        {line ? drawArmLine(ui, line, () => cancelFromArmCard($)) : null}
       </Box>
     )
   })
@@ -550,6 +721,12 @@ export const register: Register = (on, options) => {
     // A hot reload starts the module over without a session.start: the first turn after it restarts
     // the timers and reads the time zone again.
     await startTimers($).catch(() => undefined)
+    await followSession($).catch(() => undefined)
+    return next(e)
+  })
+
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear') await followSession($, e.session_id).catch(() => undefined)
     return next(e)
   })
 
@@ -564,51 +741,53 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     live.isTurnRunning = false
     const result = await next(e)
+    // Taken before anything below can start a wrap-up: a compaction owed by one runs after its own turn.
+    scheduleOwedCompaction($)
+    // A reload in the middle of a turn: the turn's start ran in the module before it, so its end restarts
+    // the timers, or a saved arm would wait idle past its wake.
+    await startTimers($).catch(() => undefined)
+    await measureCompaction($).catch(() => undefined)
     await runPendingWrapUp($).catch(() => undefined)
     await check($).catch(() => undefined)
     return result
   })
 
-  on('command.run', { command: 'usage-guard' }, async ($, e) => ({ text: await runCommand($, e.args) }))
+  // A hot reload while idle leaves no turn to restart the timers: the command does, so its answer (and a
+  // disarm) sees the arm restored from its saved copy, and the arm's timer runs again.
+  on('command.run', { command: 'usage-guard' }, async ($, e) => {
+    await startTimers($).catch(() => undefined)
+    return { text: await runCommand($, e.args) }
+  })
 }
 
 async function registerSurface($: EngineInterface): Promise<void> {
   await $.command.register({
     name: 'usage-guard',
-    description: 'Usage pause status. Also: cancel, arm 5h|week (resume after that reset), disarm, settings',
+    description: 'Usage pause status. Also: cancel, arm 5h|week [compact] (resume after that reset), disarm, settings',
     argumentHint: ARGUMENT_HINT,
   })
 }
 
-const ARGUMENT_HINT = '[help | settings | arm 5h|week | disarm | cancel]'
-const HELP = [
-  '/usage-guard: pauses a session before a plan window runs out and resumes it after the reset.',
-  '  /usage-guard              the pause status and the wrap-up level',
-  '  /usage-guard cancel       cancel the active pause: no automatic resume',
-  '  /usage-guard arm 5h|week  resume this session after that window resets',
-  '  /usage-guard disarm       drop the armed resume',
-  '  /usage-guard settings     open the settings pane',
-  '  /usage-guard help         this list',
-].join('\n')
-
-// `/usage-guard [help | settings | arm 5h|week | disarm | cancel]`; with no argument, the status.
+// `/usage-guard [help | settings | arm 5h|week [compact] | disarm | cancel]`; with no argument, the status.
 async function runCommand($: EngineInterface, args: string): Promise<string> {
-  const [verb = '', which = ''] = args.trim().split(/\s+/)
+  const [verb = '', which = '', option = ''] = args.trim().split(/\s+/)
   if (verb === 'help') return HELP
   if (verb === 'settings') {
     await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
     return 'Opened the usage-guard settings.'
   }
-  if (verb === 'arm') return armByHand($, which)
+  if (verb === 'arm') return armByHand($, which, option)
   if (verb === 'disarm') return disarm($)
   const arm = await read($, armedWake)
   const armedText = arm ? ` Armed to resume at ${localTime(arm.wakeAt)}.` : ''
+  const compacted = live.lastCompaction ? `\nLast compaction, ${live.lastCompaction}` : ''
   const pause = await readPause($)
   if (!pause || pause.status !== 'active')
-    return `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}`
+    return `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}${compacted}`
   if (verb === 'cancel') {
     await cancelPause($, pause)
     return 'Usage pause cancelled: no automatic resume.'
   }
-  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. Resumes at ${localTime(pause.wakeAt)}.${armedText}`
+  const resumes = `Resumes at ${localTime(pause.wakeAt)}.`
+  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. ${resumes}${armedText}${compacted}`
 }

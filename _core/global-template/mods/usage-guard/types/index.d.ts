@@ -33,10 +33,22 @@ export type ArmedWake = {
   kind: string
   resetsAt: string
   wakeAt: number
+  /** Armed with nothing pending: the card above the prompt asks to keep or cancel it, until answered. */
+  isQuestioned?: boolean
+  /** The session id the arm was set in: its task list still counts at the wake after a /clear. */
+  armedIn?: string
+  /** The session id the arm's saved copy is filed under; a /clear moves it to the new one. */
+  session?: string
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'usage-guard': { band: UsageGuardBand | null; settings: SettingsView | null; armed: ArmedWake | null }
+    'usage-guard': {
+      band: UsageGuardBand | null
+      settings: SettingsView | null
+      armed: ArmedWake | null
+      /** What the last press on the arm card did, shown in its place until dismissed. */
+      armNote: string | null
+    }
   }
 }
