@@ -10,25 +10,24 @@ import { CLAIM, countOpenTasks, covers, EMPTY_ARM_NOTE, hotLimits, joinPause, LI
 import { NO_WORK_NOTICE, planArm, planPause, projectOf, resetKey, resumePrompt, WRAP_UP_ARGS } from './plan'
 import { stopCommandsFor } from './rules'
 import { drawArmLine, drawCards } from './cards'
+import { register as adopt } from './adopt'
 import { register as phone } from './phone'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
 import { applyValues, type Live, newLive } from './live'
 import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, formatLocal, HELP, pausedText } from './texts'
-import { questionText, READ_ZONE, UNCONFIRMED_NOTICE, zoneOf } from './texts'
+import { questionText, READ_ZONE, statusText, UNCONFIRMED_NOTICE, zoneOf } from './texts'
 
 const CHECK_EVERY_MS = 60_000
 // A beat after a command or the wrap-up's turn ends before compacting, so the engine is between turns.
 const COMPACT_DELAY_MS = 1_000
-// How often the card above the prompt re-reads the shared files, so a Dismiss
-// or a cancel in one session shows in the others.
+// How often the card re-reads the shared files, so a Dismiss or a cancel elsewhere shows here.
 const REFRESH_MS = 2_000
 const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
 const band = atom({ plugin: 'usage-guard', key: 'band' } as const, null)
 const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
 const armNote = atom({ plugin: 'usage-guard', key: 'armNote' } as const, null)
-// Module state (its type in live.ts): a hot reload starts it over, which is safe because the pause
-// itself lives in the shared file.
+// Module state (live.ts): a hot reload starts it over, safe since the pause lives in the shared file.
 const live: Live = newLive()
 
 async function dataDir($: EngineInterface): Promise<string> {
@@ -90,8 +89,7 @@ function localTime(ms: number): string {
   return formatLocal(ms, live.zone)
 }
 
-// A note in this session's transcript. What the person sees is the card above
-// the prompt, drawn in every session; Claude Code's toast vanishes in seconds.
+// A note in this transcript; what the person sees is the card in every session (a toast vanishes).
 async function notice($: EngineInterface, text: string): Promise<void> {
   await $.session.append({ message: { type: 'system', content: [{ type: 'text', text }] } }).catch(() => undefined)
 }
@@ -396,8 +394,12 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   }
   // An instance left by a hot reload may fire the same arm beside this one: one wins the claim. With no
   // claim on disk the other could win it too, so a failed helper resumes nothing (fails closed).
-  const won = await tryClaim($, `arm-${Date.parse(arm.resetsAt)}-${await $.session.id()}`)
-  if (won === false) return
+  // Under the id the arm is filed under, the one an adopting session claims (a /clear may lag behind).
+  const filedAs = current.session ?? (await $.session.id())
+  const won = await tryClaim($, `arm-${Date.parse(arm.resetsAt)}-${filedAs}`)
+  // Taken with the saved copy gone: another session adopted it, so nothing here runs it. Stand down.
+  const copy = won === false && parseSavedArm(String(await $.fs.read(await armPath($, filedAs)).catch(() => '')))
+  if (won === false) return void (copy ? undefined : await update($, armedWake, () => null))
   // The arm stays set until the resume has run, so the pause's own timer, firing beside this one, sees it.
   const isPauseReset = pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled'
   if (won === null) await notice($, UNCONFIRMED_NOTICE)
@@ -418,7 +420,8 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
 // keeps naming the earlier file while that may still hold it, so the next save or disarm clears it.
 async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
   const before = await read($, armedWake)
-  const filed = arm && { ...arm, session: await $.session.id() }
+  // The project folder too: a later session there is offered the arm if this one closes before its wake.
+  const filed = arm && { ...arm, session: await $.session.id(), root: arm.root ?? (await $.session.root()) }
   await update($, armedWake, () => filed)
   const isSaved = await saveArm($, filed, before?.session)
   if (isSaved || !filed || !before?.session) return
@@ -687,6 +690,8 @@ async function armLine($: EngineInterface): Promise<string | undefined> {
 export const register: Register = (on, options) => {
   // The settings come from the mod's own file over the loaded options, read again as it changes.
   settings(on, options, values => applyValues(live, values))
+  // Outside phone, so its command reads the offer the adopt module just looked for.
+  adopt(on, options)
   phone(on, options)
 
   on('session.start', async ($, e, next) => {
@@ -784,16 +789,11 @@ async function runCommand($: EngineInterface, args: string): Promise<string> {
   }
   if (verb === 'arm') return armByHand($, which, option)
   if (verb === 'disarm') return disarm($)
-  const arm = await read($, armedWake)
-  const armedText = arm ? ` Armed to resume at ${localTime(arm.wakeAt)}.` : ''
-  const compacted = live.lastCompaction ? `\nLast compaction, ${live.lastCompaction}` : ''
   const pause = await readPause($)
-  if (!pause || pause.status !== 'active')
-    return `No usage pause. Sessions wrap up at ${live.wrapUpAt}% of any plan window.${armedText}${compacted}`
-  if (verb === 'cancel') {
+  if (verb === 'cancel' && pause?.status === 'active') {
     await cancelPause($, pause)
     return 'Usage pause cancelled: no automatic resume.'
   }
-  const resumes = `Resumes at ${localTime(pause.wakeAt)}.`
-  return `Paused: ${limitName(pause)} at ${pause.percentUsed}%. ${resumes}${armedText}${compacted}`
+  const armAt = (await read($, armedWake))?.wakeAt
+  return statusText({ pause, armAt, lastCompaction: live.lastCompaction, wrapUpAt: live.wrapUpAt, zone: live.zone })
 }

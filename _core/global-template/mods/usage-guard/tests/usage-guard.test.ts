@@ -21,6 +21,10 @@ import {
   world,
 } from './world'
 
+
+// For tests that run hours or days of minute checks through the fake clock.
+const LONG = { timeoutMs: 15_000 }
+
 test('below the line nothing happens', async ($, on) => {
   const seen = world(on)
   await start($)
@@ -263,7 +267,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
-test('the card cancels the automatic resume', async ($, on) => {
+test('the card cancels the automatic resume', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
@@ -611,7 +615,7 @@ test('an arm resumes the session once when a pause for its reset began after the
   expect(pauseOf(seen)?.status).toBe('done')
 })
 
-test('an armed wake that comes due during a pause leaves the resume to the pause', async ($, on) => {
+test('an armed wake that comes due during a pause leaves the resume to the pause', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -673,7 +677,10 @@ test("another session's cancel leaves this session's own arm in place", async ($
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('an arm that met a longer pause still resumes the session after another session cancels it', async ($, on) => {
+test(
+  'an arm that met a longer pause still resumes the session after another session cancels it',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -703,7 +710,7 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
   world(on)
   await start($)
   const hint = registered.find(command => command.name === 'usage-guard')?.argumentHint
-  expect(hint).toBe('[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel]')
+  expect(hint).toBe('[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel | adopt]')
   const help = await $.command.run({ command: 'usage-guard', args: 'help' } as never)
   const lines = [
     '/usage-guard cancel',
@@ -712,6 +719,7 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
     '/usage-guard disarm',
     '/usage-guard settings',
     '/usage-guard phone',
+    '/usage-guard adopt [drop]',
   ]
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
