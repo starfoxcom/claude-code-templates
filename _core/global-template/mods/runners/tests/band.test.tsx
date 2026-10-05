@@ -83,7 +83,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 // A runner from the machine's own list file draws its row and buttons on both surfaces.
 const LISTED = [{ label: 'local', processes: ['Runner.Listener'], start: ['start-runners'], stop: [['stop-runners']] }]
 const LIST_FILE = 'C:/Users/me/.claude/mods-data/runners/runners.json'
-const registered: { name: string; argumentHint?: string }[] = []
+const registered: { name: string; description?: string; argumentHint?: string }[] = []
 
 // `files`: more readable files, by full path or, for the manifest, `plugin.json`.
 function machine(on: On, isUp: () => boolean, files: Record<string, string> = {}) {
@@ -141,8 +141,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
 test('/runners shows its arguments in the menu, lists them on help and names each runner', async ($, on) => {
   const { clock } = machine(on, () => true)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  const hint = registered.find(command => command.name === 'runners')?.argumentHint
-  expect(hint).toBe('[help | add | settings | set | phone]')
+  const command = registered.find(c => c.name === 'runners')
+  expect(command?.argumentHint).toBe('[help | add | settings | set | phone]')
+  // The menu's description names every verb the hint does.
+  for (const verb of ['add', 'settings', 'set', 'phone', 'help']) expect(command?.description).toContain(verb)
   const help = (await $.command.run({ command: 'runners', args: 'help' } as never)) as { text: string }
   for (const line of help.text.split('\n').slice(1)) expect(line).toMatch(/^ {2}\/runners( \w+)? +\S/)
   // An unknown word gets the same list.
