@@ -134,3 +134,16 @@ test('without a title the board row is not required; short bundles and attached 
   expect(pr('create', ['-d', '-F', 'b.md', '-t', 'feat: x']).isUnknown).toBe(false)
   expect(pr('create', ['--title', '-tx', '-F', 'b.md']).isUnknown).toBe(false)
 })
+
+test('a flag value that looks like a flag is read only as that value', () => {
+  expect(pr('create', ['--title', '-tx', '-F', 'b.md']).title).toBe('-tx')
+  expect(pr('create', ['-t', '--title', '-F', 'b.md']).title).toBe('--title')
+  const inline = pr('create', ['--title', '-bx', '-F', 'b.md'])
+  expect([inline.isInline, inline.title]).toEqual([false, '-bx'])
+  expect(pr('create', ['--title', '--web', '-F', 'b.md']).isFilled).toBe(false)
+  expect(pr('create', ['--label', '--fill', '-t', 'x', '-F', 'b.md']).isFilled).toBe(false)
+  expect(pr('create', ['--head', '-F', '-t', 'x', '-F', 'b.md']).bodyFile).toBe('b.md')
+  expect(pr('create', ['--head', '-F', '-t', 'x', '-F', 'b.md']).isUnknown).toBe(false)
+  // A value flag typed as another flag's value is that value, so the word after it is read on its own.
+  expect(pr('create', ['-t', '-F', 'b.md']).bodyFile).toBeUndefined()
+})
