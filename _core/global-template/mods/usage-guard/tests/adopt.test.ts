@@ -147,6 +147,20 @@ test('from the phone, the text names the offer and /usage-guard adopt resumes it
   expect((again as { text?: string }).text).toBe('No closed session in this project has a missed resume.')
 })
 
+test('after an answer on the phone, a later missed arm is still offered there', LONG, async ($, on) => {
+  const seen = world(on)
+  leaveMissedArm(seen)
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'adopt drop' } as never)
+  // No card draws on the phone, so the answer's note is never dismissed there.
+  const later = { ...MISSED, resetsAt: '2026-10-04T23:00:00.000Z', armedIn: 'sess-new' }
+  seen.files.set(`${ARMS_DIR}/sess-new.json`, JSON.stringify(later))
+  const answer = await $.command.run({ command: 'usage-guard', args: 'adopt' } as never)
+  expect((answer as { text?: string }).text).toBe('Resuming the closed session’s work here.')
+  await seen.clock.advance(1_000)
+  expect(adoptPrompts(seen)).toHaveLength(1)
+})
+
 // The arm's own session, still open, at its wake: another session took the claim.
 async function wakeAfterClaimTaken($: Engine, seen: World, savedCopy: string): Promise<string> {
   await start($)
