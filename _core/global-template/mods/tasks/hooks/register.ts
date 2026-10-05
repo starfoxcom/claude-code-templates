@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
+import { hasPendingWake, keepGoingText, MAX_IDLE_PROMPTS, workable } from './keepgoing'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { PANE, phoneText } from './view'
 
@@ -120,6 +121,10 @@ const live: {
   isEngineCleared: boolean
   isAliveStarted: boolean
   nudgeAfter: number
+  keepGoing: boolean
+  // Keep-going prompts sent in a row with no change to the list, and the list's changedAt at the last one.
+  idlePrompts: number
+  promptedAt?: number
 } = {
   turn: 0,
   isTurnRunning: false,
@@ -131,6 +136,8 @@ const live: {
   isEngineCleared: false,
   isAliveStarted: false,
   nudgeAfter: 3,
+  keepGoing: true,
+  idlePrompts: 0,
 }
 
 // One task file in the engine's own store (`<config>/tasks/<session>/<id>.json`).
@@ -589,6 +596,31 @@ async function markEnded($: EngineInterface): Promise<void> {
   if (mirror.tasks.length > 0 || mirror.carried) await saveMirror($, mirror)
 }
 
+const KEEP_GOING_DELAY_MS = 3_000
+
+// The file another mod keeps beside this one's: `mods-data/<mod>/<name>`. Undefined when it is not there.
+async function peerFile($: EngineInterface, mod: string, name: string): Promise<string | undefined> {
+  const dir = (await dataDir($)).replace(/\/tasks$/, `/${mod}`)
+  return $.fs.read(`${dir}/${name}`).then(String, () => undefined)
+}
+
+// A turn that ended with work nobody has to wait for gets a prompt to carry on, unless something else
+// wakes the session (a CI watch, a plan-limit pause) or the last prompts changed nothing on the list.
+async function keepGoing($: EngineInterface): Promise<void> {
+  if (live.isTurnRunning) return
+  const mirror = await mirrorOf($)
+  const tasks = workable(mirror)
+  if (tasks.length === 0) return
+  if (hasPendingWake(await peerFile($, 'ci-watch', `${await $.session.id()}.json`))) return
+  const pause = await peerFile($, 'usage-guard', 'pause.json')
+  if (pause && /"status"\s*:\s*"active"/.test(pause)) return
+  const isIdle = live.idlePrompts > 0 && live.promptedAt === mirror.changedAt
+  if (isIdle && live.idlePrompts >= MAX_IDLE_PROMPTS) return
+  live.idlePrompts = isIdle ? live.idlePrompts + 1 : 1
+  live.promptedAt = mirror.changedAt
+  await $.prompt.submit({ text: keepGoingText(tasks) })
+}
+
 // The settings file at the session's start, before any tool call: the settings module follows it from
 // there. Read here, since an engine handle is never passed into another file.
 async function readSettings($: EngineInterface): Promise<void> {
@@ -603,6 +635,7 @@ export const register: Register = (on, options) => {
   // The settings come from the mod's own file over the loaded options, read again as it changes.
   settings(on, options, values => {
     live.nudgeAfter = Number(values.nudgeAfterTools ?? 3)
+    live.keepGoing = values.keepGoing !== false
   })
 
   // `/task-list [help | settings]`; with no argument, the task list. Any other argument gets the help.
@@ -658,6 +691,9 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     live.isTurnRunning = false
+    // Looked at a moment after the turn ends, never from the end itself: a prompt sent there was seen lost.
+    if (live.keepGoing && !e.agentId && e.reason === 'answer')
+      $.clock.after(KEEP_GOING_DELAY_MS, () => void keepGoing($).catch(() => undefined))
     return next(e)
   })
 
@@ -668,6 +704,8 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    // The person's own prompt: the keep-going count starts over.
+    if (!e.origin) live.idlePrompts = 0
     if (live.isTurnRunning) return next(e)
     const mirror = await mirrorOf($)
     const notes: string[] = []
