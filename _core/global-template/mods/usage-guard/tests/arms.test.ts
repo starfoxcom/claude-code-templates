@@ -293,6 +293,26 @@ test('an arm set beside open tasks still resumes fully after a /clear starts an 
   expect(quietWakes(seen)).toEqual([])
 })
 
+test('an arm a longer pause moves keeps the session it was set in, and still resumes fully', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [{ status: 'in_progress' }])
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  // Another session paused for the weekly reset, past this arm's wake.
+  const resetsAt = new Date(Date.parse(RESET) + 3 * 3_600_000).toISOString()
+  const wakeAt = Date.parse(resetsAt) + 2 * 60_000
+  const pause = { status: 'active', kinds: ['seven_day'], percentUsed: 92, resetsAt, wakeAt, triggeredBy: 'sess-c' }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.armedIn).toBe('sess-a')
+  await seen.clock.advance(wakeAt - WAKE)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(quietWakes(seen)).toEqual([])
+})
+
 test('an armed session with nothing pending gets the one-line prompt at a pause reset too', async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [])

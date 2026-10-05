@@ -83,29 +83,7 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
     seen.files.set(key(e.path), e.text)
     return { value: undefined }
   })
-  on('process.run', ($, e) => {
-    seen.runs.push([...e.argv])
-    let out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
-    if (e.argv[0] === 'node' && String(e.argv[2]).includes('mkdirSync')) {
-      seen.isArmsDirMissing = (seen.mkdirFailures ?? 0) > 0
-      if (seen.isArmsDirMissing) {
-        seen.mkdirFailures = (seen.mkdirFailures ?? 0) - 1
-        const failed = { exitCode: 1, stdout: '', stderr: 'EPERM', isStdoutTruncated: false, isStderrTruncated: false }
-        return { value: failed }
-      }
-    }
-    if (e.argv[2] === CLAIM) {
-      const name = e.argv[4] ?? ''
-      seen.duringClaim?.(name)
-      if (seen.failClaims?.has(name)) {
-        const failed = { exitCode: 1, stdout: '', stderr: 'EPERM', isStdoutTruncated: false, isStderrTruncated: false }
-        return { value: failed }
-      }
-      out = seen.claims.has(name) ? 'taken\n' : 'won\n'
-      seen.claims.add(name)
-    }
-    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-  })
+  on('process.run', ($, e) => processRun(seen, e.argv))
   on('session.id', () => ({ value: seen.sessionId }))
   on('session.root', () => {
     return { value: root }
@@ -151,6 +129,31 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
   on('tool.call', { tool: 'Edit' }, () => ({ result: {} as never }) as never)
   on('tool.call', { tool: 'Read' }, () => ({ result: {} as never, isReadOnly: true }) as never)
   return seen
+}
+
+// The engine's process runner as the mod uses it: the time zone, the claim helper and the arms folder.
+function processRun(seen: World, argv: readonly string[]) {
+  seen.runs.push([...argv])
+  let out = argv[0] === 'node' ? '420 America/Phoenix\n' : ''
+  if (argv[0] === 'node' && String(argv[2]).includes('mkdirSync')) {
+    seen.isArmsDirMissing = (seen.mkdirFailures ?? 0) > 0
+    if (seen.isArmsDirMissing) {
+      seen.mkdirFailures = (seen.mkdirFailures ?? 0) - 1
+      const failed = { exitCode: 1, stdout: '', stderr: 'EPERM', isStdoutTruncated: false, isStderrTruncated: false }
+      return { value: failed }
+    }
+  }
+  if (argv[2] === CLAIM) {
+    const name = argv[4] ?? ''
+    seen.duringClaim?.(name)
+    if (seen.failClaims?.has(name)) {
+      const failed = { exitCode: 1, stdout: '', stderr: 'EPERM', isStdoutTruncated: false, isStderrTruncated: false }
+      return { value: failed }
+    }
+    out = seen.claims.has(name) ? 'taken\n' : 'won\n'
+    seen.claims.add(name)
+  }
+  return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
 }
 
 export async function start($: Engine): Promise<void> {
