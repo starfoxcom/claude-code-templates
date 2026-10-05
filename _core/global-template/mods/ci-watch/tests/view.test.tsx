@@ -1,7 +1,7 @@
 import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 
-import { LOOKS, summary } from '../hooks/view'
+import { LOOKS, phoneText, summary } from '../hooks/view'
 import type { Watch } from '../types'
 import { world } from './world'
 
@@ -139,4 +139,15 @@ test('with nothing watched the band draws nothing of its own', async ($, on) => 
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ plugin: 'ci-watch', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   expect(await ui.find({ type: 'Text', text: /PR / })).toBeUndefined()
+})
+
+test('the phone text is the row summary, every check with its icon, then the PR link', () => {
+  const watch = { ...BASE, checks: { review: 'pass', build: 'pending', mac: 'skipping' } }
+  expect(phoneText(watch).split('\n')).toEqual([
+    '⏳ PR 7 · 2/3 done',
+    '   ✅ review',
+    '   ⏳ build',
+    '   ➖ mac',
+    '   https://github.com/o/r/pull/7',
+  ])
 })
