@@ -315,7 +315,7 @@ export const register: Register = (on, options) => {
     await start($)
     await $.command.register({
       name: 'runners',
-      description: "The local CI runners' state. Also: settings, set, phone, help",
+      description: "The local CI runners' state. Also: add, settings, set, phone, help",
       argumentHint: ARGUMENT_HINT,
     })
     return result
