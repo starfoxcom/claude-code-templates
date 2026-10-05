@@ -84,13 +84,21 @@ const LISTED = [{ label: 'local', processes: ['Runner.Listener'], start: ['start
 const LIST_FILE = 'C:/Users/me/.claude/mods-data/runners/runners.json'
 const registered: { name: string; argumentHint?: string }[] = []
 
-function machine(on: On, isUp: () => boolean) {
+// `files`: more readable files, by full path or, for the manifest, `plugin.json`.
+function machine(on: On, isUp: () => boolean, files: Record<string, string> = {}) {
   const runs: string[][] = []
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { USERPROFILE: 'C:/Users/me', OS: 'Windows_NT' })
   on('fs.read', ($, e) => {
-    if (e.path.replaceAll('\\', '/') !== LIST_FILE) throw new Error('ENOENT')
+    const path = e.path.replaceAll('\\', '/')
+    const extra = files[path] ?? (path.endsWith('/plugin.json') ? files['plugin.json'] : undefined)
+    if (extra !== undefined) return { value: extra }
+    if (path !== LIST_FILE) throw new Error('ENOENT')
     return { value: JSON.stringify(LISTED) }
+  })
+  on('fs.write', ($, e) => {
+    files[e.path.replaceAll('\\', '/')] = e.text
+    return { value: undefined }
   })
   on('process.run', ($, e) => {
     runs.push([...e.argv])
@@ -152,4 +160,24 @@ test('/runners with no runners listed says how to add one', async ($, on) => {
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
   const answer = (await $.command.run({ command: 'runners', args: '' } as never)) as { text: string }
   expect(answer.text).toContain('No runners listed. Add one to ~/.claude/mods-data/runners/runners.json')
+})
+
+test('the check interval in the settings file applies from the start, and a new one takes over', async ($, on) => {
+  const manifest = JSON.stringify({ userConfig: { checkSeconds: { type: 'number' } } })
+  const file = 'C:/Users/me/.claude/mods-data/runners/settings.json'
+  const saved = { 'plugin.json': manifest, [file]: '{"checkSeconds":120}' }
+  const { runs, clock } = machine(on, () => true, saved)
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  const checks = () => runs.filter(argv => argv[0] === 'tasklist').length
+  // The first reading runs at once; the next ones every two minutes.
+  await clock.advance(60_000)
+  expect(checks()).toBe(1)
+  await clock.advance(60_000)
+  expect(checks()).toBe(2)
+  // A new interval: the old timer ticks once more, then the new one runs.
+  await $.command.run({ command: 'runners', args: 'set checkSeconds 60' } as never)
+  await clock.advance(120_000)
+  expect(checks()).toBe(3)
+  await clock.advance(60_000)
+  expect(checks()).toBe(4)
 })

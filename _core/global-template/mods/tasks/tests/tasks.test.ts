@@ -28,7 +28,9 @@ function world(on: On): World {
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
   on('fs.read', ($, e) => {
-    const text = seen.files.get(key(e.path))
+    // The mod's manifest, wherever the plugin root is, under the key `plugin.json`.
+    const isManifest = key(e.path).endsWith('/plugin.json')
+    const text = seen.files.get(key(e.path)) ?? (isManifest ? seen.files.get('plugin.json') : undefined)
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
@@ -281,6 +283,21 @@ test('a long turn with no task list is asked for one, once', async ($, on) => {
   }
   expect(notes.length).toBe(1)
   expect(notes[0]).toContain('ran 3 tool calls with no task list')
+})
+
+test('the nudge count saved in the settings file applies from the session start', async ($, on) => {
+  const seen = world(on)
+  seen.files.set('plugin.json', JSON.stringify({ userConfig: { nudgeAfterTools: { type: 'number' } } }))
+  seen.files.set('C:/Users/me/.claude/mods-data/tasks/settings.json', '{"nudgeAfterTools":5}')
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  await turn($)
+  const notes: string[] = []
+  for (let i = 0; i < 6; i++) {
+    const result = (await $.tool.call({ tool: 'Read', file_path: 'a' } as never)) as never as { context?: string[] }
+    notes.push(...(result.context ?? []))
+  }
+  expect(notes.length).toBe(1)
+  expect(notes[0]).toContain('ran 5 tool calls with no task list')
 })
 
 test('a task deleted unfinished stays in the list as dropped', async ($, on) => {

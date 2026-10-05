@@ -574,8 +574,18 @@ async function startPolling($: EngineInterface): Promise<void> {
   await claimOwner($)
   await sweep($)
   await load($)
-  const tick = $.clock.every(live.pollMs, async () => {
+  armPolling($)
+}
+
+// A new interval from the settings file takes over at the next tick of the old one.
+function armPolling($: EngineInterface): void {
+  const period = live.pollMs
+  const tick = $.clock.every(period, async () => {
     if (await isRetired($)) return void tick.cancel()
+    if (live.pollMs !== period) {
+      tick.cancel()
+      armPolling($)
+    }
     await poll($).catch(() => undefined)
   })
 }
