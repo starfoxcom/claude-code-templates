@@ -10,7 +10,7 @@
 #     `@claude review this PR`.
 #
 # Merge gate participation: this workflow PATCHes the `Claude On-Demand`
-# check-run on the PR HEAD SHA via the Checks API after Opus finishes its
+# check-run on the PR HEAD SHA via the Checks API after the deep review finishes its
 # review. The check was created at status=in_progress by claude-code-review.yml's
 # init-deep-check job; this workflow upgrades it to success/failure based on
 # the deep verdict. Branch protection on main/develop requires both
@@ -49,7 +49,7 @@ jobs:
     # Anchor the bot-loop guard to startsWith — the action's progress comment
     # body STARTS with "Claude Code is working"; legitimate escalation
     # comments may quote the phrase when discussing the filter itself (e.g.
-    # listing invariants for Opus to verify). Using `!contains` here would
+    # listing invariants for the deep tier to verify). Using `!contains` here would
     # reject any such quote and silently block the deep tier from firing.
     if: |
       (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
@@ -74,7 +74,7 @@ jobs:
       id-token: write
       actions: read
       # Needed to PATCH the `Claude On-Demand` check-run on the PR HEAD SHA
-      # both at job start (in_progress) and after the Opus review completes
+      # both at job start (in_progress) and after the deep review completes
       # (success/failure based on verdict).
       checks: write
     steps:
@@ -112,7 +112,7 @@ jobs:
       # the title to "Deep review in progress". For manual `@claude review
       # this PR` triggers without a prior routine run on this HEAD SHA, the
       # check may not yet exist — create it. Either way, the PR's check
-      # rollup now shows "Claude On-Demand: in_progress" while Opus runs.
+      # rollup now shows "Claude On-Demand: in_progress" while the review runs.
       - name: Upsert Claude On-Demand check to in_progress
         if: steps.pr-head.outputs.head_sha != ''
         env:
@@ -293,7 +293,7 @@ jobs:
 
       - name: Evaluate deep-tier verdict
         # PATCH the `Claude On-Demand` check on the PR HEAD SHA to
-        # success/failure based on Opus's verdict comment. Branch protection
+        # success/failure based on the reviewer's verdict comment. Branch protection
         # on main/develop requires `Claude On-Demand` as a status check, so
         # this PATCH is what actually gates merge for auto-escalated PRs.
         #
@@ -305,7 +305,7 @@ jobs:
         # broke the fold-in architecture.
         #
         # The action posts a comment starting with "**Claude finished
-        # @claude[bot]'s task in <duration>**" when Opus completes its review.
+        # @claude[bot]'s task in <duration>**" when the reviewer completes its review.
         # We re-read that comment and translate to check conclusion.
         if: always() && steps.pr-head.outputs.head_sha != ''
         env:
