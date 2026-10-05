@@ -1,4 +1,5 @@
-import type { ArmedWake } from '../types'
+import type { AdoptOffer, ArmedWake } from '../types'
+import { projectOf } from './plan'
 
 // An arm survives a restart in `mods-data/usage-guard/arms/<session>.json`: the arm, or `null` once it
 // is dropped or done (mods cannot delete files).
@@ -23,8 +24,9 @@ export function parseSavedArm(text: string): ArmedWake | undefined {
     if (!arm || typeof arm.kind !== 'string' || typeof arm.resetsAt !== 'string') return undefined
     if (typeof arm.wakeAt !== 'number' || !Number.isFinite(arm.wakeAt)) return undefined
     const armedIn = typeof arm.armedIn === 'string' ? { armedIn: arm.armedIn } : {}
+    const root = typeof arm.root === 'string' ? { root: arm.root } : {}
     const isQuestioned = arm.isQuestioned === true
-    return { kind: arm.kind, resetsAt: arm.resetsAt, wakeAt: arm.wakeAt, isQuestioned, ...armedIn }
+    return { kind: arm.kind, resetsAt: arm.resetsAt, wakeAt: arm.wakeAt, isQuestioned, ...armedIn, ...root }
   } catch {
     return undefined
   }
@@ -55,4 +57,47 @@ export function quietResumeText(limit: string): string {
 
 export function quietResumePrompt(limit: string): string {
   return `[usage-guard] ${quietResumeText(limit)} Say so in one line and wait for the person.`
+}
+
+// A closed session's arm is offered once its own wake is safely past (an open session fires on time) and
+// while it is recent: an older one would restart work the person has long moved on from.
+export const ADOPT_GRACE_MS = 2 * 60_000
+export const ADOPT_MAX_AGE_MS = 24 * 3_600_000
+
+/**
+ * The saved arm another session in this project left behind: its wake passed and it never ran. Each
+ * file is `<session>.json`; the newest wake wins. Undefined when there is none.
+ */
+export function pickOffer(
+  files: { name: string; text: string }[],
+  me: string,
+  root: string,
+  now: number,
+): AdoptOffer | undefined {
+  let best: AdoptOffer | undefined
+  for (const { name, text } of files) {
+    const owner = name.replace(/\.json$/, '')
+    const arm = parseSavedArm(text)
+    if (!arm?.root || owner === me || !name.endsWith('.json')) continue
+    if (projectOf(arm.root) !== projectOf(root)) continue
+    const age = now - arm.wakeAt
+    if (age < ADOPT_GRACE_MS || age > ADOPT_MAX_AGE_MS) continue
+    if (!best || arm.wakeAt > best.arm.wakeAt) best = { owner, arm }
+  }
+  return best
+}
+
+export function offerText(limit: string, wakeText: string): string {
+  return (
+    `An earlier session in this project was armed to resume at ${wakeText}, after the ${limit} reset, and was ` +
+    'closed before it ran. Resume its work here?'
+  )
+}
+
+// The resume an adopting session runs: the work is the earlier session's, so it is rebuilt from its records.
+export function adoptReason(limit: string, wakeText: string, owner: string): string {
+  return (
+    `An earlier session in this project was armed to resume at ${wakeText}, after the ${limit} reset, and was ` +
+    `closed before it ran; the person chose to resume it here. Its task list is mods-data/tasks/${owner}.json.`
+  )
 }
