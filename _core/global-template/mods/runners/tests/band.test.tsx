@@ -167,14 +167,16 @@ test('/runners with no runners listed says how to add one', async ($, on) => {
   expect(answer.text).toContain('/runners add <name> <program>')
 })
 
-// A machine with no list file yet: the files `/runners add` reads and writes, and what runs.
-function bare(on: On, files: Map<string, string> = new Map()) {
+// A machine with no list file yet: the files `/runners add` reads and writes, and what runs. `duringRead`
+// runs inside each file read, before it returns: something else acting while the mod waits on it.
+function bare(on: On, files: Map<string, string> = new Map(), duringRead?: (path: string) => unknown) {
   const runs: string[][] = []
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, { USERPROFILE: 'C:/Users/me', OS: 'Windows_NT' })
   const key = (path: string) => path.replaceAll('\\', '/')
-  on('fs.read', ($, e) => {
+  on('fs.read', async ($, e) => {
     const text = files.get(key(e.path))
+    await duringRead?.(key(e.path))
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
@@ -196,6 +198,14 @@ function bare(on: On, files: Map<string, string> = new Map()) {
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   on('ui.render', () => ({ type: 'Box', props: { key: 'beneath' }, children: [] }) as never)
   return { files, runs, clock }
+}
+
+// The test runner has timers; the mod sandbox's types do not list them.
+declare function setTimeout(callback: () => void, ms: number): unknown
+
+/** A short real wait: room for other work to go ahead (a bound, never what a test waits on to pass). */
+function moment(ms = 100): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 const add = async ($: Engine, args: string) =>
@@ -243,6 +253,27 @@ test('a /runners add that comes first after a reload starts the timers once', as
   const before = checks()
   await clock.advance(60_000)
   expect(checks() - before).toBe(1)
+})
+
+test('a /runners add that lands while a reloaded start is still reading the list keeps its runner', async (
+  $,
+  on,
+) => {
+  // The add lands during the start's read of the list (which still lacks it) and waits for the start,
+  // which holds the read until the add is answered, or a moment if the add waits for it.
+  let added: Promise<string> | undefined
+  const { clock } = bare(on, new Map(), path => {
+    if (path !== LIST_FILE || added) return
+    added = add($, 'ci Runner.Listener')
+    return Promise.race([added, moment()])
+  })
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  expect(await added).toContain('Added "ci"')
+  // Still listed at the next check, not only on the row drawn at the add.
+  await clock.advance(60_000)
+  const props = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
+  const ui = await $.ui.mount({ plugin: 'runners', surface: 'terminal', component: 'AbovePrompt', props })
+  expect(await ui.find({ key: 'runner-0' })).toBeDefined()
 })
 
 test('the check interval in the settings file applies from the start, and a new one takes over', async ($, on) => {

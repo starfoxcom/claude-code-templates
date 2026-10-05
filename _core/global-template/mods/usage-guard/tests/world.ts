@@ -52,6 +52,8 @@ export type World = {
   /** The mod's manifest as the main module reads it beside its settings file; none by default. */
   manifest?: string
   isArmsDirMissing?: boolean
+  /** Runs inside each file read, before it returns: something else acting while the mod waits on it. */
+  duringRead?: (path: string) => unknown
 }
 
 export function world(on: On, root = 'C:/Repos/my-game'): World {
@@ -72,9 +74,10 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
   }
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
-  on('fs.read', ($, e) => {
+  on('fs.read', async ($, e) => {
     const isManifest = key(e.path).endsWith('/.claude-plugin/plugin.json')
     const text = isManifest ? seen.manifest : seen.files.get(key(e.path))
+    await seen.duringRead?.(key(e.path))
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
@@ -209,3 +212,11 @@ export async function mountCard($: Engine, surface: 'terminal' | 'desktop' = 'te
 }
 
 export const registered: { name: string; argumentHint?: string }[] = []
+
+// The test runner has timers; the mod sandbox's types do not list them.
+declare function setTimeout(callback: () => void, ms: number): unknown
+
+/** A short real wait: room for other work to go ahead (a bound, never what a test waits on to pass). */
+export function moment(ms = 100): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
