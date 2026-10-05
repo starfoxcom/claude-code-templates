@@ -34,6 +34,8 @@ test('the row names the incident while the checks wait', () => {
 })
 
 const POLL_MS = 30_000
+const OWNER = 'C:/Users/me/.claude/mods-data/ci-watch/s1.owner'
+const STATE = 'C:/Users/me/.claude/mods-data/ci-watch/s1.json'
 
 test('checks pending past 15 minutes during an Actions incident wake the session once, early', async ($, on) => {
   const { seen, clock } = world(on)
@@ -79,4 +81,60 @@ test('with no incident the status is read at most every five minutes, and nothin
   expect(seen.statusReads).toBeLessThanOrEqual(3)
   expect(seen.statusReads).toBeGreaterThan(0)
   expect(seen.prompts).toEqual([])
+})
+
+test('an incident wake held through a push never goes out as the new commit settling', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.status = ACTIONS
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  // The incident is noted while a turn runs (no tool result carries it), then a new commit lands.
+  await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+  for (let i = 0; i < 31; i++) await clock.advance(POLL_MS)
+  seen.head = 'b2'
+  await clock.advance(POLL_MS)
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('settled with no failure'))).toEqual([])
+})
+
+test('a load retired while GitHub status was read does not save over the newer one', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let i = 0; i < 30; i++) await clock.advance(POLL_MS)
+  // The status read takes long enough for a hot reload to claim the session.
+  seen.status = ACTIONS
+  seen.duringStatus = () => void seen.files.set(OWNER, 'a-newer-instance')
+  await clock.advance(POLL_MS)
+  expect(seen.statusReads).toBe(1)
+  expect(seen.files.get(STATE)).not.toContain('Incident with Actions')
+  expect(seen.prompts).toEqual([])
+})
+
+test('refused incident wakes leave the settlement wake all of its tries', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.status = ACTIONS
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  // A hook drops every prompt for a while: the incident wake runs out of tries.
+  seen.refusals = 99
+  for (let i = 0; i < 40; i++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
+  // The checks settle; the first try is refused, a later one goes in.
+  seen.refusals = 1
+  seen.bucket = 'pass'
+  for (let i = 0; i < 6; i++) await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('settled with no failure'))).toHaveLength(1)
+})
+
+test('the row says confirming, not the incident, once every check has passed', () => {
+  const watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: { build: 'pass' }, stablePolls: 1 }
+  expect(summary({ ...watch, incident: 'Incident with Actions' })).toEqual({
+    text: '⏳ PR 7 · all 1 passed, confirming',
+    color: 'green',
+  })
 })
