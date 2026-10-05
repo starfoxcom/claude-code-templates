@@ -47,6 +47,8 @@ export type Plan = {
   isWrite: boolean
   /** Each `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
   prs: PrCall[]
+  /** Every `gh` statement in the command: the PR-body contract judges only a command with one. */
+  ghCalls: number
 }
 
 /** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
@@ -206,6 +208,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     unread: [],
     isWrite: false,
     prs: [],
+    ghCalls: 0,
   }
   const r: Reading = {
     plan,
@@ -576,6 +579,7 @@ function ghSpec(group: string, action: string): Spec {
 
 function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
+  plan.ghCalls++
   const { gi, ai } = ghWords(args, r)
   const group = args[gi]?.text ?? ''
   const action = args[ai]?.text ?? ''
@@ -602,7 +606,7 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   walk(rest, ghSpec(group, action), r, where)
   if (group === 'pr' && (action === 'create' || action === 'edit')) {
     // Stdin is read exactly only from a literal here-doc: a pipe or a `< file` may feed it instead.
-    const isLiteral = st.heredocs.length > 0 && !st.hasDynamicBody && !st.pipeIn && st.reads.length === 0
+    const isLiteral = st.heredocs.length === 1 && !st.hasDynamicBody && !st.pipeIn && st.reads.length === 0
     const stdinBody = isLiteral ? st.heredocs.join('\n') : undefined
     const filePath = plan.files.slice(before).find(f => f.where === where)?.path
     plan.prs.push(readPr(action, rest, { stdinBody, filePath }))

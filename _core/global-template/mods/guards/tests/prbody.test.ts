@@ -98,3 +98,14 @@ test('of overlapping repo keys the longest wins, whatever the file order', () =>
   expect(ruleFor({ repos: { 'game-smoke': long, game: short } }, 'game-smoke')).toBe(long)
   expect(ruleFor({ repos: { game: short, 'game-smoke': long } }, 'game')).toBe(short)
 })
+
+test('a title built at run time is marked, in every spelling', () => {
+  expect(pr('create', ['--title', dyn('$T')]).isTitleDynamic).toBe(true)
+  expect(pr('create', [dyn('--title=$T')]).isTitleDynamic).toBe(true)
+  expect(pr('create', [dyn('-t$T')]).isTitleDynamic).toBe(true)
+  expect(pr('create', ['--title', 'feat: x', '--base', dyn('$B')]).isTitleDynamic).toBe(false)
+})
+
+test('the value of --recover is a value, never a flag', () => {
+  expect(pr('create', ['--recover', dyn('$STATE'), '--body-file', 'b.md']).isUnknown).toBe(false)
+})

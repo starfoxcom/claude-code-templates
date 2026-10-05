@@ -23,6 +23,8 @@ export type PrCall = {
   isFilled: boolean
   /** A word that may stand for several, built at run time (`@params`, `$ARGS`): the flags are unknown. */
   isUnknown: boolean
+  /** The title is built at run time, so a title exemption cannot be decided. */
+  isTitleDynamic: boolean
 }
 
 /** A word as the command reading hands it over: its text, and whether the shell builds it at run time. */
@@ -33,7 +35,7 @@ const VALUE_FLAGS = new Set(
   (
     '-t --title -b --body -F --body-file -B --base -H --head -R --repo -a --assignee -l --label -m --milestone ' +
     '-p --project -r --reviewer -T --template --add-label --remove-label --add-reviewer --remove-reviewer ' +
-    '--add-assignee --remove-assignee --add-project --remove-project'
+    '--add-assignee --remove-assignee --add-project --remove-project --recover'
   ).split(' '),
 )
 const FILL = /^(?:-f|-w|--fill|--fill-first|--fill-verbose|--web)$/
@@ -52,7 +54,15 @@ export function readPr(
   given: PrWord[],
   found: { stdinBody?: string; filePath?: string } = {},
 ): PrCall {
-  const call: PrCall = { action, title: '', isInline: false, isFilled: false, isUnknown: false, ...found }
+  const call: PrCall = {
+    action,
+    title: '',
+    isInline: false,
+    isFilled: false,
+    isUnknown: false,
+    isTitleDynamic: false,
+    ...found,
+  }
   const words = given.map(w => w.text)
   for (let i = 0; i < words.length; i++) {
     const w = words[i] ?? ''
@@ -62,7 +72,11 @@ export function readPr(
     if (FILL.test(w)) call.isFilled = true
     else if (/^(?:-b|--body)(?:=|$)/.test(w) || /^-b./.test(w)) call.isInline = true
     const title = valueAt(words, i, '--title', '-t')
-    if (title !== undefined) call.title = title
+    if (title !== undefined) {
+      call.title = title
+      const isSplit = w === '--title' || w === '-t'
+      call.isTitleDynamic = Boolean(given[isSplit ? i + 1 : i]?.dynamic)
+    }
     const file = valueAt(words, i, '--body-file', '-F')
     if (file !== undefined) call.bodyFile = file
   }
