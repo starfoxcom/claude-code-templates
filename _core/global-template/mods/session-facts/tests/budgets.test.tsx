@@ -216,6 +216,19 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ type: 'Text', text: /week 20%/ })).toBeDefined()
   })
 
+  test(`${surface}: in a narrow band each chip wraps whole, and only one wider than the band is cut`, async ($, on) => {
+    world(on)
+    await start($, surface)
+    const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
+    const props = async (key: string) =>
+      ((await ui.find({ key })) as never as { props: Record<string, unknown> } | undefined)?.props
+    expect((await props('session-facts-row'))?.flexWrap).toBe('wrap')
+    for (const key of ['session-facts-chip-0', 'session-facts-chip-1', 'session-facts-chip-2'])
+      expect(await props(key)).toEqual(expect.objectContaining({ flexShrink: 1, minWidth: 0 }))
+    const week = (await ui.find({ type: 'Text', text: /week 20%/ })) as never as { props: Record<string, unknown> }
+    expect(week.props.wrap).toBe('truncate-end')
+  })
+
   test(`${surface}: a usage-guard pause replaces the plan chips`, async ($, on) => {
     world(on, { status: 'active', wakeAt: NOW + 60 * MINUTE })
     await start($, surface)
