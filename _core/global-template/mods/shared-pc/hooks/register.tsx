@@ -217,9 +217,9 @@ function cardBox(ui: Ui, $: Engine, shown: SharedPcBand, width: number) {
             key="card-approve"
             label="Approve"
             variant="primary"
-            onPress={() => change($, ['answer', asker, 'approve'])}
+            onPress={() => answerAsk($, asker, 'approve')}
           />
-          <Button key="card-decline" label="Decline" onPress={() => change($, ['answer', asker, 'decline'])} />
+          <Button key="card-decline" label="Decline" onPress={() => answerAsk($, asker, 'decline')} />
         </Box>
       )}
       {!asker && card.tone === 'red' && (
@@ -464,6 +464,18 @@ async function notify($: Engine, body: string, tone: CardTone) {
   const until = tone === 'red' ? Number.POSITIVE_INFINITY : now + NOTICE_CARD_MS
   ctx.notices.push({ key: `notice:${now}`, body, tone, until })
   await refresh($)
+}
+
+// A press always answers: the request card gives way to a short card saying what was decided, and the
+// same line goes to the transcript for a surface that draws no card.
+async function answerAsk($: Engine, asker: string, answer: 'approve' | 'decline') {
+  const reply = await change($, ['answer', asker, answer])
+  const name = asker.slice(0, 8)
+  const decided =
+    answer === 'approve' ? `Approved: ${name} goes next on the PC.` : `Declined: ${name} keeps its place in the line.`
+  const text = reply.error ? `shared-pc error: ${reply.error}` : decided
+  await notify($, text, reply.error ? 'red' : 'blue')
+  await $.session.append({ message: { type: 'system', content: [{ type: 'text', text }] } }).catch(() => undefined)
 }
 
 async function dismissNotice($: Engine, key: string) {
