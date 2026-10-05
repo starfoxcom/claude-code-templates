@@ -36,6 +36,8 @@ export type Seen = {
   /** What githubstatus.com answers (default: nothing), and how often it was read. */
   status?: string
   statusReads: number
+  /** Runs inside each status read: something else acting while the mod waits on GitHub. */
+  duringStatus?: () => unknown
   /** How many prompts a hook drops before one enters. */
   refusals?: number
   /** Each slash command registered, with its argument hint. */
@@ -88,6 +90,7 @@ export function world(on: On) {
     if (e.argv[2] === SWEEP_SCRIPT) seen.order.push(`sweep ${e.argv.slice(3).join(' ')}`)
     if (e.argv[2] === STATUS_SCRIPT) {
       seen.statusReads++
+      await seen.duringStatus?.()
       const stdout = seen.status ?? ''
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }

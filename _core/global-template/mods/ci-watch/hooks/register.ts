@@ -494,6 +494,8 @@ async function poll($: EngineInterface): Promise<void> {
             checks: {},
             quietSince: undefined,
             incident: undefined,
+            // A wake held for the old head (an incident's) would go out as the new head's settlement.
+            wakePending: undefined,
           }
         : current
     let checks: Record<string, string> | undefined
@@ -521,6 +523,9 @@ async function poll($: EngineInterface): Promise<void> {
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
   const toWake = settled.filter(w => live.watches.includes(w))
+  // GitHub's status is read before the retirement check: the read can take seconds, and a load retired
+  // meanwhile must not save over the newer one's file afterwards.
+  const isIncidentNoted = await noteIncidents($, now)
   // A newer load took over while this poll waited on gh: it settles the watches on its own next poll,
   // so this instance neither saves nor wakes.
   if (await isRetired($)) return
@@ -531,8 +536,7 @@ async function poll($: EngineInterface): Promise<void> {
   // Each wake is marked pending in the same save that records its outcome; sendHeld sends it.
   const due = new Set(toWake.filter(w => !isRecorded(recorded, w) && claimWake(w)))
   if (due.size > 0) live.watches = live.watches.map(w => (due.has(w) ? { ...w, wakePending: true } : w))
-  if (await noteIncidents($, now)) changed = true
-  if (changed || live.isUnsaved) await save($)
+  if (changed || isIncidentNoted || live.isUnsaved) await save($)
   if (!live.isTurnRunning) await sendHeld($)
 }
 
@@ -566,15 +570,17 @@ async function sendHeld($: EngineInterface): Promise<void> {
   }
 }
 
-// Tries per wake: a hook that drops every prompt is not asked again each minute.
+// Tries per wake: a hook that drops every prompt is not asked again each minute. An incident's early wake
+// counts apart from the settlement's, so refusals of the first never cost the second its tries.
 const MAX_TRIES = 3
 const refusals = new Map<string, number>()
+const triesKey = (watch: Watch) => `${watch.outcome ? 'settled' : 'incident'}:${wakeKey(watch)}`
 
 // Saved, not only set in memory: every poll starts from the file. A newer load owns the file once this
 // one is retired, so then only the flag is laid on its copy, and that load sends the wake.
 async function markPending($: EngineInterface, watch: Watch): Promise<void> {
-  const count = (refusals.get(wakeKey(watch)) ?? 0) + 1
-  refusals.set(wakeKey(watch), count)
+  const count = (refusals.get(triesKey(watch)) ?? 0) + 1
+  refusals.set(triesKey(watch), count)
   if (count >= MAX_TRIES) return
   const isSame = (w: Watch) => w.id === watch.id && w.headSha === watch.headSha
   const mark = (list: Watch[]) => list.map(w => (isSame(w) ? { ...w, wakePending: true } : w))
