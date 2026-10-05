@@ -420,9 +420,14 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   if (now?.resetsAt === arm.resetsAt && now.kind === arm.kind) await setArm($, null)
 }
 
+// The arm in plugin state names the session its saved copy is filed under. A hot reload keeps that state
+// while it starts this module over, and a /clear changes the id, so every save and move reads the file
+// from the arm itself: the copy under an earlier id is always the one cleared.
 async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
-  await update($, armedWake, () => arm)
-  await saveArm($, arm)
+  const before = await read($, armedWake)
+  const filed = arm && { ...arm, session: await $.session.id() }
+  await update($, armedWake, () => filed)
+  await saveArm($, filed, before?.session)
 }
 
 async function armPath($: EngineInterface, sessionId?: string): Promise<string> {
@@ -430,17 +435,14 @@ async function armPath($: EngineInterface, sessionId?: string): Promise<string> 
 }
 
 // A failed save never fails the command: the arm still stands until this process ends.
-async function saveArm($: EngineInterface, arm: ArmedWake | null, sessionId?: string): Promise<void> {
+async function saveArm($: EngineInterface, arm: ArmedWake | null, earlier?: string): Promise<void> {
   try {
     if (!live.isArmsDirMade) {
       await $.process.run(['node', '-e', MKDIR_SCRIPT, `${await dataDir($)}/arms`], { timeoutMs: 10_000 })
       live.isArmsDirMade = true
     }
-    // The arm's own file is cleared even when the session id moved on since it was saved (a /clear).
-    const path = await armPath($, sessionId)
-    if (live.armFile && live.armFile !== path) await $.fs.write(live.armFile, 'null')
-    await $.fs.write(path, JSON.stringify(arm, null, 2))
-    live.armFile = arm ? path : undefined
+    if (earlier && earlier !== arm?.session) await $.fs.write(await armPath($, earlier), 'null')
+    await $.fs.write(await armPath($, arm?.session), JSON.stringify(arm, null, 2))
   } catch {
     // Kept in this process's state only.
   }
@@ -451,16 +453,20 @@ async function saveArm($: EngineInterface, arm: ArmedWake | null, sessionId?: st
 // restart that resumes the newest conversation still finds it.
 async function followSession($: EngineInterface, sessionId?: string): Promise<void> {
   const arm = await read($, armedWake)
-  if (arm && live.armFile && live.armFile !== (await armPath($, sessionId))) await saveArm($, arm, sessionId)
+  const current = sessionId ?? (await $.session.id())
+  if (!arm?.session || arm.session === current) return
+  const moved = { ...arm, session: current }
+  await update($, armedWake, () => moved)
+  await saveArm($, moved, arm.session)
 }
 
 // A session started again (a restart, a resume) finds the arm it saved: scheduled again, caught up
 // within the setting's window, or dropped with a note. A hot reload keeps the arm in state instead.
 async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
-  const path = await armPath($)
-  const saved = parseSavedArm(String(await $.fs.read(path).catch(() => '')))
-  if (!saved) return undefined
-  live.armFile = path
+  const text = await $.fs.read(await armPath($)).catch(() => '')
+  const parsed = parseSavedArm(String(text))
+  if (!parsed) return undefined
+  const saved = { ...parsed, session: await $.session.id() }
   const limit = LIMIT_NAMES[saved.kind] ?? saved.kind
   const action = catchUpOf(saved.wakeAt, await $.clock.now(), live.catchUpMinutes)
   if (action === 'drop') {
@@ -593,12 +599,9 @@ async function startTimers($: EngineInterface): Promise<void> {
   await refresh($)
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) await act($, pause)
-  // A wake armed before a hot reload: the module's timer and its note of the arm's file went with the old
-  // instance (the file is this id's: a /clear before the reload moved it). Before a restart: the state
-  // went with the process, and the saved arm stands in.
-  const held = await read($, armedWake)
-  if (held) live.armFile = await armPath($)
-  const arm = held ?? (await restoreArm($))
+  // A wake armed before a hot reload: the module's timer went with the old instance. Before a restart:
+  // the state went with the process, and the saved arm stands in.
+  const arm = (await read($, armedWake)) ?? (await restoreArm($))
   if (arm) await scheduleArm($, arm)
   $.clock.every(CHECK_EVERY_MS, () => void followSession($).then(() => check($)).catch(() => undefined))
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
