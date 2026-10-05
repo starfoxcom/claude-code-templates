@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
 import { register as settings, SETTINGS_PANE } from './settings'
-import { keyOf, registerView, STOP_PREFIX } from './view'
+import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
 
 
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
@@ -20,12 +20,13 @@ const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 const KEEP_SETTLED_MS = 60 * 60_000
-const HINT = '[help | settings | stop]'
+const HINT = '[help | settings | stop | phone]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
   '  /ci-watch           the watched PRs and their checks',
   '  /ci-watch stop      stop watching every PR in this session',
   '  /ci-watch settings  open the settings pane',
+  '  /ci-watch phone     the same as text, for phone chats',
   '  /ci-watch help      this list',
 ].join('\n')
 
@@ -573,10 +574,10 @@ export const register: Register = (on, options) => {
     return { result: `Watching ${repo}#${number}; you will be woken once its checks settle.` }
   })
 
-  // `/ci-watch [help | settings | stop]`; with no argument, the watched PRs. An unknown verb gets the help.
+  // `/ci-watch [help | settings | stop | phone]`; with no argument, the watched PRs. An unknown verb gets the help.
   on('command.run', { command: 'ci-watch' }, async ($, e, next) => {
     const verb = e.args.trim()
-    if (!['', 'settings', 'stop'].includes(verb)) return { text: HELP }
+    if (!['', 'settings', 'stop', 'phone'].includes(verb)) return { text: HELP }
     if (verb === 'settings') {
       await $.ui.open({ id: SETTINGS_PANE, title: 'CI watch settings', focus: true })
       return { text: 'Opened the ci-watch settings.' }
@@ -589,12 +590,11 @@ export const register: Register = (on, options) => {
       await save($)
       return { text: 'Stopped watching every PR in this session.' }
     }
-    if (live.watches.length === 0) return { text: 'No PR is being watched.' }
-    const lines = live.watches.map(w => {
-      const states = Object.values(w.checks)
-      const passed = states.filter(bucket => !PENDING.has(bucket) && !FAILED.has(bucket)).length
-      return `${w.repo}#${w.number}: ${w.outcome ?? 'running'}, ${passed}/${states.length} done`
-    })
-    return { text: lines.join('\n') }
+    // The row's own words, so the command and the row never disagree; the phone also gets each check.
+    const none = live.watches.length === 0 ? ['No PR is being watched.'] : []
+    if (verb === 'phone')
+      return { text: [...none, ...live.watches.map(phoneText), '/ci-watch help for more'].join('\n') }
+    if (none.length > 0) return { text: none[0] }
+    return { text: live.watches.map(w => `${summary(w).text} (${w.repo})`).join('\n') }
   })
 }
