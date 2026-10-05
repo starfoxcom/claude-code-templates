@@ -10,7 +10,7 @@
 #     `@claude review this PR`.
 #
 # Merge gate participation: this workflow PATCHes the `Claude On-Demand`
-# check-run on the PR HEAD SHA via the Checks API after Opus finishes its
+# check-run on the PR HEAD SHA via the Checks API after the deep review finishes its
 # review. The check was created at status=in_progress by claude-code-review.yml's
 # init-deep-check job; this workflow upgrades it to success/failure based on
 # the deep verdict. Branch protection on main/develop requires both
@@ -49,7 +49,7 @@ jobs:
     # Anchor the bot-loop guard to startsWith — the action's progress comment
     # body STARTS with "Claude Code is working"; legitimate escalation
     # comments may quote the phrase when discussing the filter itself (e.g.
-    # listing invariants for Opus to verify). Using `!contains` here would
+    # listing invariants for the deep tier to verify). Using `!contains` here would
     # reject any such quote and silently block the deep tier from firing.
     if: |
       (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
@@ -74,7 +74,7 @@ jobs:
       id-token: write
       actions: read
       # Needed to PATCH the `Claude On-Demand` check-run on the PR HEAD SHA
-      # both at job start (in_progress) and after the Opus review completes
+      # both at job start (in_progress) and after the deep review completes
       # (success/failure based on verdict).
       checks: write
     steps:
@@ -112,7 +112,7 @@ jobs:
       # the title to "Deep review in progress". For manual `@claude review
       # this PR` triggers without a prior routine run on this HEAD SHA, the
       # check may not yet exist — create it. Either way, the PR's check
-      # rollup now shows "Claude On-Demand: in_progress" while Opus runs.
+      # rollup now shows "Claude On-Demand: in_progress" while the review runs.
       - name: Upsert Claude On-Demand check to in_progress
         if: steps.pr-head.outputs.head_sha != ''
         env:
@@ -177,26 +177,22 @@ jobs:
       - name: Detect failure class
         id: failure_class
         if: steps.claude_attempt_1.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          REPO="${{ github.repository }}"
-          RUN_ID="${{ github.run_id }}"
-
-          JOB_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
-            --jq '[.jobs[] | select(.name | test("On-demand"))] | first | .id // empty')
-          if [ -z "$JOB_ID" ]; then
-            echo "::warning::Could not resolve job ID — treating as transient failure"
-            echo "usage_limit=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          LOG=$(gh api "repos/$REPO/actions/jobs/$JOB_ID/logs" 2>/dev/null || true)
-          # The action also saves the CLI's result to a file, on disk even when
-          # the job log has not reached the API yet. A plan cap reads "You've
-          # reached your <model> limit" with HTTP 429.
-          RESULT=$(cat "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
-          if printf '%s %s' "$LOG" "$RESULT" | grep -qiE 'rate.limit|usage.limit|billing|quota.exceeded|resource.exhausted|spending.limit|credit|allowance|reached your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
+          # The action saves the CLI's messages to a file on disk. Only two
+          # fields of its final `result` message are read, both written by the
+          # CLI: the API's HTTP status, and the result text when `is_error` is
+          # set (then it is the API's error, not the model's words). Everything
+          # else can carry the PR's own words: the job log prints the whole
+          # prompt, the other messages hold the diff and comments, and the
+          # result's own fields hold the model's final text and the commands it
+          # was refused. A model cap returns HTTP 429, the plan cap reads
+          # "You've hit your limit · resets …". A missing or unreadable file,
+          # or a cap reported anywhere else, counts as transient: the cost is
+          # one same-model retry.
+          RESULT=$(jq -r '[.[]? | select(.type == "result")] | last // empty
+            | "status=\(.api_error_status // "") \(if .is_error == true then .result // "" else "" end)"' \
+            "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
+          if printf '%s' "$RESULT" | grep -qiE '^status=429|rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit'; then
             echo "::warning::Usage limit detected in attempt 1 — skipping the same-model retry, falling back to Opus 5.5 @ high"
             echo "usage_limit=true" >> "$GITHUB_OUTPUT"
           else
@@ -289,7 +285,7 @@ jobs:
 
       - name: Evaluate deep-tier verdict
         # PATCH the `Claude On-Demand` check on the PR HEAD SHA to
-        # success/failure based on Opus's verdict comment. Branch protection
+        # success/failure based on the reviewer's verdict comment. Branch protection
         # on main/develop requires `Claude On-Demand` as a status check, so
         # this PATCH is what actually gates merge for auto-escalated PRs.
         #
@@ -301,7 +297,7 @@ jobs:
         # broke the fold-in architecture.
         #
         # The action posts a comment starting with "**Claude finished
-        # @claude[bot]'s task in <duration>**" when Opus completes its review.
+        # @claude[bot]'s task in <duration>**" when the reviewer completes its review.
         # We re-read that comment and translate to check conclusion.
         if: always() && steps.pr-head.outputs.head_sha != ''
         env:
