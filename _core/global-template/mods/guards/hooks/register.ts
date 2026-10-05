@@ -116,13 +116,14 @@ async function prRules($: Engine): Promise<PrRules | undefined> {
   }
 }
 
-// The PR body as it will be sent: the here-doc on stdin, the text this command writes to the body file,
-// or the file on disk. Undefined when there is none or it cannot be read (checkFiles names that).
+// The PR body exactly as it will be sent: a literal here-doc on stdin, what a `cat` here-doc in this
+// command writes to the body file, or the file on disk. Undefined for any other route.
 async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: boolean) {
   if (call.bodyFile === '-') return call.stdinBody
-  const file = plan.files.find(f => f.path === call.bodyFile)
+  const file = call.filePath === undefined ? undefined : plan.files.find(f => f.path === call.filePath)
   if (!file) return undefined
   if (file.written) {
+    if (!file.isLiteral) return undefined
     const label = `${file.where} (file ${file.path})`
     return plan.texts.filter(t => t.where === label && !t.creditOnly).map(t => t.text).join('\n') || undefined
   }
@@ -133,14 +134,24 @@ async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: 
   }
 }
 
+// Each PR call in the command, in order: the first reason to block. A body that cannot be read exactly
+// is named unread, so the shadow log shows it; it never blocks and never passes in silence.
 async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash: boolean) {
-  if (!plan.pr) return undefined
-  const rule = ruleFor(await prRules($), repo)
+  const rule = plan.prs.length > 0 ? ruleFor(await prRules($), repo) : undefined
   if (!rule) return undefined
-  const early = checkCall(plan.pr)
-  if (early) return early
-  const text = await prBody($, plan, plan.pr, cwd, isBash)
-  return text === undefined ? undefined : checkBody(text, plan.pr.title, rule)
+  for (const call of plan.prs) {
+    const early = checkCall(call)
+    if (early) return early
+    if (call.bodyFile === undefined && !call.isUnknown) continue
+    const text = call.isUnknown ? undefined : await prBody($, plan, call, cwd, isBash)
+    if (text === undefined) {
+      plan.unread.push(`the PR body (format check, ${call.action})`)
+      continue
+    }
+    const reason = checkBody(text, call.title, rule)
+    if (reason) return reason
+  }
+  return undefined
 }
 
 // The first reason to block, or undefined.

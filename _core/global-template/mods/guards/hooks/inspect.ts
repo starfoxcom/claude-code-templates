@@ -28,8 +28,9 @@ export type Plan = {
   texts: { where: string; text: string; creditOnly?: boolean }[]
   /** Body files the command hands to git or gh, as written (relative to `cwd` when not absolute).
    * `written`: this same command writes the file, and what it writes was read from the command text. */
-  /** `folder`: where a relative path resolves, as the command stands where the file is named. */
-  files: { where: string; path: string; written?: boolean; folder?: Folder }[]
+  /** `folder`: where a relative path resolves, as the command stands where the file is named.
+   * `isLiteral`: written by a `cat` of a literal here-doc, so the text read is exactly the file's. */
+  files: { where: string; path: string; written?: boolean; isLiteral?: boolean; folder?: Folder }[]
   /** Files the command itself writes (`> file`). */
   written: string[]
   branches: string[]
@@ -45,8 +46,8 @@ export type Plan = {
   isCwdUnknown?: boolean
   block?: string
   isWrite: boolean
-  /** A `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
-  pr?: PrCall
+  /** Each `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
+  prs: PrCall[]
 }
 
 /** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
@@ -197,7 +198,16 @@ const GH_WRITES: Record<string, string[]> = {
 }
 
 export function inspect(command: string, powershell: boolean): Plan {
-  const plan: Plan = { texts: [], files: [], written: [], branches: [], diff: null, unread: [], isWrite: false }
+  const plan: Plan = {
+    texts: [],
+    files: [],
+    written: [],
+    branches: [],
+    diff: null,
+    unread: [],
+    isWrite: false,
+    prs: [],
+  }
   const r: Reading = {
     plan,
     folder: { isUnknown: false },
@@ -213,6 +223,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     const writer = r.writers.get(norm(f.path))
     if (!writer) continue
     f.written = true
+    f.isLiteral = isLiteralWrite(writer.st)
     feed(writer.st, { ...r, ps: writer.ps }, `${f.where} (file ${f.path})`)
   }
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
@@ -243,6 +254,13 @@ const RAW_WRITES = [
   String.raw`\bgh\b${REST}\bapi\b(?=${REST}(?:${API_WRITE}))`,
   String.raw`\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b${REST}api\.github\.com`,
 ].map(source => new RegExp(source, 'i'))
+
+// `cat > f <<'EOF'`: the file holds the here-doc as typed. `printf`, `echo -e` and the like expand escapes
+// the reading leaves as typed, so their files are not read as exact text.
+function isLiteralWrite(st: Statement): boolean {
+  const { name } = programOf(st)
+  return /^(cat|type|get-content|gc)$/.test(name) && st.heredocs.length > 0 && !st.hasDynamicBody
+}
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 
@@ -589,10 +607,14 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     return undefined
   }
   const where = write(plan, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
+  const before = plan.files.length
   walk(rest, ghSpec(group, action), r, where)
   if (group === 'pr' && (action === 'create' || action === 'edit')) {
-    const stdinBody = st.heredocs.length > 0 ? st.heredocs.join('\n') : undefined
-    plan.pr = readPr(action, rest.map(w => w.text), stdinBody)
+    // Stdin is read exactly only from a literal here-doc: a pipe or a `< file` may feed it instead.
+    const isLiteral = st.heredocs.length > 0 && !st.hasDynamicBody && !st.pipeIn && st.reads.length === 0
+    const stdinBody = isLiteral ? st.heredocs.join('\n') : undefined
+    const filePath = plan.files.slice(before).find(f => f.where === where)?.path
+    plan.prs.push(readPr(action, rest, { stdinBody, filePath }))
   }
   return where
 }

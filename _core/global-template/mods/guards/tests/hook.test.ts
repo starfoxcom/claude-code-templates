@@ -230,3 +230,46 @@ test('a body file the same command writes is checked from what it writes', { opt
   expect(String((piped as { deny?: string }).deny)).toContain('`## What` is missing')
   expect(seen.ran).toHaveLength(1)
 })
+
+const lastEntry = (seen: { files: Map<string, string> }) =>
+  JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+
+test('a PR body that cannot be read exactly is named unread, never blocked', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': FULL })
+  const routes = [
+    // printf expands escapes the reading leaves as typed.
+    `printf '## What\\n- add it\\n\\n## Why\\nmissing\\n\\nResolves #4\\n' > /tmp/b.md && ` +
+      'gh pr create --title t --body-file /tmp/b.md',
+    'cat b.md | gh pr create --title "feat: x" --body-file -',
+    'gh pr create --title "feat: x" --body-file - < b.md',
+    'cat b.md > c.md && gh pr create --title "feat: x" --body-file c.md',
+  ]
+  for (const command of routes) {
+    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
+    expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
+  }
+  expect(seen.ran).toHaveLength(routes.length)
+})
+
+test('every PR call in a command is checked, and a body path built from a variable is read', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': '## What\n- add it\n' })
+  const both = await bash($, 'gh pr create --title "feat: x" --body-file short.md && gh pr edit 5 --add-label bug')
+  expect(String((both as { deny?: string }).deny)).toContain('`## Why` is missing')
+  const built = await bash($, 'F=short.md; gh pr create --title "feat: x" --body-file "$F"')
+  expect(String((built as { deny?: string }).deny)).toContain('`## Why` is missing')
+  expect(seen.ran).toEqual([])
+})
+
+test('a PowerShell splat is never blocked for flags it may carry', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE })
+  on('tool.call', { tool: 'PowerShell' }, () => ({ result: {} as never }))
+  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
+  const result = await $.tool.call({ tool: 'PowerShell', command: 'gh pr create @params' } as never)
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
+})
