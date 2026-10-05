@@ -104,7 +104,17 @@ test('a pane with no rows of its own says what /config listed', async ($, on) =>
   on('config.list', () => ({ value: [THEME] }))
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: /listed 1 row\(s\), such as theme \(engine\)\./ })).toBeDefined()
+  // Only the engine's own rows: that surface lists no plugin settings at all.
+  expect(await ui.find({ type: 'Text', text: /listed 1 row\(s\), 0 of them from plugins\.$/ })).toBeDefined()
+})
+
+test("a pane with no rows of its own names other plugins' rows, not the engine's", async ($, on) => {
+  const other = { ...THEME, key: 'ci-watch.pollSeconds', provider: { plugin: 'ci-watch', tier: 'user' } as never }
+  on('config.list', () => ({ value: [THEME, other] }))
+  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+  const ui = await mountPane($, 'desktop')
+  const text = /listed 2 row\(s\), 1 of them from plugins, such as ci-watch\.pollSeconds \(ci-watch\)\.$/
+  expect(await ui.find({ type: 'Text', text })).toBeDefined()
 })
 
 test('a pane whose /config cannot be listed says why', async ($, on) => {
@@ -114,7 +124,8 @@ test('a pane whose /config cannot be listed says why', async ($, on) => {
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   const ui = await mountPane($, 'desktop')
   // A hook that throws is skipped, so the list fails as one with no answer at all would.
-  expect(await ui.find({ type: 'Text', text: /No settings for usage-guard here: \/config could not be listed \(/ })).toBeDefined()
+  const text = /No settings for usage-guard here: \/config could not be listed \(/
+  expect(await ui.find({ type: 'Text', text })).toBeDefined()
 })
 
 test('a refused change shows its reason under the field', async ($, on) => {
