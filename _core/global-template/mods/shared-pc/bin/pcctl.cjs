@@ -227,15 +227,6 @@ function normalize(s, all) {
     return keep
   })
   if (s.nextUp && (t > s.nextUp.until || !isAlive(all, s.nextUp.session))) s.nextUp = null
-  // Skip-the-line requests: shown in every session until answered; an unanswered one ends when its
-  // session dies, gets the seat anyway, or after 15 minutes. An answered one waits for its session to
-  // read it (`ack`), unless that session died.
-  s.requests = s.requests.filter(r => {
-    if (!isAlive(all, r.session)) return false
-    if (r.answer) return true
-    const isServed = s.seat && s.seat.session === r.session && s.seat.since > r.at
-    return !isServed && t - r.at < REQUEST_TTL_MS
-  })
   if (s.seat) {
     const seat = s.seat
     let reason = null
@@ -252,6 +243,16 @@ function normalize(s, all) {
     const reserved = s.nextUp && !s.line.some(e => e.session === s.nextUp.session)
     if (!reserved) grant(s, s.line.shift())
   }
+  // Skip-the-line requests: shown in every session until answered; an unanswered one ends when its
+  // session dies, gets the seat anyway, or after 15 minutes. An answered one waits for its session to
+  // read it (`ack`), unless that session died. Swept after the seat changes hands, so a request whose
+  // session was just granted the seat ends in the same pass.
+  s.requests = s.requests.filter(r => {
+    if (!isAlive(all, r.session)) return false
+    if (r.answer) return true
+    const isServed = s.seat && s.seat.session === r.session && s.seat.since > r.at
+    return !isServed && t - r.at < REQUEST_TTL_MS
+  })
   return s
 }
 
@@ -403,6 +404,15 @@ const OPS = {
       s.nextUp = null
     }
     return view(normalize(s, all), all, id)
+  },
+  // The tool's release: the seat, a reservation and the place in line, all in this one write, so a seat
+  // freed by another session can never be granted to this one between giving up the seat and the line.
+  // `freed` and `left` say what it gave up.
+  drop(s, all, id, args, t) {
+    const freed = Boolean(s.seat && s.seat.session === id)
+    const left = s.line.some(e => e.session === id)
+    OPS.leave(s, all, id)
+    return { ...OPS.release(s, all, id, args, t), freed, left }
   },
   end(s, all, id, args, t) {
     s.line = s.line.filter(e => e.session !== id)
