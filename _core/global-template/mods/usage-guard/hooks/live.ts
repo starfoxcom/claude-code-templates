@@ -7,7 +7,8 @@ import type { Zone } from './texts'
 export type Live = {
   zone: Zone
   isTurnRunning: boolean
-  isStarted: boolean
+  /** The module's one start (settings, zone, saved arm, timers), awaited by every hook that needs it. */
+  started?: Promise<void>
   /** The session id whose tool calls changed something: a /clear goes on under a new id with none. */
   workSession?: string
   isStatusShown: boolean
@@ -47,7 +48,6 @@ export function newLive(): Live {
   return {
     zone: { offsetMinutes: 0, name: 'UTC' },
     isTurnRunning: false,
-    isStarted: false,
     isStatusShown: false,
     handled: new Set(),
     wrapUpAt: 90,

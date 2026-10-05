@@ -10,7 +10,7 @@ import {
   targetFolder,
   wakeText,
 } from '../hooks/register'
-import { type Seen, world } from './world'
+import { moment, type Seen, world } from './world'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
 const HOUR = 60 * 60_000
@@ -140,6 +140,24 @@ test('an instance a newer load has replaced stops polling and never wakes the se
   const before = seen.files.get(STATE)
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/y' } as never)
   expect(seen.files.get(STATE)).toBe(before)
+})
+
+test('a call that lands while a fresh load is still claiming the session is answered by it', async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  seen.files.set(OWNER, 'an-older-instance')
+  // A hot reload runs the new load's start beside the model's next call, which lands mid-claim (the
+  // claim makes its folder first): the call waits for the claim instead of reading the older name. The
+  // folder make holds the claim back until the call is answered, or a moment if the call waits for it.
+  let call: Promise<unknown> | undefined
+  seen.duringMkdir = () => {
+    seen.duringMkdir = undefined
+    call = $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 7, repo: 'o/r' } as never)
+    return Promise.race([call, moment()])
+  }
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  expect(await call).toEqual({ result: 'Watching o/r#7; you will be woken once its checks settle.' })
+  expect(seen.files.get(OWNER)).not.toBe('an-older-instance')
 })
 
 test('a watch whose save failed is kept from memory and still wakes the session', async ($, on) => {
