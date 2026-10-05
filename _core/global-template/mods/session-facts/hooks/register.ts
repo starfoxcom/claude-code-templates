@@ -282,6 +282,9 @@ async function saveMemory($: EngineInterface): Promise<void> {
 // first prompt after one sets up too.
 async function setUp($: EngineInterface): Promise<void> {
   live.isSetUp = true
+  // The settings file first, so a set-up after a reload never runs on the options the module loaded with.
+  // One that cannot be read never costs the set-up: the loaded options stand.
+  await readSettings($).catch(() => undefined)
   live.zone = await readZone($)
   live.window = await readWindow($)
   await prepareMemory($)
@@ -295,8 +298,8 @@ async function setUp($: EngineInterface): Promise<void> {
   $.clock.every(BUDGETS_EVERY_MS, () => void refreshBudgets($))
 }
 
-// The settings file at the session's start, before any tool call: the settings module follows it from
-// there. Read here, since an engine handle is never passed into another file.
+// The settings file at set-up (the session's start, or the first prompt after a reload), before any tool
+// call: the settings module follows it from there. Read here, since an engine handle is never passed into another file.
 async function readSettings($: EngineInterface): Promise<void> {
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
   const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
@@ -306,18 +309,19 @@ async function readSettings($: EngineInterface): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
-  live.cacheLifetimeMs = live.cacheTtlMs
   registerBudgetsView(on)
   // The settings come from the mod's own file over the loaded options, read again as it changes.
   settings(on, options, values => {
     live.planWarnAt = Number(values.planWarnAt ?? 75)
     live.cacheWarnMinutes = Number(values.cacheWarnMinutes ?? 10)
-    live.cacheTtlMs = Number(values.cacheTtlMinutes ?? 60) * 60_000
+    const ttlMs = Number(values.cacheTtlMinutes ?? 60) * 60_000
+    // A new TTL starts the countdown over until a response tells the session's own lifetime. The file is
+    // applied again every minute: an unchanged TTL leaves a lifetime the responses already pointed to.
+    if (ttlMs !== live.cacheTtlMs && !live.isLifetimeRead) live.cacheLifetimeMs = ttlMs
+    live.cacheTtlMs = ttlMs
   })
 
   on('session.start', async ($, e, next) => {
-    // A settings file that cannot be read never costs the start: the loaded options stand.
-    await readSettings($).catch(() => undefined)
     const description = 'The budgets row and the facts line on every prompt'
     await $.command.register({ name: 'session-facts', description, argumentHint: HINT }).catch(() => undefined)
     await setUp($)

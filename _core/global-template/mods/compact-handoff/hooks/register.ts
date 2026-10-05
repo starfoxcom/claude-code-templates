@@ -316,12 +316,14 @@ async function replace(
   return { ...result, messages: summary ? [summary, carried, ...rest] : [carried, ...rest] }
 }
 
-// The mode in effect: the settings file can change it while the session runs.
-const live = { mode: 'on' as Mode }
+// The mode in effect: the settings file can change it while the session runs. `isRead`: the file was read
+// since this module loaded.
+const live = { mode: 'on' as Mode, isRead: false }
 
 // The settings file at the session's start, before any tool call: the settings module follows it from
 // there. Read here, since an engine handle is never passed into another file.
 async function readSettings($: EngineInterface): Promise<void> {
+  live.isRead = true
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
   const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
   const file = await $.fs.read(`${config}/mods-data/compact-handoff/settings.json`.replace(/\\/g, '/')).catch(() => '')
@@ -369,7 +371,9 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // After a reload no session.start runs: the first recall or compaction reads the file before the mode.
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => {
+    if (!live.isRead) await readSettings($).catch(() => undefined)
     const query = String((e as { query?: unknown }).query ?? '').trim()
     if (live.mode === 'off') return { deny: 'compact-handoff is off.' }
     if (!query) return { deny: 'recall needs a query.' }
@@ -378,6 +382,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.compact', async ($, e, next) => {
+    if (!live.isRead) await readSettings($).catch(() => undefined)
     if (e.agentId !== undefined || live.mode === 'off') return next(e)
     if (e.trigger === 'precompute') return live.mode === 'on' ? precompute($, e, next) : next(e)
     return live.mode === 'on' ? replace($, e, next) : shadow($, e, next)
