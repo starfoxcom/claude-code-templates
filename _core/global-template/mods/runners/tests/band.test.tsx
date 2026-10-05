@@ -1,4 +1,5 @@
 import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
 import { clockTime, isListed, mergeReading, pgrepPattern, rowText } from '../hooks/register'
@@ -82,7 +83,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 // A runner from the machine's own list file draws its row and buttons on both surfaces.
 const LISTED = [{ label: 'local', processes: ['Runner.Listener'], start: ['start-runners'], stop: [['stop-runners']] }]
 const LIST_FILE = 'C:/Users/me/.claude/mods-data/runners/runners.json'
-const registered: { name: string; argumentHint?: string }[] = []
+const registered: { name: string; description?: string; argumentHint?: string }[] = []
 
 // `files`: more readable files, by full path or, for the manifest, `plugin.json`.
 function machine(on: On, isUp: () => boolean, files: Record<string, string> = {}) {
@@ -140,7 +141,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
 test('/runners shows its arguments in the menu, lists them on help and names each runner', async ($, on) => {
   const { clock } = machine(on, () => true)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(registered.find(command => command.name === 'runners')?.argumentHint).toBe('[help | settings | set | phone]')
+  const command = registered.find(c => c.name === 'runners')
+  expect(command?.argumentHint).toBe('[help | add | settings | set | phone]')
+  // The menu's description names every verb the hint does.
+  for (const verb of ['add', 'settings', 'set', 'phone', 'help']) expect(command?.description).toContain(verb)
   const help = (await $.command.run({ command: 'runners', args: 'help' } as never)) as { text: string }
   for (const line of help.text.split('\n').slice(1)) expect(line).toMatch(/^ {2}\/runners( \w+)? +\S/)
   // An unknown word gets the same list.
@@ -159,7 +163,86 @@ test('/runners with no runners listed says how to add one', async ($, on) => {
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
   const answer = (await $.command.run({ command: 'runners', args: '' } as never)) as { text: string }
-  expect(answer.text).toContain('No runners listed. Add one to ~/.claude/mods-data/runners/runners.json')
+  expect(answer.text).toContain('No runners listed yet.')
+  expect(answer.text).toContain('/runners add <name> <program>')
+})
+
+// A machine with no list file yet: the files `/runners add` reads and writes, and what runs.
+function bare(on: On, files: Map<string, string> = new Map()) {
+  const runs: string[][] = []
+  const clock = mock.clock(on, { now: NOW })
+  mock.env(on, { USERPROFILE: 'C:/Users/me', OS: 'Windows_NT' })
+  const key = (path: string) => path.replaceAll('\\', '/')
+  on('fs.read', ($, e) => {
+    const text = files.get(key(e.path))
+    if (text === undefined) throw new Error('ENOENT')
+    return { value: text }
+  })
+  on('fs.write', ($, e) => {
+    files.set(key(e.path), e.text)
+    return { value: undefined }
+  })
+  on('fs.list', ($, e) => {
+    const dir = `${key(e.path ?? '')}/`
+    const names = [...files.keys()].filter(path => path.startsWith(dir)).map(path => path.slice(dir.length))
+    return { value: names.map(name => ({ name, kind: 'file', size: 1, mtimeMs: 1, isLink: false })) } as never
+  })
+  on('process.run', ($, e) => {
+    runs.push([...e.argv])
+    const out = e.argv[0] === 'node' ? '360\n' : e.argv[0] === 'tasklist' ? '"Runner.Listener.exe","1"\r\n' : ''
+    return { value: { exitCode: 0, stdout: out, stderr: '' } } as never
+  })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
+  on('ui.render', () => ({ type: 'Box', props: { key: 'beneath' }, children: [] }) as never)
+  return { files, runs, clock }
+}
+
+const add = async ($: Engine, args: string) =>
+  ((await $.command.run({ command: 'runners', args: `add ${args}` } as never)) as { text: string }).text
+
+test('/runners add lists a runner in the file and draws its row at once', async ($, on) => {
+  const { files, runs, clock } = bare(on)
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  expect(await add($, 'ci Runner.Listener,vmmemWSL me/my-game')).toContain('Added "ci" (Runner.Listener, vmmemWSL')
+  expect(JSON.parse(files.get(LIST_FILE) ?? '[]')).toEqual([
+    { label: 'ci', processes: ['Runner.Listener', 'vmmemWSL'], repo: 'me/my-game' },
+  ])
+  // The folder is made before the first write.
+  expect(runs.some(argv => argv[0] === 'node' && argv.at(-1) === 'C:/Users/me/.claude/mods-data/runners')).toBe(true)
+  await clock.advance(1_000)
+  const props = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
+  const ui = await $.ui.mount({ plugin: 'runners', surface: 'terminal', component: 'AbovePrompt', props })
+  expect(await ui.find({ key: 'runner-0' })).toBeDefined()
+  // The same name again is refused, in any case.
+  expect(await add($, 'CI other')).toBe('A runner named "CI" is already listed.')
+})
+
+test('/runners add keeps the entries already in the file and never writes over one it cannot read', async (
+  $,
+  on,
+) => {
+  const kept = { label: 'gpu', processes: ['x'], start: ['go'], note: 'mine' }
+  const { files } = bare(on, new Map([[LIST_FILE, JSON.stringify([kept])]]))
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  await add($, 'ci Runner.Listener')
+  expect(JSON.parse(files.get(LIST_FILE) ?? '[]')).toEqual([kept, { label: 'ci', processes: ['Runner.Listener'] }])
+  files.set(LIST_FILE, '{ broken')
+  expect(await add($, 'more y')).toContain('not valid JSON')
+  expect(files.get(LIST_FILE)).toBe('{ broken')
+})
+
+test('a /runners add that comes first after a reload starts the timers once', async ($, on) => {
+  const { runs, clock } = bare(on)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  // No session.start: a hot reload skips it, so the command is the first event the module sees.
+  await add($, 'ci Runner.Listener')
+  await $.turn.start({ turnId: 't' } as never)
+  await clock.advance(1_000)
+  const checks = () => runs.filter(argv => argv[0] === 'tasklist').length
+  const before = checks()
+  await clock.advance(60_000)
+  expect(checks() - before).toBe(1)
 })
 
 test('the check interval in the settings file applies from the start, and a new one takes over', async ($, on) => {
