@@ -13,7 +13,9 @@ function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Wind
   on('session.id', () => ({ value: 'sess-a' }))
   on('session.cwd', () => ({ value: 'C:/Repos/my-game' }) as never)
   on('fs.read', ($, e) => {
-    const text = seen.files.get(e.path.replaceAll('\\', '/'))
+    const path = e.path.replaceAll('\\', '/')
+    // The manifest, wherever the plugin root is: a test that needs it lists it as `plugin.json`.
+    const text = seen.files.get(path.endsWith('/plugin.json') ? 'plugin.json' : path)
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
@@ -41,6 +43,15 @@ async function bash($: Engine, command: string) {
   await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
   return $.tool.call({ tool: 'Bash', command } as never)
 }
+
+test("the mode saved in the mod's settings file applies from the session's start", async ($, on) => {
+  const manifest = JSON.stringify({ userConfig: { mode: { type: 'string', options: ['shadow', 'enforce'] } } })
+  const saved = { 'plugin.json': manifest, 'C:/Users/me/.claude/mods-data/guards/settings.json': '{"mode":"enforce"}' }
+  const seen = world(on, saved)
+  const result = await bash($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
+  expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
+  expect(seen.ran).toEqual([])
+})
 
 test('in shadow mode a credit is logged, never blocked', async ($, on) => {
   const seen = world(on)
