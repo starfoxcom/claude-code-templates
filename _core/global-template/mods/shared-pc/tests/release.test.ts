@@ -1,34 +1,28 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-// The tool's release frees this session's seat; a session only waiting in line leaves the line instead,
-// so "release" never answers "Released." while the session still waits its turn.
+// The tool's release gives up the seat and the place in line in one helper write (`drop`), and answers
+// by what that write did: never "Released." while the session still waits in line, never a success when
+// the helper failed.
 
 const ME = 'me-session-id'
 
-function fakeHost(on: any, ops: string[][], inLineAfterLeave: boolean) {
+function fakeHost(on: any, ops: string[][], replies: Record<string, object>) {
   on('session.id', () => ({ value: ME }))
   on('session.root', () => ({ value: 'C:/Repos/app' }))
   on('process.run', (_$: unknown, e: { argv: readonly string[] }) => {
     const op = e.argv.slice(e.argv.findIndex(a => a.endsWith('pcctl.cjs')) + 1)
     ops.push([...op])
-    const other = { session: 'other', kind: 'work', label: 'build', since: 1, tasks: [] }
-    const isInLine = op[0] === 'release' || (op[0] === 'leave' && inLineAfterLeave)
+    const view = { seat: null, line: [], nextUp: null, requests: [], mine: 'none', position: 0 }
     const stdout =
       op[0] === 'where'
         ? JSON.stringify({ dir: 'C:/fake/shared-pc', aliveMs: 45_000, lingerMs: 60_000 })
-        : JSON.stringify({
-            seat: other,
-            line: isInLine ? [{ session: ME }] : [],
-            nextUp: null,
-            requests: [],
-            mine: isInLine ? 'line' : 'none',
-            position: isInLine ? 1 : 0,
-          })
+        : JSON.stringify({ ...view, ...replies[op[0] ?? ''] })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('fs.read', (_$: unknown, e: { path?: string }) => {
     const path = String(e.path ?? '').replace(/\\/g, '/')
-    if (path.endsWith('state.json')) return { value: JSON.stringify({ seat: null, line: [], nextUp: null, requests: [] }) }
+    const empty = { seat: null, line: [], nextUp: null, requests: [] }
+    if (path.endsWith('state.json')) return { value: JSON.stringify(empty) }
     return { value: JSON.stringify({ id: ME, name: 'x', lastBeat: Date.now() }) }
   })
   on('fs.write', () => ({ value: undefined }))
@@ -38,20 +32,30 @@ function fakeHost(on: any, ops: string[][], inLineAfterLeave: boolean) {
   on('session.start', () => ({ cwd: 'C:/Repos/app' }) as never)
 }
 
-test('release while only waiting in line leaves the line', { timeoutMs: 15_000 }, async ($, on) => {
-  const ops: string[][] = []
-  fakeHost(on, ops, false)
+const cases: [string, object, string][] = [
+  ['holding the seat', { freed: true, left: false }, 'Released.'],
+  ['only waiting in line', { freed: false, left: true }, 'Left the line.'],
+  ['neither', { freed: false, left: false }, 'Nothing to release: this session held no seat and was not in line.'],
+  ['the helper failing', { error: 'MutexLost' }, 'Release failed: MutexLost'],
+]
+
+for (const [label, dropReply, answer] of cases) {
+  test(`release answers by what its one write did: ${label}`, { timeoutMs: 15_000 }, async ($, on) => {
+    const ops: string[][] = []
+    fakeHost(on, ops, { drop: dropReply })
+    await $.session.start({ source: 'startup', cwd: 'C:/Repos/app' } as never)
+    const before = ops.length
+    const result = await $.tool.call({ tool: 'mcp__shared-pc__pc', action: 'release' } as never)
+
+    expect((result as { result?: unknown }).result).toBe(answer)
+    // One helper write: no grant can land between giving up the seat and the line.
+    expect(ops.slice(before).filter(op => op[0] !== 'status')).toEqual([['drop', ME]])
+  })
+}
+
+test('a hold the helper fails says so instead of a place in line', { timeoutMs: 15_000 }, async ($, on) => {
+  fakeHost(on, [], { hold: { error: 'MutexLost' } })
   await $.session.start({ source: 'startup', cwd: 'C:/Repos/app' } as never)
-  const answer = await $.tool.call({ tool: 'mcp__shared-pc__pc', action: 'release' } as never)
-
-  expect((answer as { result?: unknown }).result).toBe('Left the line.')
-  expect(ops.filter(op => op[0] === 'leave')).toEqual([['leave', ME]])
-})
-
-test('release never claims success while the session is still in line', { timeoutMs: 15_000 }, async ($, on) => {
-  fakeHost(on, [], true)
-  await $.session.start({ source: 'startup', cwd: 'C:/Repos/app' } as never)
-  const answer = await $.tool.call({ tool: 'mcp__shared-pc__pc', action: 'release' } as never)
-
-  expect((answer as { result?: unknown }).result).toBe('Still #1 in line.')
+  const result = await $.tool.call({ tool: 'mcp__shared-pc__pc', action: 'hold', minutes: 5 } as never)
+  expect((result as { result?: unknown }).result).toBe('Hold failed: MutexLost')
 })

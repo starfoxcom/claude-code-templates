@@ -295,6 +295,23 @@ test('a request ends in the same write that hands its session the seat', () => {
   assert.deepStrictEqual(s.requests, [])
 })
 
+test('drop gives up the seat, a reservation and the place in line in one write, and says which', () => {
+  const sb = sandbox()
+  ;['a', 'b', 'c'].forEach(id => sb.register(id))
+  sb.run('claim', 'a', 'x')
+  sb.run('claim', 'b', 'x')
+  sb.run('claim', 'c', 'x')
+  const left = sb.run('drop', 'c')
+  assert.deepStrictEqual([left.freed, left.left, left.mine], [false, true, 'none'])
+  assert.deepStrictEqual(sb.state().line.map(e => e.session), ['b'])
+  sb.run('done', 'a')
+  const freed = sb.run('drop', 'a')
+  assert.deepStrictEqual([freed.freed, freed.left], [true, false])
+  assert.strictEqual(sb.state().seat.session, 'b')
+  const none = sb.run('drop', 'a')
+  assert.deepStrictEqual([none.freed, none.left], [false, false])
+})
+
 test('a stale mutex left by a crash is broken', () => {
   const sb = sandbox()
   sb.register('a')
