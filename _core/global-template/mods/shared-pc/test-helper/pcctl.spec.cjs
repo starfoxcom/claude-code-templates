@@ -95,9 +95,8 @@ test('release hands the seat to the front of the line', () => {
 test('release also gives up a reservation, so the free seat goes to whoever claims it', () => {
   const sb = sandbox()
   ;['b', 'c'].forEach(id => sb.register(id))
-  // An approved request on an idle machine reserves the next seat for the requester.
-  sb.run('ask', 'b', 'GPU window')
-  sb.run('answer', 'b', 'approve')
+  // Sent to the front of the line on an idle machine, a session holds a reservation for the next seat.
+  sb.run('next', 'b')
   assert.strictEqual(sb.state().nextUp.session, 'b')
   sb.run('release', 'b')
   assert.strictEqual(sb.state().nextUp, null)
@@ -463,4 +462,67 @@ test('session end frees the seat and removes the registry file', () => {
   sb.run('end', 'a')
   assert.strictEqual(sb.state().seat.session, 'b')
   assert.ok(!fs.existsSync(path.join(sb.dir, 'sessions', 'a.json')))
+})
+
+test('a request with nobody ahead is refused and shows no card', () => {
+  const sb = sandbox()
+  ;['a', 'b'].forEach(id => sb.register(id))
+  assert.ok(sb.run('ask', 'b', 'please').error, 'the PC is free: nothing to ask')
+  sb.run('claim', 'a', 'x')
+  assert.ok(sb.run('ask', 'a', 'please').error, 'the seat holder has nobody ahead')
+  assert.deepStrictEqual(sb.state().requests, [])
+})
+
+test('an open request ends when the PC goes free with nobody ahead of its session', () => {
+  const sb = sandbox()
+  ;['a', 'b'].forEach(id => sb.register(id))
+  sb.run('claim', 'a', 'x')
+  // b asks without waiting in line: when a lets go, the seat is free and the card has nothing to ask.
+  sb.run('ask', 'b', 'please')
+  assert.strictEqual(sb.state().requests.length, 1)
+  sb.run('done', 'a')
+  sb.run('release', 'a')
+  const s = sb.state()
+  assert.strictEqual(s.seat, null)
+  assert.deepStrictEqual(s.requests, [])
+})
+
+test('a request ends once its session holds the seat or the reservation, whoever still waits', () => {
+  // The asker gets the seat with another session still in line.
+  const held = sandbox()
+  ;['a', 'b', 'c'].forEach(id => held.register(id))
+  ;['a', 'b', 'c'].forEach(id => held.run('claim', id, 'x'))
+  held.run('ask', 'b', 'please')
+  held.run('done', 'a')
+  held.run('release', 'a')
+  assert.strictEqual(held.state().seat.session, 'b')
+  assert.deepStrictEqual(held.state().requests, [])
+  // The seat holder asked, then another session was given the reservation after it.
+  const reserved = sandbox()
+  ;['a', 'b', 'c'].forEach(id => reserved.register(id))
+  reserved.run('claim', 'c', 'x')
+  reserved.run('claim', 'a', 'x')
+  reserved.run('ask', 'a', 'please')
+  reserved.run('done', 'c')
+  reserved.run('release', 'c')
+  reserved.run('next', 'b')
+  assert.strictEqual(reserved.state().seat.session, 'a')
+  assert.deepStrictEqual(reserved.state().requests, [])
+})
+
+test('the seat holder and the reservation holder have nobody ahead, whoever waits in line', () => {
+  const holder = sandbox()
+  ;['a', 'b'].forEach(id => holder.register(id))
+  holder.run('claim', 'a', 'x')
+  holder.run('claim', 'b', 'x')
+  assert.ok(holder.run('ask', 'a', 'please').error, 'the seat holder has nobody ahead')
+  const reserved = sandbox()
+  ;['a', 'b', 'c'].forEach(id => reserved.register(id))
+  reserved.run('claim', 'c', 'x')
+  reserved.run('claim', 'a', 'x')
+  reserved.run('next', 'b')
+  reserved.run('done', 'c')
+  reserved.run('release', 'c')
+  assert.strictEqual(reserved.state().seat, null)
+  assert.ok(reserved.run('ask', 'b', 'please').error, 'the reservation holder may take the seat now')
 })
