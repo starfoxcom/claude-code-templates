@@ -2,7 +2,7 @@ import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 import { ADOPT_GRACE_MS, ADOPT_MAX_AGE_MS, parseSavedArm, pickOffer } from '../hooks/arms'
 import type { World } from './world'
-import { ARM_FILE, ARMS_DIR, mountCard, NOW, RESET, start, world } from './world'
+import { ARM_FILE, ARMS_DIR, mountCard, NOW, RESET, resumes, start, WAKE, world } from './world'
 
 // A closed session's arm that never ran: a later session in the same project offers it, and resumes it
 // only when the person says so.
@@ -99,6 +99,28 @@ test('a claim that cannot be confirmed resumes nothing and keeps the arm', LONG,
   expect(seen.files.get(OLD_FILE)).toBe(JSON.stringify(MISSED))
 })
 
+const CHANGES: [string, object][] = [
+  ['set again', { ...MISSED, wakeAt: NOW + 3_600_000 }],
+  ['moved to a later reset', { ...MISSED, resetsAt: '2026-10-02T22:00:00.000Z' }],
+]
+for (const [how, changed] of CHANGES) {
+  for (const key of ['usage-adopt-yes', 'usage-adopt-drop']) {
+    test(`an arm ${how} after the offer showed is left alone by ${key}`, LONG, async ($, on) => {
+      const seen = world(on)
+      leaveMissedArm(seen)
+      await start($)
+      const ui = await offered($, seen)
+      leaveMissedArm(seen, changed)
+      await ui.press({ key })
+      await seen.clock.advance(1_000)
+      expect(seen.files.get(OLD_FILE)).toBe(JSON.stringify(changed))
+      expect(seen.claims.has(ARM_CLAIM)).toBe(false)
+      expect(adoptPrompts(seen)).toEqual([])
+      expect(await ui.find({ type: 'Text', text: /^That resume changed meanwhile/ })).toBeDefined()
+    })
+  }
+}
+
 test('dropping a missed arm clears it without a resume', LONG, async ($, on) => {
   const seen = world(on)
   leaveMissedArm(seen)
@@ -123,4 +145,26 @@ test('from the phone, the text names the offer and /usage-guard adopt resumes it
   expect(adoptPrompts(seen)).toHaveLength(1)
   const again = await $.command.run({ command: 'usage-guard', args: 'adopt' } as never)
   expect((again as { text?: string }).text).toBe('No closed session in this project has a missed resume.')
+})
+
+// The arm's own session, still open, at its wake: another session took the claim.
+async function wakeAfterClaimTaken($: Engine, seen: World, savedCopy: string): Promise<string> {
+  await start($)
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
+  seen.claims.add(`arm-${Date.parse(RESET)}-sess-a`)
+  seen.files.set(ARM_FILE, savedCopy)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+  return String(((await $.command.run({ command: 'usage-guard', args: '' } as never)) as { text?: string }).text)
+}
+
+test('an armed session whose arm another session adopted stands down at its wake', async ($, on) => {
+  const seen = world(on)
+  expect(await wakeAfterClaimTaken($, seen, 'null')).not.toContain('Armed to resume')
+})
+
+test('a claim taken while the saved arm stands (a reloaded instance) keeps the arm here', async ($, on) => {
+  const seen = world(on)
+  const saved = JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE, session: 'sess-a' })
+  expect(await wakeAfterClaimTaken($, seen, saved)).toContain('Armed to resume')
 })
