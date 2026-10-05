@@ -3,8 +3,10 @@ import type { ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Regis
 
 // The mod's settings in a pane every surface draws (the CLI and the Desktop app alike): the /config
 // rows this plugin owns, each changed through $.config.set as the menu would, which reloads the mod
-// with the new value. Every mod with settings carries this file, the same apart from PLUGIN and
-// TITLE; its command opens the pane by SETTINGS_PANE.
+// with the new value. Where /config lists no plugin rows (the Desktop app), the values show read-only.
+// ci-watch, compact-handoff, guards, runners, session-facts, session-info and tasks carry this file, the
+// same apart from PLUGIN, TITLE, COMMAND and the atom's plugin name; usage-guard keeps its own settings file.
+// Its command opens the pane by SETTINGS_PANE.
 
 const PLUGIN = 'runners'
 const TITLE = 'Runners settings'
@@ -24,6 +26,13 @@ export function fieldOf(row: Pick<ConfigRow, 'key'>): string {
 export function isOwnRow(row: Pick<ConfigRow, 'key' | 'provider'>): boolean {
   const owner = row.key.slice(0, Math.max(row.key.lastIndexOf('.'), 0))
   return row.provider?.plugin === PLUGIN || owner === PLUGIN || owner.startsWith(`${PLUGIN}@`)
+}
+
+// True when /config listed fine yet holds no plugin's row at all, ours or another's: that surface leaves
+// plugin settings out of its list (the Desktop app does). Other plugins' rows there mean ours are missing
+// for some other reason, which emptyNote names; a failed list says nothing about the surface.
+export function leavesPluginsOut(listed: readonly Pick<ConfigRow, 'key' | 'provider'>[] | Error): boolean {
+  return !(listed instanceof Error) && !listed.some(row => isOwnRow(row) || row.provider?.plugin !== 'engine')
 }
 
 // Shown when none of the rows is this plugin's: what /config did list (or why it could not), so one
@@ -93,8 +102,7 @@ async function saveText($: Engine, row: ConfigRow, text: string): Promise<void> 
   return save($, row, parsed.value)
 }
 
-// The surfaces that draw fields. The mobile app has no Input or Select, so it is left to the engine's
-// own pane.
+// Every surface but mobile draws fields; the mobile app gets the engine's own pane.
 type Ui = Elements['terminal'] | Elements['desktop'] | Elements['vscode']
 
 function control(ui: Ui, $: Engine, row: ConfigRow) {
@@ -134,8 +142,8 @@ export const register: Register = (on, options) => {
     const listed = await $.config.list().catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))
     const rows = listed instanceof Error ? [] : listed.filter(isOwnRow)
     const errors = (await read($, view))?.errors ?? {}
-    // No row of this plugin's, yet the plugin has values: this surface leaves plugin rows out of /config.
-    const isReadOnly = rows.length === 0 && Object.keys(options).length > 0
+    // This surface leaves plugin rows out of /config: the values show read-only.
+    const isReadOnly = leavesPluginsOut(listed) && Object.keys(options).length > 0
     const titles = isReadOnly ? await titlesOf($) : {}
     const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
     return (
