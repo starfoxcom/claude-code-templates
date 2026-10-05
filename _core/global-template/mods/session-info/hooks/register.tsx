@@ -185,30 +185,40 @@ export const register: Register = (on, options) => {
 
 type Ui = ReturnType<EngineInterface['ui']['resolve']>
 
+// The row's parts (model, project, branch with its arrows, the changes button) wrap whole in a narrow
+// band: a part that does not fit moves to the next line in one piece. Only a part wider than the band
+// alone (a long branch name) shrinks, cut short with an ellipsis.
 function rowOf(ui: Ui, $: EngineInterface, shown: SessionLine) {
   const { Box, Button, Text } = ui
   const { git } = shown
   const count = git.changed.length
   return (
-    <Box>
-      <Text>
-        {shown.effort ? `${shown.model} ${shown.effort}` : shown.model} · {shown.project}
-      </Text>
+    <Box key="session-info-row" flexWrap="wrap">
+      <Box key="session-info-model" flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end">{shown.effort ? `${shown.model} ${shown.effort}` : shown.model}</Text>
+      </Box>
+      <Box key="session-info-project" flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end"> · {shown.project}</Text>
+      </Box>
       {git.branch ? (
-        <Text>
-          {' · '}
-          {git.branch}
-          {count > 0 ? '*' : ''}
-        </Text>
+        <Box key="session-info-branch" flexShrink={1} minWidth={0}>
+          <Text wrap="truncate-end">
+            {' · '}
+            {git.branch}
+            {count > 0 ? '*' : ''}
+          </Text>
+          {git.ahead > 0 ? <Text color="green"> ↑{git.ahead}</Text> : null}
+          {git.behind > 0 ? <Text color="yellow"> ↓{git.behind}</Text> : null}
+        </Box>
       ) : null}
-      {git.ahead > 0 ? <Text color="green"> ↑{git.ahead}</Text> : null}
-      {git.behind > 0 ? <Text color="yellow"> ↓{git.behind}</Text> : null}
       {count > 0 ? (
-        <Button
-          key="session-info-changes"
-          label={`${count} changed`}
-          onPress={() => update($, isExpanded, value => !value)}
-        />
+        <Box key="session-info-changes-slot" flexShrink={0}>
+          <Button
+            key="session-info-changes"
+            label={`${count} changed`}
+            onPress={() => update($, isExpanded, value => !value)}
+          />
+        </Box>
       ) : null}
     </Box>
   )
