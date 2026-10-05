@@ -293,7 +293,8 @@ test('an arm set beside open tasks still resumes fully after a /clear starts an 
   expect(quietWakes(seen)).toEqual([])
 })
 
-test('an arm a longer pause moves keeps the session it was set in, and still resumes fully', async ($, on) => {
+// Hours of minute checks run through: the long limit.
+test('an arm a longer pause moves keeps the session it was set in, and still resumes fully', LONG, async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [{ status: 'in_progress' }])
   await start($)

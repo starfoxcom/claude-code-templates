@@ -13,9 +13,9 @@ import { formatLocal, READ_ZONE, type Zone, zoneOf } from './texts'
 // card above the prompt (and through `/usage-guard adopt` where no card draws). Never by itself: the
 // person decides whether the closed session's work goes on here.
 
-// Looked for every five minutes, from a timer started by an event (a card hook stays pure, starting
+// Looked for every 15 minutes, from a timer started by an event (a card hook stays pure, starting
 // nothing): an offer waits on the person anyway, and a session start always looks at once.
-const SCAN_EVERY_MS = 5 * 60_000
+const SCAN_EVERY_MS = 15 * 60_000
 const state = atom({ plugin: 'usage-guard', key: 'adopt' } as const, null)
 const scan = { isTimed: false, zone: undefined as Zone | undefined }
 
