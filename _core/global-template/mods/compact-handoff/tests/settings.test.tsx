@@ -103,3 +103,12 @@ test('a row listed under a qualified key is this mod\'s and saves under that sam
   await ui.select({ key: 'compact-handoff-set-mode', value: 'shadow' })
   expect(writes).toEqual(['compact-handoff@inline.mode'])
 })
+
+test('rows of another plugin in /config name what was listed, not an app that hides them', async ($, on) => {
+  const other = { ...ROWS[0], key: 'other-mod.level', provider: { plugin: 'other-mod', tier: 'user' } as never }
+  noPluginRows(on, () => ({ value: [ROWS[0], other] }))
+  const ui = await mountPane($, 'desktop')
+  const note = /No settings for compact-handoff here: .*other-mod\.level/
+  expect(await ui.find({ type: 'Text', text: note })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeUndefined()
+})

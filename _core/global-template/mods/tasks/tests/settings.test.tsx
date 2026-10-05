@@ -125,3 +125,11 @@ test('a row listed under a qualified key is this mod\'s and saves under that sam
   await ui.input({ key: 'tasks-set-nudgeAfterTools', text: '5' })
   expect(writes).toEqual(['tasks@inline.nudgeAfterTools'])
 })
+
+test('rows of another plugin in /config name what was listed, not an app that hides them', async ($, on) => {
+  const other = { ...ROWS[0], key: 'other-mod.level', provider: { plugin: 'other-mod', tier: 'user' } as never }
+  noPluginRows(on, () => ({ value: [ROWS[0], other] }))
+  const ui = await mountPane($, PANE, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /No settings for tasks here: .*other-mod\.level/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeUndefined()
+})
