@@ -177,31 +177,17 @@ jobs:
       - name: Detect failure class
         id: failure_class
         if: steps.claude_attempt_1.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          REPO="${{ github.repository }}"
-          RUN_ID="${{ github.run_id }}"
-
-          JOB_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
-            --jq '[.jobs[] | select(.name | test("On-demand"))] | first | .id // empty')
-          if [ -z "$JOB_ID" ]; then
-            echo "::warning::Could not resolve job ID — treating as transient failure"
-            echo "usage_limit=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          LOG=$(gh api "repos/$REPO/actions/jobs/$JOB_ID/logs" 2>/dev/null || true)
-          # The action also saves the CLI's messages to a file, on disk even when
-          # the job log has not reached the API yet. Only its final `result`
-          # message is read: the rest holds the PR's own diff and comments, whose
-          # words must not decide the failure class. A model cap reads "You've
-          # reached your <model> limit" with HTTP 429, the plan cap "You've hit
-          # your limit · resets …". The patterns are the CLI's and API's own
-          # error wording, never bare words a diff could contain.
+          # The action saves the CLI's messages to a file on disk. Only its final
+          # `result` message is read. The rest of that file, and the job log
+          # (which prints the whole prompt), hold the PR's own body, diff and
+          # comments, whose words must not decide the failure class. A model cap
+          # reads "You've reached your <model> limit" with HTTP 429, the plan cap
+          # "You've hit your limit · resets …". A missing or unreadable file
+          # counts as transient: the cost is one same-model retry.
           RESULT=$(jq -c '[.[]? | select(.type == "result")] | last // empty' \
             "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
-          if printf '%s %s' "$LOG" "$RESULT" | grep -qiE 'rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
+          if printf '%s' "$RESULT" | grep -qiE 'rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
             echo "::warning::Usage limit detected in attempt 1 — skipping the same-model retry, falling back to Opus 5.5 @ high"
             echo "usage_limit=true" >> "$GITHUB_OUTPUT"
           else
