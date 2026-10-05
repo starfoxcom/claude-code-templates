@@ -13,8 +13,7 @@ import { drawArmLine, drawCards } from './cards'
 import { register as phone } from './phone'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
-import type { Live } from './live'
-import { applyValues, newLive } from './live'
+import { applyValues, type Live, newLive } from './live'
 import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, formatLocal, HELP, pausedText } from './texts'
 import { questionText, READ_ZONE, UNCONFIRMED_NOTICE, zoneOf } from './texts'
 
@@ -599,7 +598,8 @@ async function check($: EngineInterface): Promise<void> {
 // The settings file, for what runs before any prompt (a start, a reload) and each check: see settings.tsx.
 async function readSettings($: EngineInterface): Promise<void> {
   const file = await $.fs.read(`${await dataDir($)}/settings.json`).catch(() => '')
-  applyFile(String(file), String(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => '')))
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
 }
 
 // The time zone and the two timers (pause check, shared card refresh), once per module load.
