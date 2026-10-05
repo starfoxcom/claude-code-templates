@@ -369,3 +369,14 @@ test('a start after a reload restores the saved arm even when the command is ref
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toHaveLength(1)
 })
+
+test('a bare /usage-guard typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  await start($)
+  const bridge = { command: 'usage-guard', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n')).toEqual([
+    '🟩 No usage pause. Sessions wrap up at 90% of any plan window.',
+    '/usage-guard help for more',
+  ])
+})
