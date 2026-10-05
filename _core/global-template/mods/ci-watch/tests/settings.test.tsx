@@ -2,7 +2,7 @@ import type { ConfigRow, ConfigSetInput, On } from 'claude-code'
 import type { Engine, Mounted } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 
-import { parseNumber } from '../hooks/settings'
+import { READ_ONLY_NOTE, parseNumber } from '../hooks/settings'
 
 // The settings pane over faked /config rows: the engine's own validation draws it on each surface,
 // and every change goes through config.set as the /config menu's would.
@@ -115,4 +115,48 @@ test('/ci-watch settings opens the pane', async ($, on) => {
   const answer = await $.command.run({ command: 'ci-watch', args: 'settings' } as never)
   expect(seen.opened).toEqual([PANE])
   expect(answer).toEqual(expect.objectContaining({ text: 'Opened the ci-watch settings.' }))
+})
+
+// The Desktop app lists no plugin rows in /config: the pane shows the mod's values read-only, named by
+// the manifest, and offers nothing to change there.
+const TITLES = { userConfig: { pollSeconds: { title: 'Poll every (seconds)' } } }
+
+function noPluginRows(on: On, list: () => unknown) {
+  on('config.list', list as never)
+  on('fs.read', ($, e) => {
+    if (String((e as { path?: string }).path).endsWith('plugin.json')) return { value: JSON.stringify(TITLES) }
+    throw new Error('no such file')
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+}
+
+test('a /config with no plugin rows shows the values read-only, named by the manifest', async ($, on) => {
+  noPluginRows(on, () => ({ value: ROWS.filter(row => row.key === 'theme') }))
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeDefined()
+  expect(await ui.find({ key: 'setting-pollSeconds' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Poll every (seconds)' })).toBeDefined()
+  expect(await ui.find({ key: 'ci-watch-set-pollSeconds' })).toBeUndefined()
+})
+
+test('a /config that cannot be listed says so, not that the app hides the rows', async ($, on) => {
+  noPluginRows(on, () => ({ deny: 'no menu here' }))
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: /could not be listed \(.*no menu here.*\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeUndefined()
+})
+
+test('a row listed under a qualified key is this mod\'s and saves under that same key', async ($, on) => {
+  const writes: string[] = []
+  const qualified = ROWS.map(row => ({ ...row, key: row.key.replace('ci-watch.', 'ci-watch@inline.') }))
+  on('config.list', () => ({ value: [...qualified, { ...qualified[1], key: 'ci-watch-extra.pollSeconds' }] }))
+  on('config.set', ($, e) => {
+    writes.push(e.key)
+    return { value: e.value }
+  })
+  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+  const ui = await mountPane($, 'desktop')
+  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeUndefined()
+  await ui.input({ key: 'ci-watch-set-pollSeconds', text: '85' })
+  expect(writes).toEqual(['ci-watch@inline.pollSeconds'])
 })
