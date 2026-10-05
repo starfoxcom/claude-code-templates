@@ -199,7 +199,7 @@ test('an arm with nothing pending is set, says so, and the card keeps it', LONG,
   expect(quietWakes(seen)).toHaveLength(1)
 })
 
-test("an arm with nothing pending is dropped by the card's cancel", async ($, on) => {
+test("an arm with nothing pending is dropped by the card's cancel", LONG, async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [])
   await start($)
