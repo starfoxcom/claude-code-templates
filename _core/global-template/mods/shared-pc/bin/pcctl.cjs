@@ -256,10 +256,12 @@ function normalize(s, all) {
 }
 
 // Whether another session would use the PC before this one: the seat, a reservation, or a place
-// earlier in the line. Only then is there anything to ask to skip.
+// earlier in the line. Only then is there anything to ask to skip. The seat holder is never behind, and
+// with the seat free the reservation holder is not either (it may take the seat now): the exact
+// opposite of `mayTakeFreeSeat` there.
 function isBehind(s, id) {
-  if (s.seat && s.seat.session !== id) return true
-  if (s.nextUp && s.nextUp.session !== id) return true
+  if (s.seat) return s.seat.session !== id
+  if (s.nextUp) return s.nextUp.session !== id
   const position = s.line.findIndex(e => e.session === id)
   return position === -1 ? s.line.length > 0 : position > 0
 }
