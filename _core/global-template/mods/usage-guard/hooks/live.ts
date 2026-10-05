@@ -32,6 +32,14 @@ export type Live = {
   isArmsDirMade: boolean
 }
 
+/** Runs the mod with its settings: the file's values over the options it loaded with. */
+export function applyValues(live: Live, values: Record<string, unknown>): void {
+  live.wrapUpAt = Number(values.wrapUpAt ?? 90)
+  live.delayMinutes = Number(values.wakeDelayMinutes ?? 2)
+  live.compactAbovePercent = Number(values.compactAbovePercent ?? 25)
+  live.catchUpMinutes = Number(values.catchUpMinutes ?? 30)
+}
+
 /** The state a fresh module load starts from. */
 export function newLive(): Live {
   return {
