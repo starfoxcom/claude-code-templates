@@ -1,12 +1,14 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import { inspect } from './inspect'
-import type { Plan } from './inspect'
+import type { Folder, Plan } from './inspect'
 import { checkAddedLines, checkBranch, checkText, describe } from './policy'
+import { checkBody, checkCall, ruleFor } from './prbody'
+import type { PrCall, PrRules } from './prbody'
 import { register as settings, SETTINGS_PANE } from './settings'
 
-// guards: one in-process check on every Bash and PowerShell call, replacing the attribution and
-// `gh run watch` scripts. It reads the command (which program, which flags, which message) instead of
+// guards: one in-process check on every Bash and PowerShell call, replacing the attribution,
+// `gh run watch` and PR-body scripts. It reads the command (which program, which flags, which message) instead of
 // scanning raw text, so paths, branch names and flags never trip it. Hot reload watches this file only:
 // change it after editing shell.ts, inspect.ts or policy.ts.
 //
@@ -61,15 +63,20 @@ async function git($: Engine, cwd: string, args: string[]): Promise<string> {
   return (await gitRun($, cwd, args)).out
 }
 
+// A body file's full path: from the folder in effect where it is named; a file read through a pipe
+// keeps the command's.
+function fileAt(path: string, folder: Folder | undefined, cwd: string, session: string, isBash: boolean) {
+  const base = !folder ? cwd : folder.path === undefined ? session : osPath(folder.path, session, isBash)
+  return osPath(path, base, isBash)
+}
+
 // The body files the command reads: the first reason to block, or undefined. Files that cannot be read
 // for a known cause are named unread instead.
 async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, isBash: boolean) {
   const written = new Set(plan.written.map(p => osPath(p, cwd, isBash).toLowerCase()))
   const session = await $.session.cwd()
   for (const { where, path, written: fromCommand, folder } of plan.files) {
-    // The folder in effect where the file is named; a file read through a pipe keeps the command's.
-    const base = !folder ? cwd : folder.path === undefined ? session : osPath(folder.path, session, isBash)
-    const full = osPath(path, base, isBash)
+    const full = fileAt(path, folder, cwd, session, isBash)
     // A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a
     // file of the same name in the session folder is a different file: it is never read.
     const isFolderUnknown = folder ? folder.isUnknown : plan.isCwdUnknown
@@ -99,6 +106,43 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, 
   return undefined
 }
 
+// The repos whose PRs follow the PR-body contract, from mods-data/guards/pr-body.json; none without it.
+async function prRules($: Engine): Promise<PrRules | undefined> {
+  try {
+    const rules = JSON.parse(String(await $.fs.read(`${live.dir}/pr-body.json`))) as PrRules
+    return rules && typeof rules.repos === 'object' ? rules : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// The PR body as it will be sent: the here-doc on stdin, the text this command writes to the body file,
+// or the file on disk. Undefined when there is none or it cannot be read (checkFiles names that).
+async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: boolean) {
+  if (call.bodyFile === '-') return call.stdinBody
+  const file = plan.files.find(f => f.path === call.bodyFile)
+  if (!file) return undefined
+  if (file.written) {
+    const label = `${file.where} (file ${file.path})`
+    return plan.texts.filter(t => t.where === label && !t.creditOnly).map(t => t.text).join('\n') || undefined
+  }
+  try {
+    return String(await $.fs.read(fileAt(file.path, file.folder, cwd, await $.session.cwd(), isBash)))
+  } catch {
+    return undefined
+  }
+}
+
+async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash: boolean) {
+  if (!plan.pr) return undefined
+  const rule = ruleFor(await prRules($), repo)
+  if (!rule) return undefined
+  const early = checkCall(plan.pr)
+  if (early) return early
+  const text = await prBody($, plan, plan.pr, cwd, isBash)
+  return text === undefined ? undefined : checkBody(text, plan.pr.title, rule)
+}
+
 // The first reason to block, or undefined.
 async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | undefined> {
   if (plan.block) return plan.block
@@ -112,6 +156,8 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
   }
   const fileReason = await checkFiles($, plan, cwd, mayName, isBash)
   if (fileReason) return fileReason
+  const prReason = await checkPr($, plan, cwd, repo, isBash)
+  if (prReason) return `PR-body contract: ${prReason}`
   for (const branch of plan.branches) {
     const v = checkBranch(branch, mayName)
     if (v) return describe(v, `the new branch name "${branch}" (it lands in merge commit titles)`)
