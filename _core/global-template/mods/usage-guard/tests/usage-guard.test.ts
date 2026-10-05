@@ -1,6 +1,7 @@
 import type { On, SessionCompactResult, SessionContextUsage, SessionRateLimit } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
+import { catchUpOf, parseSavedArm } from '../hooks/arms'
 import { CACHE_LIFE_MS, outcomeOf, outcomeText, shouldCompactAtPause } from '../hooks/compact'
 import type { Pause } from '../hooks/plan'
 import { CLAIM, countOpenTasks, EMPTY_ARM_NOTE, NO_WORK_NOTICE, planArm, WRAP_UP_ARGS } from '../hooks/plan'
@@ -17,6 +18,7 @@ const WAKE = Date.parse(RESET) + 2 * 60_000
 const PAUSE_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/pause.json'
 const CARD_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/card.json'
 const TASKS_DIR = 'C:/Users/me/.claude/mods-data/tasks'
+const ARM_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/arms/sess-a.json'
 const KEY = String(Date.parse(RESET))
 const SUMMARY = [{ role: 'user' as const, text: 'summary', toolUses: [] }]
 
@@ -373,6 +375,11 @@ test('a session that changed nothing only waits near the limit, and is not set t
 })
 
 // The resumes this session submitted: the automatic "continue now" prompt, never /session-start.
+// An armed wake with nothing pending: one line, no work started.
+function quietWakes(seen: World): string[] {
+  return seen.prompts.filter(text => text.startsWith('[usage-guard] ') && text.includes('wait for the person'))
+}
+
 function resumes(seen: World): string[] {
   return seen.prompts.filter(text => text.startsWith('[usage-guard] ') && text.includes('Continue the pending work'))
 }
@@ -1038,9 +1045,10 @@ test('an arm with nothing pending is set, says so, and the card keeps it', async
   expect(await ui.find({ key: 'usage-arm-question' })).toBeDefined()
   await ui.press({ key: 'usage-arm-keep' })
   expect(await ui.find({ key: 'usage-arm-question' })).toBeUndefined()
-  // Kept: the arm still resumes the session at its wake.
+  // Kept: the arm still wakes the session, with the one-line prompt since nothing is pending.
   await seen.clock.advance(WAKE - NOW)
-  expect(resumes(seen)).toHaveLength(1)
+  expect(resumes(seen)).toEqual([])
+  expect(quietWakes(seen)).toHaveLength(1)
 })
 
 test("an arm with nothing pending is dropped by the card's cancel", async ($, on) => {
@@ -1082,4 +1090,78 @@ test('open tasks are the ones not completed, not dropped and not on hold', () =>
   expect(countOpenTasks(list([{ status: 'pending', droppedAt: 1 }]))).toBe(0)
   expect(countOpenTasks('not json')).toBeUndefined()
   expect(countOpenTasks('{}')).toBeUndefined()
+})
+
+test('an armed session with nothing pending gets the one-line prompt at a pause reset too', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [])
+  await start($)
+  await arm5h($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
+  await endTurn($)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+  expect(quietWakes(seen)).toHaveLength(1)
+})
+
+const savedArm = (seen: World) => seen.files.get(ARM_FILE)
+
+test('an arm is saved for a restart, and a disarm drops the saved copy', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await arm5h($)
+  expect(parseSavedArm(savedArm(seen) ?? '')).toEqual(
+    expect.objectContaining({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }),
+  )
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a session started again before its wake schedules the saved arm', async ($, on) => {
+  const seen = world(on)
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
+  await start($)
+  await seen.clock.advance(WAKE - NOW - 1)
+  expect(resumes(seen)).toEqual([])
+  await seen.clock.advance(1)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a session started again within the catch-up window resumes at once', async ($, on) => {
+  const seen = world(on)
+  const missed = new Date(NOW - 2 * 3_600_000).toISOString()
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: missed, wakeAt: NOW - 29 * 60_000 }))
+  await start($)
+  await seen.clock.advance(1)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a session started again past the catch-up window drops the saved arm and resumes nothing', async ($, on) => {
+  const seen = world(on)
+  const missed = new Date(NOW - 2 * 3_600_000).toISOString()
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: missed, wakeAt: NOW - 31 * 60_000 }))
+  await start($)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a saved arm is scheduled ahead, caught up within the window, and dropped past it or with catch-up off', () => {
+  const minute = 60_000
+  expect(catchUpOf(NOW + 1, NOW, 30)).toBe('schedule')
+  expect(catchUpOf(NOW, NOW, 30)).toBe('fire')
+  expect(catchUpOf(NOW - 30 * minute, NOW, 30)).toBe('fire')
+  expect(catchUpOf(NOW - 30 * minute - 1, NOW, 30)).toBe('drop')
+  expect(catchUpOf(NOW - 1, NOW, 0)).toBe('drop')
+  expect(catchUpOf(NOW + 1, NOW, 0)).toBe('schedule')
+})
+
+test('only a whole arm reads back from its file', () => {
+  const arm = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }
+  expect(parseSavedArm(JSON.stringify(arm))).toEqual({ ...arm, isQuestioned: false })
+  expect(parseSavedArm('null')).toBeUndefined()
+  expect(parseSavedArm('{"kind":"five_hour","resetsAt":"x"}')).toBeUndefined()
+  expect(parseSavedArm('not json')).toBeUndefined()
 })

@@ -21,6 +21,12 @@
       "title": "Compact before a pause above (% context)",
       "description": "A session that will resume on its own compacts after its wrap-up when its context is above this share and the reset is more than an hour away, so the resume starts from a summary instead of reading the whole context with a cold cache. 0 turns it off.",
       "default": 25
+    },
+    "catchUpMinutes": {
+      "type": "number",
+      "title": "Catch up a missed resume (minutes)",
+      "description": "A session armed to resume that was closed at its wake resumes when it starts again within this many minutes of the wake. Later, it only says what it missed. 0 never catches up.",
+      "default": 30
     }
   }
 }
