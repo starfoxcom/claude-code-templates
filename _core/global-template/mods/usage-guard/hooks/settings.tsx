@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { ConfigKind, ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Register } from 'claude-code'
+import type { ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Register } from 'claude-code'
 
 // The mod's settings in a pane every surface draws (the CLI and the Desktop app alike): the /config
 // rows this plugin owns, each changed through $.config.set as the menu would, which reloads the mod
@@ -61,7 +61,7 @@ async function fieldsOf($: Engine): Promise<Record<string, Field>> {
   return {}
 }
 
-function kindOf(field: Field): ConfigKind {
+function kindOf(field: Field): ConfigRow['kind'] {
   if (field.type === 'boolean') return 'boolean'
   if (field.options) return 'choice'
   return field.type === 'number' ? 'number' : 'text'
@@ -159,9 +159,9 @@ export const register: Register = (on, options) => {
     const listedRows = listed instanceof Error ? [] : listed.filter(isOwnRow)
     const shown = await read($, view)
     const errors = shown?.errors ?? {}
-    // No row of this plugin's, yet the plugin has values: this surface leaves plugin rows out of /config,
-    // so the pane draws them from the manifest and tries each change anyway.
-    const isUnlisted = listedRows.length === 0 && Object.keys(options).length > 0
+    // Listed, yet no row of ours while we have values: this surface leaves plugin rows out of /config, so the
+    // pane draws them from the manifest and tries each change anyway. A failed list tells nothing of that.
+    const isUnlisted = !(listed instanceof Error) && listedRows.length === 0 && Object.keys(options).length > 0
     const rows = isUnlisted ? unlistedRows(options, await fieldsOf($)) : listedRows
     const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
     return (
