@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import type { RunnerView } from '../types'
+import { parseAdd, withRunner } from './add'
 import { soonestRun } from './cron'
 import { RUNNERS } from './rules'
 import type { Runner } from './rules'
@@ -21,6 +22,8 @@ const view = atom({ plugin: 'runners', key: 'view' } as const, null)
 const live = {
   checkMs: 60_000,
   isStarted: false,
+  /** The timers run: some runner was listed. */
+  isArmed: false,
   isWindows: false,
   /** Minutes behind UTC, as getTimezoneOffset gives it; null until read. */
   zoneOffset: null as number | null,
@@ -181,13 +184,52 @@ async function start($: Engine): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
   live.runners = [...RUNNERS, ...(await readList($))]
-  if (live.runners.length === 0) return
+  if (live.runners.length > 0) await arm($)
+}
+
+// The timers and the first reading, once there is a runner to read: at the start, or at the first
+// `/runners add` of a session that began with none.
+async function arm($: Engine): Promise<void> {
+  live.isArmed = true
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   await readZone($)
   $.clock.every(live.checkMs, () => void check($).catch(() => undefined))
   $.clock.every(HOUR_MS, () => void readZone($).catch(() => undefined))
   // The first reading can take many `gh` calls: session start and the first turn never wait for it.
   void check($).catch(() => undefined)
+}
+
+const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
+
+// `/runners add`: the runner joins this machine's list file and this session's row at once; other sessions
+// list it at their next start. A file that exists but cannot be read is never written over.
+async function addRunner($: Engine, words: string[]): Promise<string> {
+  const runner = parseAdd(words)
+  if ('error' in runner) return runner.error
+  const name = runner.label.toLowerCase()
+  const isListedHere = live.runners.some(r => r.label.toLowerCase() === name)
+  if (isListedHere) return `A runner named "${runner.label}" is already listed.`
+  const path = await listPath($)
+  const dir = path.slice(0, path.lastIndexOf('/'))
+  const read = await $.fs.read(path).then(String, () => undefined)
+  const isThere = (await $.fs.list(dir).catch(() => [])).some(entry => entry.name === 'runners.json')
+  if (read === undefined && isThere) return `Could not read ${path}; nothing was changed.`
+  const next = withRunner(read, runner)
+  if ('error' in next) return next.error
+  await run($, ['node', '-e', MKDIR_SCRIPT, dir])
+  const isSaved = await $.fs.write(path, next.text).then(
+    () => true,
+    () => false,
+  )
+  if (!isSaved) return `Could not write ${path}; nothing was changed.`
+  live.runners = [...live.runners, runner]
+  if (live.isArmed) void check($).catch(() => undefined)
+  else await arm($)
+  const repo = runner.repo ? `, repo ${runner.repo}` : ''
+  return (
+    `Added "${runner.label}" (${runner.processes.join(', ')}${repo}) to ${path}. ` +
+    'For Start and Stop buttons, add "start" and "stop" commands to its entry there (see hooks/rules.ts).'
+  )
 }
 
 async function setRow($: Engine, index: number, change: Partial<RunnerView>): Promise<void> {
@@ -296,28 +338,32 @@ export const register: Register = (on, options) => {
   })
 }
 
-const ARGUMENT_HINT = '[help | settings | phone]'
+const ARGUMENT_HINT = '[help | add | settings | phone]'
 const HELP = [
   '/runners: the local CI runners in a row above the prompt, with Start and Stop.',
   "  /runners           each runner's state",
+  '  /runners add       list a runner set: /runners add <name> <program>[,<program>...] [owner/repo]',
   '  /runners settings  open the settings pane',
   '  /runners phone     the same as text, for phone chats',
   '  /runners help      this list',
 ].join('\n')
 
-// `/runners [help | settings | phone]`; with no argument, each runner's last reading. Another word gets
-// the list. `phone` marks each runner with a coloured square, as the row's colour does not reach a chat.
+// `/runners [help | add | settings | phone]`; with no argument, each runner's last reading. Another word
+// gets the list. `phone` marks each runner with a coloured square, as the row's colour does not reach a chat.
 async function runCommand($: Engine, args: string): Promise<string> {
-  const verb = args.trim().split(/\s+/)[0] ?? ''
+  const [verb = '', ...words] = args.trim().split(/\s+/)
   if (verb === 'settings') {
     await $.ui.open({ id: SETTINGS_PANE, title: 'Runners settings', focus: true })
     return 'Opened the runners settings.'
   }
+  if (verb === 'add') return addRunner($, words)
   if (verb && verb !== 'phone') return HELP
   if (live.runners.length === 0)
     return (
-      'No runners listed. Add one to ~/.claude/mods-data/runners/runners.json (or hooks/rules.ts): ' +
-      'label and processes, and optionally repo, start and stop.'
+      'No runners listed yet. The row shows your local CI runners (on or off, online and busy, queued and ' +
+      'scheduled runs) once you list one: /runners add <name> <program>[,<program>...] [owner/repo], for ' +
+      'example /runners add ci Runner.Listener me/my-game. Start and Stop commands go in ' +
+      '~/.claude/mods-data/runners/runners.json; hooks/rules.ts shows every field.'
     )
   const rows = (await read($, view))?.rows ?? []
   if (rows.length === 0) return 'Reading the runners; ask again in a moment.'
