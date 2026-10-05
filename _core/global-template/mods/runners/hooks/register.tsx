@@ -21,7 +21,8 @@ const READ_ZONE = ['node', '-e', 'console.log(new Date().getTimezoneOffset())']
 const view = atom({ plugin: 'runners', key: 'view' } as const, null)
 const live = {
   checkMs: 60_000,
-  isStarted: false,
+  /** The module's one start (the list, then the timers), awaited by every hook that needs it. */
+  started: undefined as Promise<void> | undefined,
   /** The timers run: some runner was listed. */
   isArmed: false,
   isWindows: false,
@@ -192,9 +193,10 @@ function armChecks($: Engine): void {
   })
 }
 
-async function start($: Engine): Promise<void> {
-  if (live.isStarted) return
-  live.isStarted = true
+// Once per module load. Every caller waits for the one start: an add that lands mid-start (a reload's)
+// joins the list after the start has read it, instead of being dropped by that read.
+const start = ($: Engine): Promise<void> => (live.started ??= startOnce($).catch(() => undefined))
+async function startOnce($: Engine): Promise<void> {
   live.runners = [...RUNNERS, ...(await readList($))]
   if (live.runners.length > 0) await arm($)
 }
