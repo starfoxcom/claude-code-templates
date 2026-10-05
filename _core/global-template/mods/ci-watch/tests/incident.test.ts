@@ -57,6 +57,18 @@ test('checks pending past 15 minutes during an Actions incident wake the session
   expect(seen.prompts[1]).toContain('all 1 checks settled with no failure')
 })
 
+test('a watch only confirming finished checks is not called stuck', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.status = ACTIONS
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let i = 0; i < 30; i++) await clock.advance(POLL_MS)
+  seen.bucket = 'pass'
+  for (let i = 0; i < 4; i++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(1)
+  expect(seen.prompts[0]).toContain('all 1 checks settled with no failure')
+})
+
 test('with no incident the status is read at most every five minutes, and nothing wakes', async ($, on) => {
   const { seen, clock } = world(on)
   seen.status = JSON.stringify({ incidents: [] })
