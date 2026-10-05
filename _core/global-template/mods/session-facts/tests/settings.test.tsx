@@ -126,3 +126,10 @@ test('/session-facts with help, no argument or an unknown one answers with the h
   }
   expect(seen.opened).toEqual([])
 })
+
+test('a bare /session-facts typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  const bridge = { command: 'session-facts', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n').at(-1)).toBe('/session-facts help for more')
+})

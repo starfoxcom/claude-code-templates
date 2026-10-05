@@ -1,4 +1,4 @@
-import type { GitState } from '../types'
+import type { GitState, SessionLine } from '../types'
 
 export const GIT_STATUS = ['git', 'status', '--porcelain=v1', '--branch', '--untracked-files=normal']
 
@@ -33,4 +33,20 @@ export function modelName(id: string): string {
   const [, family = '', major, minor] = match
   const name = family.charAt(0).toUpperCase() + family.slice(1)
   return minor ? `${name} ${major}.${minor}` : `${name} ${major}`
+}
+
+/**
+ * The row as plain text for a phone chat, which draws no row: the model and project, then the branch with
+ * its arrows and changes, and the changed files the PC shows behind a button, up to `maxFiles`.
+ */
+export function phoneText(shown: SessionLine, maxFiles: number): string {
+  const head = `🧭 ${shown.effort ? `${shown.model} ${shown.effort}` : shown.model} · ${shown.project}`
+  const { git } = shown
+  if (!git.branch) return [head, '🌿 no branch (not a git repository, or a detached HEAD)'].join('\n')
+  const arrows = [git.ahead > 0 ? `↑${git.ahead}` : '', git.behind > 0 ? `↓${git.behind}` : ''].filter(Boolean)
+  const count = git.changed.length
+  const parts = [git.branch, ...(arrows.length > 0 ? [arrows.join(' ')] : []), count > 0 ? `${count} changed` : 'clean']
+  const files = git.changed.slice(0, maxFiles).map(entry => `   ${entry}`)
+  const rest = count - files.length
+  return [head, `🌿 ${parts.join(' · ')}`, ...files, ...(rest > 0 ? [`   … and ${rest} more`] : [])].join('\n')
 }
