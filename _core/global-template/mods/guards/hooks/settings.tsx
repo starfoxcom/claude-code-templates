@@ -8,13 +8,13 @@ import type { ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Regis
 // same apart from PLUGIN, TITLE, COMMAND and the atom's plugin name; usage-guard keeps its own settings file.
 // Its command opens the pane by SETTINGS_PANE.
 
-const PLUGIN = 'tasks'
-const TITLE = 'Tasks settings'
+const PLUGIN = 'guards'
+const TITLE = 'Guards settings'
 export const SETTINGS_PANE = `${PLUGIN}-settings`
-const COMMAND = '/task-list settings'
+const COMMAND = '/guards settings'
 // Only what the pane cannot read back from /config: the last refusal per field. The engine lists a
 // module's state from literals, so the plugin name is spelled out here rather than taken from PLUGIN.
-const view = atom({ plugin: 'tasks', key: 'settings' } as const, null)
+const view = atom({ plugin: 'guards', key: 'settings' } as const, null)
 
 // A row's field: what follows its last dot. The key is `<plugin>.<field>`, and the plugin part may carry
 // where the plugin came from (`usage-guard@inline`); field names hold no dot.

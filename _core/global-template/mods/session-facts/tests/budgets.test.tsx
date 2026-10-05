@@ -10,6 +10,7 @@ import {
   contextText,
   fillTone,
   pauseChip,
+  phoneText,
   planChip,
   shortLocal,
 } from '../hooks/budgets'
@@ -215,6 +216,19 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ type: 'Text', text: /week 20%/ })).toBeDefined()
   })
 
+  test(`${surface}: in a narrow band each chip wraps whole, and only one wider than the band is cut`, async ($, on) => {
+    world(on)
+    await start($, surface)
+    const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
+    const props = async (key: string) =>
+      ((await ui.find({ key })) as never as { props: Record<string, unknown> } | undefined)?.props
+    expect((await props('session-facts-row'))?.flexWrap).toBe('wrap')
+    for (const key of ['session-facts-chip-0', 'session-facts-chip-1', 'session-facts-chip-2'])
+      expect(await props(key)).toEqual(expect.objectContaining({ flexShrink: 1, minWidth: 0 }))
+    const week = (await ui.find({ type: 'Text', text: /week 20%/ })) as never as { props: Record<string, unknown> }
+    expect(week.props.wrap).toBe('truncate-end')
+  })
+
   test(`${surface}: a usage-guard pause replaces the plan chips`, async ($, on) => {
     world(on, { status: 'active', wakeAt: NOW + 60 * MINUTE })
     await start($, surface)
@@ -238,3 +252,31 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ type: 'Text', text: ' 50%' })).toBeDefined()
   })
 }
+
+test('the phone text is the row as squares, with every reset time and the cache time left', () => {
+  const limits = [
+    { kind: 'five_hour', percentUsed: 12, resetsAt: NOW + 120 * MINUTE },
+    { kind: 'seven_day', percentUsed: 80, resetsAt: NOW + 24 * 60 * MINUTE },
+  ]
+  expect(phoneText({ ...B, limits, cacheExpiresAt: NOW + 42 * MINUTE }, NOW).split('\n')).toEqual([
+    '📊 Budgets · 09:00',
+    'ctx 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ 50% · 217k to compact',
+    '5-hour 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 12% · resets Fri 11:00',
+    'week 🟨🟨🟨🟨🟨🟨🟨🟨⬜⬜ 80% · resets Sat 09:00',
+    'cache: warm · 42m left',
+  ])
+})
+
+test('the phone text says -- for what is unknown, and the pause in place of the plan lines', () => {
+  expect(phoneText({ ...B, tokens: undefined }, NOW).split('\n').slice(1)).toEqual([
+    'ctx --',
+    '5-hour --',
+    'week --',
+    'cache --',
+  ])
+  const paused = { ...B, pausedUntil: NOW + 180 * MINUTE, cacheExpiresAt: NOW + 5 * MINUTE }
+  expect(phoneText(paused, NOW).split('\n').slice(2)).toEqual([
+    '🟥 PAUSED until Fri 12:00',
+    '🟨 cache 5m left · cold start 250k',
+  ])
+})

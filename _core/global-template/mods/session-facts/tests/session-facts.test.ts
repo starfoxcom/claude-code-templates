@@ -121,15 +121,16 @@ test('a compaction is followed by a fresh facts line, and later lines name it fo
   const texts = (result.messages ?? []).map(message => message.text)
   expect(texts.length).toBe(3)
   expect([texts[0], texts[2]]).toEqual(['SUMMARY', 'kept'])
-  // The size the compaction left, never the 450k the engine still reports from before it.
+  // Unknown until the first response: never the 450k the engine still reports from before it, nor the
+  // compaction's own size, which leaves out the system prompt, tools and rules every request carries.
   expect(texts[1]).toContain('[session-facts] 2026-10-02 09:00:00 America/Phoenix')
-  expect(texts[1]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 8% · 427k to compact · just compacted 09:00 |')
+  expect(texts[1]).toContain('| ctx -- · just compacted 09:00 (unknown until the first response of this window) |')
   expect(texts[1]).toContain('week 68%')
   expect(texts[1]).toContain('from before the compaction')
 
   usage.tokens = undefined
   await $.prompt.submit({ text: 'next' } as never)
-  expect(seen[0]).toContain('| ctx 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 8% · 427k to compact · just compacted 09:00 |')
+  expect(seen[0]).toContain('| ctx -- · just compacted 09:00 (unknown until the first response of this window) |')
 
   usage.tokens = 60_000
   await clock.advance(15 * 60_000 - 1)

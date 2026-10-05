@@ -29,6 +29,7 @@ function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Wind
     return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated, isStderrTruncated: false } }
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   on('tool.call', { tool: 'Bash' }, ($, e) => {
     seen.ran.push(String(e.command))
     return { result: {} as never }

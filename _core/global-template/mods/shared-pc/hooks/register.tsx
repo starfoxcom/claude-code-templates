@@ -129,7 +129,11 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'mcp__shared-pc__pc' }, async ($, e) => ({ result: await toolAction($, e as ToolInput) }))
 
-  on('command.run', { command: 'pc' }, async ($, e) => ({ text: await commandAction($, e.args) }))
+  // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+  // card draws: the bare command answers with the phone text.
+  on('command.run', { command: 'pc' }, async ($, e) => ({
+    text: await commandAction($, e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')),
+  }))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // What core and the other mods draw here (usage-guard's card among them) stays, above the band.
@@ -214,9 +218,9 @@ function cardBox(ui: Ui, $: Engine, shown: SharedPcBand, width: number) {
             key="card-approve"
             label="Approve"
             variant="primary"
-            onPress={() => change($, ['answer', asker, 'approve'])}
+            onPress={() => answerAsk($, asker, 'approve')}
           />
-          <Button key="card-decline" label="Decline" onPress={() => change($, ['answer', asker, 'decline'])} />
+          <Button key="card-decline" label="Decline" onPress={() => answerAsk($, asker, 'decline')} />
         </Box>
       )}
       {!asker && card.tone === 'red' && (
@@ -294,8 +298,8 @@ async function setUp($: Engine) {
   $.clock.every(REFRESH_MS, () => void refresh($))
   await $.command.register({
     name: 'pc',
-    description: 'Shared PC: show the line, or next [name] | leave | release | hold <min> [reason] | done',
-    argumentHint: '[help | next [name] | leave | release | hold <min> [reason] | done]',
+    description: 'Shared PC: show the line, or next [name] | leave | release | hold <min> [reason] | done | phone',
+    argumentHint: '[help | next [name] | leave | release | hold <min> [reason] | done | phone]',
     immediate: true,
   })
   await $.tool.register({
@@ -460,6 +464,18 @@ async function notify($: Engine, body: string, tone: CardTone) {
   const until = tone === 'red' ? Number.POSITIVE_INFINITY : now + NOTICE_CARD_MS
   ctx.notices.push({ key: `notice:${now}`, body, tone, until })
   await refresh($)
+}
+
+// A press always answers: the request card gives way to a short card saying what was decided, and the
+// same line goes to the transcript for a surface that draws no card.
+async function answerAsk($: Engine, asker: string, answer: 'approve' | 'decline') {
+  const reply = await change($, ['answer', asker, answer])
+  const name = asker.slice(0, 8)
+  const decided =
+    answer === 'approve' ? `Approved: ${name} goes next on the PC.` : `Declined: ${name} keeps its place in the line.`
+  const text = reply.error ? `shared-pc error: ${reply.error}` : decided
+  await notify($, text, reply.error ? 'red' : 'blue')
+  await $.session.append({ message: { type: 'system', content: [{ type: 'text', text }] } }).catch(() => undefined)
 }
 
 async function dismissNotice($: Engine, key: string) {
@@ -634,6 +650,7 @@ const HELP = [
   '  /pc release               give the seat back',
   '  /pc hold <min> [reason]   keep the seat for a measurement or a multi-command run (default 15 min)',
   '  /pc done                  same as release',
+  '  /pc phone                 the same as text, for phone chats',
   '  /pc help                  this list',
 ].join('\n')
 
@@ -661,6 +678,8 @@ async function commandAction($: Engine, args: string): Promise<string> {
     case 'done':
       reply = await change($, ['release', ctx.me])
       break
+    case 'phone':
+      return phoneText(await pcctl($, ['status', ctx.me]))
     default:
       return HELP
   }
@@ -677,6 +696,19 @@ function duration(ms: number): string {
   const m = Math.floor(s / 60)
   if (m < 60) return `${m}m`
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+/**
+ * The seat as plain text for a phone chat, which draws no card: the status with a square for who holds the
+ * seat (green free, blue this session, yellow another), then every open request the cards would show.
+ */
+function phoneText(reply: Reply): string {
+  if (reply.error) return describe(reply)
+  const square = !reply.seat ? '🟩' : reply.seat.session === ctx.me ? '🟦' : '🟨'
+  const who = (id: string) => (id === ctx.me ? 'this session' : id.slice(0, 8))
+  const asks = (reply.requests ?? []).filter(ask => !ask.answer)
+  const lines = asks.map(ask => `🟨 ${who(ask.session)} asks to go next: ${ask.reason}`)
+  return [`${square} ${describe(reply)}`, ...lines, '/pc help for more'].join('\n')
 }
 
 function describe(reply: Reply): string {
