@@ -703,7 +703,7 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
   world(on)
   await start($)
   const hint = registered.find(command => command.name === 'usage-guard')?.argumentHint
-  expect(hint).toBe('[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel]')
+  expect(hint).toBe('[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel | adopt]')
   const help = await $.command.run({ command: 'usage-guard', args: 'help' } as never)
   const lines = [
     '/usage-guard cancel',
@@ -712,6 +712,7 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
     '/usage-guard disarm',
     '/usage-guard settings',
     '/usage-guard phone',
+    '/usage-guard adopt [drop]',
   ]
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))

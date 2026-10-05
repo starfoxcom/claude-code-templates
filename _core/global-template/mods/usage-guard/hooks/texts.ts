@@ -31,6 +31,22 @@ export function armLineText(wakeAt: number, kind: string, zone: Zone): string {
   return `⏰ resumes ${day} ${minute} · after the ${LIMIT_NAMES[kind] ?? kind} reset`
 }
 
+/** Plain /usage-guard's answer: the pause or its absence, then a standing arm and the last compaction. */
+export function statusText(s: {
+  pause?: Pause
+  armAt?: number
+  lastCompaction?: string
+  wrapUpAt: number
+  zone: Zone
+}): string {
+  const armed = s.armAt === undefined ? '' : ` Armed to resume at ${formatLocal(s.armAt, s.zone)}.`
+  const compacted = s.lastCompaction ? `\nLast compaction, ${s.lastCompaction}` : ''
+  if (s.pause?.status !== 'active')
+    return `No usage pause. Sessions wrap up at ${s.wrapUpAt}% of any plan window.${armed}${compacted}`
+  const resumes = `Resumes at ${formatLocal(s.pause.wakeAt, s.zone)}.`
+  return `Paused: ${limitName(s.pause)} at ${s.pause.percentUsed}%. ${resumes}${armed}${compacted}`
+}
+
 export function pausedText(pause: Pause, wakeText: string): string {
   return (
     `${limitName(pause)} plan usage at ${pause.percentUsed}%. Sessions save their work and pause. Work ` +
@@ -66,7 +82,7 @@ export function cardTone(id: string): Tone {
 export type CardButton = { key: string; label: string; isPrimary?: boolean; onPress: () => unknown }
 export type Card = { key: string; tone: Tone; text: string; buttons: CardButton[] }
 
-export const ARGUMENT_HINT = '[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel]'
+export const ARGUMENT_HINT = '[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel | adopt]'
 export const HELP = [
   '/usage-guard: pauses a session before a plan window runs out and resumes it after the reset.',
   '  /usage-guard                      the pause status and the wrap-up level',
@@ -74,6 +90,7 @@ export const HELP = [
   '  /usage-guard arm 5h|week          resume this session after that window resets',
   '  /usage-guard arm 5h|week compact  the same, and compact the session now',
   '  /usage-guard disarm               drop the armed resume',
+  '  /usage-guard adopt [drop]         run here the resume a closed session missed (drop: forget it)',
   '  /usage-guard settings             open the settings pane',
   '  /usage-guard set <name> <value>   change a setting; with no name, list them',
   '  /usage-guard phone                the same as text, for phone chats',
