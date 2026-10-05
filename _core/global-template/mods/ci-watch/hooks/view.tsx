@@ -51,6 +51,13 @@ export function summary(watch: Watch): { text: string; color: 'green' | 'red' | 
   return { text: `⏳ ${pr} · ${done}/${states.length} done`, color: 'yellow' }
 }
 
+/** One watch as plain text for a phone chat: the row's summary, every check with its icon, the PR link. */
+export function phoneText(watch: Watch): string {
+  const checks = Object.entries(watch.checks).map(([name, bucket]) => `   ${(LOOKS[bucket] ?? UNKNOWN).icon} ${name}`)
+  const link = `   https://github.com/${watch.repo}/pull/${watch.number}`
+  return [summary(watch).text, ...checks, link].join('\n')
+}
+
 type Ui = ReturnType<EngineInterface['ui']['resolve']>
 
 function watchRow(ui: Ui, $: EngineInterface, watch: Watch, isOpen: boolean) {
