@@ -142,7 +142,18 @@ export function mergedNumber(command: string, isPowerShell = false): number | un
   return named ? Number(named[1]) : 0
 }
 
-export function wakeText(watch: Watch): string {
+// How long ago the checks finished, so a late wake shows its delay.
+function finishedAgo(watch: Watch, now?: number): string {
+  if (now === undefined || watch.settledAt === undefined) return ''
+  const minutes = Math.max(0, Math.round((now - watch.settledAt) / 60_000))
+  return minutes === 0 ? ' Checks finished just now.' : ` Checks finished ${minutes} min ago.`
+}
+
+export function wakeText(watch: Watch, now?: number): string {
+  return `${outcomeText(watch)}${finishedAgo(watch, now)}`
+}
+
+function outcomeText(watch: Watch): string {
   const entries = Object.entries(watch.checks)
   const pr = `PR ${watch.repo}#${watch.number}`
   const failed = entries.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
@@ -503,8 +514,28 @@ async function sendHeld($: EngineInterface): Promise<void> {
     if (await isClosed($, watch.repo, watch.number)) continue
     const head = await headOf($, watch.repo, watch.number)
     if (head && head !== watch.headSha) continue
-    void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
+    const text = wakeText(watch, await $.clock.now())
+    // A wake the engine refuses is marked pending again, so the next poll tries once more.
+    void $.prompt.submit({ text }).catch(() => markPending(watch))
   }
+}
+
+function markPending(watch: Watch): void {
+  const isSame = (w: Watch) => w.id === watch.id && w.headSha === watch.headSha
+  live.watches = live.watches.map(w => (isSame(w) ? { ...w, wakePending: true } : w))
+}
+
+// As the old Monitor did: checks that finish while a turn runs reach it at once, on the next tool result,
+// instead of waiting for the turn's end. Each is taken from the pending list in one step and saved.
+async function takeNotes($: EngineInterface): Promise<string[]> {
+  if (!live.isTurnRunning) return []
+  const due = live.watches.filter(w => w.wakePending)
+  if (due.length === 0) return []
+  live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
+  live.generation++
+  await save($)
+  const now = await $.clock.now()
+  return due.map(w => wakeText(w, now))
 }
 
 // A hot reload starts the module over without a new session.start: the next
@@ -572,16 +603,29 @@ export const register: Register = (on, options) => {
     await startPolling($)
     if (await isRetired($)) return next(e)
     await setTurnRunning($, false)
+    // What is still pending (no tool result carried it) goes out from the next poll, between turns: a
+    // prompt submitted from the turn's own end was seen to vanish.
+    return next(e)
+  })
+
+  // The other common tools carry a finished watch into the running turn too.
+  on('tool.call', { tool: ['Read', 'Edit', 'Write', 'Grep', 'Glob'] }, async ($, e, next) => {
+    await startPolling($)
+    if (await isRetired($)) return next(e)
     const result = await next(e)
-    // From a timer: the turn's own hook is still running, and the wake is a turn of its own.
-    $.clock.after(0, () => void sendHeld($).catch(() => undefined))
-    return result
+    if (e.agentId !== undefined || 'deny' in result) return result
+    const notes = await takeNotes($)
+    return notes.length > 0 ? { ...result, context: [...(result.context ?? []), ...notes] } : result
   })
 
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     await startPolling($)
     if (await isRetired($)) return next(e)
-    const result = await next(e)
+    const answered = await next(e)
+    // A finished watch rides on this result; a subagent's call or a refused one carries none.
+    const notes = e.agentId !== undefined || 'deny' in answered ? [] : await takeNotes($)
+    const isPlain = 'deny' in answered || notes.length === 0
+    const result = isPlain ? answered : { ...answered, context: [...(answered.context ?? []), ...notes] }
     const command = String((e as { command?: unknown }).command ?? '')
     const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
     if (result.deny !== undefined || result.isError) return result
