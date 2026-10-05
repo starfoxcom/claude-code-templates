@@ -313,6 +313,25 @@ test('an arm a longer pause moves keeps the session it was set in, and still res
   expect(quietWakes(seen)).toEqual([])
 })
 
+test('a pause resume still counts the arming session after the arm is cleared midway', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [{ status: 'in_progress' }])
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 92, resetsAt: RESET, wakeAt: WAKE }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-c' }))
+  await seen.clock.advance(60_000)
+  // The arm's own timer clears the arm while the pause's resume waits on its claim helper.
+  seen.duringClaim = name => {
+    if (name.startsWith('resume-')) void $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  }
+  await seen.clock.advance(WAKE - NOW - 60_000)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(quietWakes(seen)).toEqual([])
+})
+
 test('an armed session with nothing pending gets the one-line prompt at a pause reset too', async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [])
@@ -347,6 +366,20 @@ test('a failed attempt to make the arms folder is tried again at the next save',
   await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
   await arm5h($)
   expect(parseSavedArm(savedArm(seen) ?? '')?.wakeAt).toBe(WAKE)
+})
+
+test('a /clear move that fails to save keeps the old file named, so a disarm still clears it', async ($, on) => {
+  const seen = world(on)
+  on('classic.SessionStart', () => ({}) as never)
+  await start($)
+  await arm5h($)
+  seen.isArmsDirMissing = true
+  seen.sessionId = 'sess-b'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-b' })
+  expect(parseSavedArm(savedArm(seen) ?? '')?.wakeAt).toBe(WAKE)
+  seen.isArmsDirMissing = false
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(savedArm(seen)).toBe('null')
 })
 
 test('a disarm after a /clear also drops the copy saved under the old session id', async ($, on) => {
