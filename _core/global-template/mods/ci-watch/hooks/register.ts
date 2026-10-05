@@ -39,6 +39,9 @@ const live = {
   isUnsaved: false,
   /** Counts the changes made outside a poll (a new watch, a stop, a merge), so a poll can tell. */
   generation: 0,
+  isTurnRunning: false,
+  /** Wakes that settled while a turn ran, sent at its end unless that turn already dealt with them. */
+  held: [] as Watch[],
 }
 
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
@@ -460,8 +463,25 @@ async function poll($: EngineInterface): Promise<void> {
   const recorded = toWake.length > 0 ? await readSaved($) : undefined
   if (changed || live.isUnsaved) await save($)
   for (const watch of toWake) {
-    if (!isRecorded(recorded, watch) && claimWake(watch))
-      void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
+    if (isRecorded(recorded, watch) || !claimWake(watch)) continue
+    if (live.isTurnRunning) live.held.push(watch)
+    else void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
+  }
+  if (!live.isTurnRunning) await sendHeld($)
+}
+
+// A wake that settles mid-turn waits for the turn's end: the engine would only run it then anyway, and
+// by then the turn may have merged the PR or pushed a fix, which makes the wake stale. Each is checked
+// again first: a PR merged or closed, or one whose head moved on (its new commit has a watch of its own),
+// wakes nothing.
+async function sendHeld($: EngineInterface): Promise<void> {
+  const held = live.held
+  live.held = []
+  for (const watch of held) {
+    if (await isClosed($, watch.repo, watch.number)) continue
+    const head = await headOf($, watch.repo, watch.number)
+    if (head && head !== watch.headSha) continue
+    void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
   }
 }
 
@@ -519,7 +539,16 @@ export const register: Register = (on, options) => {
   // startPolling first: a freshly loaded instance claims the owner file before any check.
   on('turn.start', async ($, e, next) => {
     await startPolling($)
+    live.isTurnRunning = true
     return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    live.isTurnRunning = false
+    const result = await next(e)
+    // From a timer: the turn's own hook is still running, and the wake is a turn of its own.
+    $.clock.after(0, () => void sendHeld($).catch(() => undefined))
+    return result
   })
 
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
