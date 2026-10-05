@@ -400,7 +400,8 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   }
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) {
-    const later: ArmedWake = { ...arm, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
+    // From the arm as it stands, not as this timer was set: its question, its sessions are kept.
+    const later: ArmedWake = { ...current, resetsAt: pause.resetsAt, wakeAt: pause.wakeAt }
     await setArm($, later)
     await scheduleArm($, later)
     return
@@ -508,9 +509,10 @@ async function armByHand($: EngineInterface, which: string, option: string): Pro
   const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
   if (typeof planned === 'string') return planned
   const isEmpty = (await openTasks($)) === 0
-  const arm = { ...planned, armedIn: await $.session.id() }
-  await setArm($, isEmpty ? { ...arm, isQuestioned: true } : arm)
-  await scheduleArm($, planned)
+  const base = { ...planned, armedIn: await $.session.id() }
+  const arm = isEmpty ? { ...base, isQuestioned: true } : base
+  await setArm($, arm)
+  await scheduleArm($, arm)
   const lines = [
     `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
       `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`,
