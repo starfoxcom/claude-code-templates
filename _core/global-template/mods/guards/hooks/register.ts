@@ -7,7 +7,7 @@ import type { NameRule } from './names'
 import { checkAddedLines, checkBranch, checkText, describe } from './policy'
 import { checkBody, checkCall, hasRow, ruleFor } from './prbody'
 import type { PrCall, PrRules } from './prbody'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 // guards: one in-process check on every Bash and PowerShell call, replacing the attribution,
 // `gh run watch` and PR-body scripts. It reads the command (which program, which flags, which message) instead of
@@ -304,20 +304,34 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   return result
 }
 
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: Engine): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/guards/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  live.mode = String(options.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
-  live.mentionRepos = String(options.mentionRepos ?? '*')
-    .split(',')
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean)
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.mode = String(values.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
+    live.mentionRepos = String(values.mentionRepos ?? '*')
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean)
+  })
 
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const result = await next(e)
     await setUp($)
     await $.command.register({
       name: 'guards',
-      description: 'The guard mode and what it caught. Also: settings, help',
+      description: 'The guard mode and what it caught. Also: settings, set, help',
       argumentHint: ARGUMENT_HINT,
     })
     return result
@@ -329,11 +343,12 @@ export const register: Register = (on, options) => {
   )
 }
 
-const ARGUMENT_HINT = '[help | settings]'
+const ARGUMENT_HINT = '[help | settings | set]'
 const HELP = [
   '/guards: reads every shell command that writes history (commits, PRs, issues, releases) for AI credit.',
   '  /guards           the mode, where the product may be named, and what it caught',
   '  /guards settings  open the settings pane',
+  '  /guards set       change a setting: set <name> <value>; alone, list them',
   '  /guards help      this list',
 ].join('\n')
 

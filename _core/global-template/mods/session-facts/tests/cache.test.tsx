@@ -87,7 +87,9 @@ function world(on: On) {
   const files = new Map<string, string>()
   on('session.id', () => ({ value: 's1' }))
   on('fs.read', ($, e) => {
-    const text = files.get(e.path.replaceAll('\\', '/'))
+    const path = e.path.replaceAll('\\', '/')
+    // The mod's manifest, wherever the plugin root is, under the key `plugin.json`.
+    const text = files.get(path) ?? (path.endsWith('/plugin.json') ? files.get('plugin.json') : undefined)
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
@@ -252,6 +254,16 @@ test('each reply is remembered in the data folder', async ($, on) => {
   expect(parseMemory(files.get(MEMORY) ?? '')).toEqual(
     expect.objectContaining({ lastResponseAt: NOW, lifetimeMs: HOUR, lastModel: 'claude-opus-5-5' }),
   )
+})
+
+test('the cache lifetime saved in the settings file starts the countdown', async ($, on) => {
+  const { files } = world(on)
+  files.set('plugin.json', JSON.stringify({ userConfig: { cacheTtlMinutes: { type: 'number' } } }))
+  files.set('C:/Users/me/.claude/mods-data/session-facts/settings.json', '{"cacheTtlMinutes":5}')
+  await start($)
+  await turn($)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache 5m left · cold start 250k$/ })).toBeDefined()
 })
 
 test('after a reload the countdown carries on from the remembered reply', async ($, on) => {

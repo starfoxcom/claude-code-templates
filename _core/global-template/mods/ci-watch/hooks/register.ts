@@ -2,7 +2,7 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
 
 
@@ -20,12 +20,13 @@ const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 const KEEP_SETTLED_MS = 60 * 60_000
-const HINT = '[help | settings | stop | phone]'
+const HINT = '[help | settings | set | stop | phone]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
   '  /ci-watch           the watched PRs and their checks',
   '  /ci-watch stop      stop watching every PR in this session',
   '  /ci-watch settings  open the settings pane',
+  '  /ci-watch set       change a setting: set <name> <value>; alone, list them',
   '  /ci-watch phone     the same as text, for phone chats',
   '  /ci-watch help      this list',
 ].join('\n')
@@ -573,17 +574,39 @@ async function startPolling($: EngineInterface): Promise<void> {
   await claimOwner($)
   await sweep($)
   await load($)
-  const tick = $.clock.every(live.pollMs, async () => {
+  armPolling($)
+}
+
+// A new interval from the settings file takes over at the next tick of the old one.
+function armPolling($: EngineInterface): void {
+  const period = live.pollMs
+  const tick = $.clock.every(period, async () => {
     if (await isRetired($)) return void tick.cancel()
+    if (live.pollMs !== period) {
+      tick.cancel()
+      armPolling($)
+    }
     await poll($).catch(() => undefined)
   })
 }
 
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: EngineInterface): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/ci-watch/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  live.pollMs = Number(options.pollSeconds ?? 30) * 1000
-  live.timeoutMs = Number(options.timeoutMinutes ?? 60) * 60_000
   registerView(on)
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.pollMs = Number(values.pollSeconds ?? 30) * 1000
+    live.timeoutMs = Number(values.timeoutMinutes ?? 60) * 60_000
+  })
 
   on('ui.press', async ($, e, next) => {
     if (e.plugin !== 'ci-watch' || !e.element.startsWith(STOP_PREFIX)) return next(e)
@@ -595,6 +618,8 @@ export const register: Register = (on, options) => {
   })
 
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const result = await next(e)
     await startPolling($)
     await $.tool.register({
