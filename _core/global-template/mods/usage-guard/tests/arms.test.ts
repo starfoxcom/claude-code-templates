@@ -12,6 +12,7 @@ import {
   endTurn,
   mountCard,
   NOW,
+  PAUSE_FILE,
   quietWakes,
   RESET,
   resumes,
@@ -50,6 +51,22 @@ test('a session that resumes by itself compacts once its wrap-up turn ends, and 
   // Once: later turns during the pause compact nothing more.
   await endTurn($)
   expect(seen.statuses.at(-1)).toContain('compacted to 125k')
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toHaveLength(1)
+})
+
+test('after a reload in a pause, a wrap-up begun at a turn end compacts after its own turn', async ($, on) => {
+  const seen = world(on)
+  seen.context = { ...seen.context, tokens: 400_000 }
+  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 92, resetsAt: RESET, wakeAt: WAKE }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-b' }))
+  // No session.start: the module reloaded mid-turn, and the turn changed something after it.
+  await doWork($)
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toEqual([])
+  await endTurn($)
   await seen.clock.advance(1_000)
   expect(seen.compactions).toHaveLength(1)
 })
@@ -297,6 +314,17 @@ test('a disarm after a /clear also drops the copy saved under the old session id
   await arm5h($)
   seen.sessionId = 'sess-b'
   await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a /clear moves the saved arm to the new session id at once, before any turn', async ($, on) => {
+  const seen = world(on)
+  on('classic.SessionStart', () => ({}) as never)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-b' })
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt).toBe(WAKE)
   expect(savedArm(seen)).toBe('null')
 })
 

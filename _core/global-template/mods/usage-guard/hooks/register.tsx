@@ -440,19 +440,19 @@ async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> 
   await saveArm($, arm)
 }
 
-async function armPath($: EngineInterface): Promise<string> {
-  return `${await dataDir($)}/arms/${await $.session.id()}.json`
+async function armPath($: EngineInterface, sessionId?: string): Promise<string> {
+  return `${await dataDir($)}/arms/${sessionId ?? (await $.session.id())}.json`
 }
 
 // A failed save never fails the command: the arm still stands until this process ends.
-async function saveArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
+async function saveArm($: EngineInterface, arm: ArmedWake | null, sessionId?: string): Promise<void> {
   try {
     if (!live.isArmsDirMade) {
       await $.process.run(['node', '-e', MKDIR_SCRIPT, `${await dataDir($)}/arms`], { timeoutMs: 10_000 })
       live.isArmsDirMade = true
     }
     // The arm's own file is cleared even when the session id moved on since it was saved (a /clear).
-    const path = await armPath($)
+    const path = await armPath($, sessionId)
     if (live.armFile && live.armFile !== path) await $.fs.write(live.armFile, 'null')
     await $.fs.write(path, JSON.stringify(arm, null, 2))
     live.armFile = arm ? path : undefined
@@ -461,25 +461,21 @@ async function saveArm($: EngineInterface, arm: ArmedWake | null): Promise<void>
   }
 }
 
-// A /clear moves the session to a new id with no session.start: the saved copy follows the standing
-// arm there, so a restart that resumes the newest conversation still finds it.
-async function followSession($: EngineInterface): Promise<void> {
+// A /clear moves the session to a new id with no session.start: the saved copy follows the standing arm
+// there (the classic SessionStart hook sees the new id; the next turn or minute check catch a miss), so a
+// restart that resumes the newest conversation still finds it.
+async function followSession($: EngineInterface, sessionId?: string): Promise<void> {
   const arm = await read($, armedWake)
-  if (arm && live.armFile && live.armFile !== (await armPath($))) await saveArm($, arm)
+  if (arm && live.armFile && live.armFile !== (await armPath($, sessionId))) await saveArm($, arm, sessionId)
 }
 
 // A session started again (a restart, a resume) finds the arm it saved: scheduled again, caught up
 // within the setting's window, or dropped with a note. A hot reload keeps the arm in state instead.
 async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
-  let saved: ArmedWake | undefined
-  try {
-    const path = await armPath($)
-    saved = parseSavedArm(String(await $.fs.read(path)))
-    if (saved) live.armFile = path
-  } catch {
-    return undefined
-  }
+  const path = await armPath($)
+  const saved = parseSavedArm(String(await $.fs.read(path).catch(() => '')))
   if (!saved) return undefined
+  live.armFile = path
   const limit = LIMIT_NAMES[saved.kind] ?? saved.kind
   const action = catchUpOf(saved.wakeAt, await $.clock.now(), live.catchUpMinutes)
   if (action === 'drop') {
@@ -734,6 +730,11 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear') await followSession($, e.session_id).catch(() => undefined)
+    return next(e)
+  })
+
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
     // Core marks a call read-only (true) or leaves the flag out, never false: any
@@ -745,10 +746,11 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     live.isTurnRunning = false
     const result = await next(e)
+    // Taken before anything below can start a wrap-up: a compaction owed by one runs after its own turn.
+    scheduleOwedCompaction($)
     // A reload in the middle of a turn: the turn's start ran in the module before it, so its end restarts
     // the timers, or a saved arm would wait idle past its wake.
     await startTimers($).catch(() => undefined)
-    scheduleOwedCompaction($)
     await measureCompaction($).catch(() => undefined)
     await runPendingWrapUp($).catch(() => undefined)
     await check($).catch(() => undefined)
