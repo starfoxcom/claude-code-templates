@@ -202,3 +202,47 @@ test('an incident another load noted while this one read GitHub is not sent twic
   expect(seen.prompts).toEqual([])
   expect(seen.files.get(STATE)).toContain('Incident with Actions')
 })
+
+test("another load's incident note still held in its turn is taken over held, and goes out once", async (
+  $,
+  on,
+) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+  for (let i = 0; i < 30; i++) await clock.advance(POLL_MS)
+  // While this load reads GitHub, the other one notes the incident and holds it for the turn's end.
+  seen.status = ACTIONS
+  seen.duringStatus = () => {
+    seen.duringStatus = undefined
+    const saved = JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Record<string, unknown>[] }
+    const note = { incident: 'Incident with Actions', incidentPending: true }
+    for (const watch of saved.watches) Object.assign(watch, note)
+    seen.files.set(STATE, JSON.stringify(saved))
+  }
+  await clock.advance(POLL_MS)
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('GitHub reports an open incident'))).toHaveLength(1)
+})
+
+test('a poll that overlapped the one sending the incident note does not note it again', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.status = ACTIONS
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let i = 0; i < 30; i++) await clock.advance(POLL_MS)
+  // A slow poll: the next one runs whole (notes and sends) while this one still waits on gh. The state
+  // file cannot be read, so only memory knows the note went out.
+  seen.duringChecks = () => {
+    seen.duringChecks = undefined
+    return clock.advance(POLL_MS)
+  }
+  await clock.advance(POLL_MS)
+  for (let i = 0; i < 2; i++) await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('GitHub reports an open incident'))).toHaveLength(1)
+})
