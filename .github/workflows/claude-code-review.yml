@@ -12,7 +12,7 @@
 #   • Triage non-reviewable diff  → conclusion=skipped  ("Diff non-reviewable")
 #   • Routine completes, no escal. → conclusion=skipped  ("No escalation")
 #   • Routine escalates           → status=in_progress  ("Deep review in progress")
-#   • Opus completes              → success / failure   (claude.yml PATCHes)
+#   • Deep review completes       → success / failure   (claude.yml PATCHes)
 #
 # Why: previously the gate "folded in" the deep verdict by re-firing on the
 # deep tier's `issue_comment` completion event and reading the comment body.
@@ -53,9 +53,9 @@ jobs:
     # so branch protection has something to evaluate. The check starts at
     # status=in_progress ("Waiting for routine review to evaluate"), then
     # downstream jobs PATCH it through the lifecycle:
-    #   • triage non-reviewable / Sonnet no escalation → conclusion=skipped
-    #   • Sonnet escalates → status=in_progress titled "Deep review in progress"
-    #   • Opus completes → conclusion=success/failure (claude.yml)
+    #   • triage non-reviewable / routine no escalation → conclusion=skipped
+    #   • Routine escalates → status=in_progress titled "Deep review in progress"
+    #   • Deep review completes → conclusion=success/failure (claude.yml)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -85,7 +85,7 @@ jobs:
             -F head_sha="$HEAD_SHA" \
             -F status="in_progress" \
             -F "output[title]=Waiting for routine review to evaluate" \
-            -F "output[summary]=The routine review (Sonnet) is evaluating whether deep-tier review is needed. This check will resolve to skipped (no escalation) or in_progress → success/failure (escalated to Opus)."
+            -F "output[summary]=The routine review is evaluating whether deep-tier review is needed. This check will resolve to skipped (no escalation) or in_progress → success/failure (escalated to the deep tier)."
           echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
 
   triage:
@@ -149,7 +149,7 @@ jobs:
 
         Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
 
-        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The `Bash(gh *),Read` allowlist is exactly sized for this contract — don't try `cat`, `grep`, `wc`, `head`, or `git diff`; they will be denied.
+        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc` and `head` will be denied.
 
         ## Step 2 — Architectural review
 
@@ -171,7 +171,7 @@ jobs:
 
         **Mark for escalation when ALL hold:**
         1. The concern is about correctness, not style.
-        2. You can articulate a *specific* reason an Opus reviewer would catch what you cannot.
+        2. You can articulate a *specific* reason a deep-tier reviewer would catch what you cannot.
         3. You would not stake the merge on your own verdict for that concern.
 
         **Auto-escalate (always mark) when the diff includes any of:**
@@ -225,7 +225,7 @@ jobs:
 
         - `<file:line>` — <what specifically concerns you about this change in 1 sentence>.
           **Why I am not confident:** <one sentence on the limit of your analysis — what you cannot fully verify from the diff/the files you read>.
-          **What I want Opus to verify:** <one sentence naming the concrete check — invariant, contract, edge case>.
+          **What I want the deep tier to verify:** <one sentence naming the concrete check — invariant, contract, edge case>.
         - ...
 
         A depth-pass request follows in the next comment.
@@ -233,7 +233,7 @@ jobs:
 
         For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the trigger comment in Step 4 already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4.
 
-        🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for Opus). Binary verdict + optional 🟡 section are independent dimensions.
+        🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for the deep tier). Binary verdict + optional 🟡 section are independent dimensions.
 
         ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
 
@@ -298,10 +298,10 @@ jobs:
           python-version: "3.11"
 
       # ── Pre-screen: deterministic Python checks over the diff ────────────────
-      # Catches mechanical rule violations before Sonnet sees them. Sonnet then
+      # Catches mechanical rule violations before the reviewer sees them. The reviewer then
       # trusts the report and spends turns on judgment work — NOT re-discovering
       # grep-able patterns. This is what makes the `Bash(gh *),Read` allowlist
-      # the right size: Sonnet doesn't need `cat`/`grep`/`wc` because the pre-
+      # the right size: the reviewer doesn't need `cat`/`grep`/`wc` because the pre-
       # screen already did that work.
       - name: Pre-screen PR diff
         env:
@@ -646,15 +646,15 @@ jobs:
           # If claude.yml's Evaluate step already PATCHed the check to a
           # terminal state (success or failure), do NOT overwrite. Scenarios:
           # (a) maintainer manually @claude-triggered before routine
-          # completed and Opus finished first; (b) "Re-run all jobs" on the
-          # routine workflow after Opus has set a terminal state. The
+          # completed and the deep review finished first; (b) "Re-run all jobs" on the
+          # routine workflow after the deep review has set a terminal state. The
           # `skipped` and `in_progress` states ARE safe to overwrite —
           # they're set by this routine workflow, not by claude.yml's
           # authoritative Evaluate step.
           EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
           EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
           if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
-            echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — Opus has spoken; routine Resolve will not overwrite"
+            echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — the deep tier has spoken; routine Resolve will not overwrite"
             exit 0
           fi
 
@@ -663,7 +663,7 @@ jobs:
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
               -F "output[title]=Deep review in progress" \
-              -F "output[summary]=needs-deep-review applied. Waiting for the Opus deep-tier verdict (claude.yml will PATCH this check on completion)."
+              -F "output[summary]=needs-deep-review applied. Waiting for the deep-tier verdict (claude.yml will PATCH this check on completion)."
             echo "::notice::Set Claude On-Demand check $CHECK_ID to in_progress (escalated)"
           else
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
@@ -726,7 +726,7 @@ jobs:
             if [ -n "$CHECK_ID" ]; then
               # Terminal-state guard (symmetric with the Resolve step's guard):
               # if a maintainer manually @claude-triggered on a docs-only PR
-              # and Opus set the check to success/failure, a routine re-run
+              # and the deep review set the check to success/failure, a routine re-run
               # must not overwrite that authoritative verdict with skipped.
               EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
               EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
@@ -785,7 +785,7 @@ jobs:
           # per page ascending, so on a long-thread PR the verdict comment
           # lands on a later page and `| last` would silently pick a stale
           # verdict from page 1.
-          # Title-tolerant match: Sonnet does not reliably reproduce the exact
+          # Title-tolerant match: the reviewer does not reliably reproduce the exact
           # `## Code Review — claude-code-templates` heading (observed `**Code
           # Review - …**` and a heading-less `Code Review — …`). The title is
           # only a SELECTOR key, not a load-bearing contract like the verdict
