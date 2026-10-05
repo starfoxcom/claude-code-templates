@@ -747,7 +747,12 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  on('command.run', { command: 'usage-guard' }, async ($, e) => ({ text: await runCommand($, e.args) }))
+  // A hot reload while idle leaves no turn to restart the timers: the command does, so its answer (and a
+  // disarm) sees the arm restored from its saved copy, and the arm's timer runs again.
+  on('command.run', { command: 'usage-guard' }, async ($, e) => {
+    await startTimers($).catch(() => undefined)
+    return { text: await runCommand($, e.args) }
+  })
 }
 
 async function registerSurface($: EngineInterface): Promise<void> {
