@@ -9,12 +9,61 @@ import type { ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Regis
 const PLUGIN = 'compact-handoff'
 const TITLE = 'Compact hand-off settings'
 export const SETTINGS_PANE = `${PLUGIN}-settings`
+const COMMAND = '/compact-handoff settings'
 // Only what the pane cannot read back from /config: the last refusal per field. The engine lists a
 // module's state from literals, so the plugin name is spelled out here rather than taken from PLUGIN.
 const view = atom({ plugin: 'compact-handoff', key: 'settings' } as const, null)
 
+// A row's field: what follows its last dot. The key is `<plugin>.<field>`, and the plugin part may carry
+// where the plugin came from (`usage-guard@inline`); field names hold no dot.
 export function fieldOf(row: Pick<ConfigRow, 'key'>): string {
-  return row.key.slice(PLUGIN.length + 1)
+  return row.key.slice(row.key.lastIndexOf('.') + 1)
+}
+
+// A row this plugin owns: by its owner, or by its key's plugin part, with or without a source.
+export function isOwnRow(row: Pick<ConfigRow, 'key' | 'provider'>): boolean {
+  const owner = row.key.slice(0, Math.max(row.key.lastIndexOf('.'), 0))
+  return row.provider?.plugin === PLUGIN || owner === PLUGIN || owner.startsWith(`${PLUGIN}@`)
+}
+
+// Shown when none of the rows is this plugin's: what /config did list (or why it could not), so one
+// look on that surface tells why the pane is empty. The rows other plugins own are the telling ones (none
+// at all: that surface lists no plugin settings), so they are named and the engine's own only counted.
+export function emptyNote(listed: readonly Pick<ConfigRow, 'key' | 'provider'>[] | Error): string {
+  if (listed instanceof Error) return `No settings for ${PLUGIN} here: /config could not be listed (${listed.message}).`
+  const fromPlugins = listed.filter(row => row.provider?.plugin !== 'engine')
+  const sample = fromPlugins.slice(0, 5).map(row => `${row.key} (${row.provider?.plugin ?? 'no owner'})`)
+  const such = sample.length > 0 ? `, such as ${sample.join(', ')}` : ''
+  const count = `${listed.length} row(s), ${fromPlugins.length} of them from plugins${such}`
+  return `No settings for ${PLUGIN} here: /config listed ${count}.`
+}
+
+// Shown over the values when this surface's /config lists no plugin rows (the Desktop app leaves them out):
+// the values are read-only here, and the terminal's menu changes them.
+export const READ_ONLY_NOTE =
+  'This app leaves mod settings out of its settings list, so they show read-only here. Change them in ' +
+  `the terminal: /config (or ${COMMAND} there).`
+
+type Manifest = { userConfig?: Record<string, { title?: string }> }
+
+// Each field's title from the manifest, so a read-only value is named as the menu names it. The plugin's
+// root holds plugin.json, directly or in .claude-plugin/; unread, a field shows by its own name.
+async function titlesOf($: Engine): Promise<Record<string, string>> {
+  for (const path of [`${$.plugin.root}/.claude-plugin/plugin.json`, `${$.plugin.root}/plugin.json`]) {
+    try {
+      const fields = (JSON.parse(String(await $.fs.read(path))) as Manifest).userConfig ?? {}
+      return Object.fromEntries(Object.entries(fields).map(([field, spec]) => [field, spec.title ?? field]))
+    } catch {
+      // Not there: the next place.
+    }
+  }
+  return {}
+}
+
+/** A value as the read-only view shows it: a switch as On or Off, anything else as its text. */
+export function shownValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'On' : 'Off'
+  return value === undefined || value === null || value === '' ? '(not set)' : String(value)
 }
 
 // A number field's text as the value to write, or why it cannot be one.
@@ -67,17 +116,36 @@ function control(ui: Ui, $: Engine, row: ConfigRow) {
   return <ui.Input key={key} value={String(row.value)} submitLabel="save" onSubmit={submit} />
 }
 
-export const register: Register = on => {
+function readOnlyRows(ui: Ui, options: Record<string, unknown>, titles: Record<string, string>) {
+  return Object.entries(options).map(([field, value]) => (
+    <ui.Box key={`setting-${field}`} flexDirection="column" marginTop={1}>
+      <ui.Text bold>{titles[field] ?? field}</ui.Text>
+      <ui.Text>{shownValue(value)}</ui.Text>
+    </ui.Box>
+  ))
+}
+
+export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== SETTINGS_PANE || e.surface === 'mobile') return next(e)
     const ui = $.ui.resolve(e) as Ui
     // Read on every draw: /config is the store, so a change made in the menu shows here too.
-    const rows = (await $.config.list()).filter(row => row.key.startsWith(`${PLUGIN}.`))
+    const listed = await $.config.list().catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))
+    const rows = listed instanceof Error ? [] : listed.filter(isOwnRow)
     const errors = (await read($, view))?.errors ?? {}
+    // No row of this plugin's, yet the plugin has values: this surface leaves plugin rows out of /config.
+    const isReadOnly = rows.length === 0 && Object.keys(options).length > 0
+    const titles = isReadOnly ? await titlesOf($) : {}
     const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
     return (
       <ui.Box flexDirection="column">
         <ui.Text bold>{TITLE}</ui.Text>
+        {rows.length === 0 ? (
+          <ui.Text dimColor wrap="wrap">
+            {isReadOnly ? READ_ONLY_NOTE : emptyNote(listed)}
+          </ui.Text>
+        ) : null}
+        {isReadOnly ? readOnlyRows(ui, options, titles) : null}
         {rows.map(row => (
           <ui.Box key={`setting-${fieldOf(row)}`} flexDirection="column" marginTop={1}>
             <ui.Text bold>{row.label}</ui.Text>
