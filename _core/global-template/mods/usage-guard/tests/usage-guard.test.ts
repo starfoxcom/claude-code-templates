@@ -677,7 +677,10 @@ test("another session's cancel leaves this session's own arm in place", async ($
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('an arm that met a longer pause still resumes the session after another session cancels it', async ($, on) => {
+test(
+  'an arm that met a longer pause still resumes the session after another session cancels it',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
