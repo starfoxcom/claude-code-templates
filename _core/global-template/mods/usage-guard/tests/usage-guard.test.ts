@@ -1,6 +1,7 @@
-import type { On, SessionRateLimit } from 'claude-code'
+import type { On, SessionCompactResult, SessionContextUsage, SessionRateLimit } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
+import { CACHE_LIFE_MS, outcomeOf, outcomeText, shouldCompactAtPause } from '../hooks/compact'
 import type { Pause } from '../hooks/plan'
 import { CLAIM, NO_WORK_NOTICE, planArm, WRAP_UP_ARGS } from '../hooks/plan'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
@@ -16,6 +17,7 @@ const WAKE = Date.parse(RESET) + 2 * 60_000
 const PAUSE_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/pause.json'
 const CARD_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/card.json'
 const KEY = String(Date.parse(RESET))
+const SUMMARY = [{ role: 'user' as const, text: 'summary', toolUses: [] }]
 
 type World = {
   files: Map<string, string>
@@ -31,6 +33,13 @@ type World = {
   duringClaim?: (name: string) => void
   /** Claims whose helper fails (exits non-zero) and writes nothing. */
   failClaims?: Set<string>
+  context: SessionContextUsage
+  /** The instructions of each compaction asked for. */
+  compactions: (string | undefined)[]
+  /** What a compaction answers; an Error makes the engine refuse it. */
+  compactResult: SessionCompactResult | Error
+  /** Every text the status line was given, undefined for a cleared one. */
+  statuses: (string | undefined)[]
 }
 
 function world(on: On, root = 'C:/Repos/my-game'): World {
@@ -43,6 +52,11 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     limits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: RESET }],
     claims: new Set(),
     sessionId: 'sess-a',
+    // 10% of a 1M compaction window: below the default 25%.
+    context: { window: 1_000_000, tokens: 100_000, breakdown: { rawMaxTokens: 1_000_000 } as never },
+    compactions: [],
+    compactResult: { messages: SUMMARY, tokensBefore: 400_000, tokensAfter: 30_000 },
+    statuses: [],
   }
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
   const key = (path: string) => path.replaceAll('\\', '/')
@@ -75,7 +89,12 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
     return { value: root }
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: seen.limits } }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: seen.context, rateLimits: seen.limits } }))
+  on('session.compact', ($, e) => {
+    seen.compactions.push(e.instructions)
+    if (seen.compactResult instanceof Error) throw seen.compactResult
+    return seen.compactResult
+  })
   on('command.list', () => ({
     value: [
       { name: 'session-close', description: '', source: 'user' },
@@ -97,7 +116,10 @@ function world(on: On, root = 'C:/Repos/my-game'): World {
   on('ui.toast', () => {
     throw new Error('usage-guard must not use the toast')
   })
-  on('ui.status', () => ({ value: undefined }))
+  on('ui.status', ($, e) => {
+    seen.statuses.push(e.text)
+    return { value: undefined }
+  })
   // What core draws above the prompt; the card draws above it.
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -829,9 +851,15 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
   world(on)
   await start($)
   const hint = registered.find(command => command.name === 'usage-guard')?.argumentHint
-  expect(hint).toBe('[help | settings | arm 5h|week | disarm | cancel]')
+  expect(hint).toBe('[help | settings | arm 5h|week [compact] | disarm | cancel]')
   const help = await $.command.run({ command: 'usage-guard', args: 'help' } as never)
-  const lines = ['/usage-guard cancel', '/usage-guard arm 5h|week', '/usage-guard disarm', '/usage-guard settings']
+  const lines = [
+    '/usage-guard cancel',
+    '/usage-guard arm 5h|week',
+    '/usage-guard arm 5h|week compact',
+    '/usage-guard disarm',
+    '/usage-guard settings',
+  ]
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
 })
@@ -847,4 +875,138 @@ test('after a /clear the new session id has no work: it only waits, and is not s
   expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toEqual([])
+})
+
+// A working session crosses the line at a turn's end, so the wrap-up (/session-close) runs as the next turn.
+async function crossAndWrapUp($: Engine, seen: World, resetsAt = RESET): Promise<void> {
+  await start($)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt }]
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+}
+
+test('a session that resumes by itself compacts once its wrap-up turn ends, and says what it freed', async ($, on) => {
+  const seen = world(on)
+  seen.context = { ...seen.context, tokens: 400_000 }
+  await crossAndWrapUp($, seen)
+  // Not beside the turn that crossed the line: only after the wrap-up's own turn.
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toEqual([])
+  await endTurn($)
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toHaveLength(1)
+  expect(seen.compactions[0]).toContain('resumes its saved work on its own')
+  expect(seen.statuses.at(-1)).toContain('compacted to 30k')
+  // Once: later turns during the pause compact nothing more.
+  await endTurn($)
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toHaveLength(1)
+})
+
+test('a pause compacts nothing when the context is below the setting', async ($, on) => {
+  const seen = world(on)
+  await crossAndWrapUp($, seen)
+  await endTurn($)
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toEqual([])
+})
+
+test('a pause compacts nothing when the wake comes before the cache would go cold', async ($, on) => {
+  const seen = world(on)
+  seen.context = { ...seen.context, tokens: 400_000 }
+  await crossAndWrapUp($, seen, new Date(NOW + 30 * 60_000).toISOString())
+  await endTurn($)
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toEqual([])
+})
+
+test('a session with nothing saved compacts nothing at the pause', async ($, on) => {
+  const seen = world(on)
+  seen.context = { ...seen.context, tokens: 400_000 }
+  await start($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await endTurn($)
+  await endTurn($)
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toEqual([])
+})
+
+test('a compaction at the pause that freed nothing says so instead of claiming it worked', async ($, on) => {
+  const seen = world(on)
+  seen.context = { ...seen.context, tokens: 400_000 }
+  seen.compactResult = { messages: SUMMARY, tokensBefore: 400_000, tokensAfter: 400_000 }
+  await crossAndWrapUp($, seen)
+  await endTurn($)
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toHaveLength(1)
+  expect(seen.statuses.at(-1)).toContain('compaction freed nothing')
+})
+
+const status = async ($: Engine) =>
+  ((await $.command.run({ command: 'usage-guard', args: '' } as never)) as { text: string }).text
+
+test('arm with compact compacts a moment later, whatever the context size, then resumes later', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h compact' } as never)
+  const { text } = answer as { text: string }
+  expect(text).toContain('Armed: this session resumes')
+  expect(text).toContain('Compacting this session in a moment')
+  // Never inside the command: the engine refuses a compaction under the hook that runs it.
+  expect(seen.compactions).toEqual([])
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toHaveLength(1)
+  // /usage-guard repeats how it went, for a surface the transcript note does not reach.
+  expect(await status($)).toContain('Compacted: context went from 400k to 30k tokens.')
+  await seen.clock.advance(WAKE - NOW - 1_000)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
+test('arm with compact that the engine refuses or a hook vetoes still arms, and says so', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  seen.compactResult = new Error('a turn is running')
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h compact' } as never)
+  await seen.clock.advance(1_000)
+  expect(await status($)).toMatch(/Armed to resume at .*\nLast compaction, .*: Not compacted: /)
+  seen.compactResult = { skip: 'blocked by a hook' }
+  await $.command.run({ command: 'usage-guard', args: 'arm 5h compact' } as never)
+  await seen.clock.advance(1_000)
+  expect(await status($)).toContain('Not compacted: blocked by a hook')
+})
+
+test('arm with an unknown option arms nothing', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h now' } as never)
+  expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Unknown option "now"') }))
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+  expect(seen.compactions).toEqual([])
+})
+
+test('a pause compacts only with the setting on, at or above it, and with the wake past the cache life', () => {
+  const fill = (percent: number) => ({ tokens: percent * 10_000, percent })
+  const far = NOW + CACHE_LIFE_MS + 1
+  expect(shouldCompactAtPause(fill(25), 25, far, NOW)).toBe(true)
+  expect(shouldCompactAtPause(fill(24), 25, far, NOW)).toBe(false)
+  expect(shouldCompactAtPause(fill(100), 0, far, NOW)).toBe(false)
+  expect(shouldCompactAtPause(undefined, 25, far, NOW)).toBe(false)
+  expect(shouldCompactAtPause(fill(50), 25, NOW + CACHE_LIFE_MS, NOW)).toBe(false)
+})
+
+test('a compaction counts as freeing context only when its sizes show it', () => {
+  const messages = [{ role: 'user' as const, text: 's', toolUses: [] }]
+  const text = (result: SessionCompactResult) => outcomeText(outcomeOf(result))
+  expect(text({ messages, tokensBefore: 412_000, tokensAfter: 31_400 })).toBe(
+    'Compacted: context went from 412k to 31k tokens.',
+  )
+  expect(text({ messages, tokensBefore: 100_000, tokensAfter: 100_000 })).toBe(
+    'The compaction did not free context (100k before, 100k after), so the session keeps its full context.',
+  )
+  expect(text({ messages, tokensBefore: 100_000 })).toBe(
+    'The compaction did not free context: its size afterwards was not reported, so the session keeps its full context.',
+  )
+  expect(text({ skip: 'vetoed' })).toBe('Not compacted: vetoed')
 })
