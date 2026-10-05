@@ -461,6 +461,13 @@ async function saveArm($: EngineInterface, arm: ArmedWake | null): Promise<void>
   }
 }
 
+// A /clear moves the session to a new id with no session.start: the saved copy follows the standing
+// arm there, so a restart that resumes the newest conversation still finds it.
+async function followSession($: EngineInterface): Promise<void> {
+  const arm = await read($, armedWake)
+  if (arm && live.armFile && live.armFile !== (await armPath($))) await saveArm($, arm)
+}
+
 // A session started again (a restart, a resume) finds the arm it saved: scheduled again, caught up
 // within the setting's window, or dropped with a note. A hot reload keeps the arm in state instead.
 async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
@@ -609,7 +616,7 @@ async function startTimers($: EngineInterface): Promise<void> {
   // the state went with the process, and the saved arm stands in.
   const arm = (await read($, armedWake)) ?? (await restoreArm($))
   if (arm) await scheduleArm($, arm)
-  $.clock.every(CHECK_EVERY_MS, () => void check($).catch(() => undefined))
+  $.clock.every(CHECK_EVERY_MS, () => void followSession($).then(() => check($)).catch(() => undefined))
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
 }
 
@@ -723,6 +730,7 @@ export const register: Register = (on, options) => {
     // A hot reload starts the module over without a session.start: the first turn after it restarts
     // the timers and reads the time zone again.
     await startTimers($).catch(() => undefined)
+    await followSession($).catch(() => undefined)
     return next(e)
   })
 
