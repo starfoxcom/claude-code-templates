@@ -67,6 +67,16 @@ Write `mods-data/guards/pr-body.json` to make `guards` check pull request bodies
 
 There, `gh pr create` and `gh pr edit` must pass the body as a file (`--body-file`, never inline `--body`, `--fill` or `--web`), and the body needs `## What` with a bullet, `## Why` with text, and `## Notes` only when it is filled. `row` (optional) matches a whole line every PR body carries, such as its issue link, and that line also ends the section above it; titles matching `noRow` carry none, and a PR edited without `--title` is not held to the row. A body is checked only when the PR call is the whole command and is written out in full: one statement starting with `gh` (no `cd`, variable, subshell or `bash -c` before or around it, and a PR named by number, not by URL), every flag spelled on its own (`-d -F b.md`, not `-dF b.md`), no word the shell changes (no `$`, `$'...'`, `$(...)` or backtick anywhere in it), one `--body-file`, and the body in that file, already on disk, or in one literal here-doc on stdin. Anything else, and any repo whose patterns do not compile, is logged as unread in `decisions.jsonl`, never blocked. Of keys that overlap, the longest match wins. Without the file, no PR body is checked.
 
+### Banned names (guards, opt-in)
+
+Write `mods-data/guards/names.json` to keep names out of a repo's history, such as the titles a clean-room project must never mention. Keys match repo names as in `pr-body.json`:
+
+```json
+{ "repos": { "my-game": { "names": ["oldkeep", "Lantern Studio"], "words": ["OK"] } } }
+```
+
+`names` match anywhere and in any case (`oldkeep` catches `OldkeepPLUS`), and a name of several words matches across spaces and line breaks. `words` match only as whole words, in the case written (`OK` catches `OK-normal`, never `BOOK` or `ok`). Both are checked in the messages and titles `guards` reads from git and gh writes (commits, PRs, issues), in body files, and in new branch names; lines added to project files stay the project's own CI check. In shadow mode a hit is logged, in enforce mode it is blocked. A file whose lists are not strings is ignored. Without the file, no name is checked.
+
 ### What guards cannot see
 
 `guards` is a safety net for commands written the ordinary way, not a sandbox. It reads git and gh where people and agents really put them: behind `if`/`then`/`do`/`{`/`(`/`!`, behind `sudo`, `env`, `time`, `timeout`, `nohup`, `command`, `xargs`, inside `$(...)`, `bash -c`, `powershell -Command` and `cmd /c` (or `//c` from Git Bash, with the command split or as one quoted word), with `gh -R owner/name` before the subcommand. It reads messages from variables set earlier in the same command, here-docs, here-strings, `< file`, a pipe from `echo`/`printf`/`cat`, and files the command writes itself with `>`. A quoted value that starts with `<` or `>` is read as text, and `<(...)` as a file built at run time. On top of that reading, the whole text of every git or gh write is checked for AI credit lines, as the shipped attribution hook does, so a spelling the reading misses still cannot carry one into history. When a message exists but is made by something it cannot follow, it names that message as **unread** in `decisions.jsonl` instead of passing it silently. Out of its reach:
@@ -107,7 +117,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 |---|---|
 | `compact-handoff` | hand-off files: one per session in `on` mode, plus `<session>-precompute.md` when the engine writes a summary ahead of time; newest 20, at most 14 days, in `shadow` mode |
 | `ci-watch` | `<session>.json` (the watches) and `<session>.owner` (which loaded copy of the mod polls); a settled watch is dropped after an hour, or at once when the PR is merged or closed; both files are swept two days after their session last wrote them |
-| `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json`; `pr-body.json` is yours to write (see [PR-body contract](#pr-body-contract-guards-opt-in)) |
+| `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json`; `pr-body.json` and `names.json` are yours to write (see [PR-body contract](#pr-body-contract-guards-opt-in) and [Banned names](#banned-names-guards-opt-in)) |
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
 | `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days), `settings.json` (its settings, written by its pane and `/usage-guard set`), `arms/<session>.json` (a session's standing arm, kept for a restart; `null` once disarmed or run) |
