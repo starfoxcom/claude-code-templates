@@ -140,10 +140,23 @@ test('a flag value that looks like a flag is read only as that value', () => {
   expect(pr('create', ['-t', '--title', '-F', 'b.md']).title).toBe('--title')
   const inline = pr('create', ['--title', '-bx', '-F', 'b.md'])
   expect([inline.isInline, inline.title]).toEqual([false, '-bx'])
+  expect(pr('create', ['--title', '-b x', '-F', 'b.md']).isInline).toBe(false)
   expect(pr('create', ['--title', '--web', '-F', 'b.md']).isFilled).toBe(false)
   expect(pr('create', ['--label', '--fill', '-t', 'x', '-F', 'b.md']).isFilled).toBe(false)
   expect(pr('create', ['--head', '-F', '-t', 'x', '-F', 'b.md']).bodyFile).toBe('b.md')
   expect(pr('create', ['--head', '-F', '-t', 'x', '-F', 'b.md']).isUnknown).toBe(false)
   // A value flag typed as another flag's value is that value, so the word after it is read on its own.
   expect(pr('create', ['-t', '-F', 'b.md']).bodyFile).toBeUndefined()
+})
+
+test('a heading or a row line inside a code block is code, never structure', () => {
+  const fenced = (code: string) => `## What\n- a\n\n## Why\nb\n\n## Notes\n${code}\n\nResolves #12\n`
+  expect(checkBody(fenced('```md\n## Why\n\nResolves #4\n```'), 'feat: x', RULE)).toBeUndefined()
+  expect(checkBody(fenced('~~~~\n## x\n~~~\nstill code\n~~~~'), 'feat: x', RULE)).toBeUndefined()
+  expect(checkBody('## What\n```\n## a\n```\n- a\n\n## Why\nb\n\nResolves #12\n', 'feat: x', RULE)).toBeUndefined()
+  // A section holding only a code block is not empty.
+  expect(checkBody('## What\n- a\n\n## Why\n```\n## x\n```\n\nResolves #12\n', 'feat: x', RULE)).toBeUndefined()
+  // A heading shown as code does not start the section, and a row shown as code does not count.
+  expect(checkBody('```\n## What\n- a\n```\n## Why\nb\n\nResolves #12\n', 'feat: x', RULE)).toContain('`## What`')
+  expect(checkBody('## What\n- a\n\n## Why\nb\n\n```\nResolves #12\n```\n', 'feat: x', RULE)).toContain('no board-row')
 })
