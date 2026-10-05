@@ -158,13 +158,12 @@ test('both keys refused there: each refusal shows word for word', async ($, on) 
   expect(await ui.find({ type: 'Text', text: /^Saved/ })).toBeUndefined()
 })
 
-test('a /config that cannot be listed draws the fields too', async ($, on) => {
-  noPluginRows(on, () => {
-    throw new Error('no menu here')
-  })
+test('a /config that cannot be listed says so, not that the app hides the rows', async ($, on) => {
+  noPluginRows(on, () => ({ deny: 'no menu here' }))
   const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeDefined()
-  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /could not be listed \(.*no menu here.*\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeUndefined()
+  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeUndefined()
 })
 
 test('the rows /config left out take their kind from the manifest', () => {
