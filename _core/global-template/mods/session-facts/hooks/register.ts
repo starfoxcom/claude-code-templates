@@ -21,7 +21,7 @@ const READ_ZONE = [
 
 type Zone = { offsetMinutes: number; name: string }
 type Window = { size: number; compactsAt?: number }
-type Compaction = { at: number; tokensAfter?: number }
+type Compaction = { at: number }
 
 const UTC: Zone = { offsetMinutes: 0, name: 'UTC (host zone unread)' }
 
@@ -63,10 +63,11 @@ function formatLocal(nowMs: number, zone: Zone): string {
 }
 
 // The budgets row's figures, its bar drawn as colored squares since the State line copied from
-// this is read on the phone. Until the first response after a compaction the engine has no fill
-// of its own; the compaction's size stands in.
+// this is read on the phone. Until the first response after a compaction the fill is unknown: the
+// compaction's own size counts only the kept messages, never the system prompt, tools and rules every
+// request carries, so it read far below the real fill (4% for a real 27%, 2026-10-04).
 function contextPart(tokens: number | undefined, fullWindow: number, now: number): { text: string; isKnown: boolean } {
-  const fill = tokens ?? live.compaction?.tokensAfter
+  const fill = tokens
   const text = contextText(fill, live.window?.size ?? fullWindow, live.window?.compactsAt, true)
   const mark = compactedMark(live.compaction?.at, live.zone.offsetMinutes, now)
   const unknown = fill === undefined ? ' (unknown until the first response of this window)' : ''
@@ -184,7 +185,7 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
       readPausedUntil($),
     ])
     const next: Budgets = {
-      tokens: context.tokens ?? live.compaction?.tokensAfter,
+      tokens: context.tokens,
       size: live.window?.size ?? context.window,
       compactsAt: live.window?.compactsAt,
       compactedAt: live.compaction?.at,
@@ -394,9 +395,9 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (e.agentId !== undefined || e.trigger === 'precompute') return result
     // `skip` tells the two result shapes apart: past it, the result is a compaction that
-    // stands, whose `messages` and `tokensAfter` the types guarantee.
+    // stands, whose `messages` the types guarantee.
     if (result.skip !== undefined || result.messages.length === 0) return result
-    live.compaction = { at: await $.clock.now(), tokensAfter: result.tokensAfter }
+    live.compaction = { at: await $.clock.now() }
     live.isWindowFresh = true
     const line = await factsLine($, true)
     live.lastLine = { at: live.compaction.at, isPartial: line.isPartial }
