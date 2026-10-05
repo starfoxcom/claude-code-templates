@@ -388,8 +388,7 @@ test('text piped in, set in a variable, or written to a file earlier in the comm
   expect(plan('cat /tmp/b.md | gh pr create --title t --body-file -').files.map(f => f.path)).toEqual(['/tmp/b.md'])
   expect(plan('F=/tmp/b.md; gh pr create --title t --body-file "$F"').files.map(f => f.path)).toEqual(['/tmp/b.md'])
   const fed = plan("cat > /tmp/b.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md").files
-  const literal = { written: true, isLiteral: true }
-  expect(fed).toEqual([{ where: 'the PR text', path: '/tmp/b.md', ...literal, folder: { isUnknown: false } }])
+  expect(fed).toEqual([{ where: 'the PR text', path: '/tmp/b.md', written: true, folder: { isUnknown: false } }])
   // A message made by something the reading cannot follow is named, never dropped.
   expect(plan('git log -1 --format=%B | git commit -F -').unread).toEqual(['the commit message'])
   expect(plan('git commit -F -').unread).toEqual(['the commit message'])

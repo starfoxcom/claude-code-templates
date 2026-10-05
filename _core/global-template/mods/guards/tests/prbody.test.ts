@@ -84,3 +84,17 @@ test("a section ends at the repo's own board-row line, whatever its verb", () =>
   // Without a row rule only headings end a section: such a line is part of the text.
   expect(checkBody('## What\n- a\n## Why\nResolves #4', 'feat: x', {})).toBeUndefined()
 })
+
+test('a variable after a flag that takes no value may carry any flag', () => {
+  expect(pr('create', ['--draft', dyn('$FLAGS')]).isUnknown).toBe(true)
+  expect(pr('create', ['-d', dyn('$FLAGS')]).isUnknown).toBe(true)
+  expect(pr('create', ['--label', dyn('$L'), '--body-file', 'b.md']).isUnknown).toBe(false)
+})
+
+test('of overlapping repo keys the longest wins, whatever the file order', () => {
+  const short = { row: 'a' }
+  const long = { row: 'b' }
+  expect(ruleFor({ repos: { game: short, 'game-smoke': long } }, 'game-smoke')).toBe(long)
+  expect(ruleFor({ repos: { 'game-smoke': long, game: short } }, 'game-smoke')).toBe(long)
+  expect(ruleFor({ repos: { game: short, 'game-smoke': long } }, 'game')).toBe(short)
+})

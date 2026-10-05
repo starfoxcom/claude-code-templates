@@ -216,23 +216,43 @@ test('without the rules file no PR body is checked', { options: { mode: 'enforce
   expect(seen.ran).toHaveLength(1)
 })
 
-test('a body file the same command writes is checked from what it writes', { options: { mode: 'enforce' } }, async (
-  $,
-  on,
-) => {
+const lastEntry = (seen: { files: Map<string, string> }) =>
+  JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+
+test('a body file the same command writes is named unread; a here-doc on stdin is checked', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE })
   const write = (body: string) =>
     `cat > /tmp/b.md <<'EOF'\n${body}EOF\ngh pr create --title "feat: x" --body-file /tmp/b.md`
-  expect((await bash($, write(FULL)) as { deny?: string }).deny).toBeUndefined()
   const short = await bash($, write('## What\n- add it\n\n## Why\nmissing\n'))
-  expect(String((short as { deny?: string }).deny)).toContain('no board-row line')
+  expect((short as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
   const piped = await bash($, `gh pr create --title "feat: x" --body-file - <<'EOF'\n## Why\nb\nEOF`)
   expect(String((piped as { deny?: string }).deny)).toContain('`## What` is missing')
   expect(seen.ran).toHaveLength(1)
 })
 
-const lastEntry = (seen: { files: Map<string, string> }) =>
-  JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+test('a relative body file under a folder built at run time is never judged from the session folder', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
+  const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
+})
+
+test('an invalid pattern in the rules file leaves the PR unjudged and the credit checks running', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const bad = JSON.stringify({ repos: { 'my-game': { row: '^(Resolves' } } })
+  const seen = world(on, { [RULES]: bad, 'C:/Repos/my-game/b.md': FULL })
+  const pr = await bash($, 'gh pr create --title "feat: x" --body-file b.md')
+  expect((pr as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain('the PR body (pr-body.json has an invalid pattern for my-game)')
+  const credit = await bash($, `gh pr create --title "feat: x" --body-file b.md --body '${AI_TRAILER}'`)
+  expect(String((credit as { deny?: string }).deny)).toContain('AI credit')
+})
 
 test('a PR body that cannot be read exactly is named unread, never blocked', { options: { mode: 'enforce' } }, async (
   $,
