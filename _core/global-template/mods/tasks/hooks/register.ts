@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import { register as settings, SETTINGS_PANE } from './settings'
-import { PANE } from './view'
+import { PANE, phoneText } from './view'
 
 // This mod is the main session's task list: it answers TaskCreate, TaskUpdate,
 // TaskList and TaskGet itself from `mods-data/tasks/<session>.json`, so the
@@ -84,11 +84,12 @@ const COMMAND = 'task-list'
 const ALIVE_EVERY_MS = 60_000
 // Missed heartbeats this long mean the session is gone (closed without an end, or crashed).
 const ALIVE_STALE_MS = 3 * ALIVE_EVERY_MS
-const HINT = '[help | settings]'
+const HINT = '[help | settings | phone]'
 export const HELP = [
   '/task-list: keeps the task list honest and shows it in the band above the prompt.',
   '  /task-list           open the task list',
   '  /task-list settings  open the settings pane',
+  '  /task-list phone     the same as text, for phone chats',
   '  /task-list help      this list',
 ].join('\n')
 const SWEEP_DAYS = 14
@@ -595,6 +596,7 @@ export const register: Register = (on, options) => {
   // Not `/tasks`: that name is a built-in command, and the engine refuses it.
   on('command.run', { command: COMMAND }, async ($, e) => {
     const verb = e.args.trim()
+    if (verb === 'phone') return { text: `${phoneText((await mirrorOf($)).tasks)}\n/task-list help for more` }
     if (verb !== '' && verb !== 'settings') return { text: HELP }
     const [id, title] = verb === '' ? [PANE, 'Tasks'] : [SETTINGS_PANE, 'Tasks settings']
     await $.ui.open({ id, title, focus: true })

@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ordered, PANE } from '../hooks/view'
+import { ordered, PANE, phoneText } from '../hooks/view'
 import type { TaskRow } from '../types'
 
 // The view draws the mirror register.ts writes; the mirror is faked here.
@@ -141,4 +141,28 @@ test("a new session shows the last session's unfinished tasks as carried over", 
     props: PANE_PROPS,
   } as never)
   expect(await pane.find({ key: 'carried-7' })).toBeDefined()
+})
+
+test('the phone text counts each kind, lists the unfinished tasks, then the newest finished ones', () => {
+  const row = (id: string, status: TaskRow['status'], extra: Partial<TaskRow> = {}): TaskRow => ({
+    id,
+    subject: `task ${id}`,
+    status,
+    ...extra,
+  })
+  const done = ['1', '2', '3', '4', '5', '6'].map(id => row(id, 'completed'))
+  const tasks = [...done, row('7', 'in_progress'), row('8', 'pending', { hold: 'Alex' }), row('9', 'pending')]
+  expect(phoneText(tasks).split('\n')).toEqual([
+    '📋 Tasks · 🔨 1 working · 📝 1 open · 🚧 1 on hold · ✅ 6 done',
+    '🔨 #7 task 7',
+    '📝 #9 task 9',
+    '🚧 #8 task 8 (waits on: Alex)',
+    '✅ #6 task 6',
+    '✅ #5 task 5',
+    '✅ #4 task 4',
+    '✅ #3 task 3',
+    '✅ #2 task 2',
+    '… and 1 more finished',
+  ])
+  expect(phoneText([])).toBe('📋 No task list in this session.')
 })
