@@ -673,11 +673,13 @@ async function armLine($: EngineInterface): Promise<string | undefined> {
 }
 
 export const register: Register = (on, options) => {
-  live.wrapUpAt = Number(options.wrapUpAt ?? 90)
-  live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
-  live.compactAbovePercent = Number(options.compactAbovePercent ?? 25)
-  live.catchUpMinutes = Number(options.catchUpMinutes ?? 30)
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.wrapUpAt = Number(values.wrapUpAt ?? 90)
+    live.delayMinutes = Number(values.wakeDelayMinutes ?? 2)
+    live.compactAbovePercent = Number(values.compactAbovePercent ?? 25)
+    live.catchUpMinutes = Number(values.catchUpMinutes ?? 30)
+  })
   phone(on, options)
 
   on('session.start', async ($, e, next) => {
@@ -752,7 +754,8 @@ export const register: Register = (on, options) => {
 async function registerSurface($: EngineInterface): Promise<void> {
   await $.command.register({
     name: 'usage-guard',
-    description: 'Usage pause status. Also: cancel, arm 5h|week [compact] (resume after that reset), disarm, settings',
+    description:
+      'Usage pause status. Also: cancel, arm 5h|week [compact] (resume after that reset), disarm, settings, set',
     argumentHint: ARGUMENT_HINT,
   })
 }

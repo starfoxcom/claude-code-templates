@@ -1,59 +1,115 @@
 import { atom, read, update } from 'claude-code'
-import type { ConfigKind, ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Register } from 'claude-code'
+import type { ConfigKind, Elements, EngineInterface as Engine, On, Register } from 'claude-code'
 
-// The mod's settings in a pane every surface draws (the CLI and the Desktop app alike): the /config
-// rows this plugin owns, each changed through $.config.set as the menu would, which reloads the mod
-// with the new value. Every mod with settings carries this file, the same apart from PLUGIN and
-// TITLE; its command opens the pane by SETTINGS_PANE.
+// The mod's settings: a JSON file of its own under mods-data, the one place they are kept. The pane (every
+// surface that draws fields, the terminal and the Desktop app alike) and `/<command> set <name> <value>`
+// (the phone, where no field draws) both write it. Every session reads it at its start, at each turn and
+// once a minute, so a change reaches the sessions already running.
+// The /config menu cannot be that place: the Desktop app's lists no plugin rows and refuses to set them, so
+// the mod's rows are hidden there. The options the mod loaded with (the manifest's defaults, or a value set
+// in /config before) stay underneath. Every mod with settings carries this file, the same apart from
+// PLUGIN, TITLE and NAME; its command opens the pane by SETTINGS_PANE.
 
 const PLUGIN = 'usage-guard'
 const TITLE = 'Usage guard settings'
+// The slash command, without the slash.
+const NAME = 'usage-guard'
 export const SETTINGS_PANE = `${PLUGIN}-settings`
-const COMMAND = '/usage-guard settings'
-// Only what the pane cannot read back from /config: the last refusal per field. The engine lists a
+const REFRESH_MS = 60_000
+const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
+// The last save's outcome per field, shown under it until the pane opens again. The engine lists a
 // module's state from literals, so the plugin name is spelled out here rather than taken from PLUGIN.
 const view = atom({ plugin: 'usage-guard', key: 'settings' } as const, null)
 
-// A row's field: what follows its last dot. The key is `<plugin>.<field>`, and the plugin part may carry
-// where the plugin came from (`usage-guard@inline`); field names hold no dot.
-export function fieldOf(row: Pick<ConfigRow, 'key'>): string {
-  return row.key.slice(row.key.lastIndexOf('.') + 1)
+type Options = Parameters<Register>[1]
+export type Values = Record<string, unknown>
+export type Field = { title?: string; description?: string; type?: string; options?: string[] }
+type Fields = Record<string, Field>
+type Manifest = { userConfig?: Fields }
+type Parsed = { value: unknown } | { error: string }
+
+export function kindOf(field: Field): ConfigKind {
+  if (field.type === 'boolean') return 'boolean'
+  if (field.options) return 'choice'
+  return field.type === 'number' ? 'number' : 'text'
 }
 
-// A row this plugin owns: by its owner, or by its key's plugin part, with or without a source.
-export function isOwnRow(row: Pick<ConfigRow, 'key' | 'provider'>): boolean {
-  const owner = row.key.slice(0, Math.max(row.key.lastIndexOf('.'), 0))
-  return row.provider?.plugin === PLUGIN || owner === PLUGIN || owner.startsWith(`${PLUGIN}@`)
+/** Typed or picked text as the field's kind holds it, or why it cannot be one. */
+export function parseValue(field: Field, text: string): Parsed {
+  const trimmed = text.trim()
+  const kind = kindOf(field)
+  if (kind === 'number') {
+    const value = Number(trimmed)
+    return trimmed !== '' && Number.isFinite(value) ? { value } : { error: `"${text}" is not a number` }
+  }
+  if (kind === 'boolean') {
+    if (/^(on|true|yes)$/i.test(trimmed)) return { value: true }
+    if (/^(off|false|no)$/i.test(trimmed)) return { value: false }
+    return { error: `"${text}" is not on or off` }
+  }
+  if (kind === 'choice')
+    return field.options?.includes(trimmed)
+      ? { value: trimmed }
+      : { error: `"${text}" is not one of: ${(field.options ?? []).join(', ')}` }
+  return { value: text }
 }
 
-// Shown when none of the rows is this plugin's: what /config did list (or why it could not), so one
-// look on that surface tells why the pane is empty. The rows other plugins own are the telling ones (none
-// at all: that surface lists no plugin settings), so they are named and the engine's own only counted.
-export function emptyNote(listed: readonly Pick<ConfigRow, 'key' | 'provider'>[] | Error): string {
-  if (listed instanceof Error) return `No settings for ${PLUGIN} here: /config could not be listed (${listed.message}).`
-  const fromPlugins = listed.filter(row => row.provider?.plugin !== 'engine')
-  const sample = fromPlugins.slice(0, 5).map(row => `${row.key} (${row.provider?.plugin ?? 'no owner'})`)
-  const such = sample.length > 0 ? `, such as ${sample.join(', ')}` : ''
-  const count = `${listed.length} row(s), ${fromPlugins.length} of them from plugins${such}`
-  return `No settings for ${PLUGIN} here: /config listed ${count}.`
+function fits(field: Field, value: unknown): boolean {
+  const kind = kindOf(field)
+  if (kind === 'number') return typeof value === 'number' && Number.isFinite(value)
+  if (kind === 'boolean') return typeof value === 'boolean'
+  if (kind === 'choice') return typeof value === 'string' && (field.options ?? []).includes(value)
+  return typeof value === 'string'
 }
 
-// Shown over the fields when this surface's /config lists no plugin rows (the Desktop app leaves them out).
-// The engine says a row the menu leaves out still answers $.config.set, so a change is tried anyway, and
-// the pane says how it went.
-export const UNLISTED_NOTE =
-  "This app leaves mod settings out of its settings list. A change here is tried anyway: 'Saved.' or the " +
-  `reason it was refused shows under the field. The terminal's /config (or ${COMMAND} there) always works.`
+/** What the mod runs with: each saved value that fits a declared field, over the options it loaded with. */
+export function effectiveValues(options: Values, saved: Values, fields: Fields): Values {
+  const values = { ...options }
+  for (const [name, value] of Object.entries(saved)) {
+    const field = fields[name]
+    if (field && fits(field, value)) values[name] = value
+  }
+  return values
+}
 
-type Field = { title?: string; description?: string; type?: string; options?: string[] }
-type Manifest = { userConfig?: Record<string, Field> }
+/** A value as text and the phone show it: a switch as on or off. */
+export function shownValue(value: unknown): string {
+  if (typeof value === 'boolean') return value ? 'on' : 'off'
+  return value === undefined || value === null || value === '' ? '(not set)' : String(value)
+}
 
-// The manifest's fields. The plugin's root holds plugin.json, directly or in .claude-plugin/; unread, each
-// field shows by its own name as a text field.
-async function fieldsOf($: Engine): Promise<Record<string, Field>> {
+/** `/<command> set` with no name: every setting, its value and its title. */
+export function settingsList(values: Values, fields: Fields): string {
+  const names = Object.keys(fields)
+  const width = Math.max(0, ...names.map(name => name.length))
+  const rows = names.map(name => `  ${name.padEnd(width)}  ${shownValue(values[name])}  ${fields[name]?.title ?? ''}`)
+  return [`${PLUGIN} settings (change one with /${NAME} set <name> <value>):`, ...rows].join('\n').trimEnd()
+}
+
+async function filePath($: Engine): Promise<string> {
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  return `${configured ?? `${home}/.claude`}/mods-data/${PLUGIN}/settings.json`.replace(/\\/g, '/')
+}
+
+async function readSaved($: Engine): Promise<Values> {
+  try {
+    const parsed: unknown = JSON.parse(String(await $.fs.read(await filePath($))))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Values) : {}
+  } catch {
+    return {}
+  }
+}
+
+// The manifest's fields, read once per load. The plugin's root holds plugin.json, directly or in
+// .claude-plugin/.
+let manifestFields: Fields | undefined
+async function fieldsOf($: Engine): Promise<Fields> {
+  if (manifestFields) return manifestFields
   for (const path of [`${$.plugin.root}/.claude-plugin/plugin.json`, `${$.plugin.root}/plugin.json`]) {
     try {
-      return (JSON.parse(String(await $.fs.read(path))) as Manifest).userConfig ?? {}
+      manifestFields = (JSON.parse(String(await $.fs.read(path))) as Manifest).userConfig ?? {}
+      return manifestFields
     } catch {
       // Not there: the next place.
     }
@@ -61,134 +117,174 @@ async function fieldsOf($: Engine): Promise<Record<string, Field>> {
   return {}
 }
 
-function kindOf(field: Field): ConfigKind {
-  if (field.type === 'boolean') return 'boolean'
-  if (field.options) return 'choice'
-  return field.type === 'number' ? 'number' : 'text'
-}
-
-/** The rows /config left out, as it would list them: from the manifest and the values the mod loaded with. */
-export function unlistedRows(options: Record<string, unknown>, fields: Record<string, Field>): ConfigRow[] {
-  return Object.entries(options).map(([name, value]) => {
-    const field = fields[name] ?? {}
-    return {
-      key: `${PLUGIN}.${name}`,
-      label: field.title ?? name,
-      description: field.description,
-      kind: kindOf(field),
-      value: value as ConfigValue,
-      options: field.options,
-      provider: { plugin: PLUGIN, tier: 'user' } as never,
-      isLocked: false,
+// The file is read again just before the write, so a change another session saved a moment ago stays.
+// Its folder is made on the first save that finds it missing.
+async function writeValue($: Engine, name: string, value: unknown): Promise<string | undefined> {
+  const path = await filePath($)
+  const text = `${JSON.stringify({ ...(await readSaved($)), [name]: value }, null, 2)}\n`
+  try {
+    await $.fs.write(path, text)
+    return undefined
+  } catch {
+    try {
+      await $.process.run(['node', '-e', MKDIR_SCRIPT, path.slice(0, path.lastIndexOf('/'))], { timeoutMs: 10_000 })
+      await $.fs.write(path, text)
+      return undefined
+    } catch (err) {
+      return `Could not save: ${err instanceof Error ? err.message : String(err)}`
     }
-  })
+  }
 }
 
-// A number field's text as the value to write, or why it cannot be one.
-export function parseNumber(text: string): { value: number } | { error: string } {
-  const value = Number(text.trim())
-  return text.trim() !== '' && Number.isFinite(value) ? { value } : { error: `"${text}" is not a number` }
-}
-
-async function showError($: Engine, field: string, error: string | undefined, saved?: string): Promise<void> {
+async function showResult($: Engine, name: string, result: { error?: string; saved?: string }): Promise<void> {
   await update($, view, shown => {
     const errors = { ...(shown?.errors ?? {}) }
-    const done = { ...(shown?.saved ?? {}) }
-    if (error) errors[field] = error
-    else delete errors[field]
-    if (saved) done[field] = saved
-    else delete done[field]
-    return { errors, saved: done }
+    const saved = { ...(shown?.saved ?? {}) }
+    delete errors[name]
+    delete saved[name]
+    if (result.error) errors[name] = result.error
+    if (result.saved) saved[name] = result.saved
+    return { errors, saved }
   })
-}
-
-async function setOne($: Engine, key: string, value: ConfigValue): Promise<string | undefined> {
-  const answer = await $.config.set({ key, value }).catch((err: Error) => ({ deny: err.message }))
-  return answer.deny
-}
-
-// A row /config left out is tried by its plain key, then with the source an inline plugin's key carries.
-// Each refusal is kept word for word: on that surface it is the finding.
-async function save($: Engine, row: ConfigRow, value: ConfigValue, isUnlisted = false): Promise<void> {
-  const deny = await setOne($, row.key, value)
-  if (!isUnlisted) return showError($, fieldOf(row), deny)
-  if (!deny) return showError($, fieldOf(row), undefined, `Saved: ${String(value)}.`)
-  const inline = `${PLUGIN}@inline.${fieldOf(row)}`
-  const again = await setOne($, inline, value)
-  if (!again) return showError($, fieldOf(row), undefined, `Saved: ${String(value)} (as ${inline}).`)
-  return showError($, fieldOf(row), `Refused. ${row.key}: ${deny} ${inline}: ${again}`)
-}
-
-async function saveText($: Engine, row: ConfigRow, text: string, isUnlisted: boolean): Promise<void> {
-  if (row.kind !== 'number') return save($, row, text, isUnlisted)
-  const parsed = parseNumber(text)
-  if ('error' in parsed) return showError($, fieldOf(row), parsed.error)
-  return save($, row, parsed.value, isUnlisted)
 }
 
 // The surfaces that draw fields. The mobile app has no Input or Select, so it is left to the engine's
-// own pane.
+// own pane, and `/<command> set` serves it.
 type Ui = Elements['terminal'] | Elements['desktop'] | Elements['vscode']
 
-function control(ui: Ui, $: Engine, row: ConfigRow, isUnlisted: boolean) {
-  const key = `${PLUGIN}-set-${fieldOf(row)}`
-  if (row.isLocked) return <ui.Text dimColor>{String(row.value)} (set by your organization)</ui.Text>
-  if (row.kind === 'boolean') {
-    const options = [
-      { value: 'on', label: 'On' },
-      { value: 'off', label: 'Off' },
-    ]
-    const pick = (value: string) => void save($, row, value === 'on', isUnlisted)
-    return <ui.Select key={key} options={options} value={row.value ? 'on' : 'off'} onSelect={pick} />
-  }
-  if (row.kind === 'choice') {
-    const options = (row.options ?? []).map(option => ({ value: option }))
-    const pick = (value: string) => void save($, row, value, isUnlisted)
-    return <ui.Select key={key} options={options} value={String(row.value)} onSelect={pick} />
-  }
-  const submit = (text: string) => void saveText($, row, text, isUnlisted)
-  return <ui.Input key={key} value={String(row.value)} submitLabel="save" onSubmit={submit} />
+// What register was handed, for the functions below: the loaded options and how the mod takes new values.
+const loaded: { options: Values; apply: (values: Values) => void; isTicking: boolean } = {
+  options: {},
+  apply: () => undefined,
+  isTicking: false,
 }
 
-export const register: Register = (on, options) => {
+async function currentValues($: Engine): Promise<Values> {
+  return effectiveValues(loaded.options, await readSaved($), await fieldsOf($))
+}
+
+async function refresh($: Engine): Promise<void> {
+  loaded.apply(await currentValues($))
+}
+
+async function start($: Engine): Promise<void> {
+  await refresh($).catch(() => undefined)
+  if (loaded.isTicking) return
+  loaded.isTicking = true
+  $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
+}
+
+// Parse, save, and run with the new value at once; the other sessions read it within a minute.
+async function change($: Engine, name: string, text: string): Promise<Parsed> {
+  const field = (await fieldsOf($))[name]
+  if (!field) return { error: `No setting named "${name}".` }
+  const parsed = parseValue(field, text)
+  if ('error' in parsed) return parsed
+  const error = await writeValue($, name, parsed.value)
+  if (error) return { error }
+  await refresh($)
+  return parsed
+}
+
+async function saveFromPane($: Engine, name: string, text: string): Promise<void> {
+  const parsed = await change($, name, text)
+  const saved = 'error' in parsed ? undefined : `Saved: ${shownValue(parsed.value)}.`
+  await showResult($, name, 'error' in parsed ? { error: parsed.error } : { saved })
+}
+
+function control(ui: Ui, $: Engine, name: string, field: Field, value: unknown) {
+  const key = `${PLUGIN}-set-${name}`
+  const kind = kindOf(field)
+  if (kind === 'boolean' || kind === 'choice') {
+    const choices = kind === 'boolean' ? ['on', 'off'] : (field.options ?? [])
+    const pick = (choice: string) => void saveFromPane($, name, choice)
+    return <ui.Select key={key} options={choices.map(value => ({ value }))} value={shownValue(value)} onSelect={pick} />
+  }
+  const submit = (text: string) => void saveFromPane($, name, text)
+  return <ui.Input key={key} value={shownValue(value)} submitLabel="save" onSubmit={submit} />
+}
+
+// `/<command> set [<name> <value>]`, for the phone: no name lists the settings. A pane opened again starts
+// clean, with no outcome of an earlier save under its fields.
+async function setCommand($: Engine, args: string): Promise<string | undefined> {
+  const [verb = '', name = '', ...rest] = args.trim().split(/\s+/)
+  if (verb === 'settings') await update($, view, () => null)
+  if (verb !== 'set') return undefined
+  if (!name) return settingsList(await currentValues($), await fieldsOf($))
+  await start($)
+  const parsed = await change($, name, rest.join(' '))
+  if ('error' in parsed) return `${parsed.error} /${NAME} set lists the settings.`
+  return `Saved: ${name} is ${shownValue(parsed.value)} for every session (the others within a minute).`
+}
+
+async function drawPane(ui: Ui, $: Engine) {
+  // Read on every draw: a change saved in another session shows here too.
+  const fields = await fieldsOf($)
+  const values = await currentValues($)
+  const shown = await read($, view)
+  const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
+  return (
+    <ui.Box flexDirection="column">
+      <ui.Text bold>{TITLE}</ui.Text>
+      <ui.Text dimColor wrap="wrap">
+        {`Saved for every session. From the phone: /${NAME} set <name> <value>.`}
+      </ui.Text>
+      {Object.entries(fields).map(([name, field]) => (
+        <ui.Box key={`setting-${name}`} flexDirection="column" marginTop={1}>
+          <ui.Text bold>{field.title ?? name}</ui.Text>
+          {field.description ? (
+            <ui.Text dimColor wrap="wrap">
+              {field.description}
+            </ui.Text>
+          ) : null}
+          {control(ui, $, name, field, values[name])}
+          {shown?.errors[name] ? (
+            <ui.Text color="red" wrap="wrap">
+              {shown.errors[name]}
+            </ui.Text>
+          ) : null}
+          {shown?.saved?.[name] ? <ui.Text color="green">{shown.saved[name]}</ui.Text> : null}
+        </ui.Box>
+      ))}
+      <ui.Box marginTop={1}>
+        <ui.Button key={`${PLUGIN}-settings-close`} label="Close" onPress={close} />
+      </ui.Box>
+    </ui.Box>
+  )
+}
+
+// The file is read at each prompt (the person's or a plugin's, so every turn), when a Desktop window joins,
+// at the mod's command and the pane, and once a minute from the first of those. The mod's own module keeps
+// session.start and turn.start, and a plugin hooks an event once without a matcher.
+export function register(on: On, options: Options, apply: (values: Values) => void): void {
+  loaded.options = options
+  loaded.apply = apply
+  apply(options)
+
+  on('prompt.submit', async ($, e, next) => {
+    await start($)
+    return next(e)
+  })
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    await start($)
+    return result
+  })
+
+  // The mod's own /config rows are hidden: a change there would not reach the file this mod runs from.
+  on('config.describe', async ($, e, next) => {
+    const shown = await next(e)
+    const owner = e.key.slice(0, Math.max(e.key.lastIndexOf('.'), 0))
+    return owner === PLUGIN || owner.startsWith(`${PLUGIN}@`) ? { ...shown, isHidden: true } : shown
+  })
+
+  on('command.run', { command: NAME }, async ($, e, next) => {
+    const text = await setCommand($, e.args)
+    return text === undefined ? next(e) : { text }
+  })
+
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== SETTINGS_PANE || e.surface === 'mobile') return next(e)
-    const ui = $.ui.resolve(e) as Ui
-    // Read on every draw: /config is the store, so a change made in the menu shows here too.
-    const listed = await $.config.list().catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))
-    const listedRows = listed instanceof Error ? [] : listed.filter(isOwnRow)
-    const shown = await read($, view)
-    const errors = shown?.errors ?? {}
-    // No row of this plugin's, yet the plugin has values: this surface leaves plugin rows out of /config,
-    // so the pane draws them from the manifest and tries each change anyway.
-    const isUnlisted = listedRows.length === 0 && Object.keys(options).length > 0
-    const rows = isUnlisted ? unlistedRows(options, await fieldsOf($)) : listedRows
-    const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
-    return (
-      <ui.Box flexDirection="column">
-        <ui.Text bold>{TITLE}</ui.Text>
-        {isUnlisted || rows.length === 0 ? (
-          <ui.Text dimColor wrap="wrap">
-            {isUnlisted ? UNLISTED_NOTE : emptyNote(listed)}
-          </ui.Text>
-        ) : null}
-        {rows.map(row => (
-          <ui.Box key={`setting-${fieldOf(row)}`} flexDirection="column" marginTop={1}>
-            <ui.Text bold>{row.label}</ui.Text>
-            {row.description ? (
-              <ui.Text dimColor wrap="wrap">
-                {row.description}
-              </ui.Text>
-            ) : null}
-            {control(ui, $, row, isUnlisted)}
-            {errors[fieldOf(row)] ? <ui.Text color="red" wrap="wrap">{errors[fieldOf(row)]}</ui.Text> : null}
-            {shown?.saved?.[fieldOf(row)] ? <ui.Text color="green">{shown.saved[fieldOf(row)]}</ui.Text> : null}
-          </ui.Box>
-        ))}
-        <ui.Box marginTop={1}>
-          <ui.Button key={`${PLUGIN}-settings-close`} label="Close" onPress={close} />
-        </ui.Box>
-      </ui.Box>
-    )
+    return drawPane($.ui.resolve(e) as Ui, $)
   })
 }
