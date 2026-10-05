@@ -362,7 +362,7 @@ for (const mode of ['on', 'off'] as const) {
   test(name, { options: { mode } }, async ($, on) => {
     const seen = world(on)
     await start($)
-    expect(seen.commands).toEqual([{ name: 'compact-handoff', argumentHint: '[help | settings]' }])
+    expect(seen.commands).toEqual([{ name: 'compact-handoff', argumentHint: '[help | settings | set]' }])
     const run = (args: string) => $.command.run({ command: 'compact-handoff', args } as never)
     expect(await run('')).toEqual(expect.objectContaining({ text: MODE_TEXT[mode] }))
     expect(await run('help')).toEqual(expect.objectContaining({ text: HELP }))
@@ -371,3 +371,42 @@ for (const mode of ['on', 'off'] as const) {
     expect(seen.opened).toEqual(['compact-handoff-settings'])
   })
 }
+
+// The mode saved in the mod's own file: `mode: off` over a loaded `on`.
+function savedOff(on: On) {
+  const manifest = JSON.stringify({ userConfig: { mode: { type: 'string', options: ['on', 'shadow', 'off'] } } })
+  on('fs.read', ($, e) => {
+    const path = e.path.replaceAll('\\', '/')
+    if (path === 'C:/Users/me/.claude/mods-data/compact-handoff/settings.json') return { value: '{"mode":"off"}' }
+    if (path.endsWith('/plugin.json')) return { value: manifest }
+    throw new Error('ENOENT')
+  })
+}
+
+test('the mode saved in the settings file applies from the session start', { options: { mode: 'on' } }, async (
+  $,
+  on,
+) => {
+  world(on)
+  savedOff(on)
+  await start($)
+  const shown = await $.command.run({ command: 'compact-handoff', args: '' } as never)
+  expect(shown).toEqual({ text: 'Mode off: stock compaction.' })
+})
+
+test(
+  'after a reload, with no session start, a compaction reads the saved mode first',
+  { options: { mode: 'on' } },
+  async ($, on) => {
+    const seen = world(on)
+    savedOff(on)
+    let instructions: string | undefined = 'unset'
+    on('session.compact', ($, e) => {
+      instructions = e.instructions
+      return { messages: [{ role: 'user', text: 'STOCK', toolUses: [] }] }
+    })
+    await $.session.compact({ trigger: 'auto', messages: CONVERSATION } as never)
+    expect(instructions).toBeUndefined()
+    expect(seen.writes).toEqual([])
+  },
+)

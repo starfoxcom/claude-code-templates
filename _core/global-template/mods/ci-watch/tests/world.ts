@@ -26,6 +26,10 @@ export type Seen = {
   prState: string
   /** The head commit `gh pr view` reports (default `a1`). */
   head?: string
+  /** The mod's manifest, read as any plugin.json (default: none). */
+  manifest?: string
+  /** `gh pr checks` calls so far: one per watch per poll. */
+  checksRead: number
   /** How many prompts a hook drops before one enters. */
   refusals?: number
   /** Each slash command registered, with its argument hint. */
@@ -42,6 +46,7 @@ export function world(on: On) {
     order: [],
     prState: 'OPEN',
     commands: [],
+    checksRead: 0,
   }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
@@ -60,6 +65,7 @@ export function world(on: On) {
   })
   on('fs.read', async ($, e) => {
     const path = e.path.replaceAll('\\', '/')
+    if (path.endsWith('/plugin.json') && seen.manifest !== undefined) return { value: seen.manifest }
     const text = seen.isReadable ? seen.files.get(path) : undefined
     if (text === undefined) throw new Error('ENOENT')
     // The read already holds the old text when the change lands.
@@ -70,6 +76,7 @@ export function world(on: On) {
     const args = e.argv.join(' ')
     if (e.argv[2] === MKDIR_SCRIPT) seen.order.push(`mkdir ${e.argv[3]}`)
     if (e.argv[2] === SWEEP_SCRIPT) seen.order.push(`sweep ${e.argv.slice(3).join(' ')}`)
+    if (args.includes('pr checks')) seen.checksRead++
     if (args.includes('pr checks')) await seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {
       return {

@@ -2,15 +2,18 @@ import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import { inspect } from './inspect'
 import type { Folder, Plan } from './inspect'
+import { describeName, findName, readNameRules } from './names'
+import type { NameRule } from './names'
 import { checkAddedLines, checkBranch, checkText, describe } from './policy'
 import { checkBody, checkCall, hasRow, ruleFor } from './prbody'
 import type { PrCall, PrRules } from './prbody'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 // guards: one in-process check on every Bash and PowerShell call, replacing the attribution,
 // `gh run watch` and PR-body scripts. It reads the command (which program, which flags, which message) instead of
 // scanning raw text, so paths, branch names and flags never trip it. Hot reload watches this file only:
-// change it after editing shell.ts, inspect.ts or policy.ts.
+// change it after editing shell.ts, inspect.ts or policy.ts. Opt-in per repo, from files in
+// mods-data/guards: the PR-body contract (pr-body.json) and banned names (names.json).
 //
 // mode `shadow` (the default while it is new): never blocks; it logs what it would block, and what the
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
@@ -77,9 +80,21 @@ function isUnplaced(plan: Plan, path: string, folder: Folder | undefined): boole
   return Boolean(isFolderUnknown) && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)
 }
 
+// What message text is checked for besides AI credit: the product name unless the repo may name it,
+// and the repo's banned names.
+type TextRules = { mayName: boolean; banned?: NameRule }
+
+// One message text: AI credit first, then the product name, then the repo's banned names.
+function textReason(text: string, where: string, rules: TextRules, creditOnly = false): string | undefined {
+  const v = checkText(text, rules.mayName || creditOnly)
+  if (v) return describe(v, where)
+  const name = rules.banned && !creditOnly ? findName(text, rules.banned) : undefined
+  return name ? describeName(name, where) : undefined
+}
+
 // The body files the command reads: the first reason to block, or undefined. Files that cannot be read
 // for a known cause are named unread instead.
-async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, isBash: boolean) {
+async function checkFiles($: Engine, plan: Plan, cwd: string, rules: TextRules, isBash: boolean) {
   const written = new Set(plan.written.map(p => osPath(p, cwd, isBash).toLowerCase()))
   const session = await $.session.cwd()
   for (const { where, path, written: fromCommand, folder } of plan.files) {
@@ -104,8 +119,8 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, mayName: boolean, 
       }
       return `could not read the body file ${full} for ${where}. Write the file first, or check the path.`
     }
-    const v = checkText(text, mayName)
-    if (v) return describe(v, `${where} (file ${path})`)
+    const reason = textReason(text, `${where} (file ${path})`, rules)
+    if (reason) return reason
   }
   return undefined
 }
@@ -115,6 +130,15 @@ async function prRules($: Engine): Promise<PrRules | undefined> {
   try {
     const rules = JSON.parse(String(await $.fs.read(`${live.dir}/pr-body.json`))) as PrRules
     return rules && typeof rules.repos === 'object' ? rules : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// The repos' banned names, from mods-data/guards/names.json; none without it, or when it is malformed.
+async function nameRules($: Engine) {
+  try {
+    return readNameRules(String(await $.fs.read(`${live.dir}/names.json`)))
   } catch {
     return undefined
   }
@@ -174,15 +198,19 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
   const top = (await git($, cwd, ['rev-parse', '--show-toplevel'])).trim()
   const repo = (plan.repo ?? top.split(/[\\/]/).pop() ?? '').toLowerCase()
   const mayName = live.mentionRepos.includes('*') || live.mentionRepos.includes(repo)
+  const rules: TextRules = { mayName, banned: ruleFor(await nameRules($), repo) }
   for (const { where, text, creditOnly } of plan.texts) {
-    const v = checkText(text, mayName || Boolean(creditOnly))
-    if (v) return describe(v, where)
+    const reason = textReason(text, where, rules, creditOnly)
+    if (reason) return reason
   }
-  const fileReason = await checkFiles($, plan, cwd, mayName, isBash)
+  const fileReason = await checkFiles($, plan, cwd, rules, isBash)
   if (fileReason) return fileReason
   for (const branch of plan.branches) {
+    const where = `the new branch name "${branch}" (it lands in merge commit titles)`
     const v = checkBranch(branch, mayName)
-    if (v) return describe(v, `the new branch name "${branch}" (it lands in merge commit titles)`)
+    if (v) return describe(v, where)
+    const name = rules.banned ? findName(branch, rules.banned) : undefined
+    if (name) return describeName(name, where)
   }
   if (plan.diff) {
     const diff = await gitRun(
@@ -276,20 +304,34 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   return result
 }
 
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: Engine): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/guards/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  live.mode = String(options.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
-  live.mentionRepos = String(options.mentionRepos ?? '*')
-    .split(',')
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean)
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.mode = String(values.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
+    live.mentionRepos = String(values.mentionRepos ?? '*')
+      .split(',')
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean)
+  })
 
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const result = await next(e)
     await setUp($)
     await $.command.register({
       name: 'guards',
-      description: 'The guard mode and what it caught. Also: settings, help',
+      description: 'The guard mode and what it caught. Also: settings, set, help',
       argumentHint: ARGUMENT_HINT,
     })
     return result
@@ -301,11 +343,12 @@ export const register: Register = (on, options) => {
   )
 }
 
-const ARGUMENT_HINT = '[help | settings]'
+const ARGUMENT_HINT = '[help | settings | set]'
 const HELP = [
   '/guards: reads every shell command that writes history (commits, PRs, issues, releases) for AI credit.',
   '  /guards           the mode, where the product may be named, and what it caught',
   '  /guards settings  open the settings pane',
+  '  /guards set       change a setting: set <name> <value>; alone, list them',
   '  /guards help      this list',
 ].join('\n')
 
@@ -338,9 +381,11 @@ async function statusText($: Engine): Promise<string> {
     `${label}: ${c.checked} writes checked, ${c.mod} ${isEnforced ? 'blocked' : 'it would block'}, ` +
     `${c.scripts} the guard scripts blocked.`
   const now = await $.clock.now()
+  const banned = Object.keys((await nameRules($))?.repos ?? {})
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
     `The product name may appear in ${names}; AI credit is blocked everywhere.`,
+    ...(banned.length > 0 ? [`Banned names (names.json) are checked in: ${banned.join(', ')}.`] : []),
     line('Today (UTC)', sumDays(stats, now, 1)),
     line('Last 7 days (UTC)', sumDays(stats, now, 7)),
   ].join('\n')

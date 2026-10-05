@@ -401,7 +401,7 @@ test('a push in another folder is looked up there', () => {
 test('/ci-watch shows its verbs in the menu, and help or an unknown verb lists them', async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  expect(seen.commands).toEqual([{ name: 'ci-watch', argumentHint: '[help | settings | stop | phone]' }])
+  expect(seen.commands).toEqual([{ name: 'ci-watch', argumentHint: '[help | settings | set | stop | phone]' }])
   for (const args of ['help', 'stopp']) {
     const answer = await $.command.run({ command: 'ci-watch', args } as never)
     expect(answer).toEqual(expect.objectContaining({ text: HELP }))
@@ -584,4 +584,26 @@ test('checks that finish mid-turn reach the turn on its next tool result, once',
   await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
   await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
+})
+
+const MANIFEST = JSON.stringify({ userConfig: { pollSeconds: { type: 'number' }, timeoutMinutes: { type: 'number' } } })
+const SETTINGS = 'C:/Users/me/.claude/mods-data/ci-watch/settings.json'
+
+test('the poll interval in the settings file applies from the start, and a new one takes over', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  seen.manifest = MANIFEST
+  seen.files.set(SETTINGS, '{"pollSeconds":60}')
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await clock.advance(30_000)
+  expect(seen.checksRead).toBe(0)
+  await clock.advance(30_000)
+  expect(seen.checksRead).toBe(1)
+  // A new interval: the old timer ticks once more, then the new one runs.
+  await $.command.run({ command: 'ci-watch', args: 'set pollSeconds 30' } as never)
+  await clock.advance(60_000)
+  expect(seen.checksRead).toBe(2)
+  await clock.advance(30_000)
+  expect(seen.checksRead).toBe(3)
 })
