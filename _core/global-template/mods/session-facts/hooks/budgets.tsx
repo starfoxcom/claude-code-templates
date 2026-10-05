@@ -164,6 +164,8 @@ export function phoneText(b: Budgets, now: number): string {
   return [...lines, ...(until ? [`🟥 PAUSED until ${until}`] : plans), phoneCacheLine(b, now)].join('\n')
 }
 
+// In a narrow band (a side pane takes room) the row wraps by whole chips: a chip that does not fit moves
+// to the next line in one piece. Only a chip wider than the band alone shrinks, cut short with an ellipsis.
 export function registerBudgetsView(on: On): void {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inner = await next(e)
@@ -174,14 +176,14 @@ export function registerBudgetsView(on: On): void {
     return (
       <Box flexDirection="column">
         {inner}
-        <Box>
+        <Box key="session-facts-row" flexWrap="wrap">
           {chips.map((chip, index) => (
-            <Box key={`session-facts-chip-${index}`}>
+            <Box key={`session-facts-chip-${index}`} flexShrink={1} minWidth={0}>
               <Text color={chip.color}>{index > 0 ? ' · ' : ''}</Text>
               {(chip.parts ?? [{ text: chip.text }])
                 .filter(part => part.text)
                 .map((part, at) => (
-                  <Text key={`session-facts-chip-${index}-${at}`} color={part.color ?? chip.color}>
+                  <Text key={`session-facts-chip-${index}-${at}`} color={part.color ?? chip.color} wrap="truncate-end">
                     {part.text}
                   </Text>
                 ))}
