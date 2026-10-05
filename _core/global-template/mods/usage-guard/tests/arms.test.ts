@@ -355,3 +355,12 @@ test('after a hot reload while idle, disarm finds the saved arm and drops it', a
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toEqual([])
 })
+
+test('a start after a reload restores the saved arm even when the command is refused', async ($, on) => {
+  const seen = world(on)
+  seen.refuseRegister = true
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
+  await start($)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+})
