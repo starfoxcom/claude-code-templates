@@ -692,6 +692,8 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     live.isTurnRunning = false
     // Looked at a moment after the turn ends, never from the end itself: a prompt sent there was seen lost.
+    // `reason` is the engine's TurnCompleteReason ('answer' | 'aborted' | 'refusal' | 'error'): only a turn
+    // the model answered goes on.
     if (live.keepGoing && !e.agentId && e.reason === 'answer')
       $.clock.after(KEEP_GOING_DELAY_MS, () => void keepGoing($).catch(() => undefined))
     return next(e)
@@ -704,8 +706,8 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    // The person's own prompt: the keep-going count starts over.
-    if (!e.origin) live.idlePrompts = 0
+    // The person's own prompt, typed or from the phone: the keep-going count starts over.
+    if (e.origin?.kind === 'composer' || e.origin?.kind === 'bridge') live.idlePrompts = 0
     if (live.isTurnRunning) return next(e)
     const mirror = await mirrorOf($)
     const notes: string[] = []

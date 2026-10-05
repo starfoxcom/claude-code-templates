@@ -53,7 +53,7 @@ test('the prompt names the first task and how many more', () => {
 })
 
 function world(on: On, tasks: MirrorTask[], files: Record<string, string> = {}) {
-  const seen = { prompts: [] as string[], files: new Map(Object.entries(files)) }
+  const seen = { prompts: [] as string[], origins: [] as (string | undefined)[], files: new Map(Object.entries(files)) }
   seen.files.set(MIRROR_FILE, JSON.stringify(mirrorOf(tasks)))
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
@@ -74,6 +74,7 @@ function world(on: On, tasks: MirrorTask[], files: Record<string, string> = {}) 
   on('turn.complete', () => ({ text: '' }))
   on('prompt.submit', ($, e) => {
     seen.prompts.push(e.text)
+    seen.origins.push(e.origin?.kind)
     return { text: e.text }
   })
   return { seen, clock }
@@ -124,7 +125,9 @@ test('two prompts that change nothing on the list are the last; the person promp
   await turnEnds($, clock)
   await turnEnds($, clock)
   expect(seen.prompts).toHaveLength(4)
-  await $.prompt.submit({ text: 'go on' } as never)
+  // The mod's own prompts come from a plugin and never start the count over; the person's do.
+  expect(seen.origins).toEqual(['plugin', 'plugin', 'plugin', 'plugin'])
+  await $.prompt.submit({ text: 'go on', origin: { kind: 'composer' } } as never)
   await turnEnds($, clock)
   expect(seen.prompts.filter(text => text.startsWith('[tasks]'))).toHaveLength(5)
 })
