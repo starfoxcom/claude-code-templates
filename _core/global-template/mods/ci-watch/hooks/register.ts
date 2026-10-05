@@ -304,10 +304,12 @@ function isRecorded(saved: readonly Watch[] | undefined, watch: Watch): boolean 
 // A last guard against a second wake from the same instance (two of its polls settling one watch). A
 // hot reload's instances may not share this global (see the owner file above), so across instances the
 // owner file and `isRecorded` are what keep a wake to one.
+const wakeKey = (watch: Watch) => `${watch.id ?? ''}|${watch.repo}#${watch.number}@${watch.headSha}`
+
 export function claimWake(watch: Watch): boolean {
   const shared = globalThis as { __ciWatchWoken?: Set<string> }
   const woken = (shared.__ciWatchWoken ??= new Set())
-  const key = `${watch.id ?? ''}|${watch.repo}#${watch.number}@${watch.headSha}`
+  const key = wakeKey(watch)
   if (woken.has(key)) return false
   woken.add(key)
   return true
@@ -497,8 +499,8 @@ async function poll($: EngineInterface): Promise<void> {
   if (!live.isTurnRunning) await sendHeld($)
 }
 
-// Pending wakes go out once no turn runs: a wake that settles mid-turn waits for the turn's end, since
-// the engine would only run it then anyway, and by then the turn may have merged the PR or pushed a fix.
+// Pending wakes go out from a poll while no turn runs; one that settles mid-turn rides the turn's next
+// tool result instead (takeNotes), and what no tool result carried goes out from the first poll after it.
 // The mark lives in the saved file, so a reload mid-turn sends it from the new module. Each is checked
 // again first: a watch stopped or replaced meanwhile is no longer listed, and a PR merged or closed, or
 // one whose head moved on (its new commit has a watch of its own), wakes nothing. Taken from memory in
@@ -515,20 +517,45 @@ async function sendHeld($: EngineInterface): Promise<void> {
     const head = await headOf($, watch.repo, watch.number)
     if (head && head !== watch.headSha) continue
     const text = wakeText(watch, await $.clock.now())
-    // A wake the engine refuses is marked pending again, so the next poll tries once more.
-    void $.prompt.submit({ text }).catch(() => markPending(watch))
+    // A refused wake (a hook drops the prompt, or the call fails) is marked pending again for the next poll.
+    void $.prompt
+      .submit({ text })
+      .then(
+        sent => sent.drop !== undefined,
+        () => true,
+      )
+      .then(isRefused => (isRefused ? markPending($, watch) : undefined))
+      .catch(() => undefined)
   }
 }
 
-function markPending(watch: Watch): void {
+// Tries per wake: a hook that drops every prompt is not asked again each minute.
+const MAX_TRIES = 3
+const refusals = new Map<string, number>()
+
+// Saved, not only set in memory: every poll starts from the file. A newer load owns the file once this
+// one is retired, so then only the flag is laid on its copy, and that load sends the wake.
+async function markPending($: EngineInterface, watch: Watch): Promise<void> {
+  const count = (refusals.get(wakeKey(watch)) ?? 0) + 1
+  refusals.set(wakeKey(watch), count)
+  if (count >= MAX_TRIES) return
   const isSame = (w: Watch) => w.id === watch.id && w.headSha === watch.headSha
-  live.watches = live.watches.map(w => (isSame(w) ? { ...w, wakePending: true } : w))
+  const mark = (list: Watch[]) => list.map(w => (isSame(w) ? { ...w, wakePending: true } : w))
+  if (await isRetired($)) {
+    const saved = await readState($)
+    if (saved?.watches) await $.fs.write(await statePath($), JSON.stringify({ ...saved, watches: mark(saved.watches) }))
+    return
+  }
+  live.watches = mark(live.watches)
+  live.generation++
+  await save($)
 }
 
 // As the old Monitor did: checks that finish while a turn runs reach it at once, on the next tool result,
 // instead of waiting for the turn's end. Each is taken from the pending list in one step and saved.
 async function takeNotes($: EngineInterface): Promise<string[]> {
-  if (!live.isTurnRunning) return []
+  // A newer load may have taken over while the tool ran: the notes and the file are its own.
+  if (!live.isTurnRunning || (await isRetired($))) return []
   const due = live.watches.filter(w => w.wakePending)
   if (due.length === 0) return []
   live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
