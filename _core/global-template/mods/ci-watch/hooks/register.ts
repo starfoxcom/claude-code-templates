@@ -40,8 +40,13 @@ const live = {
   /** Counts the changes made outside a poll (a new watch, a stop, a merge), so a poll can tell. */
   generation: 0,
   isTurnRunning: false,
-  /** Wakes that settled while a turn ran, sent at its end unless that turn already dealt with them. */
-  held: [] as Watch[],
+}
+
+// Wakes that settled while a turn ran, sent at its end unless that turn already dealt with them. Kept for
+// the whole process, as claimWake's set is: a reload mid-turn ends the turn in the new module.
+function heldWakes(): Watch[] {
+  const shared = globalThis as { __ciWatchHeld?: Watch[] }
+  return (shared.__ciWatchHeld ??= [])
 }
 
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
@@ -464,7 +469,7 @@ async function poll($: EngineInterface): Promise<void> {
   if (changed || live.isUnsaved) await save($)
   for (const watch of toWake) {
     if (isRecorded(recorded, watch) || !claimWake(watch)) continue
-    if (live.isTurnRunning) live.held.push(watch)
+    if (live.isTurnRunning) heldWakes().push(watch)
     else void $.prompt.submit({ text: wakeText(watch) }).catch(() => undefined)
   }
   if (!live.isTurnRunning) await sendHeld($)
@@ -472,12 +477,15 @@ async function poll($: EngineInterface): Promise<void> {
 
 // A wake that settles mid-turn waits for the turn's end: the engine would only run it then anyway, and
 // by then the turn may have merged the PR or pushed a fix, which makes the wake stale. Each is checked
-// again first: a PR merged or closed, or one whose head moved on (its new commit has a watch of its own),
-// wakes nothing.
+// again first: a watch stopped or replaced meanwhile, a PR merged or closed, or one whose head moved on
+// (its new commit has a watch of its own) wakes nothing.
 async function sendHeld($: EngineInterface): Promise<void> {
-  const held = live.held
-  live.held = []
+  const held = heldWakes().splice(0)
   for (const watch of held) {
+    const isWatched = live.watches.some(
+      w => w.repo === watch.repo && w.number === watch.number && w.headSha === watch.headSha && w.id === watch.id,
+    )
+    if (!isWatched) continue
     if (await isClosed($, watch.repo, watch.number)) continue
     const head = await headOf($, watch.repo, watch.number)
     if (head && head !== watch.headSha) continue
