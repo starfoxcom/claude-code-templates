@@ -470,6 +470,42 @@ test('a session started again within the catch-up window resumes at once', async
   expect(savedArm(seen)).toBe('null')
 })
 
+// The mod's settings file and its manifest, as the main module reads them before any prompt.
+function settingsFile(seen: World, values: Record<string, unknown>): void {
+  seen.files.set('C:/Users/me/.claude/mods-data/usage-guard/settings.json', JSON.stringify(values))
+  const userConfig = { catchUpMinutes: { type: 'number' }, wrapUpAt: { type: 'number' } }
+  seen.manifest = JSON.stringify({ userConfig })
+}
+
+test('a session started again reads the catch-up window from the settings file before any prompt', async ($, on) => {
+  const seen = world(on)
+  settingsFile(seen, { catchUpMinutes: 120 })
+  const missed = new Date(NOW - 3 * 3_600_000).toISOString()
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: missed, wakeAt: NOW - 60 * 60_000 }))
+  await start($)
+  await seen.clock.advance(1)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
+test('an idle session takes a new wrap-up line from the settings file at the next minute check', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  await endTurn($)
+  expect(seen.commands).toEqual([])
+  settingsFile(seen, { wrapUpAt: 35 })
+  await seen.clock.advance(60_000)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
+test('/usage-guard set after an idle hot reload still restarts the saved arm and its timer', async ($, on) => {
+  const seen = world(on)
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
+  await $.command.run({ command: 'usage-guard', args: 'set' } as never)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
 test('a session started again past the catch-up window drops the saved arm and resumes nothing', async ($, on) => {
   const seen = world(on)
   const missed = new Date(NOW - 2 * 3_600_000).toISOString()
