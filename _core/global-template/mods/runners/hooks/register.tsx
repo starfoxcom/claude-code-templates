@@ -5,7 +5,7 @@ import type { RunnerView } from '../types'
 import { soonestRun } from './cron'
 import { RUNNERS } from './rules'
 import type { Runner } from './rules'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 // The machine's local CI runners in one row above the prompt: on or off, how many are online and
 // busy, queued runs and the next scheduled run, with Start and Stop. Every value is read in a timer,
@@ -177,6 +177,18 @@ async function readZone($: Engine): Promise<void> {
   if (Number.isInteger(offset)) live.zoneOffset = offset
 }
 
+// A new interval from the settings file takes over at the next tick of the old one.
+function armChecks($: Engine): void {
+  const period = live.checkMs
+  const tick = $.clock.every(period, () => {
+    if (live.checkMs !== period) {
+      tick.cancel()
+      armChecks($)
+    }
+    void check($).catch(() => undefined)
+  })
+}
+
 async function start($: Engine): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
@@ -184,7 +196,7 @@ async function start($: Engine): Promise<void> {
   if (live.runners.length === 0) return
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   await readZone($)
-  $.clock.every(live.checkMs, () => void check($).catch(() => undefined))
+  armChecks($)
   $.clock.every(HOUR_MS, () => void readZone($).catch(() => undefined))
   // The first reading can take many `gh` calls: session start and the first turn never wait for it.
   void check($).catch(() => undefined)
@@ -235,16 +247,30 @@ export function clockTime(ms: number, offsetMinutes: number | null): string {
   return offsetMinutes === null ? `${hhmm} UTC` : hhmm
 }
 
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: Engine): Promise<void> {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/runners/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  live.checkMs = Math.max(15, Number(options.checkSeconds ?? 60)) * 1000
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.checkMs = Math.max(15, Number(values.checkSeconds ?? 60)) * 1000
+  })
 
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const result = await next(e)
     await start($)
     await $.command.register({
       name: 'runners',
-      description: "The local CI runners' state. Also: settings, phone, help",
+      description: "The local CI runners' state. Also: settings, set, phone, help",
       argumentHint: ARGUMENT_HINT,
     })
     return result
@@ -296,11 +322,12 @@ export const register: Register = (on, options) => {
   })
 }
 
-const ARGUMENT_HINT = '[help | settings | phone]'
+const ARGUMENT_HINT = '[help | settings | set | phone]'
 const HELP = [
   '/runners: the local CI runners in a row above the prompt, with Start and Stop.',
   "  /runners           each runner's state",
   '  /runners settings  open the settings pane',
+  '  /runners set       change a setting: set <name> <value>; alone, list them',
   '  /runners phone     the same as text, for phone chats',
   '  /runners help      this list',
 ].join('\n')
