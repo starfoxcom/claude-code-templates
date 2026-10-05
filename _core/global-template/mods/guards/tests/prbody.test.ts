@@ -1,35 +1,41 @@
 import { expect, test } from 'claude-code/testing'
 import { checkBody, checkCall, readPr, ruleFor } from '../hooks/prbody'
+import type { PrWord } from '../hooks/prbody'
 
 // The PR-body contract, pure: how a `gh pr` call passes its body, and the body against the format.
 
 const RULE = { row: '^(Resolves|Part of) #\\d+\\s*$', noRow: '^(docs|chore)\\(' }
 const GOOD = '## What\n- add the thing\n\n## Why\nIt was missing.\n\nResolves #12\n'
 
+// Plain words as the reading hands them over; `dyn` marks one the shell builds at run time.
+const pr = (action: 'create' | 'edit', words: (string | PrWord)[]) =>
+  readPr(action, words.map(w => (typeof w === 'string' ? { text: w } : w)))
+const dyn = (text: string): PrWord => ({ text, dynamic: true })
+
 test('reads the title, body file and inline or fill flags in every spelling', () => {
-  expect(readPr('create', ['--title', 'feat: x', '--body-file', 'b.md'])).toMatchObject({
+  expect(pr('create', ['--title', 'feat: x', '--body-file', 'b.md'])).toMatchObject({
     title: 'feat: x',
     bodyFile: 'b.md',
     isInline: false,
     isFilled: false,
   })
-  const equals = readPr('create', ['--title=feat: y', '--body-file=c.md'])
+  const equals = pr('create', ['--title=feat: y', '--body-file=c.md'])
   expect(equals).toMatchObject({ title: 'feat: y', bodyFile: 'c.md' })
-  expect(readPr('create', ['-tfeat: z', '-Fd.md'])).toMatchObject({ title: 'feat: z', bodyFile: 'd.md' })
-  expect(readPr('create', ['--body', 'text']).isInline).toBe(true)
-  expect(readPr('edit', ['5', '-b', 'text']).isInline).toBe(true)
-  expect(readPr('create', ['--body=text']).isInline).toBe(true)
+  expect(pr('create', ['-tfeat: z', '-Fd.md'])).toMatchObject({ title: 'feat: z', bodyFile: 'd.md' })
+  expect(pr('create', ['--body', 'text']).isInline).toBe(true)
+  expect(pr('edit', ['5', '-b', 'text']).isInline).toBe(true)
+  expect(pr('create', ['--body=text']).isInline).toBe(true)
   for (const flag of ['-f', '-w', '--fill', '--fill-first', '--fill-verbose', '--web'])
-    expect(readPr('create', [flag]).isFilled).toBe(true)
-  expect(readPr('create', ['--base', 'develop', '--title', 't']).isFilled).toBe(false)
+    expect(pr('create', [flag]).isFilled).toBe(true)
+  expect(pr('create', ['--base', 'develop', '--title', 't']).isFilled).toBe(false)
 })
 
 test('a body must come from a file; an edit that sets no body passes', () => {
-  expect(checkCall(readPr('create', ['--title', 't', '--body', 'x']))).toContain('inline `--body`')
-  expect(checkCall(readPr('create', ['--fill']))).toContain('`--fill*`')
-  expect(checkCall(readPr('create', ['--title', 't']))).toContain('needs `--body-file')
-  expect(checkCall(readPr('edit', ['5', '--add-label', 'bug']))).toBeUndefined()
-  expect(checkCall(readPr('create', ['--title', 't', '--body-file', 'b.md']))).toBeUndefined()
+  expect(checkCall(pr('create', ['--title', 't', '--body', 'x']))).toContain('inline `--body`')
+  expect(checkCall(pr('create', ['--fill']))).toContain('`--fill*`')
+  expect(checkCall(pr('create', ['--title', 't']))).toContain('needs `--body-file')
+  expect(checkCall(pr('edit', ['5', '--add-label', 'bug']))).toBeUndefined()
+  expect(checkCall(pr('create', ['--title', 't', '--body-file', 'b.md']))).toBeUndefined()
 })
 
 test('the body is checked section by section, then for its board row', () => {
@@ -60,4 +66,21 @@ test('a rule applies to every repo whose name contains its key', () => {
   expect(ruleFor(rules, 'gameproject-smoke')).toBe(RULE)
   expect(ruleFor(rules, 'the public board')).toBeUndefined()
   expect(ruleFor(undefined, 'gameproject')).toBeUndefined()
+})
+
+test('a word that may stand for several flags makes the call unknown, never judged', () => {
+  expect(pr('create', ['@params']).isUnknown).toBe(true)
+  expect(pr('create', [dyn('$ARGS')]).isUnknown).toBe(true)
+  expect(pr('create', ['--title', dyn('$T'), '--body-file', 'b.md']).isUnknown).toBe(false)
+  expect(pr('create', [dyn('--title=$T'), '--body-file', 'b.md']).isUnknown).toBe(false)
+  expect(checkCall(pr('create', ['@params']))).toBeUndefined()
+})
+
+test("a section ends at the repo's own board-row line, whatever its verb", () => {
+  const closes = { row: '^Closes #\\d+$' }
+  expect(checkBody('## What\n- a\n## Why\nCloses #4', 'feat: x', closes)).toContain('`## Why` is missing or empty')
+  expect(checkBody('## What\n- a\n## Why\nb\n## Notes\n\nCloses #4', 'feat: x', closes)).toContain('`## Notes`')
+  expect(checkBody('## What\n- a\n## Why\nb\nCloses #4', 'feat: x', closes)).toBeUndefined()
+  // Without a row rule only headings end a section: such a line is part of the text.
+  expect(checkBody('## What\n- a\n## Why\nResolves #4', 'feat: x', {})).toBeUndefined()
 })

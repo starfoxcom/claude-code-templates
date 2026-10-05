@@ -1,7 +1,8 @@
 // The PR-body contract: in the repos listed in mods-data/guards/pr-body.json, every `gh pr create` or
 // `gh pr edit` that sets a body carries it from a file, in the PR format (`## What` with a bullet,
 // `## Why` with text, `## Notes` only when filled), and names its board row when the repo asks for one.
-// Pure, no engine access. Without the file nothing is checked.
+// Pure, no engine access. Without the file nothing is checked. A body is checked only where it can be
+// read exactly; any other spelling is named unread, never blocked and never passed in silence.
 
 /** One repo's rules: `row`, a line every work PR carries (a regex, read line by line); `noRow`, the PR
  * titles that carry none (a regex). Both optional. */
@@ -12,13 +13,20 @@ export type PrRules = { repos: Record<string, RepoRule> }
 export type PrCall = {
   action: 'create' | 'edit'
   title: string
-  /** `--body-file <path>`; '-' reads the body from stdin (a here-doc on the statement). */
+  /** `--body-file <path>` as typed; '-' reads the body from stdin. */
   bodyFile?: string
-  /** The here-docs the statement feeds it, joined. */
+  /** The body file's path as the command reading resolved it (variables filled in), to find its entry. */
+  filePath?: string
+  /** A literal here-doc fed to the statement on stdin; none for a pipe, a `< file` or a dynamic body. */
   stdinBody?: string
   isInline: boolean
   isFilled: boolean
+  /** A word that may stand for several, built at run time (`@params`, `$ARGS`): the flags are unknown. */
+  isUnknown: boolean
 }
+
+/** A word as the command reading hands it over: its text, and whether the shell builds it at run time. */
+export type PrWord = { text: string; dynamic?: boolean }
 
 const FILL = /^(?:-f|-w|--fill|--fill-first|--fill-verbose|--web)$/
 
@@ -31,10 +39,18 @@ function valueAt(words: string[], i: number, long: string, short: string): strin
   return undefined
 }
 
-export function readPr(action: 'create' | 'edit', words: string[], stdinBody?: string): PrCall {
-  const call: PrCall = { action, title: '', isInline: false, isFilled: false, stdinBody }
+export function readPr(
+  action: 'create' | 'edit',
+  given: PrWord[],
+  found: { stdinBody?: string; filePath?: string } = {},
+): PrCall {
+  const call: PrCall = { action, title: '', isInline: false, isFilled: false, isUnknown: false, ...found }
+  const words = given.map(w => w.text)
   for (let i = 0; i < words.length; i++) {
     const w = words[i] ?? ''
+    // A splat or an unquoted variable in a flag's place (never a flag's own value) may carry any flag.
+    const isFlagValue = (words[i - 1] ?? '').startsWith('-') && !(words[i - 1] ?? '').includes('=')
+    if (/^[@$]/.test(w) && (given[i]?.dynamic || w.startsWith('@')) && !isFlagValue) call.isUnknown = true
     if (FILL.test(w)) call.isFilled = true
     else if (/^(?:-b|--body)(?:=|$)/.test(w) || /^-b./.test(w)) call.isInline = true
     const title = valueAt(words, i, '--title', '-t')
@@ -52,8 +68,9 @@ export function ruleFor(rules: PrRules | undefined, repo: string): RepoRule | un
   return key === undefined ? undefined : rules?.repos[key]
 }
 
-/** Reasons that need no body text: how the body is passed. */
+/** Reasons that need no body text: how the body is passed. A call with unknown flags is not judged. */
 export function checkCall(call: PrCall): string | undefined {
+  if (call.isUnknown) return undefined
   if (call.isInline)
     return (
       'inline `--body` is not allowed for a PR: write the body to a file and pass `--body-file <path>` ' +
@@ -65,24 +82,25 @@ export function checkCall(call: PrCall): string | undefined {
   return undefined
 }
 
-// A section's text: from its heading to the next heading or board-row line.
-function section(text: string, heading: string): string | undefined {
+// A section's text: from its heading to the next heading, or to the repo's board-row line when it has one.
+function section(text: string, heading: string, row?: RegExp): string | undefined {
   const lines = text.split(/\r?\n/)
   const start = lines.findIndex(l => l.trimEnd() === `## ${heading}`)
   if (start === -1) return undefined
   const rest = lines.slice(start + 1)
-  const end = rest.findIndex(l => /^## |^(?:Resolves|Part of) /.test(l))
+  const end = rest.findIndex(l => l.startsWith('## ') || Boolean(row?.test(l)))
   return (end === -1 ? rest : rest.slice(0, end)).join('\n')
 }
 
 /** The body against the PR format and the repo's board-row rule. */
 export function checkBody(text: string, title: string, rule: RepoRule): string | undefined {
-  const what = section(text, 'What')
+  const row = rule.row ? new RegExp(rule.row) : undefined
+  const what = section(text, 'What', row)
   if (what === undefined || !/^\s*[-*] \S/m.test(what))
     return '`## What` is missing or has no bullet. The body must carry the full PR format.'
-  const why = section(text, 'Why')
+  const why = section(text, 'Why', row)
   if (why === undefined || !why.trim()) return '`## Why` is missing or empty.'
-  const notes = section(text, 'Notes')
+  const notes = section(text, 'Notes', row)
   if (notes !== undefined && !notes.trim()) return '`## Notes` is present but empty: drop the heading or fill it.'
   if (!rule.row) return undefined
   const isExempt = rule.noRow ? new RegExp(rule.noRow).test(title) : false
