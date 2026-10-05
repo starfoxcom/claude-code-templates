@@ -93,7 +93,13 @@ function compactingHost(on: On) {
   const usage = { tokens: 450_000 as number | undefined }
   const clock = mock.clock(on, { now: NOON_UTC })
   on('process.run', () => ({
-    value: { exitCode: 0, stdout: '420 America/Phoenix\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    value: {
+      exitCode: 0,
+      stdout: '420 America/Phoenix\n',
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
   }))
   on('session.usage', ($, e) => ({
     value: {
