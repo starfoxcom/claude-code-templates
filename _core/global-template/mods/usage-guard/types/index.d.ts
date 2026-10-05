@@ -37,6 +37,12 @@ export type ArmedWake = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'usage-guard': { band: UsageGuardBand | null; settings: SettingsView | null; armed: ArmedWake | null }
+    'usage-guard': {
+      band: UsageGuardBand | null
+      settings: SettingsView | null
+      armed: ArmedWake | null
+      /** What the last press on the arm card did, shown in its place until dismissed. */
+      armNote: string | null
+    }
   }
 }

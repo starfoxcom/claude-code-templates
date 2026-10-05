@@ -31,3 +31,19 @@ export type Live = {
   /** The folder for saved arms exists: made once per module load, before the first save. */
   isArmsDirMade: boolean
 }
+
+/** The state a fresh module load starts from. */
+export function newLive(): Live {
+  return {
+    zone: { offsetMinutes: 0, name: 'UTC' },
+    isTurnRunning: false,
+    isStarted: false,
+    isStatusShown: false,
+    handled: new Set(),
+    wrapUpAt: 90,
+    delayMinutes: 2,
+    compactAbovePercent: 25,
+    catchUpMinutes: 30,
+    isArmsDirMade: false,
+  }
+}

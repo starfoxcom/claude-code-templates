@@ -2,14 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ArmedWake, UsageCard } from '../types'
-import {
-  catchUpOf,
-  caughtUpText,
-  missedArmText,
-  parseSavedArm,
-  quietResumePrompt,
-  quietResumeText,
-} from './arms'
+import { catchUpOf, caughtUpText, missedArmText, parseSavedArm, quietResumePrompt, quietResumeText } from './arms'
 import type { CompactOutcome, Fill } from './compact'
 import { measured, outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
 import type { Pause } from './plan'
@@ -35,6 +28,7 @@ import { register as phone } from './phone'
 import { register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
 import type { Live } from './live'
+import { newLive } from './live'
 import {
   ARGUMENT_HINT,
   CANCELLED_TEXT,
@@ -57,20 +51,10 @@ const REFRESH_MS = 2_000
 const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
 const band = atom({ plugin: 'usage-guard', key: 'band' } as const, null)
 const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
+const armNote = atom({ plugin: 'usage-guard', key: 'armNote' } as const, null)
 // Module state (its type in live.ts): a hot reload starts it over, which is safe because the pause
 // itself lives in the shared file.
-const live: Live = {
-  zone: { offsetMinutes: 0, name: 'UTC' },
-  isTurnRunning: false,
-  isStarted: false,
-  isStatusShown: false,
-  handled: new Set(),
-  wrapUpAt: 90,
-  delayMinutes: 2,
-  compactAbovePercent: 25,
-  catchUpMinutes: 30,
-  isArmsDirMade: false,
-}
+const live: Live = newLive()
 
 async function dataDir($: EngineInterface): Promise<string> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
@@ -534,9 +518,22 @@ async function armByHand($: EngineInterface, which: string, option: string): Pro
 }
 
 // The card's Keep: the arm stands, and the question goes.
+// A press always answers: the card turns into a one-line confirmation, and the same line is a note in
+// the transcript for a surface that draws no card.
 async function keepArm($: EngineInterface): Promise<void> {
   const current = await read($, armedWake)
-  if (current?.isQuestioned) await setArm($, { ...current, isQuestioned: false })
+  if (!current?.isQuestioned) return
+  await setArm($, { ...current, isQuestioned: false })
+  await confirmPress($, `Kept: this session resumes at ${localTime(current.wakeAt)}.`)
+}
+
+async function cancelFromArmCard($: EngineInterface): Promise<void> {
+  await confirmPress($, await disarm($))
+}
+
+async function confirmPress($: EngineInterface, text: string): Promise<void> {
+  await update($, armNote, () => text)
+  await notice($, text)
 }
 
 // Drops the arm set by hand. A pause's own resume is the pause's: /usage-guard cancel stops it.
@@ -652,9 +649,15 @@ async function cardsAbove($: EngineInterface): Promise<Card[]> {
     const text = questionText(localTime(arm.wakeAt))
     const buttons: CardButton[] = [
       { key: 'usage-arm-keep', label: 'Keep it', isPrimary: true, onPress: () => keepArm($) },
-      { key: 'usage-arm-cancel', label: 'Cancel the resume', onPress: () => disarm($) },
+      { key: 'usage-arm-cancel', label: 'Cancel the resume', onPress: () => cancelFromArmCard($) },
     ]
     cards.push({ key: 'usage-arm-question', tone: 'yellow', text, buttons })
+  }
+  const note = await read($, armNote)
+  if (note) {
+    const clear = () => update($, armNote, () => null)
+    const dismiss = { key: 'usage-arm-note-dismiss', label: 'Dismiss', isPrimary: true, onPress: clear }
+    cards.push({ key: 'usage-arm-note', tone: 'blue', text: note, buttons: [dismiss] })
   }
   return cards
 }

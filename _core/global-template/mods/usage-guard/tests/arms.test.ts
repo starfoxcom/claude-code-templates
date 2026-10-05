@@ -183,6 +183,10 @@ test('an arm with nothing pending is set, says so, and the card keeps it', async
   expect(await ui.find({ key: 'usage-arm-question' })).toBeDefined()
   await ui.press({ key: 'usage-arm-keep' })
   expect(await ui.find({ key: 'usage-arm-question' })).toBeUndefined()
+  // The press answers: a confirmation takes the card's place until dismissed.
+  expect(await ui.find({ type: 'Text', text: /^Kept: this session resumes at Fri 2026-10-02 12:02/ })).toBeDefined()
+  await ui.press({ key: 'usage-arm-note-dismiss' })
+  expect(await ui.find({ key: 'usage-arm-note' })).toBeUndefined()
   // Kept: the arm still wakes the session, with the one-line prompt since nothing is pending.
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toEqual([])
@@ -197,6 +201,7 @@ test("an arm with nothing pending is dropped by the card's cancel", async ($, on
   const ui = await mountCard($)
   await ui.press({ key: 'usage-arm-cancel' })
   expect(await ui.find({ key: 'usage-arm-question' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Disarmed: this session will not resume on its own\.$/ })).toBeDefined()
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toEqual([])
 })
