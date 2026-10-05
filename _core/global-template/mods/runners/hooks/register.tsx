@@ -190,6 +190,7 @@ async function start($: Engine): Promise<void> {
 // The timers and the first reading, once there is a runner to read: at the start, or at the first
 // `/runners add` of a session that began with none.
 async function arm($: Engine): Promise<void> {
+  if (live.isArmed) return
   live.isArmed = true
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   await readZone($)
@@ -206,6 +207,8 @@ const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
 async function addRunner($: Engine, words: string[]): Promise<string> {
   const runner = parseAdd(words)
   if ('error' in runner) return runner.error
+  // After a hot reload the command can come first: set up as turn.start would, so the list is known.
+  await start($)
   const name = runner.label.toLowerCase()
   const isListedHere = live.runners.some(r => r.label.toLowerCase() === name)
   if (isListedHere) return `A runner named "${runner.label}" is already listed.`

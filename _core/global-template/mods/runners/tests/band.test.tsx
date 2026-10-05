@@ -221,3 +221,16 @@ test('/runners add keeps the entries already in the file and never writes over o
   expect(await add($, 'more y')).toContain('not valid JSON')
   expect(files.get(LIST_FILE)).toBe('{ broken')
 })
+
+test('a /runners add that comes first after a reload starts the timers once', async ($, on) => {
+  const { runs, clock } = bare(on)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  // No session.start: a hot reload skips it, so the command is the first event the module sees.
+  await add($, 'ci Runner.Listener')
+  await $.turn.start({ turnId: 't' } as never)
+  await clock.advance(1_000)
+  const checks = () => runs.filter(argv => argv[0] === 'tasklist').length
+  const before = checks()
+  await clock.advance(60_000)
+  expect(checks() - before).toBe(1)
+})
