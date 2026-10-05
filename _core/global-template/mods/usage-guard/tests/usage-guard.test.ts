@@ -1,130 +1,25 @@
-import type { On, SessionRateLimit } from 'claude-code'
-import type { Engine } from 'claude-code/testing'
-import { expect, mock, test } from 'claude-code/testing'
+import type { SessionRateLimit } from 'claude-code'
+import { expect, test } from 'claude-code/testing'
 import type { Pause } from '../hooks/plan'
-import { CLAIM, NO_WORK_NOTICE, planArm, WRAP_UP_ARGS } from '../hooks/plan'
+import { NO_WORK_NOTICE, planArm, WRAP_UP_ARGS } from '../hooks/plan'
 import { STOP_COMMANDS, stopCommandsFor } from '../hooks/rules'
-
-// The shipped stop list is empty, and the mod under test loads its own copy of rules.ts, so the
-// lookup is tested on its own below and the hook tests check that only the zone probe ran.
-const stopsRun = (seen: World) => seen.runs.filter(argv => argv[0] !== 'node')
-
-// 2026-10-02 17:00 UTC; the 5-hour window resets at 19:00 UTC.
-const NOW = Date.UTC(2026, 9, 2, 17, 0, 0)
-const RESET = '2026-10-02T19:00:00.000Z'
-const WAKE = Date.parse(RESET) + 2 * 60_000
-const PAUSE_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/pause.json'
-const CARD_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/card.json'
-const KEY = String(Date.parse(RESET))
-
-type World = {
-  files: Map<string, string>
-  runs: string[][]
-  commands: { command: string; args?: string }[]
-  prompts: string[]
-  clock: ReturnType<typeof mock.clock>
-  limits: SessionRateLimit[]
-  /** The claim folders the helper made (`mkdir` wins once per name). */
-  claims: Set<string>
-  sessionId: string
-  /** Runs as a claim is made: another session acting meanwhile. */
-  duringClaim?: (name: string) => void
-  /** Claims whose helper fails (exits non-zero) and writes nothing. */
-  failClaims?: Set<string>
-}
-
-function world(on: On, root = 'C:/Repos/my-game'): World {
-  const seen: World = {
-    files: new Map(),
-    runs: [],
-    commands: [],
-    prompts: [],
-    clock: mock.clock(on, { now: NOW }),
-    limits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: RESET }],
-    claims: new Set(),
-    sessionId: 'sess-a',
-  }
-  mock.env(on, { USERPROFILE: 'C:/Users/me' })
-  const key = (path: string) => path.replaceAll('\\', '/')
-  on('fs.read', ($, e) => {
-    const text = seen.files.get(key(e.path))
-    if (text === undefined) throw new Error('ENOENT')
-    return { value: text }
-  })
-  on('fs.write', ($, e) => {
-    seen.files.set(key(e.path), e.text)
-    return { value: undefined }
-  })
-  on('process.run', ($, e) => {
-    seen.runs.push([...e.argv])
-    let out = e.argv[0] === 'node' ? '420 America/Phoenix\n' : ''
-    if (e.argv[2] === CLAIM) {
-      const name = e.argv[4] ?? ''
-      seen.duringClaim?.(name)
-      if (seen.failClaims?.has(name)) {
-        const failed = { exitCode: 1, stdout: '', stderr: 'EPERM', isStdoutTruncated: false, isStderrTruncated: false }
-        return { value: failed }
-      }
-      out = seen.claims.has(name) ? 'taken\n' : 'won\n'
-      seen.claims.add(name)
-    }
-    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
-  })
-  on('session.id', () => ({ value: seen.sessionId }))
-  on('session.root', () => {
-    return { value: root }
-  })
-  on('turn.start', ($, e) => ({ turnId: e.turnId }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: seen.limits } }))
-  on('command.list', () => ({
-    value: [
-      { name: 'session-close', description: '', source: 'user' },
-      { name: 'session-start', description: '', source: 'user' },
-    ],
-  }))
-  on('command.register', ($, e) => {
-    registered.push(e)
-    return { value: { command: e.name } as never }
-  })
-  on('command.run', ($, e) => {
-    seen.commands.push({ command: e.command, args: e.args })
-    return {}
-  })
-  on('prompt.submit', ($, e) => {
-    seen.prompts.push(e.text)
-    return { text: e.text }
-  })
-  on('ui.toast', () => {
-    throw new Error('usage-guard must not use the toast')
-  })
-  on('ui.status', () => ({ value: undefined }))
-  // What core draws above the prompt; the card draws above it.
-  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('turn.complete', () => ({ text: '' }))
-  // Core's shape: an edit carries no read-only mark; a read carries isReadOnly: true.
-  on('tool.call', { tool: 'Edit' }, () => ({ result: {} as never }) as never)
-  on('tool.call', { tool: 'Read' }, () => ({ result: {} as never, isReadOnly: true }) as never)
-  return seen
-}
-
-async function start($: Engine): Promise<void> {
-  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
-}
-
-// A session only wraps up once it changed something.
-async function doWork($: Engine): Promise<void> {
-  await $.tool.call({ tool: 'Edit', file_path: 'C:/Repos/my-game/a.txt', old_string: 'a', new_string: 'b' } as never)
-}
-
-async function endTurn($: Engine): Promise<void> {
-  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' })
-}
-
-function pauseOf(seen: World): Pause | undefined {
-  const text = seen.files.get(PAUSE_FILE)
-  return text === undefined ? undefined : (JSON.parse(text) as Pause)
-}
+import {
+  cardOf,
+  doWork,
+  endTurn,
+  KEY,
+  mountCard,
+  NOW,
+  PAUSE_FILE,
+  pauseOf,
+  registered,
+  RESET,
+  resumes,
+  start,
+  stopsRun,
+  WAKE,
+  world,
+} from './world'
 
 test('below the line nothing happens', async ($, on) => {
   const seen = world(on)
@@ -342,25 +237,6 @@ test('a session that changed nothing only waits near the limit, and is not set t
   expect(resumes(seen)).toEqual([])
   expect(cardOf(seen)?.id).toBe(`reset:${RESET}`)
 })
-
-// The resumes this session submitted: the automatic "continue now" prompt, never /session-start.
-function resumes(seen: World): string[] {
-  return seen.prompts.filter(text => text.startsWith('[usage-guard] ') && text.includes('Continue the pending work'))
-}
-
-function cardOf(seen: World): { id: string; text: string; dismissed: boolean } | undefined {
-  const text = seen.files.get(CARD_FILE)
-  return text === undefined ? undefined : JSON.parse(text)
-}
-
-async function mountCard($: Engine, surface: 'terminal' | 'desktop' = 'terminal') {
-  return $.ui.mount({
-    plugin: 'usage-guard',
-    surface,
-    component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never,
-  })
-}
 
 // The card draws through the engine's own validation on each surface the CLI and the Desktop app use.
 for (const surface of ['terminal', 'desktop'] as const) {
@@ -823,15 +699,20 @@ test('an arm that met a longer pause still resumes the session after another ses
   expect(resumes(seen)).toHaveLength(1)
 })
 
-const registered: { name: string; argumentHint?: string }[] = []
-
 test('/usage-guard shows its arguments in the menu and lists them on help', async ($, on) => {
   world(on)
   await start($)
   const hint = registered.find(command => command.name === 'usage-guard')?.argumentHint
-  expect(hint).toBe('[help | settings | arm 5h|week | disarm | cancel]')
+  expect(hint).toBe('[help | settings | phone | arm 5h|week [compact] | disarm | cancel]')
   const help = await $.command.run({ command: 'usage-guard', args: 'help' } as never)
-  const lines = ['/usage-guard cancel', '/usage-guard arm 5h|week', '/usage-guard disarm', '/usage-guard settings']
+  const lines = [
+    '/usage-guard cancel',
+    '/usage-guard arm 5h|week',
+    '/usage-guard arm 5h|week compact',
+    '/usage-guard disarm',
+    '/usage-guard settings',
+    '/usage-guard phone',
+  ]
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
 })
