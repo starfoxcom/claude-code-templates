@@ -289,6 +289,22 @@ test("a plugin's wake-up and the interrupt note are not the person's words", asy
   expect(words).not.toContain('Request interrupted')
 })
 
+test('a wake-up an older version carried forward is dropped from the block and its index', async () => {
+  // The block as a version before the filter wrote it: the wake-up's own line stripped, the wrapper kept.
+  const stale = 'The ci-watch plugin sent a message:\n\nThis is how the engine surfaces a prompt. Address it.'
+  const block = [
+    `${PERSON_MARK}\nOlder messages, kept only as an index (full text via the recall tool):`,
+    '- The ci-watch plugin sent a message: This is how...',
+    '- lock the rings...',
+  ].join('\n')
+  const carried = [block, 'bake the shadows', stale].join('\n--- message ---\n')
+  const words = personWords([said(carried), said('ship it')], 10_000)
+  expect(words).not.toContain('plugin sent a message')
+  expect(words).toContain('- lock the rings...')
+  expect(words).toContain('bake the shadows')
+  expect(words).toContain('ship it')
+})
+
 test('a message the last compaction kept beside its summary is carried once', async () => {
   const first = personWords([said('lock the rings'), said('bake the shadows')], 10_000)
   // The engine kept "bake the shadows" as the tail, so it is in the next list as well as in the block.
