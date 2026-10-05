@@ -3,8 +3,10 @@ import type { ConfigRow, ConfigValue, Elements, EngineInterface as Engine, Regis
 
 // The mod's settings in a pane every surface draws (the CLI and the Desktop app alike): the /config
 // rows this plugin owns, each changed through $.config.set as the menu would, which reloads the mod
-// with the new value. Every mod with settings carries this file, the same apart from PLUGIN and
-// TITLE; its command opens the pane by SETTINGS_PANE.
+// with the new value. Where /config lists no plugin rows (the Desktop app), the values show read-only.
+// ci-watch, compact-handoff, session-facts, session-info and tasks carry this file, the same apart from
+// PLUGIN, TITLE, COMMAND and the atom's plugin name; usage-guard's copy differs (it edits there too).
+// Its command opens the pane by SETTINGS_PANE.
 
 const PLUGIN = 'ci-watch'
 const TITLE = 'CI watch settings'
