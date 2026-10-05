@@ -13,6 +13,8 @@ export type PrRules = { repos: Record<string, RepoRule> }
 export type PrCall = {
   action: 'create' | 'edit'
   title: string
+  /** A `--title` is given: without one a title exemption cannot be decided. */
+  hasTitle: boolean
   /** `--body-file <path>` as typed; '-' reads the body from stdin. */
   bodyFile?: string
   /** The body file's path as the command reading resolved it (variables filled in), to find its entry. */
@@ -21,7 +23,9 @@ export type PrCall = {
   stdinBody?: string
   isInline: boolean
   isFilled: boolean
-  /** A word that may stand for several, built at run time (`@params`, `$ARGS`): the flags are unknown. */
+  /** A spelling the check does not judge: a word that may stand for several, built at run time
+   * (`@params`, `$ARGS`), a command substitution, an ANSI-C `$'...'` string, or a short flag with more
+   * after it (`-dF b.md`, `-tTitle`), which gh reads as several flags or an attached value. */
   isUnknown: boolean
   /** The title is built at run time, so a title exemption cannot be decided. */
   isTitleDynamic: boolean
@@ -57,6 +61,7 @@ export function readPr(
   const call: PrCall = {
     action,
     title: '',
+    hasTitle: false,
     isInline: false,
     isFilled: false,
     isUnknown: false,
@@ -69,11 +74,15 @@ export function readPr(
     // A splat or an unquoted variable in a flag's place (never a value-taking flag's value) may carry any flag.
     const isFlagValue = VALUE_FLAGS.has(words[i - 1] ?? '')
     if (/^[@$]/.test(w) && (given[i]?.dynamic || w.startsWith('@')) && !isFlagValue) call.isUnknown = true
+    // Only plain spellings are judged; any other is named unread, never read a second, different way.
+    if (/^-[A-Za-z]./.test(w) && !isFlagValue) call.isUnknown = true
+    if ((given[i]?.dynamic && /\$\(|`/.test(w)) || w.startsWith("$'")) call.isUnknown = true
     if (FILL.test(w)) call.isFilled = true
     else if (/^(?:-b|--body)(?:=|$)/.test(w) || /^-b./.test(w)) call.isInline = true
     const title = valueAt(words, i, '--title', '-t')
     if (title !== undefined) {
       call.title = title
+      call.hasTitle = true
       const isSplit = w === '--title' || w === '-t'
       call.isTitleDynamic = Boolean(given[isSplit ? i + 1 : i]?.dynamic)
     }
@@ -105,19 +114,31 @@ export function checkCall(call: PrCall): string | undefined {
   return undefined
 }
 
+// The repo's board-row pattern, matched against a whole line (trailing spaces aside), so a pattern
+// written without anchors never matches a bullet that merely mentions the row.
+const rowOf = (rule: RepoRule) => (rule.row ? new RegExp(`^(?:${rule.row})$`) : undefined)
+
+/** Whether the body carries a line matching the repo's board-row pattern. */
+export function hasRow(text: string, rule: RepoRule): boolean {
+  const row = rowOf(rule)
+  return Boolean(row && text.split(/\r?\n/).some(l => row.test(l.trimEnd())))
+}
+
 // A section's text: from its heading to the next heading, or to the repo's board-row line when it has one.
 function section(text: string, heading: string, row?: RegExp): string | undefined {
   const lines = text.split(/\r?\n/)
   const start = lines.findIndex(l => l.trimEnd() === `## ${heading}`)
   if (start === -1) return undefined
   const rest = lines.slice(start + 1)
-  const end = rest.findIndex(l => l.startsWith('## ') || Boolean(row?.test(l)))
+  const end = rest.findIndex(l => l.startsWith('## ') || Boolean(row?.test(l.trimEnd())))
   return (end === -1 ? rest : rest.slice(0, end)).join('\n')
 }
 
-/** The body against the PR format and the repo's board-row rule. */
-export function checkBody(text: string, title: string, rule: RepoRule): string | undefined {
-  const row = rule.row ? new RegExp(rule.row) : undefined
+/** The body against the PR format and the repo's board-row rule. `title` undefined: no title was
+ * given, so the row's exemption cannot be decided and the row is not required (the caller names it
+ * unread). */
+export function checkBody(text: string, title: string | undefined, rule: RepoRule): string | undefined {
+  const row = rowOf(rule)
   const what = section(text, 'What', row)
   if (what === undefined || !/^\s*[-*] \S/m.test(what))
     return '`## What` is missing or has no bullet. The body must carry the full PR format.'
@@ -125,9 +146,9 @@ export function checkBody(text: string, title: string, rule: RepoRule): string |
   if (why === undefined || !why.trim()) return '`## Why` is missing or empty.'
   const notes = section(text, 'Notes', row)
   if (notes !== undefined && !notes.trim()) return '`## Notes` is present but empty: drop the heading or fill it.'
-  if (!rule.row) return undefined
+  if (!rule.row || title === undefined) return undefined
   const isExempt = rule.noRow ? new RegExp(rule.noRow).test(title) : false
-  if (isExempt || new RegExp(rule.row, 'm').test(text)) return undefined
+  if (isExempt || hasRow(text, rule)) return undefined
   return (
     `no board-row line matching \`${rule.row}\`. Every work PR here names its board row; only titles ` +
     `matching \`${rule.noRow ?? '(none)'}\` name none.`

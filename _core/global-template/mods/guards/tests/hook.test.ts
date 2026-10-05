@@ -323,3 +323,35 @@ test('two here-docs on one PR call are named unread', { options: { mode: 'enforc
   expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
   expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
 })
+
+test('a PR edit with no title is judged without the board row, which is named unread', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- a\n\n## Why\nb\n' })
+  const result = await bash($, 'gh pr edit 7 --body-file b.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain("the PR body's board row (format check, edit: no --title to judge it)")
+  const short = await bash($, 'gh pr edit 7 --body-file short.md')
+  expect(short).toBeDefined()
+})
+
+// Spellings gh reads one way and a plain reading another: each is named unread, never blocked.
+const ODD_SPELLINGS = [
+  'gh pr create -dF b.md -t "feat: x"',
+  'gh pr create -tfeat -F b.md',
+  'gh pr create --title "feat: x" --body-file "$(cat name.txt)"',
+  "gh pr create --title \"feat: x\" -F - <<< $'## What\\n- a\\n\\n## Why\\nb\\n\\nResolves #1'",
+]
+// A body the check would refuse (no board row), so a misread spelling shows as a block.
+const NO_ROW = '## What\n- a\n\n## Why\nb\n'
+for (const command of ODD_SPELLINGS) {
+  test(`an odd spelling is named unread, never blocked: ${command}`, { options: { mode: 'enforce' } }, async (
+    $,
+    on,
+  ) => {
+    const files = { [RULES]: ROW_RULE, 'C:/Repos/my-game/name.txt': 'b.md\n', 'C:/Repos/my-game/b.md': NO_ROW }
+    const seen = world(on, files)
+    expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+    expect(lastEntry(seen).unread?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
+  })
+}
