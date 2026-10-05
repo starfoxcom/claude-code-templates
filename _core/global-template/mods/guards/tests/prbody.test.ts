@@ -109,3 +109,18 @@ test('a title built at run time is marked, in every spelling', () => {
 test('the value of --recover is a value, never a flag', () => {
   expect(pr('create', ['--recover', dyn('$STATE'), '--body-file', 'b.md']).isUnknown).toBe(false)
 })
+
+test('a row pattern matches a whole line, so a bullet that mentions it neither ends a section nor counts', () => {
+  const loose = { row: 'Resolves #\\d+' }
+  expect(checkBody('## What\n- Resolves #12 by moving it\n\n## Why\nb\n\nResolves #12\n', 'feat: x', loose)).toBeUndefined()
+  expect(checkBody('## What\n- Resolves #12 by moving it\n\n## Why\nb\n', 'feat: x', loose)).toContain('no board-row line')
+})
+
+test('without a title the board row is not required; short bundles and attached values are not judged', () => {
+  expect(checkBody('## What\n- a\n\n## Why\nb\n', undefined, RULE)).toBeUndefined()
+  expect(pr('edit', ['7', '--body-file', 'b.md']).hasTitle).toBe(false)
+  for (const words of [['-dF', 'b.md'], ['-tfeat', '-F', 'b.md'], ['-F', 'b.md', '-bx']])
+    expect([words, pr('create', words).isUnknown]).toEqual([words, true])
+  expect(pr('create', ['-d', '-F', 'b.md', '-t', 'feat: x']).isUnknown).toBe(false)
+  expect(pr('create', ['--title', '-tx', '-F', 'b.md']).isUnknown).toBe(false)
+})

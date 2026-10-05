@@ -3,7 +3,7 @@ import type { EngineInterface as Engine, Register } from 'claude-code'
 import { inspect } from './inspect'
 import type { Folder, Plan } from './inspect'
 import { checkAddedLines, checkBranch, checkText, describe } from './policy'
-import { checkBody, checkCall, ruleFor } from './prbody'
+import { checkBody, checkCall, hasRow, ruleFor } from './prbody'
 import type { PrCall, PrRules } from './prbody'
 import { register as settings, SETTINGS_PANE } from './settings'
 
@@ -155,7 +155,11 @@ async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash:
   const text = await prBody($, plan, call, cwd, isBash)
   if (text === undefined) return void plan.unread.push(`the PR body (format check, ${call.action})`)
   try {
-    return checkBody(text, call.title, rule)
+    const reason = checkBody(text, call.hasTitle ? call.title : undefined, rule)
+    // No title: whether this PR may skip the board row is unknown, so a missing row is named unread.
+    if (!reason && !call.hasTitle && rule.row && !hasRow(text, rule))
+      plan.unread.push(`the PR body's board row (format check, ${call.action}: no --title to judge it)`)
+    return reason
   } catch {
     // A pattern in pr-body.json that does not compile: the body goes unjudged, the other checks still run.
     return void plan.unread.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)

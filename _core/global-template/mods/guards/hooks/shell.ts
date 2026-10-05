@@ -136,6 +136,8 @@ class Reader {
   private heredocStart(): boolean {
     if (this.command.startsWith('<<<', this.i)) {
       this.endWord()
+      // An ANSI-C string (`$'a\nb'`): the shell turns its escapes into the text the program reads.
+      if (this.command.slice(this.i + 3).trimStart().startsWith("$'")) this.st.hasDynamicBody = true
       this.redirectNext = 'text'
       this.i += 3
       return true
