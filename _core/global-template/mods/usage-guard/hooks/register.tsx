@@ -11,10 +11,10 @@ import { NO_WORK_NOTICE, planArm, planPause, projectOf, resetKey, resumePrompt, 
 import { stopCommandsFor } from './rules'
 import { drawArmLine, drawCards } from './cards'
 import { register as phone } from './phone'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
 import type { Live } from './live'
-import { newLive } from './live'
+import { applyValues, newLive } from './live'
 import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, formatLocal, HELP, pausedText } from './texts'
 import { questionText, READ_ZONE, UNCONFIRMED_NOTICE, zoneOf } from './texts'
 
@@ -564,6 +564,7 @@ async function act($: EngineInterface, pause: Pause): Promise<void> {
 }
 
 async function check($: EngineInterface): Promise<void> {
+  await readSettings($)
   const now = await $.clock.now()
   const sessionId = await $.session.id()
   let pause = await readPause($)
@@ -595,10 +596,17 @@ async function check($: EngineInterface): Promise<void> {
   if (pause) await act($, pause)
 }
 
+// The settings file, for what runs before any prompt (a start, a reload) and each check: see settings.tsx.
+async function readSettings($: EngineInterface): Promise<void> {
+  const file = await $.fs.read(`${await dataDir($)}/settings.json`).catch(() => '')
+  applyFile(String(file), String(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`).catch(() => '')))
+}
+
 // The time zone and the two timers (pause check, shared card refresh), once per module load.
 async function startTimers($: EngineInterface): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
+  await readSettings($)
   await readZone($)
   await refresh($)
   const pause = await readPause($)
@@ -678,12 +686,7 @@ async function armLine($: EngineInterface): Promise<string | undefined> {
 
 export const register: Register = (on, options) => {
   // The settings come from the mod's own file over the loaded options, read again as it changes.
-  settings(on, options, values => {
-    live.wrapUpAt = Number(values.wrapUpAt ?? 90)
-    live.delayMinutes = Number(values.wakeDelayMinutes ?? 2)
-    live.compactAbovePercent = Number(values.compactAbovePercent ?? 25)
-    live.catchUpMinutes = Number(values.catchUpMinutes ?? 30)
-  })
+  settings(on, options, values => applyValues(live, values))
   phone(on, options)
 
   on('session.start', async ($, e, next) => {

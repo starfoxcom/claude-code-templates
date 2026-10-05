@@ -92,13 +92,17 @@ async function filePath($: Engine): Promise<string> {
   return `${configured ?? `${home}/.claude`}/mods-data/${PLUGIN}/settings.json`.replace(/\\/g, '/')
 }
 
-async function readSaved($: Engine): Promise<Values> {
+function parseObject(text: string): Values {
   try {
-    const parsed: unknown = JSON.parse(String(await $.fs.read(await filePath($))))
+    const parsed: unknown = JSON.parse(text)
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Values) : {}
   } catch {
     return {}
   }
+}
+
+async function readSaved($: Engine): Promise<Values> {
+  return parseObject(String(await $.fs.read(await filePath($)).catch(() => '')))
 }
 
 // The manifest's fields, read once per load. The plugin's root holds plugin.json, directly or in
@@ -157,6 +161,15 @@ const loaded: { options: Values; apply: (values: Values) => void; isTicking: boo
   options: {},
   apply: () => undefined,
   isTicking: false,
+}
+
+/**
+ * Runs the mod with the settings file's text over the options it loaded with, the fields taken from the
+ * manifest's text. For the main module, which reads the file where this one cannot hook (see register).
+ */
+export function applyFile(fileText: string, manifestText: string): void {
+  const fields = (parseObject(manifestText).userConfig ?? {}) as Fields
+  loaded.apply(effectiveValues(loaded.options, parseObject(fileText), fields))
 }
 
 async function currentValues($: Engine): Promise<Values> {
@@ -255,7 +268,8 @@ async function drawPane(ui: Ui, $: Engine) {
 
 // The file is read at each prompt (the person's or a plugin's, so every turn), when a Desktop window joins,
 // at the mod's command and the pane, and once a minute from the first of those. The mod's own module keeps
-// session.start and turn.start, and a plugin hooks an event once without a matcher.
+// session.start and turn.start (a plugin hooks an event once without a matcher), so it reads the file
+// itself at a start, after a reload and at each minute check, through applyFile.
 export function register(on: On, options: Options, apply: (values: Values) => void): void {
   loaded.options = options
   loaded.apply = apply
@@ -279,8 +293,10 @@ export function register(on: On, options: Options, apply: (values: Values) => vo
   })
 
   on('command.run', { command: NAME }, async ($, e, next) => {
-    const text = await setCommand($, e.args)
-    return text === undefined ? next(e) : { text }
+    if (e.args.trim().split(/\s+/)[0] !== 'set') return (await setCommand($, e.args), next(e))
+    // The main handler still runs: after a hot reload, any /usage-guard restarts the mod's timers there.
+    await next({ ...e, args: '' })
+    return { text: (await setCommand($, e.args)) ?? '' }
   })
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
