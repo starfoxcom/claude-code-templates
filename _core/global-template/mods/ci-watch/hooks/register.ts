@@ -48,10 +48,15 @@ function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   return current.map(w => {
     const p = polled.find(p => same(p, w))
     if (!p) return w
-    const incidentPending = !p.outcome && p.headSha === w.headSha ? w.incidentPending : p.incidentPending
+    const isNoteMemorys = !p.outcome && p.headSha === w.headSha
+    const incidentPending = isNoteMemorys ? w.incidentPending : p.incidentPending
+    // A note made meanwhile (another poll of this load noted and sent it) is kept, or it would be made again.
+    const incident = isNoteMemorys ? (w.incident ?? p.incident) : p.incident
     const isKept =
-      Boolean(p.wakePending) === Boolean(w.wakePending) && Boolean(p.incidentPending) === Boolean(incidentPending)
-    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending }
+      Boolean(p.wakePending) === Boolean(w.wakePending) &&
+      Boolean(p.incidentPending) === Boolean(incidentPending) &&
+      p.incident === incident
+    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident }
   })
 }
 
@@ -362,13 +367,14 @@ async function noteIncidents($: EngineInterface, now: number): Promise<boolean> 
   const incident = await readIncident($, now)
   if (!incident) return false
   // Another load may have noted it while this one read GitHub (two stay active when the owner file cannot
-  // be written): its saved note stands, and is taken over without a second wake.
+  // be written): its saved note stands as saved, still held or already sent, and no second one is made.
   const saved = await readSaved($)
-  const notedAs = (w: Watch) => saved?.find(s => s.id === w.id && s.headSha === w.headSha && s.incident)?.incident
+  const notedBy = (w: Watch) => saved?.find(s => s.id === w.id && s.headSha === w.headSha && s.incident)
   live.watches = live.watches.map(w => {
     if (!isWaiting(w)) return w
-    const noted = notedAs(w)
-    return noted ? { ...w, incident: noted } : { ...w, incident, incidentPending: true }
+    const noted = notedBy(w)
+    if (noted) return { ...w, incident: noted.incident, incidentPending: noted.incidentPending }
+    return { ...w, incident, incidentPending: true }
   })
   return true
 }
