@@ -1,3 +1,4 @@
+import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 import type { Watch } from '../types'
 import {
@@ -434,4 +435,83 @@ test('a bare /ci-watch typed over Remote Control answers with the phone text', a
   const bridge = { command: 'ci-watch', args: '', origin: { kind: 'bridge' } }
   const answer = (await $.command.run(bridge as never)) as { text: string }
   expect(answer.text.split('\n')).toEqual(['No PR is being watched.', '/ci-watch help for more'])
+})
+
+const stop = ($: Engine) => $.command.run({ command: 'ci-watch', args: 'stop' } as never)
+const CASES: [string, (seen: Seen, $: Engine) => unknown, number][] = [
+  ['still current, it wakes the session once the turn ends', () => undefined, 1],
+  ['merged by the turn meanwhile, it wakes nothing', seen => void (seen.prState = 'MERGED'), 0],
+  ['moved on to a new commit by the turn, it wakes nothing for the old one', seen => void (seen.head = 'b2'), 0],
+  ['stopped by the person meanwhile, it wakes nothing', (_, $) => stop($), 0],
+]
+for (const [label, during, wakes] of CASES) {
+  test(`a wake that settles mid-turn waits for the turn's end; ${label}`, async ($, on) => {
+    const { seen, clock } = world(on)
+    on('turn.start', ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', () => ({ text: '' }))
+    await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+    await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+    await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+    seen.bucket = 'pass'
+    await clock.advance(POLL_MS)
+    await clock.advance(POLL_MS)
+    await clock.advance(POLL_MS)
+    expect(seen.prompts).toEqual([])
+    await during(seen, $)
+    await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+    await clock.advance(10)
+    expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(wakes)
+  })
+}
+
+// A reload mid-turn: the turn started in the old module, and the new one first runs at the turn's end
+// (or at a tool call inside it). The wake the old module held is in the saved file, marked pending.
+const PENDING_WATCH: Watch = {
+  repo: 'o/r',
+  number: 7,
+  headSha: 'a1',
+  startedAt: 0,
+  checks: { build: 'pass' },
+  stablePolls: 2,
+  outcome: 'passed',
+  settledAt: 1,
+  id: 'w1',
+  wakePending: true,
+}
+const RELOAD_STARTS: [string, (clock: { advance: (ms: number) => Promise<unknown> }, $: Engine) => Promise<unknown>][] = [
+  ['at the turn end', async () => undefined],
+  [
+    'at a tool call inside the turn, holding it until the turn ends',
+    async (clock, $) => {
+      await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
+      await clock.advance(POLL_MS)
+    },
+  ],
+]
+for (const [label, first] of RELOAD_STARTS) {
+  test(`a wake held by the module before a reload is sent once by the new one, first run ${label}`, async (
+    $,
+    on,
+  ) => {
+    const { seen, clock } = world(on)
+    seen.isReadable = true
+    on('turn.complete', () => ({ text: '' }))
+    seen.files.set(STATE, JSON.stringify({ watches: [PENDING_WATCH], isTurnRunning: true }))
+    await first(clock, $)
+    expect(seen.prompts).toEqual([])
+    await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+    await clock.advance(10)
+    for (let i = 0; i < 3; i++) await clock.advance(POLL_MS)
+    expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(1)
+    expect(JSON.parse(seen.files.get(STATE) ?? '{}').watches[0].wakePending).toBeUndefined()
+  })
+}
+
+test('a session that ended mid-turn does not hold its wakes after a new start', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  seen.files.set(STATE, JSON.stringify({ watches: [PENDING_WATCH], isTurnRunning: true }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(1)
 })
