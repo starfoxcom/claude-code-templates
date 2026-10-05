@@ -28,7 +28,7 @@ Every mod is optional and independent, with one exception noted in the table (sh
 
 ### Options
 
-Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Change them in `/config` (each option is a row there) or in `~/.claude/settings.json` under `pluginConfigs.<mod>.options`, for example `"pluginConfigs": { "guards": { "options": { "mode": "enforce" } } }`. A change reloads the mod. A mod with a settings pane also opens one with `/<mod> settings` (`ci-watch`, `compact-handoff`, `session-facts`, `session-info`, `tasks` as `/task-list settings`, `runners`, `guards`, `usage-guard`): the same rows, editable in the terminal. The Desktop app lists no mod rows in its settings, so there the pane shows the values read-only and says to change them in the terminal. `usage-guard` keeps its settings in a file of its own instead, `mods-data/usage-guard/settings.json`, over the options it loaded with: its pane edits them on every surface, `/usage-guard set <name> <value>` does from the phone, and every running session picks a change up within a minute.
+Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`: those are the defaults. Each mod keeps the values you change in a file of its own, `mods-data/<mod>/settings.json`, over those defaults. Change them in the mod's settings pane, `/<mod> settings` (`/task-list settings` for `tasks`), which edits them in the terminal and the Desktop app alike, or with `/<mod> set <name> <value>` from the phone (`/<mod> set` alone lists them). The file is read at each session's start and once a minute after its first tool call or command, so every running session picks a change up within a minute; a new check interval takes over at the next tick of the old one. The Desktop app lists no mod rows in `/config`, so each mod hides its rows there; a value set in `/config` or in `~/.claude/settings.json` under `pluginConfigs.<mod>.options` before still counts until the file sets that field.
 
 | Mod | Option | Default | Meaning |
 |---|---|---|---|
@@ -66,6 +66,16 @@ Write `mods-data/guards/pr-body.json` to make `guards` check pull request bodies
 ```
 
 There, `gh pr create` and `gh pr edit` must pass the body as a file (`--body-file`, never inline `--body`, `--fill` or `--web`), and the body needs `## What` with a bullet, `## Why` with text, and `## Notes` only when it is filled. `row` (optional) matches a whole line every PR body carries, such as its issue link, and that line also ends the section above it; titles matching `noRow` carry none, and a PR edited without `--title` is not held to the row. A body is checked only when the PR call is the whole command and is written out in full: one statement starting with `gh` (no `cd`, variable, subshell or `bash -c` before or around it, and a PR named by number, not by URL), every flag spelled on its own (`-d -F b.md`, not `-dF b.md`), no word the shell changes (no `$`, `$'...'`, `$(...)` or backtick anywhere in it), one `--body-file`, and the body in that file, already on disk, or in one literal here-doc on stdin. Anything else, and any repo whose patterns do not compile, is logged as unread in `decisions.jsonl`, never blocked. Of keys that overlap, the longest match wins. Without the file, no PR body is checked.
+
+### Banned names (guards, opt-in)
+
+Write `mods-data/guards/names.json` to keep names out of a repo's history, such as the titles a clean-room project must never mention. Keys match repo names as in `pr-body.json`:
+
+```json
+{ "repos": { "my-game": { "names": ["oldkeep", "Lantern Studio"], "words": ["OK"] } } }
+```
+
+`names` match anywhere and in any case (`oldkeep` catches `OldkeepPLUS`), and a name of several words matches across spaces and line breaks. `words` match only as whole words, in the case written (`OK` catches `OK-normal`, never `BOOK` or `ok`). Both are checked in the messages and titles `guards` reads from git and gh writes (commits, PRs, issues), in body files, and in new branch names; lines added to project files stay the project's own CI check. In shadow mode a hit is logged, in enforce mode it is blocked. A file whose lists are not strings is ignored. Without the file, no name is checked.
 
 ### What guards cannot see
 
@@ -107,7 +117,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 |---|---|
 | `compact-handoff` | hand-off files: one per session in `on` mode, plus `<session>-precompute.md` when the engine writes a summary ahead of time; newest 20, at most 14 days, in `shadow` mode |
 | `ci-watch` | `<session>.json` (the watches) and `<session>.owner` (which loaded copy of the mod polls); a settled watch is dropped after an hour, or at once when the PR is merged or closed; both files are swept two days after their session last wrote them |
-| `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json`; `pr-body.json` is yours to write (see [PR-body contract](#pr-body-contract-guards-opt-in)) |
+| `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json`; `pr-body.json` and `names.json` are yours to write (see [PR-body contract](#pr-body-contract-guards-opt-in) and [Banned names](#banned-names-guards-opt-in)) |
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
 | `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days), `settings.json` (its settings, written by its pane and `/usage-guard set`), `arms/<session>.json` (a session's standing arm, kept for a restart; `null` once disarmed or run) |

@@ -1,6 +1,6 @@
 import type { EngineInterface, Register, SessionCompactInput, SessionCompactResult, SessionMessage } from 'claude-code'
 
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 export const PERSON_MARK = "[compact-handoff] The person's messages, word for word"
 const MESSAGE_SPLIT = '\n--- message ---\n'
@@ -66,11 +66,12 @@ export const NOT_PERSON = /^(?:The [\w.-]+ plugin sent a message:|\[Request inte
 
 type Mode = 'off' | 'shadow' | 'on'
 
-const HINT = '[help | settings]'
+const HINT = '[help | settings | set]'
 export const HELP = [
   "/compact-handoff: at each compaction, keeps the person's messages word for word and writes a hand-off.",
   '  /compact-handoff           the current mode',
   '  /compact-handoff settings  open the settings pane',
+  '  /compact-handoff set       change a setting: set <name> <value>; alone, list them',
   '  /compact-handoff help      this list',
 ].join('\n')
 export const MODE_TEXT: Record<Mode, string> = {
@@ -315,14 +316,31 @@ async function replace(
   return { ...result, messages: summary ? [summary, carried, ...rest] : [carried, ...rest] }
 }
 
+// The mode in effect: the settings file can change it while the session runs. `isRead`: the file was read
+// since this module loaded.
+const live = { mode: 'on' as Mode, isRead: false }
+
+// The settings file at the session's start, before any tool call: the settings module follows it from
+// there. Read here, since an engine handle is never passed into another file.
+async function readSettings($: EngineInterface): Promise<void> {
+  live.isRead = true
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${home}/.claude`
+  const file = await $.fs.read(`${config}/mods-data/compact-handoff/settings.json`.replace(/\\/g, '/')).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 export const register: Register = (on, options) => {
-  const mode = (options.mode ?? 'on') as Mode
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => {
+    live.mode = (values.mode ?? 'on') as Mode
+  })
 
   // `/compact-handoff [help | settings]`; with no argument, the mode. Any other argument gets the help.
   on('command.run', { command: 'compact-handoff' }, async ($, e) => {
     const verb = e.args.trim()
-    if (verb === '') return { text: MODE_TEXT[mode] }
+    if (verb === '') return { text: MODE_TEXT[live.mode] }
     if (verb !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Compact hand-off settings', focus: true })
     return { text: 'Opened the compact-handoff settings.' }
@@ -330,9 +348,11 @@ export const register: Register = (on, options) => {
 
   // The command registers in every mode, so mode off can still be turned back on from its pane.
   on('session.start', async ($, e, next) => {
+    // A settings file that cannot be read never costs the start: the loaded options stand.
+    await readSettings($).catch(() => undefined)
     const description = 'The compaction hand-off: its mode'
     await $.command.register({ name: 'compact-handoff', description, argumentHint: HINT })
-    if (mode === 'off') return next(e)
+    if (live.mode === 'off') return next(e)
     await $.tool.register({
       name: 'recall',
       description:
@@ -351,18 +371,20 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  if (mode === 'off') return
-
+  // After a reload no session.start runs: the first recall or compaction reads the file before the mode.
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => {
+    if (!live.isRead) await readSettings($).catch(() => undefined)
     const query = String((e as { query?: unknown }).query ?? '').trim()
+    if (live.mode === 'off') return { deny: 'compact-handoff is off.' }
     if (!query) return { deny: 'recall needs a query.' }
     const text = await helper($, ['recall', await $.session.id(), String(RECALL_MAX_CHARS), query])
     return { result: text }
   })
 
   on('session.compact', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
-    if (e.trigger === 'precompute') return mode === 'on' ? precompute($, e, next) : next(e)
-    return mode === 'on' ? replace($, e, next) : shadow($, e, next)
+    if (!live.isRead) await readSettings($).catch(() => undefined)
+    if (e.agentId !== undefined || live.mode === 'off') return next(e)
+    if (e.trigger === 'precompute') return live.mode === 'on' ? precompute($, e, next) : next(e)
+    return live.mode === 'on' ? replace($, e, next) : shadow($, e, next)
   })
 }

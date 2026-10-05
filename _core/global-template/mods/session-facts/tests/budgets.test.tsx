@@ -3,7 +3,6 @@ import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
 import {
-  barSvg,
   cacheChip,
   compactedMark,
   contextChip,
@@ -65,15 +64,6 @@ for (const { name, b, text, color } of CONTEXT_CASES) {
   })
 }
 
-test('the Desktop bar fills the same share in the same tone, clamped to its track', () => {
-  const fill = (svg: string) => /<rect x="0" y="2" width="(\d+)" height="6" rx="3" fill="(#\w+)"\/>/.exec(svg)
-  expect(fill(barSvg(0, 'green'))).toBeNull()
-  expect(fill(barSvg(0.5, 'green'))?.slice(1)).toEqual(['40', '#3fb950'])
-  expect(fill(barSvg(0.8, 'yellow'))?.slice(1)).toEqual(['64', '#d29922'])
-  expect(fill(barSvg(1.3, 'red'))?.slice(1)).toEqual(['80', '#f85149'])
-  expect(barSvg(0.5, 'green')).toMatch(/^<svg xmlns="http:\/\/www.w3.org\/2000\/svg" width="80" height="10"/)
-})
-
 test('fillTone: green, then yellow at three quarters, red at nine tenths', () => {
   const cases: [number, string][] = [
     [0, 'green'],
@@ -90,8 +80,8 @@ test('the bar takes the fill tone, the empty cells gray; the facts line draws th
   // 250k of a 467k compaction point: 5 of 10 cells, calm.
   expect(contextParts(250_000, 500_000, 467_000)).toEqual([
     { text: 'ctx ' },
-    { text: '▰▰▰▰▰', color: 'green', isCell: true },
-    { text: '▱▱▱▱▱', color: 'gray', isCell: true },
+    { text: '▰▰▰▰▰', color: 'green' },
+    { text: '▱▱▱▱▱', color: 'gray' },
     { text: ' 50% · 217k to compact' },
   ])
   expect(contextText(250_000, 500_000, 467_000, true)).toBe('ctx 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ 50% · 217k to compact')
@@ -218,17 +208,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     world(on)
     await start($, surface)
     const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
-    // No compaction point here, so the bar fills against the window: 5 of 10 cells, green. Desktop draws
-    // the same half, in the same green, as one bar instead of cells.
-    if (surface === 'terminal') {
-      expect(await ui.find({ type: 'Text', text: '▰▰▰▰▰', color: 'green' } as never)).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: '▱▱▱▱▱', color: 'gray' } as never)).toBeDefined()
-    } else {
-      expect(await ui.find({ type: 'Text', text: /[▰▱]/ })).toBeUndefined()
-      const bar = (await ui.find({ type: 'Svg' })) as never as { props: Record<string, unknown> } | undefined
-      expect(bar?.props.source).toBe(barSvg(0.5, 'green'))
-      expect(bar?.props.alt).toBe('context 50% of the way to compaction')
-    }
+    // No compaction point here, so the bar fills against the window: 5 of 10 cells, green.
+    expect(await ui.find({ type: 'Text', text: '▰▰▰▰▰', color: 'green' } as never)).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '▱▱▱▱▱', color: 'gray' } as never)).toBeDefined()
     expect(await ui.find({ type: 'Text', text: / 50%$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5h 80% → resets Fri 14:00/, color: 'red' } as never)).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /week 20%/ })).toBeDefined()
