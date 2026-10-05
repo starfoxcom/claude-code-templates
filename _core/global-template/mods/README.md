@@ -28,7 +28,7 @@ Every mod is optional and independent, with one exception noted in the table (sh
 
 ### Options
 
-Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Change them in `/config` (each option is a row there) or in `~/.claude/settings.json` under `pluginConfigs.<mod>.options`, for example `"pluginConfigs": { "guards": { "options": { "mode": "enforce" } } }`. A change reloads the mod. A mod with a settings pane also opens one with `/<mod> settings` (`usage-guard`, `ci-watch`, `session-facts`, `session-info`): the same rows, editable in the terminal and in the Desktop app, where `/config` opens the app's own Settings instead.
+Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Change them in `/config` (each option is a row there) or in `~/.claude/settings.json` under `pluginConfigs.<mod>.options`, for example `"pluginConfigs": { "guards": { "options": { "mode": "enforce" } } }`. A change reloads the mod. A mod with a settings pane also opens one with `/<mod> settings` (`ci-watch`, `compact-handoff`, `session-facts`, `session-info`, `tasks` as `/task-list settings`, `usage-guard`): the same rows, editable in the terminal. The Desktop app lists no mod rows in its settings, so there the pane shows the values read-only and says to change them in the terminal; `usage-guard`'s pane draws its fields anyway and tries each change.
 
 | Mod | Option | Default | Meaning |
 |---|---|---|---|
