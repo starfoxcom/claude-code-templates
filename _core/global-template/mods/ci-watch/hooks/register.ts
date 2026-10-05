@@ -36,7 +36,8 @@ const live = {
   pollMs: 30_000,
   timeoutMs: 60 * 60_000,
   watches: [] as Watch[],
-  isPolling: false,
+  /** The load's one start: claim, sweep, load, poll. Every hook awaits it, so none acts mid-claim. */
+  started: undefined as Promise<void> | undefined,
   /** The last save failed: memory holds watches the file may lack. */
   isUnsaved: false,
   /** Counts the changes made outside a poll (a new watch, a stop, a merge), so a poll can tell. */
@@ -602,14 +603,17 @@ async function takeNotes($: EngineInterface): Promise<string[]> {
 }
 
 // A hot reload starts the module over without a new session.start: the next
-// turn or tool call reloads the saved watches and restarts polling.
-async function startPolling($: EngineInterface): Promise<void> {
-  if (live.isPolling) return
-  live.isPolling = true
-  await claimOwner($)
-  await sweep($)
-  await load($)
-  armPolling($)
+// turn or tool call reloads the saved watches and restarts polling. Each hook waits for the same start:
+// a reload runs its start beside the model's next call, and a call that only saw the start under way
+// read the older load's name in the owner file, passed itself on as retired, and went unanswered.
+function startPolling($: EngineInterface): Promise<void> {
+  live.started ??= (async () => {
+    await claimOwner($)
+    await sweep($)
+    await load($)
+    armPolling($)
+  })().catch(() => undefined)
+  return live.started
 }
 
 // A new interval from the settings file takes over at the next tick of the old one.
