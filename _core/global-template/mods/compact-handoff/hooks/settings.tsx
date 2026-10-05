@@ -26,6 +26,13 @@ export function isOwnRow(row: Pick<ConfigRow, 'key' | 'provider'>): boolean {
   return row.provider?.plugin === PLUGIN || owner === PLUGIN || owner.startsWith(`${PLUGIN}@`)
 }
 
+// True when /config listed fine yet holds no plugin's row at all, ours or another's: that surface leaves
+// plugin settings out of its list (the Desktop app does). Other plugins' rows there mean ours are missing
+// for some other reason, which emptyNote names; a failed list says nothing about the surface.
+export function leavesPluginsOut(listed: readonly Pick<ConfigRow, 'key' | 'provider'>[] | Error): boolean {
+  return !(listed instanceof Error) && !listed.some(row => isOwnRow(row) || row.provider?.plugin !== 'engine')
+}
+
 // Shown when none of the rows is this plugin's: what /config did list (or why it could not), so one
 // look on that surface tells why the pane is empty. The rows other plugins own are the telling ones (none
 // at all: that surface lists no plugin settings), so they are named and the engine's own only counted.
@@ -133,9 +140,8 @@ export const register: Register = (on, options) => {
     const listed = await $.config.list().catch((err: unknown) => (err instanceof Error ? err : new Error(String(err))))
     const rows = listed instanceof Error ? [] : listed.filter(isOwnRow)
     const errors = (await read($, view))?.errors ?? {}
-    // A list with no row of this plugin's, yet the plugin has values: this surface leaves plugin rows out of
-    // /config. A list that failed says so instead: it tells nothing about the surface.
-    const isReadOnly = !(listed instanceof Error) && rows.length === 0 && Object.keys(options).length > 0
+    // This surface leaves plugin rows out of /config: the values show read-only.
+    const isReadOnly = leavesPluginsOut(listed) && Object.keys(options).length > 0
     const titles = isReadOnly ? await titlesOf($) : {}
     const close = () => void $.ui.close({ id: SETTINGS_PANE }).catch(() => undefined)
     return (
