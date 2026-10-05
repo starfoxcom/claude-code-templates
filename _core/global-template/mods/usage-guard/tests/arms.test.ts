@@ -320,6 +320,17 @@ test('an arm is saved for a restart, and a disarm drops the saved copy', async (
   expect(savedArm(seen)).toBe('null')
 })
 
+test('a failed attempt to make the arms folder is tried again at the next save', async ($, on) => {
+  const seen = world(on)
+  seen.mkdirFailures = 1
+  await start($)
+  await arm5h($)
+  expect(savedArm(seen)).toBeUndefined()
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  await arm5h($)
+  expect(parseSavedArm(savedArm(seen) ?? '')?.wakeAt).toBe(WAKE)
+})
+
 test('a disarm after a /clear also drops the copy saved under the old session id', async ($, on) => {
   const seen = world(on)
   await start($)
