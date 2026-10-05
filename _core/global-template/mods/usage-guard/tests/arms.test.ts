@@ -1,4 +1,3 @@
-import type { SessionCompactResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 import { catchUpOf, parseSavedArm } from '../hooks/arms'
@@ -12,11 +11,11 @@ import {
   endTurn,
   mountCard,
   NOW,
+  PAUSE_FILE,
   quietWakes,
   RESET,
   resumes,
   start,
-  SUMMARY,
   TASKS_DIR,
   WAKE,
   world,
@@ -50,6 +49,22 @@ test('a session that resumes by itself compacts once its wrap-up turn ends, and 
   // Once: later turns during the pause compact nothing more.
   await endTurn($)
   expect(seen.statuses.at(-1)).toContain('compacted to 125k')
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toHaveLength(1)
+})
+
+test('after a reload in a pause, a wrap-up begun at a turn end compacts after its own turn', async ($, on) => {
+  const seen = world(on)
+  seen.context = { ...seen.context, tokens: 400_000 }
+  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 92, resetsAt: RESET, wakeAt: WAKE }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-b' }))
+  // No session.start: the module reloaded mid-turn, and the turn changed something after it.
+  await doWork($)
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+  await seen.clock.advance(1_000)
+  expect(seen.compactions).toEqual([])
+  await endTurn($)
   await seen.clock.advance(1_000)
   expect(seen.compactions).toHaveLength(1)
 })
@@ -266,6 +281,57 @@ test('open tasks are the ones not completed, not dropped and not on hold', () =>
   expect(countOpenTasks('{}')).toBeUndefined()
 })
 
+test('an arm set beside open tasks still resumes fully after a /clear starts an empty list', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [{ status: 'in_progress' }])
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(quietWakes(seen)).toEqual([])
+})
+
+test('an arm a longer pause moves keeps the session it was set in, and still resumes fully', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [{ status: 'in_progress' }])
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  // Another session paused for the weekly reset, past this arm's wake.
+  const resetsAt = new Date(Date.parse(RESET) + 3 * 3_600_000).toISOString()
+  const wakeAt = Date.parse(resetsAt) + 2 * 60_000
+  const pause = { status: 'active', kinds: ['seven_day'], percentUsed: 92, resetsAt, wakeAt, triggeredBy: 'sess-c' }
+  seen.files.set(PAUSE_FILE, JSON.stringify(pause))
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.armedIn).toBe('sess-a')
+  await seen.clock.advance(wakeAt - WAKE)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(quietWakes(seen)).toEqual([])
+})
+
+test('a pause resume still counts the arming session after the arm is cleared midway', async ($, on) => {
+  const seen = world(on)
+  tasksFile(seen, [{ status: 'in_progress' }])
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 92, resetsAt: RESET, wakeAt: WAKE }
+  seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-c' }))
+  await seen.clock.advance(60_000)
+  // The arm's own timer clears the arm while the pause's resume waits on its claim helper.
+  seen.duringClaim = name => {
+    if (name.startsWith('resume-')) void $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  }
+  await seen.clock.advance(WAKE - NOW - 60_000)
+  expect(resumes(seen)).toHaveLength(1)
+  expect(quietWakes(seen)).toEqual([])
+})
+
 test('an armed session with nothing pending gets the one-line prompt at a pause reset too', async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [])
@@ -288,6 +354,98 @@ test('an arm is saved for a restart, and a disarm drops the saved copy', async (
     expect.objectContaining({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }),
   )
   await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a failed attempt to make the arms folder is tried again at the next save', async ($, on) => {
+  const seen = world(on)
+  seen.mkdirFailures = 1
+  await start($)
+  await arm5h($)
+  expect(savedArm(seen)).toBeUndefined()
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  await arm5h($)
+  expect(parseSavedArm(savedArm(seen) ?? '')?.wakeAt).toBe(WAKE)
+})
+
+test('a /clear move that fails to save keeps the old file named, so a disarm still clears it', async ($, on) => {
+  const seen = world(on)
+  on('classic.SessionStart', () => ({}) as never)
+  await start($)
+  await arm5h($)
+  seen.isArmsDirMissing = true
+  seen.sessionId = 'sess-b'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-b' })
+  expect(parseSavedArm(savedArm(seen) ?? '')?.wakeAt).toBe(WAKE)
+  seen.isArmsDirMissing = false
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a disarm after a /clear also drops the copy saved under the old session id', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a /clear moves the saved arm to the new session id at once, before any turn', async ($, on) => {
+  const seen = world(on)
+  on('classic.SessionStart', () => ({}) as never)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-b' })
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt).toBe(WAKE)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('a /clear right after a hot reload moves the saved arm and clears the old copy', async ($, on) => {
+  const seen = world(on)
+  on('classic.SessionStart', () => ({}) as never)
+  // A reload starts the module over but keeps plugin state: the test holds the arm's state the way the
+  // engine would, with the arm also on disk under this id, and nothing has run in the new module yet.
+  const arm = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE, session: 'sess-a' }
+  let held: unknown = arm
+  let version = 1
+  const isArm = (e: unknown) => (e as { key: string }).key === 'armed'
+  on('state.get', (_, e, next) => (isArm(e) ? { value: { value: held, version } as never } : next(e)))
+  on('state.set', (_, e, next) => {
+    if (!isArm(e)) return next(e)
+    held = (e as { value: unknown }).value
+    return { value: { isSet: true, version: ++version } as never }
+  })
+  seen.files.set(ARM_FILE, JSON.stringify(arm))
+  seen.sessionId = 'sess-b'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-b' })
+  const moved = () => parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt
+  expect(moved()).toBe(WAKE)
+  expect(savedArm(seen)).toBe('null')
+  // The first turn after it restarts the timers and leaves both files as they are.
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  expect(moved()).toBe(WAKE)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('after a /clear, the next turn moves the saved arm to the new session id', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.turn.start({ turnId: 't2', prompt: 'next' } as never)
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt).toBe(WAKE)
+  expect(savedArm(seen)).toBe('null')
+})
+
+test('after a /clear while idle, the minute check moves the saved arm to the new session id', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await seen.clock.advance(60_000)
+  expect(parseSavedArm(seen.files.get(ARM_FILE.replace('sess-a', 'sess-b')) ?? '')?.wakeAt).toBe(WAKE)
   expect(savedArm(seen)).toBe('null')
 })
 
@@ -335,6 +493,8 @@ test('a saved arm is scheduled ahead, caught up within the window, and dropped p
 test('only a whole arm reads back from its file', () => {
   const arm = { kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }
   expect(parseSavedArm(JSON.stringify(arm))).toEqual({ ...arm, isQuestioned: false })
+  const set = { ...arm, armedIn: 'sess-a', session: 'sess-b' }
+  expect(parseSavedArm(JSON.stringify(set))).toEqual({ ...arm, isQuestioned: false, armedIn: 'sess-a' })
   expect(parseSavedArm('null')).toBeUndefined()
   expect(parseSavedArm('{"kind":"five_hour","resetsAt":"x"}')).toBeUndefined()
   expect(parseSavedArm('not json')).toBeUndefined()
