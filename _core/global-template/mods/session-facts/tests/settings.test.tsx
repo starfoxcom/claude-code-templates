@@ -127,6 +127,13 @@ test('/session-facts with help, no argument or an unknown one answers with the h
   expect(seen.opened).toEqual([])
 })
 
+test('a bare /session-facts typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  const bridge = { command: 'session-facts', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n').at(-1)).toBe('/session-facts help for more')
+})
+
 // The Desktop app lists no plugin rows in /config: the pane shows the mod's values read-only, named by
 // the manifest, and offers nothing to change there.
 const TITLES = { userConfig: { planWarnAt: { title: 'Warn on plan usage at (%)' } } }

@@ -1,11 +1,11 @@
-import type { ConfigRow, ConfigSetInput, On } from 'claude-code'
+import type { On } from 'claude-code'
 import type { Engine, Mounted } from 'claude-code/testing'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
-import { emptyNote, parseNumber, UNLISTED_NOTE, unlistedRows } from '../hooks/settings'
+import { effectiveValues, kindOf, parseValue, settingsList } from '../hooks/settings'
 
-// The settings pane over faked /config rows: the engine's own validation draws it on each surface,
-// and every change goes through config.set as the /config menu's would.
+// The settings pane and `/usage-guard set` over a faked settings file and manifest: the engine's own
+// validation draws the pane on each surface, and every change lands in the mod's own file.
 const PANE = 'usage-guard-settings'
 const PANE_PROPS = {
   title: 'Usage guard settings',
@@ -15,217 +15,155 @@ const PANE_PROPS = {
   scroll: { top: 0 },
   view: {},
 } as never
-const ENGINE = { plugin: 'engine', tier: 'core' } as never
-const THEME: ConfigRow = {
-  key: 'theme',
-  label: 'Theme',
-  kind: 'choice',
-  value: 'dark',
-  options: ['dark', 'light'],
-  provider: ENGINE,
-  isLocked: false,
+const FILE = 'C:/Users/me/.claude/mods-data/usage-guard/settings.json'
+const FIELDS = {
+  wrapUpAt: { type: 'number', title: 'Wrap up at (% used)', description: 'Sessions wrap up here.' },
+  wakeDelayMinutes: { type: 'number', title: 'Resume delay (minutes)' },
 }
-const WRAP_UP: ConfigRow = {
-  key: 'usage-guard.wrapUpAt',
-  label: 'Wrap up at (% used)',
-  description: 'When any plan window reaches this percentage, sessions wrap up.',
-  kind: 'number',
-  value: 90,
-  provider: ENGINE,
-  isLocked: false,
-}
-const ROWS: ConfigRow[] = [
-  THEME,
-  WRAP_UP,
-  {
-    key: 'usage-guard.wakeDelayMinutes',
-    label: 'Resume delay (minutes)',
-    kind: 'number',
-    value: 2,
-    provider: ENGINE,
-    isLocked: true,
-  },
-]
 
-function world(on: On, deny?: string) {
-  const writes: Pick<ConfigSetInput, 'key' | 'value'>[] = []
+function world(on: On, saved?: Record<string, unknown>) {
+  const files = new Map<string, string>()
+  if (saved) files.set(FILE, JSON.stringify(saved))
   const opened: string[] = []
-  on('config.list', () => ({ value: ROWS }))
-  on('config.set', ($, e) => {
-    writes.push({ key: e.key, value: e.value })
-    return deny ? { deny } : { value: e.value }
+  let isFolderMissing = !saved
+  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('config.describe', ($, e) => ({ label: e.label, description: e.description, isHidden: e.isHidden }))
+  on('fs.read', ($, e) => {
+    const path = String(e.path).replace(/\\/g, '/')
+    if (path.endsWith('plugin.json')) return { value: JSON.stringify({ userConfig: FIELDS }) }
+    const text = files.get(path)
+    if (text === undefined) throw new Error('no such file')
+    return { value: text }
+  })
+  on('fs.write', ($, e) => {
+    // The first save finds the folder missing until it is made.
+    if (isFolderMissing) throw new Error('no such folder')
+    files.set(String(e.path).replace(/\\/g, '/'), e.text)
+    return { value: undefined }
+  })
+  on('process.run', () => {
+    isFolderMissing = false
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.open', ($, e) => {
     opened.push(e.id)
     return { value: { isPlaced: true } }
   })
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { writes, opened }
+  const savedNow = () => JSON.parse(files.get(FILE) ?? '{}') as Record<string, unknown>
+  return { savedNow, opened }
 }
 
 type Pane = Mounted<'terminal' | 'desktop', 'Pane'>
 const mountPane = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal'): Promise<Pane> =>
   $.ui.mount({ plugin: 'usage-guard', surface, component: 'Pane', requestId: PANE, props: PANE_PROPS } as never)
+const run = async ($: Engine, args: string) =>
+  ((await $.command.run({ command: 'usage-guard', args } as never)) as { text: string }).text
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`the settings pane lists this mod's rows and saves a change on ${surface}`, async ($, on) => {
+  test(`the pane draws every field from the manifest and saves to the mod's file on ${surface}`, async ($, on) => {
     const seen = world(on)
     const ui = await mountPane($, surface)
-    expect(await ui.find({ key: 'setting-wrapUpAt' })).toBeDefined()
-    expect(await ui.find({ key: 'setting-wakeDelayMinutes' })).toBeDefined()
-    // Another plugin's row and the engine's own stay out of this pane.
-    expect(await ui.find({ key: 'setting-theme' })).toBeUndefined()
-    // A row a trusted source owns is shown, never offered for change.
-    expect(await ui.find({ key: 'usage-guard-set-wakeDelayMinutes' })).toBeUndefined()
-
+    expect(await ui.find({ type: 'Text', text: 'Wrap up at (% used)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Sessions wrap up here.' })).toBeDefined()
+    expect(await ui.find({ key: 'usage-guard-set-wakeDelayMinutes' })).toBeDefined()
     await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
-    expect(seen.writes).toEqual([{ key: 'usage-guard.wrapUpAt', value: 85 }])
+    // The folder was missing on the first save: it is made, and the save goes through.
+    expect(seen.savedNow()).toEqual({ wrapUpAt: 85 })
+    expect(await ui.find({ type: 'Text', text: 'Saved: 85.' })).toBeDefined()
   })
 }
 
-test('rows whose key names where the plugin came from are still this mod, saved under their own key', async ($, on) => {
-  const writes: Pick<ConfigSetInput, 'key' | 'value'>[] = []
-  const qualified = ROWS.map(row => ({ ...row, key: row.key.replace('usage-guard.', 'usage-guard@inline.') }))
-  on('config.list', () => ({ value: [...qualified, { ...WRAP_UP, key: 'usage-guard-extra.wrapUpAt' }] }))
-  on('config.set', ($, e) => {
-    writes.push({ key: e.key, value: e.value })
-    return { value: e.value }
-  })
-  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ key: 'setting-wrapUpAt' })).toBeDefined()
-  expect(await ui.find({ key: 'setting-wakeDelayMinutes' })).toBeDefined()
-  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
-  // Only the one row: a plugin whose name merely starts the same is another plugin.
-  expect(writes).toEqual([{ key: 'usage-guard@inline.wrapUpAt', value: 85 }])
-})
-
-// The Desktop app lists no plugin rows in /config: the pane draws the mod's fields from the manifest and
-// the loaded values, and tries each change anyway (a row the menu leaves out may still take a set).
-const MANIFEST = JSON.stringify({
-  userConfig: { wrapUpAt: { type: 'number', title: 'Wrap up at (% used)', description: 'Sessions wrap up here.' } },
-})
-function noPluginRows(on: On, list: () => unknown, set: (key: string) => string | undefined = () => undefined) {
-  const writes: Pick<ConfigSetInput, 'key' | 'value'>[] = []
-  on('config.list', list as never)
-  on('config.set', ($, e) => {
-    writes.push({ key: e.key, value: e.value })
-    const deny = set(e.key)
-    return deny ? { deny } : { value: e.value }
-  })
-  on('fs.read', ($, e) => {
-    if (String((e as { path?: string }).path).endsWith('plugin.json')) return { value: MANIFEST }
-    throw new Error('no such file')
-  })
-  on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return writes
-}
-
-test('a surface whose /config has no plugin rows still draws the fields, named by the manifest', async ($, on) => {
-  noPluginRows(on, () => ({ value: [THEME] }))
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Wrap up at (% used)' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Sessions wrap up here.' })).toBeDefined()
-  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeDefined()
-  // A field the manifest does not describe shows by its own name.
-  expect(await ui.find({ type: 'Text', text: 'wakeDelayMinutes' })).toBeDefined()
-})
-
-test('a change there is tried by its plain key and says it was saved', async ($, on) => {
-  const writes = noPluginRows(on, () => ({ value: [THEME] }))
-  const ui = await mountPane($, 'desktop')
-  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
-  expect(writes).toEqual([{ key: 'usage-guard.wrapUpAt', value: 85 }])
-  expect(await ui.find({ type: 'Text', text: 'Saved: 85.' })).toBeDefined()
-})
-
-test('a plain key refused there is tried with the inline source next', async ($, on) => {
-  const writes = noPluginRows(on, () => ({ value: [THEME] }), key => (key.includes('@') ? undefined : 'no such row'))
-  const ui = await mountPane($, 'desktop')
-  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
-  expect(writes.map(write => write.key)).toEqual(['usage-guard.wrapUpAt', 'usage-guard@inline.wrapUpAt'])
-  expect(await ui.find({ type: 'Text', text: 'Saved: 85 (as usage-guard@inline.wrapUpAt).' })).toBeDefined()
-})
-
-test('both keys refused there: each refusal shows word for word', async ($, on) => {
-  noPluginRows(on, () => ({ value: [THEME] }), key => `no row ${key}`)
-  const ui = await mountPane($, 'desktop')
-  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
-  const text = 'Refused. usage-guard.wrapUpAt: no row usage-guard.wrapUpAt usage-guard@inline.wrapUpAt: no row ' +
-    'usage-guard@inline.wrapUpAt'
-  expect(await ui.find({ type: 'Text', text })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^Saved/ })).toBeUndefined()
-})
-
-test('a /config that cannot be listed says so, not that the app hides the rows', async ($, on) => {
-  noPluginRows(on, () => ({ deny: 'no menu here' }))
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: /could not be listed \(.*no menu here.*\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeUndefined()
-  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeUndefined()
-})
-
-test('the rows /config left out take their kind from the manifest', () => {
-  const fields = { on: { type: 'boolean' }, pick: { type: 'string', options: ['a', 'b'] }, n: { type: 'number' } }
-  const rows = unlistedRows({ on: true, pick: 'a', n: 3, free: 'x' }, fields)
-  expect(rows.map(row => [row.key, row.kind])).toEqual([
-    ['usage-guard.on', 'boolean'],
-    ['usage-guard.pick', 'choice'],
-    ['usage-guard.n', 'number'],
-    ['usage-guard.free', 'text'],
-  ])
-})
-
-test('the note there names the terminal menu and this mod command', () => {
-  expect(UNLISTED_NOTE).toContain("The terminal's /config (or /usage-guard settings there) always works.")
-})
-
-// With no values to show, the pane says what /config listed, or why it could not.
-test("with nothing to show, the note names other plugins' rows, not the engine's", () => {
-  const other = { ...THEME, key: 'ci-watch.pollSeconds', provider: { plugin: 'ci-watch', tier: 'user' } as never }
-  expect(emptyNote([THEME])).toBe('No settings for usage-guard here: /config listed 1 row(s), 0 of them from plugins.')
-  const named = /2 row\(s\), 1 of them from plugins, such as ci-watch\.pollSeconds \(ci-watch\)\.$/
-  expect(emptyNote([THEME, other])).toMatch(named)
-  expect(emptyNote(new Error('no menu here'))).toBe(
-    'No settings for usage-guard here: /config could not be listed (no menu here).',
-  )
-})
-
-test('a refused change shows its reason under the field', async ($, on) => {
-  world(on, 'Must be between 50 and 99')
+test('a save keeps the values another session saved a moment ago', async ($, on) => {
+  const seen = world(on, { wakeDelayMinutes: 5 })
   const ui = await mountPane($)
-  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '120' })
-  expect(await ui.find({ type: 'Text', text: /Must be between 50 and 99/ })).toBeDefined()
+  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
+  expect(seen.savedNow()).toEqual({ wakeDelayMinutes: 5, wrapUpAt: 85 })
 })
 
 test('text that is not a number is refused before anything is written', async ($, on) => {
-  const seen = world(on)
+  const seen = world(on, {})
   const ui = await mountPane($)
   await ui.input({ key: 'usage-guard-set-wrapUpAt', text: 'ninety' })
-  expect(seen.writes).toEqual([])
+  expect(seen.savedNow()).toEqual({})
   expect(await ui.find({ type: 'Text', text: /"ninety" is not a number/ })).toBeDefined()
 })
 
-test('numbers parse from trimmed text; empty and non-numeric text do not', () => {
-  expect(parseNumber(' 85 ')).toEqual({ value: 85 })
-  expect(parseNumber('0')).toEqual({ value: 0 })
-  expect('error' in parseNumber('')).toBe(true)
-  expect('error' in parseNumber('ninety')).toBe(true)
-  expect('error' in parseNumber('Infinity')).toBe(true)
+test("a pane opened again starts clean, with no earlier save's outcome under its fields", async ($, on) => {
+  world(on, {})
+  const ui = await mountPane($)
+  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: 'ninety' })
+  expect(await run($, 'settings')).toBe('Opened the usage-guard settings.')
+  // Mounted again on the other surface: the same pane cannot mount twice on one.
+  const again = await mountPane($, 'desktop')
+  expect(await again.find({ type: 'Text', text: /is not a number/ })).toBeUndefined()
 })
 
 test('/usage-guard settings opens the pane', async ($, on) => {
   const seen = world(on)
-  const answer = await $.command.run({ command: 'usage-guard', args: 'settings' } as never)
+  expect(await run($, 'settings')).toBe('Opened the usage-guard settings.')
   expect(seen.opened).toEqual([PANE])
-  expect(answer).toEqual(expect.objectContaining({ text: 'Opened the usage-guard settings.' }))
 })
 
-test('rows of another plugin in /config name what was listed, not an app that hides them', async ($, on) => {
-  const other = { ...THEME, key: 'other-mod.level', provider: { plugin: 'other-mod', tier: 'user' } as never }
-  noPluginRows(on, () => ({ value: [THEME, other] }))
-  const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: /No settings for usage-guard here: .*other-mod\.level/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeUndefined()
+test('/usage-guard set lists the settings, saves one, and refuses an unknown name or a bad value', async ($, on) => {
+  const seen = world(on, { wakeDelayMinutes: 5 })
+  const list = await run($, 'set')
+  expect(list).toContain('change one with /usage-guard set <name> <value>')
+  expect(list).toMatch(/wakeDelayMinutes +5 +Resume delay \(minutes\)/)
+  expect(await run($, 'set wrapUpAt 85')).toBe(
+    'Saved: wrapUpAt is 85 for every session (the others within a minute).',
+  )
+  expect(seen.savedNow()).toEqual({ wakeDelayMinutes: 5, wrapUpAt: 85 })
+  expect(await run($, 'set nope 1')).toBe('No setting named "nope". /usage-guard set lists the settings.')
+  expect(await run($, 'set wrapUpAt lots')).toBe('"lots" is not a number /usage-guard set lists the settings.')
+  expect(seen.savedNow()).toEqual({ wakeDelayMinutes: 5, wrapUpAt: 85 })
+})
+
+test('a saved value takes effect at once in this session', async ($, on) => {
+  world(on, {})
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true } as never)
+  await run($, 'set wrapUpAt 85')
+  expect(await run($, '')).toContain('Sessions wrap up at 85% of any plan window.')
+})
+
+test("the mod's /config rows are hidden; other rows are left alone", async ($, on) => {
+  world(on)
+  const provider = { plugin: 'engine', tier: 'core' } as never
+  const describe = (key: string) =>
+    $.config.describe({ key, label: key, isHidden: false, provider } as never) as Promise<{ isHidden: boolean }>
+  expect((await describe('usage-guard.wrapUpAt')).isHidden).toBe(true)
+  expect((await describe('usage-guard@inline.wrapUpAt')).isHidden).toBe(true)
+  expect((await describe('usage-guard-extra.wrapUpAt')).isHidden).toBe(false)
+  expect((await describe('theme')).isHidden).toBe(false)
+})
+
+test('the effective values: a saved value that fits its field, over the loaded options', () => {
+  const options = { wrapUpAt: 90, wakeDelayMinutes: 2 }
+  expect(effectiveValues(options, { wrapUpAt: 85 }, FIELDS)).toEqual({ wrapUpAt: 85, wakeDelayMinutes: 2 })
+  // A value of the wrong kind, or for a field the manifest does not declare, is ignored.
+  expect(effectiveValues(options, { wrapUpAt: 'lots', other: 1 }, FIELDS)).toEqual(options)
+})
+
+test('values parse by their kind', () => {
+  const choice = { type: 'string', options: ['a', 'b'] }
+  expect(kindOf({ type: 'boolean' })).toBe('boolean')
+  expect(kindOf(choice)).toBe('choice')
+  expect(parseValue({ type: 'number' }, ' 85 ')).toEqual({ value: 85 })
+  expect('error' in parseValue({ type: 'number' }, '')).toBe(true)
+  expect('error' in parseValue({ type: 'number' }, 'Infinity')).toBe(true)
+  expect(parseValue({ type: 'boolean' }, 'on')).toEqual({ value: true })
+  expect(parseValue({ type: 'boolean' }, 'OFF')).toEqual({ value: false })
+  expect('error' in parseValue({ type: 'boolean' }, 'maybe')).toBe(true)
+  expect(parseValue(choice, 'b')).toEqual({ value: 'b' })
+  expect(parseValue(choice, 'c')).toEqual({ error: '"c" is not one of: a, b' })
+  expect(parseValue({ type: 'string' }, 'any text')).toEqual({ value: 'any text' })
+})
+
+test('the list shows each setting with its value and title', () => {
+  const text = settingsList({ wrapUpAt: 90, wakeDelayMinutes: 2 }, FIELDS)
+  expect(text.split('\n').slice(1)).toEqual([
+    '  wrapUpAt          90  Wrap up at (% used)',
+    '  wakeDelayMinutes  2  Resume delay (minutes)',
+  ])
 })

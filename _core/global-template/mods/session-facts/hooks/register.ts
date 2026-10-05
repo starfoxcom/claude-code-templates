@@ -1,8 +1,8 @@
-import { atom, update } from 'claude-code'
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, TurnUsage } from 'claude-code'
 
 import type { Budgets, CacheCheck } from '../types'
-import { compactedMark, contextText, registerBudgetsView } from './budgets'
+import { compactedMark, contextText, phoneText, registerBudgetsView } from './budgets'
 import { checkCache, nextLifetime, parseMemory, PREPARE_DIR, READ_CACHE_LINES, writtenLifetime } from './cache'
 import type { SharedPlan } from './plan'
 import { parseSharedPlan, planPart, SHARED_PLAN_FILE, sharedPlanText } from './plan'
@@ -21,14 +21,15 @@ const READ_ZONE = [
 
 type Zone = { offsetMinutes: number; name: string }
 type Window = { size: number; compactsAt?: number }
-type Compaction = { at: number; tokensAfter?: number }
+type Compaction = { at: number }
 
 const UTC: Zone = { offsetMinutes: 0, name: 'UTC (host zone unread)' }
 
-const HINT = '[help | settings]'
+const HINT = '[help | settings | phone]'
 export const HELP = [
   '/session-facts: the budgets row (context, plan usage, cache) and the time and budgets line on every prompt.',
   '  /session-facts settings  open the settings pane',
+  '  /session-facts phone     the same as text, for phone chats',
   '  /session-facts help      this list',
 ].join('\n')
 
@@ -62,10 +63,11 @@ function formatLocal(nowMs: number, zone: Zone): string {
 }
 
 // The budgets row's figures, its bar drawn as colored squares since the State line copied from
-// this is read on the phone. Until the first response after a compaction the engine has no fill
-// of its own; the compaction's size stands in.
+// this is read on the phone. Until the first response after a compaction the fill is unknown: the
+// compaction's own size counts only the kept messages, never the system prompt, tools and rules every
+// request carries, so it read far below the real fill (4% for a real 27%, 2026-10-04).
 function contextPart(tokens: number | undefined, fullWindow: number, now: number): { text: string; isKnown: boolean } {
-  const fill = tokens ?? live.compaction?.tokensAfter
+  const fill = tokens
   const text = contextText(fill, live.window?.size ?? fullWindow, live.window?.compactsAt, true)
   const mark = compactedMark(live.compaction?.at, live.zone.offsetMinutes, now)
   const unknown = fill === undefined ? ' (unknown until the first response of this window)' : ''
@@ -183,7 +185,7 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
       readPausedUntil($),
     ])
     const next: Budgets = {
-      tokens: context.tokens ?? live.compaction?.tokensAfter,
+      tokens: context.tokens,
       size: live.window?.size ?? context.window,
       compactsAt: live.window?.compactsAt,
       compactedAt: live.compaction?.at,
@@ -307,9 +309,18 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // `/session-facts [help | settings]`; any other argument, or none, gets the help.
+  // `/session-facts [help | settings | phone]`; any other argument, or none, gets the help.
   on('command.run', { command: 'session-facts' }, async ($, e) => {
-    if (e.args.trim() !== 'settings') return { text: HELP }
+    // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+    // row draws: the bare command answers with the phone text.
+    const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
+    if (verb === 'phone') {
+      await refreshBudgets($)
+      const shown = await read($, budgets)
+      const text = shown ? phoneText(shown, await $.clock.now()) : 'The budgets are not read yet.'
+      return { text: `${text}\n/session-facts help for more` }
+    }
+    if (verb !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Session facts settings', focus: true })
     return { text: 'Opened the session-facts settings.' }
   })
@@ -387,9 +398,9 @@ export const register: Register = (on, options) => {
     const result = await next(e)
     if (e.agentId !== undefined || e.trigger === 'precompute') return result
     // `skip` tells the two result shapes apart: past it, the result is a compaction that
-    // stands, whose `messages` and `tokensAfter` the types guarantee.
+    // stands, whose `messages` the types guarantee.
     if (result.skip !== undefined || result.messages.length === 0) return result
-    live.compaction = { at: await $.clock.now(), tokensAfter: result.tokensAfter }
+    live.compaction = { at: await $.clock.now() }
     live.isWindowFresh = true
     const line = await factsLine($, true)
     live.lastLine = { at: live.compaction.at, isPartial: line.isPartial }

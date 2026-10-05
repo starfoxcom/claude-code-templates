@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { ordered, PANE } from '../hooks/view'
+import { ordered, PANE, phoneText } from '../hooks/view'
 import type { TaskRow } from '../types'
 
 // The view draws the mirror register.ts writes; the mirror is faked here.
@@ -85,6 +85,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect([next.props.color, next.props.dimColor]).toEqual([undefined, undefined])
   })
 
+  test(`the band stays one line when narrow: only the task's name gives way, on ${surface}`, async ($, on) => {
+    world(on, [...LIST, { id: '4', subject: 'Wait on it', status: 'pending', hold: 'the logs' }])
+    await start($)
+    const ui = await $.ui.mount({ plugin: 'tasks', surface, component: 'AbovePrompt', props: PROPS })
+    const props = async (key: string) =>
+      ((await ui.find({ key })) as never as { props: Record<string, unknown> } | undefined)?.props
+    // The counts and the List button keep their width, so nothing they hold wraps to a second row.
+    for (const key of ['tasks-done', 'tasks-open', 'tasks-held', 'tasks-list-slot'])
+      expect((await props(key))?.flexShrink).toBe(0)
+    expect(await props('tasks-current')).toEqual(expect.objectContaining({ flexShrink: 1, minWidth: 0 }))
+    const name = (await ui.find({ type: 'Text', text: /🔨 #2 Building the guards mod/ })) as never as {
+      props: Record<string, unknown>
+    }
+    expect(name.props.wrap).toBe('truncate-end')
+  })
+
   test(`the pane lists every task, finished ones included, on ${surface}`, async ($, on) => {
     world(on, LIST)
     await start($)
@@ -141,4 +157,28 @@ test("a new session shows the last session's unfinished tasks as carried over", 
     props: PANE_PROPS,
   } as never)
   expect(await pane.find({ key: 'carried-7' })).toBeDefined()
+})
+
+test('the phone text counts each kind, lists the unfinished tasks, then the newest finished ones', () => {
+  const row = (id: string, status: TaskRow['status'], extra: Partial<TaskRow> = {}): TaskRow => ({
+    id,
+    subject: `task ${id}`,
+    status,
+    ...extra,
+  })
+  const done = ['1', '2', '3', '4', '5', '6'].map(id => row(id, 'completed'))
+  const tasks = [...done, row('7', 'in_progress'), row('8', 'pending', { hold: 'Alex' }), row('9', 'pending')]
+  expect(phoneText(tasks).split('\n')).toEqual([
+    '📋 Tasks · 🔨 1 working · 📝 1 open · 🚧 1 on hold · ✅ 6 done',
+    '🔨 #7 task 7',
+    '📝 #9 task 9',
+    '🚧 #8 task 8 (waits on: Alex)',
+    '✅ #6 task 6',
+    '✅ #5 task 5',
+    '✅ #4 task 4',
+    '✅ #3 task 3',
+    '✅ #2 task 2',
+    '… and 1 more finished',
+  ])
+  expect(phoneText([])).toBe('📋 No task list in this session.')
 })

@@ -72,20 +72,55 @@ function countOf(tasks: readonly TaskRow[], kind: Kind): number {
   return tasks.filter(task => kindOf(task) === kind).length
 }
 
+// Finished tasks the phone text lists before it only counts the rest.
+const PHONE_DONE = 5
+
+/**
+ * The list as plain text for a phone chat, which draws neither the band nor the pane: the counts, then
+ * every unfinished task under its kind's icon (with what a held one waits on), then the newest finished.
+ */
+export function phoneText(tasks: readonly TaskRow[]): string {
+  if (tasks.length === 0) return '📋 No task list in this session.'
+  const counts = KINDS.filter(k => countOf(tasks, k.kind) > 0).map(
+    k => `${k.icon} ${countOf(tasks, k.kind)} ${k.title.toLowerCase()}`,
+  )
+  const icon = (task: TaskRow) => KINDS.find(k => k.kind === kindOf(task))?.icon ?? ''
+  const waits = (task: TaskRow) => (task.hold ? ` (waits on: ${task.hold})` : '')
+  const line = (task: TaskRow) => `${icon(task)} #${task.id} ${task.subject}${waits(task)}`
+  const all = ordered(tasks)
+  const isFinished = (task: TaskRow) => ['done', 'dropped'].includes(kindOf(task))
+  const finished = all.filter(isFinished)
+  const rest = finished.length - PHONE_DONE
+  return [
+    `📋 Tasks · ${counts.join(' · ')}`,
+    ...all.filter(task => !isFinished(task)).map(line),
+    ...finished.slice(0, PHONE_DONE).map(line),
+    ...(rest > 0 ? [`… and ${rest} more finished`] : []),
+  ].join('\n')
+}
+
 type Ui = ReturnType<Engine['ui']['resolve']>
 
 // The line above the prompt while only last session's leftovers are listed.
 function carriedLine(ui: Ui, $: Engine, count: number) {
   const { Box, Button, Text } = ui
   return (
-    <Box>
-      <Text color="magenta">↩ {count} carried over from the last session, check them against the hand-off </Text>
-      <Button key="tasks-list" label="List" onPress={() => openList($)} />
+    <Box flexWrap="nowrap">
+      <Box key="tasks-carried" flexShrink={1} minWidth={0}>
+        <Text color="magenta" wrap="truncate-end">
+          ↩ {count} carried over from the last session, check them against the hand-off{' '}
+        </Text>
+      </Box>
+      <Box key="tasks-list-slot" flexShrink={0}>
+        <Button key="tasks-list" label="List" onPress={() => openList($)} />
+      </Box>
     </Box>
   )
 }
 
 // The line above the prompt: done count, the task being worked (or the next one), open and held counts.
+// It stays one line however narrow the band gets (a side pane takes room): the counts and the button
+// keep their width, and only the task's name gives way, cut short with an ellipsis.
 function bandLine(ui: Ui, $: Engine, tasks: readonly TaskRow[]) {
   const { Box, Button, Text } = ui
   const active = tasks.filter(t => kindOf(t) === 'working')
@@ -93,15 +128,32 @@ function bandLine(ui: Ui, $: Engine, tasks: readonly TaskRow[]) {
   const kept = tasks.length - countOf(tasks, 'dropped')
   const open = countOf(tasks, 'open')
   const held = countOf(tasks, 'hold')
+  const current = currentText(ui, tasks, active)
   return (
-    <Box>
-      <Text color={done === kept ? 'green' : undefined}>
-        ✅ {done}/{kept}{' '}
-      </Text>
-      {currentText(ui, tasks, active)}
-      {open > 0 ? <Text>· 📝 {open} </Text> : null}
-      {held > 0 ? <Text color="yellow">· 🚧 {held} </Text> : null}
-      <Button key="tasks-list" label="List" onPress={() => openList($)} />
+    <Box flexWrap="nowrap">
+      <Box key="tasks-done" flexShrink={0}>
+        <Text color={done === kept ? 'green' : undefined}>
+          ✅ {done}/{kept}{' '}
+        </Text>
+      </Box>
+      {current ? (
+        <Box key="tasks-current" flexShrink={1} minWidth={0}>
+          {current}
+        </Box>
+      ) : null}
+      {open > 0 ? (
+        <Box key="tasks-open" flexShrink={0}>
+          <Text>· 📝 {open} </Text>
+        </Box>
+      ) : null}
+      {held > 0 ? (
+        <Box key="tasks-held" flexShrink={0}>
+          <Text color="yellow">· 🚧 {held} </Text>
+        </Box>
+      ) : null}
+      <Box key="tasks-list-slot" flexShrink={0}>
+        <Button key="tasks-list" label="List" onPress={() => openList($)} />
+      </Box>
     </Box>
   )
 }

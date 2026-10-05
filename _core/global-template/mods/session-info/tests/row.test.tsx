@@ -81,10 +81,25 @@ for (const surface of SURFACES) {
     world(on)
     await start($, surface)
     const ui = await mount($, surface)
-    expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · GameProject/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Opus 5\.5$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ' · GameProject' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /develop\*/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /↑2/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /↓1/ })).toBeDefined()
+  })
+
+  test(`${surface}: in a narrow band each part wraps whole, and only one wider than the band is cut`, async ($, on) => {
+    world(on)
+    await start($, surface)
+    const ui = await mount($, surface)
+    const props = async (key: string) =>
+      ((await ui.find({ key })) as never as { props: Record<string, unknown> } | undefined)?.props
+    expect((await props('session-info-row'))?.flexWrap).toBe('wrap')
+    for (const key of ['session-info-model', 'session-info-project', 'session-info-branch'])
+      expect(await props(key)).toEqual(expect.objectContaining({ flexShrink: 1, minWidth: 0 }))
+    expect((await props('session-info-changes-slot'))?.flexShrink).toBe(0)
+    const branch = (await ui.find({ type: 'Text', text: /develop\*/ })) as never as { props: Record<string, unknown> }
+    expect(branch.props.wrap).toBe('truncate-end')
   })
 
   const CAPPED = { options: { maxFiles: 2 } }
@@ -110,7 +125,7 @@ test('the effort comes from the main loop, never a subagent', async ($, on) => {
   await drain($.turn.step(subagent as never))
   await $.turn.complete({ turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'done' } as never)
   const ui = await mount($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · GameProject/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Opus 5\.5 high$/ })).toBeDefined()
 })
 
 const TURN_DONE = { turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'done' } as never
@@ -122,10 +137,10 @@ test("a request's own effort beats an unchanged pick, even when it lands before 
   const step = { turnId: 't', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }
   await drain($.turn.step(step as never))
   await $.turn.complete(TURN_DONE)
-  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 high · / })).toBeDefined()
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /^Opus 5\.5 high$/ })).toBeDefined()
   // A refresh with the same pick keeps it.
   await seen.clock.advance(30_000)
-  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 high · / })).toBeDefined()
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /^Opus 5\.5 high$/ })).toBeDefined()
 })
 
 test('the effort picked in settings shows before the first request, and a new pick replaces it', async ($, on) => {
@@ -133,11 +148,11 @@ test('the effort picked in settings shows before the first request, and a new pi
   seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'high' } } }
   await start($, 'terminal')
   const ui = await mount($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: /Opus 5\.5 high · GameProject/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Opus 5\.5 high$/ })).toBeDefined()
   seen.settings = { modelSettings: { 'claude-opus-5-5': { effortLevel: 'medium' } } }
   await seen.clock.advance(30_000)
   const after = await mount($, 'terminal')
-  expect(await after.find({ type: 'Text', text: /Opus 5\.5 medium · GameProject/ })).toBeDefined()
+  expect(await after.find({ type: 'Text', text: /^Opus 5\.5 medium$/ })).toBeDefined()
 })
 
 test('the picked effort is read per model, with the top-level setting as the fallback', () => {
@@ -161,7 +176,8 @@ test('outside a repository the row keeps model and project only', async ($, on) 
   world(on, '')
   await start($, 'terminal')
   const ui = await mount($, 'terminal')
-  expect(await ui.find({ type: 'Text', text: /Opus 5\.5 · GameProject/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Opus 5\.5$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: ' · GameProject' })).toBeDefined()
   expect(await ui.find({ key: 'session-info-changes' })).toBeUndefined()
 })
 
@@ -172,7 +188,7 @@ test('a failed first read still starts the timer that fills the row', async ($, 
   expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /GameProject/ })).toBeUndefined()
   seen.isModelDown = false
   await seen.clock.advance(30_000)
-  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /Opus 5\.5 · GameProject/ })).toBeDefined()
+  expect(await (await mount($, 'terminal')).find({ type: 'Text', text: /^Opus 5\.5$/ })).toBeDefined()
 })
 
 test('one git read at a time: a slow read never lands over a checkout made while it ran', async ($, on) => {
@@ -198,9 +214,27 @@ test('one git read at a time: a slow read never lands over a checkout made while
 test('/session-info shows its verbs in the menu, and help or anything else lists them', async ($, on) => {
   const seen = world(on)
   await start($, 'terminal')
-  expect(seen.commands).toEqual([{ name: 'session-info', argumentHint: '[help | settings]' }])
+  expect(seen.commands).toEqual([{ name: 'session-info', argumentHint: '[help | settings | phone]' }])
   for (const args of ['', 'help', 'setings']) {
     const answer = await $.command.run({ command: 'session-info', args } as never)
     expect(answer).toEqual(expect.objectContaining({ text: HELP }))
   }
+})
+
+test('/session-info phone gives the row as text, ending with the help hint', async ($, on) => {
+  world(on)
+  await start($, 'terminal')
+  const answer = (await $.command.run({ command: 'session-info', args: 'phone' } as never)) as { text: string }
+  const lines = answer.text.split('\n')
+  expect(lines[0]).toMatch(/^🧭 /)
+  expect(lines[1]).toMatch(/^🌿 /)
+  expect(lines.at(-1)).toBe('/session-info help for more')
+})
+
+test('a bare /session-info typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  await start($, 'terminal')
+  const bridge = { command: 'session-info', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n').at(-1)).toBe('/session-info help for more')
 })

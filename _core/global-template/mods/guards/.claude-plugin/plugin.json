@@ -2,6 +2,7 @@
   "name": "guards",
   "version": "0.1.0",
   "description": "Keeps AI credit out of commits, PRs, issues, comments and releases, and stops the streaming CI log watcher, by reading each command instead of scanning its raw text.",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "mode": {
       "type": "string",

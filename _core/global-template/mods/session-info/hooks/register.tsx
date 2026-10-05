@@ -2,17 +2,18 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { GitState, SessionLine } from '../types'
-import { GIT_STATUS, modelName, parseStatus } from './git'
+import { GIT_STATUS, modelName, parseStatus, phoneText } from './git'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 const line = atom({ plugin: 'session-info', key: 'line' } as const, null)
 const isExpanded = atom({ plugin: 'session-info', key: 'isExpanded' } as const, false)
 
 const GIT_TIMEOUT_MS = 5_000
-const HINT = '[help | settings]'
+const HINT = '[help | settings | phone]'
 export const HELP = [
   '/session-info: the row with the model, the project and the branch with its changes.',
   '  /session-info settings  open the settings pane',
+  '  /session-info phone     the same as text, for phone chats',
   '  /session-info help      this list',
 ].join('\n')
 
@@ -125,9 +126,18 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // `/session-info [help | settings]`; any other argument, or none, gets the help.
+  // `/session-info [help | settings | phone]`; any other argument, or none, gets the help.
   on('command.run', { command: 'session-info' }, async ($, e) => {
-    if (e.args.trim() !== 'settings') return { text: HELP }
+    // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+    // row draws: the bare command answers with the phone text.
+    const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
+    if (verb === 'phone') {
+      await start($)
+      const shown = await read($, line)
+      const text = shown ? phoneText(shown, live.maxFiles) : 'The session row is not read yet.'
+      return { text: `${text}\n/session-info help for more` }
+    }
+    if (verb !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Session info settings', focus: true })
     return { text: 'Opened the session-info settings.' }
   })
@@ -175,30 +185,40 @@ export const register: Register = (on, options) => {
 
 type Ui = ReturnType<EngineInterface['ui']['resolve']>
 
+// The row's parts (model, project, branch with its arrows, the changes button) wrap whole in a narrow
+// band: a part that does not fit moves to the next line in one piece. Only a part wider than the band
+// alone (a long branch name) shrinks, cut short with an ellipsis.
 function rowOf(ui: Ui, $: EngineInterface, shown: SessionLine) {
   const { Box, Button, Text } = ui
   const { git } = shown
   const count = git.changed.length
   return (
-    <Box>
-      <Text>
-        {shown.effort ? `${shown.model} ${shown.effort}` : shown.model} · {shown.project}
-      </Text>
+    <Box key="session-info-row" flexWrap="wrap">
+      <Box key="session-info-model" flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end">{shown.effort ? `${shown.model} ${shown.effort}` : shown.model}</Text>
+      </Box>
+      <Box key="session-info-project" flexShrink={1} minWidth={0}>
+        <Text wrap="truncate-end"> · {shown.project}</Text>
+      </Box>
       {git.branch ? (
-        <Text>
-          {' · '}
-          {git.branch}
-          {count > 0 ? '*' : ''}
-        </Text>
+        <Box key="session-info-branch" flexShrink={1} minWidth={0}>
+          <Text wrap="truncate-end">
+            {' · '}
+            {git.branch}
+            {count > 0 ? '*' : ''}
+          </Text>
+          {git.ahead > 0 ? <Text color="green"> ↑{git.ahead}</Text> : null}
+          {git.behind > 0 ? <Text color="yellow"> ↓{git.behind}</Text> : null}
+        </Box>
       ) : null}
-      {git.ahead > 0 ? <Text color="green"> ↑{git.ahead}</Text> : null}
-      {git.behind > 0 ? <Text color="yellow"> ↓{git.behind}</Text> : null}
       {count > 0 ? (
-        <Button
-          key="session-info-changes"
-          label={`${count} changed`}
-          onPress={() => update($, isExpanded, value => !value)}
-        />
+        <Box key="session-info-changes-slot" flexShrink={0}>
+          <Button
+            key="session-info-changes"
+            label={`${count} changed`}
+            onPress={() => update($, isExpanded, value => !value)}
+          />
+        </Box>
       ) : null}
     </Box>
   )

@@ -11,10 +11,9 @@ import { NO_WORK_NOTICE, planArm, planPause, projectOf, resetKey, resumePrompt, 
 import { stopCommandsFor } from './rules'
 import { drawArmLine, drawCards } from './cards'
 import { register as phone } from './phone'
-import { register as settings, SETTINGS_PANE } from './settings'
+import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
-import type { Live } from './live'
-import { newLive } from './live'
+import { applyValues, type Live, newLive } from './live'
 import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, formatLocal, HELP, pausedText } from './texts'
 import { questionText, READ_ZONE, UNCONFIRMED_NOTICE, zoneOf } from './texts'
 
@@ -564,6 +563,7 @@ async function act($: EngineInterface, pause: Pause): Promise<void> {
 }
 
 async function check($: EngineInterface): Promise<void> {
+  await readSettings($)
   const now = await $.clock.now()
   const sessionId = await $.session.id()
   let pause = await readPause($)
@@ -595,10 +595,18 @@ async function check($: EngineInterface): Promise<void> {
   if (pause) await act($, pause)
 }
 
+// The settings file, for what runs before any prompt (a start, a reload) and each check: see settings.tsx.
+async function readSettings($: EngineInterface): Promise<void> {
+  const file = await $.fs.read(`${await dataDir($)}/settings.json`).catch(() => '')
+  const manifest = (dir: string) => $.fs.read(`${$.plugin.root}${dir}/plugin.json`)
+  applyFile(String(file), String(await manifest('/.claude-plugin').catch(() => manifest('').catch(() => ''))))
+}
+
 // The time zone and the two timers (pause check, shared card refresh), once per module load.
 async function startTimers($: EngineInterface): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
+  await readSettings($)
   await readZone($)
   await refresh($)
   const pause = await readPause($)
@@ -677,11 +685,8 @@ async function armLine($: EngineInterface): Promise<string | undefined> {
 }
 
 export const register: Register = (on, options) => {
-  live.wrapUpAt = Number(options.wrapUpAt ?? 90)
-  live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
-  live.compactAbovePercent = Number(options.compactAbovePercent ?? 25)
-  live.catchUpMinutes = Number(options.catchUpMinutes ?? 30)
-  settings(on, options)
+  // The settings come from the mod's own file over the loaded options, read again as it changes.
+  settings(on, options, values => applyValues(live, values))
   phone(on, options)
 
   on('session.start', async ($, e, next) => {
@@ -763,7 +768,8 @@ export const register: Register = (on, options) => {
 async function registerSurface($: EngineInterface): Promise<void> {
   await $.command.register({
     name: 'usage-guard',
-    description: 'Usage pause status. Also: cancel, arm 5h|week [compact] (resume after that reset), disarm, settings',
+    description:
+      'Usage pause status. Also: cancel, arm 5h|week [compact] (resume after that reset), disarm, settings, set',
     argumentHint: ARGUMENT_HINT,
   })
 }
