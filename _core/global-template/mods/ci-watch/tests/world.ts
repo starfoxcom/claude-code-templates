@@ -1,6 +1,7 @@
 import type { On } from 'claude-code'
 import { mock } from 'claude-code/testing'
 
+import { STATUS_SCRIPT } from '../hooks/incident'
 import { MKDIR_SCRIPT, SWEEP_SCRIPT } from '../hooks/register'
 
 // The engine beneath ci-watch in its tests: gh, the state files, the clock and the session's prompts.
@@ -30,6 +31,9 @@ export type Seen = {
   manifest?: string
   /** `gh pr checks` calls so far: one per watch per poll. */
   checksRead: number
+  /** What githubstatus.com answers (default: nothing), and how often it was read. */
+  status?: string
+  statusReads: number
   /** How many prompts a hook drops before one enters. */
   refusals?: number
   /** Each slash command registered, with its argument hint. */
@@ -47,6 +51,7 @@ export function world(on: On) {
     prState: 'OPEN',
     commands: [],
     checksRead: 0,
+    statusReads: 0,
   }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
@@ -76,6 +81,11 @@ export function world(on: On) {
     const args = e.argv.join(' ')
     if (e.argv[2] === MKDIR_SCRIPT) seen.order.push(`mkdir ${e.argv[3]}`)
     if (e.argv[2] === SWEEP_SCRIPT) seen.order.push(`sweep ${e.argv.slice(3).join(' ')}`)
+    if (e.argv[2] === STATUS_SCRIPT) {
+      seen.statusReads++
+      const stdout = seen.status ?? ''
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     if (args.includes('pr checks')) seen.checksRead++
     if (args.includes('pr checks')) await seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {

@@ -44,6 +44,11 @@ export function summary(watch: Watch): { text: string; color: 'green' | 'red' | 
   }
   if (failed.length > 0) return { text: `❌ ${pr} · failed: ${failed.join(', ')}`, color: 'red' }
   if (watch.outcome === 'timeout') return { text: `⏰ ${pr} · stuck pending`, color: 'yellow' }
+  // Still waiting while GitHub reports an Actions incident: the likely cause, named on the row.
+  if (!watch.outcome && watch.incident) {
+    const text = `⚠️ ${pr} · ${done}/${states.length} done · GitHub incident: ${watch.incident}`
+    return { text, color: 'yellow' }
+  }
   // Every check passed, and the watch waits out its quiet polls (a late workflow can still show up)
   // before it wakes the session: green for the checks, the hourglass for the wake still to come.
   if (states.length > 0 && done === states.length)
