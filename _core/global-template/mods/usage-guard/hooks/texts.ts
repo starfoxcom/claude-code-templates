@@ -66,7 +66,7 @@ export function cardTone(id: string): Tone {
 export type CardButton = { key: string; label: string; isPrimary?: boolean; onPress: () => unknown }
 export type Card = { key: string; tone: Tone; text: string; buttons: CardButton[] }
 
-export const ARGUMENT_HINT = '[help | settings | phone | arm 5h|week [compact] | disarm | cancel]'
+export const ARGUMENT_HINT = '[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel]'
 export const HELP = [
   '/usage-guard: pauses a session before a plan window runs out and resumes it after the reset.',
   '  /usage-guard                      the pause status and the wrap-up level',
@@ -75,6 +75,7 @@ export const HELP = [
   '  /usage-guard arm 5h|week compact  the same, and compact the session now',
   '  /usage-guard disarm               drop the armed resume',
   '  /usage-guard settings             open the settings pane',
+  '  /usage-guard set <name> <value>   change a setting; with no name, list them',
   '  /usage-guard phone                the same as text, for phone chats',
   '  /usage-guard help                 this list',
 ].join('\n')
