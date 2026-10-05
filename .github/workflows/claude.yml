@@ -195,12 +195,13 @@ jobs:
           # The action also saves the CLI's messages to a file, on disk even when
           # the job log has not reached the API yet. Only its final `result`
           # message is read: the rest holds the PR's own diff and comments, whose
-          # words must not decide the failure class. A plan cap reads "You've
-          # reached your <model> limit" with HTTP 429. The patterns are the CLI's
-          # and API's own error wording, never bare words a diff could contain.
+          # words must not decide the failure class. A model cap reads "You've
+          # reached your <model> limit" with HTTP 429, the plan cap "You've hit
+          # your limit · resets …". The patterns are the CLI's and API's own
+          # error wording, never bare words a diff could contain.
           RESULT=$(jq -c '[.[]? | select(.type == "result")] | last // empty' \
             "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
-          if printf '%s %s' "$LOG" "$RESULT" | grep -qiE 'rate_limit_error|usage limit|quota exceeded|resource_exhausted|reached your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
+          if printf '%s %s' "$LOG" "$RESULT" | grep -qiE 'rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
             echo "::warning::Usage limit detected in attempt 1 — skipping the same-model retry, falling back to Opus 5.5 @ high"
             echo "usage_limit=true" >> "$GITHUB_OUTPUT"
           else
