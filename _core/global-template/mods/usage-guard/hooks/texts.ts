@@ -54,6 +54,23 @@ export function pausedText(pause: Pause, wakeText: string): string {
   )
 }
 
+/** The note a session leaves when it joins a pause another session started. */
+export function joinedPauseText(pause: Pause, wakeText: string): string {
+  return (
+    `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes at ` +
+    `${wakeText}: a session with saved work then goes on by itself, and one with nothing ` +
+    `on record is told. To skip the automatic resume, run /usage-guard cancel.`
+  )
+}
+
+/** The answer to `/usage-guard arm`. */
+export function armedText(kind: string, wakeText: string): string {
+  return (
+    `Armed: this session resumes its saved work at ${wakeText}, after the ${LIMIT_NAMES[kind]} reset. ` +
+    '/usage-guard disarm cancels it.'
+  )
+}
+
 export const CANCELLED_TEXT =
   'Automatic resume cancelled for every session. Run /session-start in a session when you want to pick its ' +
   'saved work back up.'
