@@ -302,8 +302,9 @@ jobs:
       # ── Pre-screen: deterministic Python checks over the diff ────────────────
       # Catches mechanical rule violations before the reviewer sees them. The reviewer then
       # trusts the report and spends turns on judgment work — NOT re-discovering
-      # grep-able patterns. This is what makes the `Bash(gh *),Read` allowlist
-      # the right size: the reviewer doesn't need `cat`/`grep`/`wc` because the pre-
+      # grep-able patterns. This is what makes the allowlist (`gh`, `git diff`,
+      # `git log`, `git show` and Read) the right size: the reviewer doesn't need
+      # `cat`/`grep`/`wc` because the pre-
       # screen already did that work.
       - name: Pre-screen PR diff
         env:

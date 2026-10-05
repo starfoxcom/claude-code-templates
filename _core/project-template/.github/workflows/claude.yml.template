@@ -182,30 +182,22 @@ jobs:
       - name: Detect failure class
         id: failure_class
         if: steps.claude_attempt_1.outcome == 'failure'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          REPO="${{ github.repository }}"
-          RUN_ID="${{ github.run_id }}"
-
-          JOB_ID=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs" \
-            --jq '[.jobs[] | select(.name | test("On-demand"))] | first | .id // empty')
-          if [ -z "$JOB_ID" ]; then
-            echo "::warning::Could not resolve job ID — treating as transient failure"
-            echo "usage_limit=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          LOG=$(gh api "repos/$REPO/actions/jobs/$JOB_ID/logs" 2>/dev/null || true)
-          # The action also saves the CLI's messages to a file, on disk even when
-          # the job log has not reached the API yet. Only its final `result`
-          # message is read: the rest holds the PR's own diff and comments, whose
-          # words must not decide the failure class. A model cap reads "You've
-          # reached your <model> limit" with HTTP 429, the plan cap "You've hit
-          # your limit · resets …". The patterns are the CLI's and API's own
-          # error wording, never bare words a diff could contain.
-          RESULT=$(jq -c '[.[]? | select(.type == "result")] | last // empty'             "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
-          if printf '%s %s' "$LOG" "$RESULT" | grep -qiE 'rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit|api_error_status[^0-9]{0,4}429'; then
+          # The action saves the CLI's messages to a file on disk. Only two
+          # fields of its final `result` message are read, both written by the
+          # CLI: the API's HTTP status, and the result text when `is_error` is
+          # set (then it is the API's error, not the model's words). Everything
+          # else can carry the PR's own words: the job log prints the whole
+          # prompt, the other messages hold the diff and comments, and the
+          # result's own fields hold the model's final text and the commands it
+          # was refused. A model cap returns HTTP 429, the plan cap reads
+          # "You've hit your limit · resets …". A missing or unreadable file,
+          # or a cap reported anywhere else, counts as transient: the cost is
+          # one same-model retry.
+          RESULT=$(jq -r '[.[]? | select(.type == "result")] | last // empty
+            | "status=\(.api_error_status // "") \(if .is_error == true then .result // "" else "" end)"' \
+            "$RUNNER_TEMP/claude-execution-output.json" 2>/dev/null || true)
+          if printf '%s' "$RESULT" | grep -qiE '^status=429|rate_limit_error|usage limit|quota exceeded|resource_exhausted|(hit|reached) your [^.]{0,40}limit'; then
             echo "::warning::Usage limit detected in attempt 1 — skipping the same-model retry, falling back to the backup model"
             echo "usage_limit=true" >> "$GITHUB_OUTPUT"
           else
