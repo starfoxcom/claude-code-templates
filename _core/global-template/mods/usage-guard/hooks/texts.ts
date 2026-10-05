@@ -1,5 +1,5 @@
 import type { Pause } from './plan'
-import { limitName } from './plan'
+import { LIMIT_NAMES, limitName } from './plan'
 
 // What the person reads: the cards, the notes, the command's help, and the local time they all show.
 
@@ -23,6 +23,12 @@ export function formatLocal(ms: number, zone: Zone): string {
   const local = new Date(ms - zone.offsetMinutes * 60_000)
   const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][local.getUTCDay()]
   return `${day} ${local.toISOString().slice(0, 16).replace('T', ' ')} (${zone.name})`
+}
+
+/** The arm's slim line: the wake as weekday and minute, and the reset it follows. */
+export function armLineText(wakeAt: number, kind: string, zone: Zone): string {
+  const [day, , minute] = formatLocal(wakeAt, zone).split(' ')
+  return `⏰ resumes ${day} ${minute} · after the ${LIMIT_NAMES[kind] ?? kind} reset`
 }
 
 export function pausedText(pause: Pause, wakeText: string): string {
