@@ -1,3 +1,4 @@
+import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 import type { Watch } from '../types'
 import {
@@ -436,10 +437,12 @@ test('a bare /ci-watch typed over Remote Control answers with the phone text', a
   expect(answer.text.split('\n')).toEqual(['No PR is being watched.', '/ci-watch help for more'])
 })
 
-const CASES: [string, (seen: Seen) => void, number][] = [
+const stop = ($: Engine) => $.command.run({ command: 'ci-watch', args: 'stop' } as never)
+const CASES: [string, (seen: Seen, $: Engine) => unknown, number][] = [
   ['still current, it wakes the session once the turn ends', () => undefined, 1],
   ['merged by the turn meanwhile, it wakes nothing', seen => void (seen.prState = 'MERGED'), 0],
   ['moved on to a new commit by the turn, it wakes nothing for the old one', seen => void (seen.head = 'b2'), 0],
+  ['stopped by the person meanwhile, it wakes nothing', (_, $) => stop($), 0],
 ]
 for (const [label, during, wakes] of CASES) {
   test(`a wake that settles mid-turn waits for the turn's end; ${label}`, async ($, on) => {
@@ -454,7 +457,7 @@ for (const [label, during, wakes] of CASES) {
     await clock.advance(POLL_MS)
     await clock.advance(POLL_MS)
     expect(seen.prompts).toEqual([])
-    during(seen)
+    await during(seen, $)
     await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
     await clock.advance(10)
     expect(seen.prompts.filter(text => text.includes('o/r#7: all 1 checks settled'))).toHaveLength(wakes)
