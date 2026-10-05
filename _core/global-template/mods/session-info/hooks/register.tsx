@@ -2,17 +2,18 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { GitState, SessionLine } from '../types'
-import { GIT_STATUS, modelName, parseStatus } from './git'
+import { GIT_STATUS, modelName, parseStatus, phoneText } from './git'
 import { register as settings, SETTINGS_PANE } from './settings'
 
 const line = atom({ plugin: 'session-info', key: 'line' } as const, null)
 const isExpanded = atom({ plugin: 'session-info', key: 'isExpanded' } as const, false)
 
 const GIT_TIMEOUT_MS = 5_000
-const HINT = '[help | settings]'
+const HINT = '[help | settings | phone]'
 export const HELP = [
   '/session-info: the row with the model, the project and the branch with its changes.',
   '  /session-info settings  open the settings pane',
+  '  /session-info phone     the same as text, for phone chats',
   '  /session-info help      this list',
 ].join('\n')
 
@@ -125,8 +126,14 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // `/session-info [help | settings]`; any other argument, or none, gets the help.
+  // `/session-info [help | settings | phone]`; any other argument, or none, gets the help.
   on('command.run', { command: 'session-info' }, async ($, e) => {
+    if (e.args.trim() === 'phone') {
+      await start($)
+      const shown = await read($, line)
+      const text = shown ? phoneText(shown, live.maxFiles) : 'The session row is not read yet.'
+      return { text: `${text}\n/session-info help for more` }
+    }
     if (e.args.trim() !== 'settings') return { text: HELP }
     await $.ui.open({ id: SETTINGS_PANE, title: 'Session info settings', focus: true })
     return { text: 'Opened the session-info settings.' }
