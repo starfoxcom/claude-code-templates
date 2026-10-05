@@ -111,7 +111,21 @@ async function start($: EngineInterface): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
   await refresh($)
-  if (live.refreshMs > 0) $.clock.every(live.refreshMs, () => void refresh($))
+  armRefresh($)
+}
+
+// A new interval from the settings file takes over at the next tick of the old one. At 0 (no refresh)
+// a slow tick still watches for a new interval.
+const IDLE_MS = 60_000
+function armRefresh($: EngineInterface): void {
+  const period = live.refreshMs
+  const tick = $.clock.every(period > 0 ? period : IDLE_MS, () => {
+    if (live.refreshMs !== period) {
+      tick.cancel()
+      armRefresh($)
+    }
+    if (live.refreshMs > 0) void refresh($)
+  })
 }
 
 // The settings file at the session's start, before any tool call: the settings module follows it from

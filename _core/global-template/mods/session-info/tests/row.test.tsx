@@ -7,6 +7,7 @@ import { HELP, selectedEffort } from '../hooks/register'
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
 const SURFACES = ['terminal', 'desktop'] as const
 const DIRTY = '## develop...origin/develop [ahead 2, behind 1]\n M a.ts\n M b.ts\n?? c.ts\n'
+const SETTINGS = 'mods-data/session-info/settings.json'
 
 function world(on: On, status = DIRTY) {
   const seen = {
@@ -19,8 +20,20 @@ function world(on: On, status = DIRTY) {
     /** A git read waits on this, answering with the status it saw when it started. */
     gate: undefined as Promise<void> | undefined,
     commands: [] as { name: string; argumentHint?: string }[],
+    /** Readable files by the end of their path: the mod's settings file, `plugin.json` for its manifest. */
+    files: {} as Record<string, string>,
   }
   on('settings.read', () => ({ value: seen.settings }))
+  on('fs.read', ($, e) => {
+    const path = e.path.replaceAll('\\', '/')
+    const key = Object.keys(seen.files).find(end => path.endsWith(`/${end}`))
+    if (key === undefined) throw new Error('ENOENT')
+    return { value: seen.files[key] ?? '' }
+  })
+  on('fs.write', ($, e) => {
+    if (e.path.replaceAll('\\', '/').endsWith(`/${SETTINGS}`)) seen.files[SETTINGS] = e.text
+    return { value: undefined }
+  })
   on('session.model', () => {
     if (seen.isModelDown) throw new Error('no model yet')
     return { value: 'claude-opus-5-5[1m]' }
@@ -237,4 +250,29 @@ test('a bare /session-info typed over Remote Control answers with the phone text
   const bridge = { command: 'session-info', args: '', origin: { kind: 'bridge' } }
   const answer = (await $.command.run(bridge as never)) as { text: string }
   expect(answer.text.split('\n').at(-1)).toBe('/session-info help for more')
+})
+
+test('the recheck interval in the settings file applies from the start, and a new one takes over', async ($, on) => {
+  const seen = world(on)
+  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  const manifest = { userConfig: { refreshSeconds: { type: 'number' }, maxFiles: { type: 'number' } } }
+  seen.files = { 'plugin.json': JSON.stringify(manifest), [SETTINGS]: '{"refreshSeconds":60}' }
+  await start($, 'terminal')
+  const atStart = seen.gitCalls
+  await seen.clock.advance(30_000)
+  expect(seen.gitCalls).toBe(atStart)
+  await seen.clock.advance(30_000)
+  const perRead = seen.gitCalls - atStart
+  expect(perRead).toBeGreaterThan(0)
+  // Off: the old timer ticks once more, then only a slow watch for a new interval runs.
+  await $.command.run({ command: 'session-info', args: 'set refreshSeconds 0' } as never)
+  await seen.clock.advance(60_000)
+  const atOff = seen.gitCalls
+  await seen.clock.advance(180_000)
+  expect(seen.gitCalls).toBe(atOff)
+  // Back on: the slow watch hands over to the new interval.
+  await $.command.run({ command: 'session-info', args: 'set refreshSeconds 30' } as never)
+  await seen.clock.advance(60_000)
+  await seen.clock.advance(30_000)
+  expect(seen.gitCalls).toBe(atOff + 2 * perRead)
 })

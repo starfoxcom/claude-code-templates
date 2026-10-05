@@ -177,6 +177,18 @@ async function readZone($: Engine): Promise<void> {
   if (Number.isInteger(offset)) live.zoneOffset = offset
 }
 
+// A new interval from the settings file takes over at the next tick of the old one.
+function armChecks($: Engine): void {
+  const period = live.checkMs
+  const tick = $.clock.every(period, () => {
+    if (live.checkMs !== period) {
+      tick.cancel()
+      armChecks($)
+    }
+    void check($).catch(() => undefined)
+  })
+}
+
 async function start($: Engine): Promise<void> {
   if (live.isStarted) return
   live.isStarted = true
@@ -184,7 +196,7 @@ async function start($: Engine): Promise<void> {
   if (live.runners.length === 0) return
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   await readZone($)
-  $.clock.every(live.checkMs, () => void check($).catch(() => undefined))
+  armChecks($)
   $.clock.every(HOUR_MS, () => void readZone($).catch(() => undefined))
   // The first reading can take many `gh` calls: session start and the first turn never wait for it.
   void check($).catch(() => undefined)

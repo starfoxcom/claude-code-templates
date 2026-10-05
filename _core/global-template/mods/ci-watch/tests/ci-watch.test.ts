@@ -585,3 +585,25 @@ test('checks that finish mid-turn reach the turn on its next tool result, once',
   await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
 })
+
+const MANIFEST = JSON.stringify({ userConfig: { pollSeconds: { type: 'number' }, timeoutMinutes: { type: 'number' } } })
+const SETTINGS = 'C:/Users/me/.claude/mods-data/ci-watch/settings.json'
+
+test('the poll interval in the settings file applies from the start, and a new one takes over', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  seen.manifest = MANIFEST
+  seen.files.set(SETTINGS, '{"pollSeconds":60}')
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await clock.advance(30_000)
+  expect(seen.checksRead).toBe(0)
+  await clock.advance(30_000)
+  expect(seen.checksRead).toBe(1)
+  // A new interval: the old timer ticks once more, then the new one runs.
+  await $.command.run({ command: 'ci-watch', args: 'set pollSeconds 30' } as never)
+  await clock.advance(60_000)
+  expect(seen.checksRead).toBe(2)
+  await clock.advance(30_000)
+  expect(seen.checksRead).toBe(3)
+})
