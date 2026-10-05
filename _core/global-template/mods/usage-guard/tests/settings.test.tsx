@@ -2,7 +2,7 @@ import type { ConfigRow, ConfigSetInput, On } from 'claude-code'
 import type { Engine, Mounted } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 
-import { emptyNote, parseNumber, READ_ONLY_NOTE, shownValue } from '../hooks/settings'
+import { emptyNote, parseNumber, UNLISTED_NOTE, unlistedRows } from '../hooks/settings'
 
 // The settings pane over faked /config rows: the engine's own validation draws it on each surface,
 // and every change goes through config.set as the /config menu's would.
@@ -100,51 +100,86 @@ test('rows whose key names where the plugin came from are still this mod, saved 
   expect(writes).toEqual([{ key: 'usage-guard@inline.wrapUpAt', value: 85 }])
 })
 
-// The Desktop app lists no plugin rows in /config: the pane shows the mod's values read-only, named by
-// the manifest's titles, and says where to change them.
-const MANIFEST = JSON.stringify({ userConfig: { wrapUpAt: { title: 'Wrap up at (% used)' } } })
-function noPluginRows(on: On, list: () => unknown) {
+// The Desktop app lists no plugin rows in /config: the pane draws the mod's fields from the manifest and
+// the loaded values, and tries each change anyway (a row the menu leaves out may still take a set).
+const MANIFEST = JSON.stringify({
+  userConfig: { wrapUpAt: { type: 'number', title: 'Wrap up at (% used)', description: 'Sessions wrap up here.' } },
+})
+function noPluginRows(on: On, list: () => unknown, set: (key: string) => string | undefined = () => undefined) {
+  const writes: Pick<ConfigSetInput, 'key' | 'value'>[] = []
   on('config.list', list as never)
+  on('config.set', ($, e) => {
+    writes.push({ key: e.key, value: e.value })
+    const deny = set(e.key)
+    return deny ? { deny } : { value: e.value }
+  })
   on('fs.read', ($, e) => {
     if (String((e as { path?: string }).path).endsWith('plugin.json')) return { value: MANIFEST }
     throw new Error('no such file')
   })
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
+  return writes
 }
 
-test('a surface whose /config has no plugin rows shows the values read-only', async ($, on) => {
+test('a surface whose /config has no plugin rows still draws the fields, named by the manifest', async ($, on) => {
   noPluginRows(on, () => ({ value: [THEME] }))
   const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Wrap up at (% used)' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '90' })).toBeDefined()
-  // A field the manifest gives no title shows by its own name.
+  expect(await ui.find({ type: 'Text', text: 'Sessions wrap up here.' })).toBeDefined()
+  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeDefined()
+  // A field the manifest does not describe shows by its own name.
   expect(await ui.find({ type: 'Text', text: 'wakeDelayMinutes' })).toBeDefined()
-  // Nothing to edit: the fields would write to rows this surface does not have.
-  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeUndefined()
 })
 
-test('a /config that cannot be listed shows the values read-only too', async ($, on) => {
+test('a change there is tried by its plain key and says it was saved', async ($, on) => {
+  const writes = noPluginRows(on, () => ({ value: [THEME] }))
+  const ui = await mountPane($, 'desktop')
+  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
+  expect(writes).toEqual([{ key: 'usage-guard.wrapUpAt', value: 85 }])
+  expect(await ui.find({ type: 'Text', text: 'Saved: 85.' })).toBeDefined()
+})
+
+test('a plain key refused there is tried with the inline source next', async ($, on) => {
+  const writes = noPluginRows(on, () => ({ value: [THEME] }), key => (key.includes('@') ? undefined : 'no such row'))
+  const ui = await mountPane($, 'desktop')
+  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
+  expect(writes.map(write => write.key)).toEqual(['usage-guard.wrapUpAt', 'usage-guard@inline.wrapUpAt'])
+  expect(await ui.find({ type: 'Text', text: 'Saved: 85 (as usage-guard@inline.wrapUpAt).' })).toBeDefined()
+})
+
+test('both keys refused there: each refusal shows word for word', async ($, on) => {
+  noPluginRows(on, () => ({ value: [THEME] }), key => `no row ${key}`)
+  const ui = await mountPane($, 'desktop')
+  await ui.input({ key: 'usage-guard-set-wrapUpAt', text: '85' })
+  const text = 'Refused. usage-guard.wrapUpAt: no row usage-guard.wrapUpAt usage-guard@inline.wrapUpAt: no row ' +
+    'usage-guard@inline.wrapUpAt'
+  expect(await ui.find({ type: 'Text', text })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Saved/ })).toBeUndefined()
+})
+
+test('a /config that cannot be listed draws the fields too', async ($, on) => {
   noPluginRows(on, () => {
     throw new Error('no menu here')
   })
   const ui = await mountPane($, 'desktop')
-  expect(await ui.find({ type: 'Text', text: READ_ONLY_NOTE })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '90' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: UNLISTED_NOTE })).toBeDefined()
+  expect(await ui.find({ key: 'usage-guard-set-wrapUpAt' })).toBeDefined()
 })
 
-test('the read-only note names the terminal menu and this mod command', () => {
-  expect(READ_ONLY_NOTE).toContain('Change them in the terminal: /config (or /usage-guard settings there).')
-})
-
-test('read-only values: a switch as On or Off, an empty one as not set', () => {
-  expect([shownValue(true), shownValue(false), shownValue(25), shownValue(''), shownValue(undefined)]).toEqual([
-    'On',
-    'Off',
-    '25',
-    '(not set)',
-    '(not set)',
+test('the rows /config left out take their kind from the manifest', () => {
+  const fields = { on: { type: 'boolean' }, pick: { type: 'string', options: ['a', 'b'] }, n: { type: 'number' } }
+  const rows = unlistedRows({ on: true, pick: 'a', n: 3, free: 'x' }, fields)
+  expect(rows.map(row => [row.key, row.kind])).toEqual([
+    ['usage-guard.on', 'boolean'],
+    ['usage-guard.pick', 'choice'],
+    ['usage-guard.n', 'number'],
+    ['usage-guard.free', 'text'],
   ])
+})
+
+test('the note there names the terminal menu and this mod command', () => {
+  expect(UNLISTED_NOTE).toContain("The terminal's /config (or /usage-guard settings there) always works.")
 })
 
 // With no values to show, the pane says what /config listed, or why it could not.
