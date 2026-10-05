@@ -31,9 +31,10 @@ const armNote = atom({ plugin: 'usage-guard', key: 'armNote' } as const, null)
 const live: Live = newLive()
 
 async function dataDir($: EngineInterface): Promise<string> {
+  if (live.dir) return live.dir
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
-  return `${configured ?? `${home}/.claude`}/mods-data/usage-guard`.replace(/\\/g, '/')
+  return (live.dir = `${configured ?? `${home}/.claude`}/mods-data/usage-guard`.replace(/\\/g, '/'))
 }
 
 async function pausePath($: EngineInterface): Promise<string> {
@@ -127,14 +128,17 @@ async function dismissCard($: EngineInterface): Promise<void> {
   await refresh($)
 }
 
+// Runs every 2 seconds, so an idle tick (no card, no status shown) reads one file and writes nothing.
 async function refresh($: EngineInterface): Promise<void> {
   const card = await readCard($)
-  const pause = await readPause($)
+  const shown = card && !card.dismissed ? card : null
+  // The pause matters only for a card's cancel button and for a status this session shows.
+  const pause = shown || live.isStatusShown ? await readPause($) : undefined
   const isPaused = pause?.status === 'active' && pause.wakeAt > (await $.clock.now())
   // A pause cancelled or ended from another session clears this one's status too.
   if (!isPaused && live.isStatusShown) setStatus($, undefined)
-  const shown = card && !card.dismissed ? card : null
-  await update($, band, () => (shown ? { card: shown, canCancel: isPaused } : null))
+  const next = shown ? { card: shown, canCancel: isPaused } : null
+  if (JSON.stringify(await read($, band)) !== JSON.stringify(next)) await update($, band, () => next)
 }
 
 // A cancel here also drops this session's own armed wake: the person at this session asked for no
