@@ -595,7 +595,9 @@ export const register: Register = (on, options) => {
   // `/task-list [help | settings]`; with no argument, the task list. Any other argument gets the help.
   // Not `/tasks`: that name is a built-in command, and the engine refuses it.
   on('command.run', { command: COMMAND }, async ($, e) => {
-    const verb = e.args.trim()
+    // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+    // row draws: the bare command answers with the phone text.
+    const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
     if (verb === 'phone') return { text: `${phoneText((await mirrorOf($)).tasks)}\n/task-list help for more` }
     if (verb !== '' && verb !== 'settings') return { text: HELP }
     const [id, title] = verb === '' ? [PANE, 'Tasks'] : [SETTINGS_PANE, 'Tasks settings']
