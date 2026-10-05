@@ -10,6 +10,7 @@ import {
   contextText,
   fillTone,
   pauseChip,
+  phoneText,
   planChip,
   shortLocal,
 } from '../hooks/budgets'
@@ -238,3 +239,31 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ type: 'Text', text: ' 50%' })).toBeDefined()
   })
 }
+
+test('the phone text is the row as squares, with every reset time and the cache time left', () => {
+  const limits = [
+    { kind: 'five_hour', percentUsed: 12, resetsAt: NOW + 120 * MINUTE },
+    { kind: 'seven_day', percentUsed: 80, resetsAt: NOW + 24 * 60 * MINUTE },
+  ]
+  expect(phoneText({ ...B, limits, cacheExpiresAt: NOW + 42 * MINUTE }, NOW).split('\n')).toEqual([
+    '📊 Budgets · 09:00',
+    'ctx 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ 50% · 217k to compact',
+    '5-hour 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ 12% · resets Fri 11:00',
+    'week 🟨🟨🟨🟨🟨🟨🟨🟨⬜⬜ 80% · resets Sat 09:00',
+    'cache: warm · 42m left',
+  ])
+})
+
+test('the phone text says -- for what is unknown, and the pause in place of the plan lines', () => {
+  expect(phoneText({ ...B, tokens: undefined }, NOW).split('\n').slice(1)).toEqual([
+    'ctx --',
+    '5-hour --',
+    'week --',
+    'cache --',
+  ])
+  const paused = { ...B, pausedUntil: NOW + 180 * MINUTE, cacheExpiresAt: NOW + 5 * MINUTE }
+  expect(phoneText(paused, NOW).split('\n').slice(2)).toEqual([
+    '🟥 PAUSED until Fri 12:00',
+    '🟨 cache 5m left · cold start 250k',
+  ])
+})
