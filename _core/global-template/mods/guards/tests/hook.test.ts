@@ -287,6 +287,8 @@ const NOT_ALONE = [
   'gh pr create -t t -F a.md -F short.md',
   "gh pr create -t $'docs(x): y' -F short.md",
   'gh pr edit https://github.com/o/other/pull/5 --body-file short.md',
+  // Unquoted here-doc: the shell joins `- add it\` with the next line, so gh gets no `## Why` heading.
+  'gh pr create -t "feat: x" -F - <<EOF\n## What\n- add it\\\n## Why\nb\n\nResolves #1\nEOF',
 ]
 for (const command of NOT_ALONE) {
   test(`a PR call that is not plain and alone is named unread, never blocked: ${command}`, {
