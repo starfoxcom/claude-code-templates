@@ -405,6 +405,15 @@ const OPS = {
     }
     return view(normalize(s, all), all, id)
   },
+  // The tool's release: the seat, a reservation and the place in line, all in this one write, so a seat
+  // freed by another session can never be granted to this one between giving up the seat and the line.
+  // `freed` and `left` say what it gave up.
+  drop(s, all, id, args, t) {
+    const freed = Boolean(s.seat && s.seat.session === id)
+    const left = s.line.some(e => e.session === id)
+    OPS.leave(s, all, id)
+    return { ...OPS.release(s, all, id, args, t), freed, left }
+  },
   end(s, all, id, args, t) {
     s.line = s.line.filter(e => e.session !== id)
     if (s.nextUp && s.nextUp.session === id) s.nextUp = null
