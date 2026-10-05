@@ -48,6 +48,11 @@ export function summary(watch: Watch): { text: string; color: 'green' | 'red' | 
   // before it wakes the session: green for the checks, the hourglass for the wake still to come.
   if (states.length > 0 && done === states.length)
     return { text: `⏳ ${pr} · all ${states.length} passed, confirming`, color: 'green' }
+  // Still waiting while GitHub reports an Actions incident: the likely cause, named on the row.
+  if (!watch.outcome && watch.incident) {
+    const text = `⚠️ ${pr} · ${done}/${states.length} done · GitHub incident: ${watch.incident}`
+    return { text, color: 'yellow' }
+  }
   return { text: `⏳ ${pr} · ${done}/${states.length} done`, color: 'yellow' }
 }
 

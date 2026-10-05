@@ -2,20 +2,13 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
+import { isPushOrPr, mergedNumber, targetFolder } from './command'
+import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
 
 
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
-// Matched on the command with its quoted text and here-doc bodies blanked (see `commandWords`), and on
-// the subcommand word: `git commit -m "explain the push"` is not a push. Global options may come first.
-const GIT_OPTS = String.raw`(?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*`
-const GH_OPTS = String.raw`(?:\s+(?:-R\s+\S+|--repo[=\s]\S+))*`
-const AT_START = String.raw`(?:^|[\s;&|({])`
-const PUSH_OR_PR = new RegExp(
-  `${AT_START}git${GIT_OPTS}\\s+push\\b|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`,
-)
-const PR_MERGE = new RegExp(`${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+merge\\b([^|;&\\n]*)`)
 const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
@@ -46,14 +39,24 @@ const live = {
 }
 
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
-// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent.
+// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. So is
+// an incident's note, while the watch is still unsettled on the same head (the poll drops it otherwise).
+// The polled copy itself is kept whenever nothing differs: the poll finds its settled watches by identity.
 function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   const same = (a: Watch, b: Watch) =>
     a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
   return current.map(w => {
     const p = polled.find(p => same(p, w))
     if (!p) return w
-    return Boolean(p.wakePending) === Boolean(w.wakePending) ? p : { ...p, wakePending: w.wakePending }
+    const isNoteMemorys = !p.outcome && p.headSha === w.headSha
+    const incidentPending = isNoteMemorys ? w.incidentPending : p.incidentPending
+    // A note made meanwhile (another poll of this load noted and sent it) is kept, or it would be made again.
+    const incident = isNoteMemorys ? (w.incident ?? p.incident) : p.incident
+    const isKept =
+      Boolean(p.wakePending) === Boolean(w.wakePending) &&
+      Boolean(p.incidentPending) === Boolean(incidentPending) &&
+      p.incident === incident
+    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident }
   })
 }
 
@@ -81,69 +84,6 @@ export function settle(
   return next
 }
 
-// The command with quoted strings emptied and here-doc bodies dropped, so message text never reads as
-// a command. Folders come from the raw command (`targetFolder`).
-// Each shell's own escape inside double quotes: a backslash in Bash (where a backtick runs a command and
-// escapes nothing), a backtick in PowerShell (where a backslash is a plain character).
-const DOUBLE_QUOTED = {
-  bash: String.raw`"(?:[^"\\]|\\[\s\S])*"`,
-  powershell: '"(?:[^"`]|`[\\s\\S])*"',
-}
-
-// Which lines are here-doc bodies (and their end lines): they hold text, never commands.
-function hereDocLines(lines: readonly string[]): Set<number> {
-  const body = new Set<number>()
-  for (let i = 0; i < lines.length; i++) {
-    // `<<` alone: `<<<` feeds one word, not the lines after it. Found on the line with its quoted text
-    // blanked (a delimiter's own quotes kept), so a `<<EOF` inside a message opens nothing.
-    const unquoted = (lines[i] ?? '').replace(/(?<!<<-?\s*)(?:'[^']*'|"(?:[^"\\`]|[\\`].)*")/g, '""')
-    const doc = /(?<!<)<<(?!<)-?\s*(["']?)([A-Za-z_][\w.-]*)\1/.exec(unquoted)
-    if (!doc) continue
-    while (i + 1 < lines.length && (lines[i + 1] ?? '').trim() !== doc[2]) body.add(++i)
-    if (i + 1 < lines.length) body.add(++i)
-  }
-  return body
-}
-
-const quotedSpans = (isPowerShell: boolean) =>
-  new RegExp(
-    String.raw`@'[\s\S]*?'@|@"[\s\S]*?"@|'[^']*'|${isPowerShell ? DOUBLE_QUOTED.powershell : DOUBLE_QUOTED.bash}`,
-    'g',
-  )
-
-export function commandWords(command: string, isPowerShell = false): string {
-  const lines = command.split('\n')
-  const body = hereDocLines(lines)
-  return lines
-    .filter((_, i) => !body.has(i))
-    .join('\n')
-    .replace(quotedSpans(isPowerShell), '""')
-}
-
-// The command at full length, with here-doc bodies blanked and the inside of each quoted string filled
-// with `_`: a match on it sits at the same place in the command, and message text matches nothing.
-function maskedCommand(command: string, isPowerShell: boolean): string {
-  const lines = command.split('\n')
-  const body = hereDocLines(lines)
-  return lines
-    .map((line, i) => (body.has(i) ? ' '.repeat(line.length) : line))
-    .join('\n')
-    .replace(quotedSpans(isPowerShell), span => span[0] + '_'.repeat(span.length - 2) + span[span.length - 1])
-}
-
-export function isPushOrPr(command: string, isPowerShell = false): boolean {
-  return PUSH_OR_PR.test(commandWords(command, isPowerShell))
-}
-
-// A merged PR's watch is noise: the chat already says it merged. Returns the
-// PR number a `gh pr merge` names, 0 when it names none (the branch's PR).
-export function mergedNumber(command: string, isPowerShell = false): number | undefined {
-  const merge = PR_MERGE.exec(commandWords(command, isPowerShell))
-  if (!merge) return undefined
-  const named = /(?:^|\s)#?(\d+)(?=\s|$)/.exec(merge[1] ?? '')
-  return named ? Number(named[1]) : 0
-}
-
 // How long ago the checks finished, so a late wake shows its delay.
 function finishedAgo(watch: Watch, now?: number): string {
   if (now === undefined || watch.settledAt === undefined) return ''
@@ -152,12 +92,17 @@ function finishedAgo(watch: Watch, now?: number): string {
 }
 
 export function wakeText(watch: Watch, now?: number): string {
-  return `${outcomeText(watch)}${finishedAgo(watch, now)}`
+  return `${outcomeText(watch, now)}${finishedAgo(watch, now)}`
 }
 
-function outcomeText(watch: Watch): string {
+function outcomeText(watch: Watch, now?: number): string {
   const entries = Object.entries(watch.checks)
   const pr = `PR ${watch.repo}#${watch.number}`
+  // Not settled: the wake names GitHub's incident while the checks wait.
+  if (!watch.outcome && watch.incident) {
+    const minutes = Math.round(((now ?? watch.startedAt) - watch.startedAt) / 60_000)
+    return incidentText(pr, minutes, watch.incident)
+  }
   const failed = entries.filter(([, bucket]) => FAILED.has(bucket)).map(([name]) => name)
   if (watch.outcome === 'failed') {
     return (
@@ -317,37 +262,6 @@ export function claimWake(watch: Watch): boolean {
   return true
 }
 
-// The folder a push or `gh pr create` ran in: `git -C <dir>` or the `cd <dir>` / `Set-Location <dir>`
-// steps before it, on the same line or the lines above. Undefined means the session's folder.
-const GIT_C = /\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)/
-const CD = /(?:^|[;&|\n]\s*)(?:cd|Set-Location|Push-Location|pushd)\s+(?:-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/g
-const PUSH_AT = /\bgit\b[^;&|\n]*\bpush\b|\bgh\s+pr\s+create\b/
-const ABSOLUTE = /^(?:[a-zA-Z]:|[/\\~])/
-
-// The patterns run on the masked command, so text inside quotes or here-docs steers nothing; each path
-// is then read from the command at the same place.
-export function targetFolder(command: string, isWindows: boolean, isPowerShell = false): string | undefined {
-  // Git Bash paths (/c/Users/...) mean nothing to a Windows process: turn them into C:/Users/...
-  // Only on Windows: elsewhere `/u/me` is a real one-letter folder.
-  const masked = maskedCommand(command, isPowerShell)
-  const pathAt = (match: RegExpExecArray | RegExpMatchArray, offset = 0) => {
-    const at = offset + (match.index ?? 0) + match[0].length - match[1]!.length
-    const bare = command.slice(at, at + match[1]!.length).replace(/^["']|["']$/g, '')
-    return isWindows ? bare.replace(/^\/([a-zA-Z])(?=\/|$)/, '$1:') : bare
-  }
-  const push = PUSH_AT.exec(masked)
-  // `git -C <dir>` on the push itself wins.
-  const gitC = push ? GIT_C.exec(push[0]) : null
-  if (push && gitC) return pathAt(gitC, push.index)
-  // Each `cd` before the push moves on from the one before it, unless it names a whole path.
-  let folder: string | undefined
-  for (const step of masked.slice(0, push?.index ?? masked.length).matchAll(CD)) {
-    const next = pathAt(step)
-    folder = folder === undefined || ABSOLUTE.test(next) ? next : `${folder}/${next}`
-  }
-  return folder
-}
-
 async function gh($: EngineInterface, args: readonly string[], cwd?: string): Promise<string> {
   // `gh pr checks` exits non-zero while checks are pending; its JSON is still on stdout.
   const { stdout } = await $.process.run(['gh', ...args], { timeoutMs: 30_000, ...(cwd ? { cwd } : {}) })
@@ -429,6 +343,42 @@ async function recheckSettled($: EngineInterface, watch: Watch, now: number): Pr
   return { repo: watch.repo, number: watch.number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
 }
 
+// GitHub's status, read at most every few minutes and only while some watch waits long past a normal run.
+const status: { readAt?: number; incident?: string } = {}
+async function readIncident($: EngineInterface, now: number): Promise<string | undefined> {
+  if (status.readAt !== undefined && now - status.readAt < STATUS_EVERY_MS) return status.incident
+  status.readAt = now
+  const r = await $.process.run(['node', '-e', STATUS_SCRIPT], { timeoutMs: 20_000 }).catch(() => null)
+  status.incident = r && r.exitCode === 0 ? actionsIncident(r.stdout) : undefined
+  return status.incident
+}
+
+// A watch whose checks sit pending past STUCK_MS while GitHub reports an Actions incident wakes the session
+// once with the incident's name (the row shows it too), instead of waiting out the time limit in silence.
+// Returns whether a watch changed.
+async function noteIncidents($: EngineInterface, now: number): Promise<boolean> {
+  // Some check still pending (or none reported yet): a watch only confirming finished checks is not stuck.
+  const isPending = (w: Watch) => {
+    const buckets = Object.values(w.checks)
+    return buckets.length === 0 || buckets.some(bucket => PENDING.has(bucket))
+  }
+  const isWaiting = (w: Watch) => !w.outcome && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
+  if (!live.watches.some(isWaiting)) return false
+  const incident = await readIncident($, now)
+  if (!incident) return false
+  // Another load may have noted it while this one read GitHub (two stay active when the owner file cannot
+  // be written): its saved note stands as saved, still held or already sent, and no second one is made.
+  const saved = await readSaved($)
+  const notedBy = (w: Watch) => saved?.find(s => s.id === w.id && s.headSha === w.headSha && s.incident)
+  live.watches = live.watches.map(w => {
+    if (!isWaiting(w)) return w
+    const noted = notedBy(w)
+    if (noted) return { ...w, incident: noted.incident, incidentPending: noted.incidentPending }
+    return { ...w, incident, incidentPending: true }
+  })
+  return true
+}
+
 async function poll($: EngineInterface): Promise<void> {
   // Start from the saved state: a hot reload can leave an earlier instance's timer running beside
   // this one, and reading the file keeps a watch the other already settled from waking twice. With
@@ -460,6 +410,8 @@ async function poll($: EngineInterface): Promise<void> {
             stablePolls: 0,
             checks: {},
             quietSince: undefined,
+            incident: undefined,
+            incidentPending: undefined,
           }
         : current
     let checks: Record<string, string> | undefined
@@ -475,11 +427,13 @@ async function poll($: EngineInterface): Promise<void> {
       // A failed read (network, auth, no checks yet) is not a quiet poll: the count stands and the
       // next poll tries again. Only the time limit can settle the watch meanwhile.
     }
-    const next = checks
+    const polled = checks
       ? settle(base, checks, now, live.timeoutMs, live.pollMs)
       : now - base.startedAt > live.timeoutMs
         ? { ...base, outcome: 'timeout' as const, settledAt: now }
         : base
+    // Settled: its own wake says it all, so an incident note not sent yet is dropped.
+    const next = polled.outcome && polled.incidentPending ? { ...polled, incidentPending: undefined } : polled
     kept.push(next)
     changed = true
     if (next.outcome) settled.push(next)
@@ -487,6 +441,9 @@ async function poll($: EngineInterface): Promise<void> {
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
   const toWake = settled.filter(w => live.watches.includes(w))
+  // GitHub's status is read before the retirement check: the read can take seconds, and a load retired
+  // meanwhile must not save over the newer one's file afterwards.
+  const isIncidentNoted = await noteIncidents($, now)
   // A newer load took over while this poll waited on gh: it settles the watches on its own next poll,
   // so this instance neither saves nor wakes.
   if (await isRetired($)) return
@@ -497,7 +454,7 @@ async function poll($: EngineInterface): Promise<void> {
   // Each wake is marked pending in the same save that records its outcome; sendHeld sends it.
   const due = new Set(toWake.filter(w => !isRecorded(recorded, w) && claimWake(w)))
   if (due.size > 0) live.watches = live.watches.map(w => (due.has(w) ? { ...w, wakePending: true } : w))
-  if (changed || live.isUnsaved) await save($)
+  if (changed || isIncidentNoted || live.isUnsaved) await save($)
   if (!live.isTurnRunning) await sendHeld($)
 }
 
@@ -507,11 +464,14 @@ async function poll($: EngineInterface): Promise<void> {
 // again first: a watch stopped or replaced meanwhile is no longer listed, and a PR merged or closed, or
 // one whose head moved on (its new commit has a watch of its own), wakes nothing. Taken from memory in
 // one step and saved as sent before any prompt goes out, so no wake goes twice.
+const isHeld = (w: Watch) => Boolean(w.wakePending || w.incidentPending)
+const asSent = (w: Watch): Watch => (isHeld(w) ? { ...w, wakePending: undefined, incidentPending: undefined } : w)
+
 async function sendHeld($: EngineInterface): Promise<void> {
   if (await isRetired($)) return
-  const held = live.watches.filter(w => w.wakePending)
+  const held = live.watches.filter(isHeld)
   if (held.length === 0) return
-  live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
+  live.watches = live.watches.map(asSent)
   live.generation++
   await save($)
   for (const watch of held) {
@@ -531,18 +491,24 @@ async function sendHeld($: EngineInterface): Promise<void> {
   }
 }
 
-// Tries per wake: a hook that drops every prompt is not asked again each minute.
+// Tries per wake: a hook that drops every prompt is not asked again each minute. An incident's early wake
+// counts apart from the settlement's, so refusals of the first never cost the second its tries.
 const MAX_TRIES = 3
 const refusals = new Map<string, number>()
+const triesKey = (watch: Watch) => `${watch.outcome ? 'settled' : 'incident'}:${wakeKey(watch)}`
 
 // Saved, not only set in memory: every poll starts from the file. A newer load owns the file once this
 // one is retired, so then only the flag is laid on its copy, and that load sends the wake.
 async function markPending($: EngineInterface, watch: Watch): Promise<void> {
-  const count = (refusals.get(wakeKey(watch)) ?? 0) + 1
-  refusals.set(wakeKey(watch), count)
+  const count = (refusals.get(triesKey(watch)) ?? 0) + 1
+  refusals.set(triesKey(watch), count)
   if (count >= MAX_TRIES) return
   const isSame = (w: Watch) => w.id === watch.id && w.headSha === watch.headSha
-  const mark = (list: Watch[]) => list.map(w => (isSame(w) ? { ...w, wakePending: true } : w))
+  // An incident's note is marked again only while the watch is still unsettled: once it settled, its own
+  // wake goes out instead.
+  const marked = (w: Watch): Watch =>
+    watch.outcome ? { ...w, wakePending: true } : w.outcome ? w : { ...w, incidentPending: true }
+  const mark = (list: Watch[]) => list.map(w => (isSame(w) ? marked(w) : w))
   if (await isRetired($)) {
     const saved = await readState($)
     if (saved?.watches) await $.fs.write(await statePath($), JSON.stringify({ ...saved, watches: mark(saved.watches) }))
@@ -558,9 +524,9 @@ async function markPending($: EngineInterface, watch: Watch): Promise<void> {
 async function takeNotes($: EngineInterface): Promise<string[]> {
   // A newer load may have taken over while the tool ran: the notes and the file are its own.
   if (!live.isTurnRunning || (await isRetired($))) return []
-  const due = live.watches.filter(w => w.wakePending)
+  const due = live.watches.filter(isHeld)
   if (due.length === 0) return []
-  live.watches = live.watches.map(w => (w.wakePending ? { ...w, wakePending: undefined } : w))
+  live.watches = live.watches.map(asSent)
   live.generation++
   await save($)
   const now = await $.clock.now()

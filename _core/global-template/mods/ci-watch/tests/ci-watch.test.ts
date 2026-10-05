@@ -1,15 +1,8 @@
 import type { Engine } from 'claude-code/testing'
 import { expect, test } from 'claude-code/testing'
 import type { Watch } from '../types'
-import {
-  claimWake,
-  HELP,
-  isPushOrPr,
-  mergedNumber,
-  settle,
-  targetFolder,
-  wakeText,
-} from '../hooks/register'
+import { isPushOrPr, mergedNumber, targetFolder } from '../hooks/command'
+import { claimWake, HELP, settle, wakeText } from '../hooks/register'
 import { moment, type Seen, world } from './world'
 
 const BASE: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 0, checks: {}, stablePolls: 0 }
