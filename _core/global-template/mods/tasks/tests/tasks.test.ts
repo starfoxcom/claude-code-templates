@@ -385,7 +385,7 @@ test("after a reload the engine's store is left alone, even a subagent task matc
 test('/task-list opens the list or its settings, and help or anything else lists its verbs', async ($, on) => {
   const seen = world(on)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(seen.commands).toEqual([{ name: 'task-list', argumentHint: '[help | settings]' }])
+  expect(seen.commands).toEqual([{ name: 'task-list', argumentHint: '[help | settings | phone]' }])
   const run = (args: string) => $.command.run({ command: 'task-list', args } as never)
   expect(await run('')).toEqual(expect.objectContaining({ text: 'Opened the task list.' }))
   expect(await run('settings')).toEqual(expect.objectContaining({ text: 'Opened the tasks settings.' }))
@@ -497,4 +497,12 @@ test('a handed-over session that is resumed and saves its list is current again'
   await turn($)
   await create($, 'more work')
   expect(mirror(seen).handedOverAt).toBeUndefined()
+})
+
+test('a bare /task-list typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  const bridge = { command: 'task-list', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n')).toEqual(['📋 No task list in this session.', '/task-list help for more'])
 })

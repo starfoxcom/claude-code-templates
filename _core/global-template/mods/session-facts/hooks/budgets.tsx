@@ -132,6 +132,40 @@ export function chipsOf(b: Budgets, now: number): Chip[] {
   return [contextChip(b, now), ...plan, ...(cache ? [cache] : [])]
 }
 
+const PHONE_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'week' }
+
+// A plan window as ten squares in its chip's tone, with the reset time the row shows only past the warning.
+function phonePlanLine(limit: PlanWindow, b: Budgets): string {
+  const name = PHONE_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')
+  const used = Math.round(limit.percentUsed)
+  const tone = planChip(limit, b).color ?? 'green'
+  const filled = Math.min(BAR_CELLS, Math.max(0, Math.round(used / 10)))
+  const bar = SQUARES[tone].repeat(filled) + '⬜'.repeat(BAR_CELLS - filled)
+  const reset = limit.resetsAt ? ` · resets ${shortLocal(limit.resetsAt, b.offsetMinutes)}` : ''
+  return `${name} ${bar} ${used}%${reset}`
+}
+
+function phoneCacheLine(b: Budgets, now: number): string {
+  const chip = cacheChip(b, now)
+  if (chip) return `${chip.color ? `${SQUARES[chip.color]} ` : ''}${chip.text}`
+  if (b.cacheExpiresAt === undefined) return 'cache --'
+  return `cache: warm · ${Math.max(0, Math.floor((b.cacheExpiresAt - now) / 60_000))}m left`
+}
+
+/**
+ * The budgets row as plain text for a phone chat, which draws no row: the same chips' figures and tones,
+ * colour as squares, plus what the row keeps until it matters (every reset time, the cache's time left).
+ */
+export function phoneText(b: Budgets, now: number): string {
+  const context = contextText(b.tokens, b.size, b.compactsAt, true) + compactedMark(b.compactedAt, b.offsetMinutes, now)
+  const plans = b.limits.length > 0 ? b.limits.map(limit => phonePlanLine(limit, b)) : ['5-hour --', 'week --']
+  const until = pauseChip(b, now) && b.pausedUntil !== undefined ? shortLocal(b.pausedUntil, b.offsetMinutes) : ''
+  const lines = [`📊 Budgets · ${shortLocal(now, b.offsetMinutes).slice(4)}`, context]
+  return [...lines, ...(until ? [`🟥 PAUSED until ${until}`] : plans), phoneCacheLine(b, now)].join('\n')
+}
+
+// In a narrow band (a side pane takes room) the row wraps by whole chips: a chip that does not fit moves
+// to the next line in one piece. Only a chip wider than the band alone shrinks, cut short with an ellipsis.
 export function registerBudgetsView(on: On): void {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inner = await next(e)
@@ -142,14 +176,14 @@ export function registerBudgetsView(on: On): void {
     return (
       <Box flexDirection="column">
         {inner}
-        <Box>
+        <Box key="session-facts-row" flexWrap="wrap">
           {chips.map((chip, index) => (
-            <Box key={`session-facts-chip-${index}`}>
+            <Box key={`session-facts-chip-${index}`} flexShrink={1} minWidth={0}>
               <Text color={chip.color}>{index > 0 ? ' · ' : ''}</Text>
               {(chip.parts ?? [{ text: chip.text }])
                 .filter(part => part.text)
                 .map((part, at) => (
-                  <Text key={`session-facts-chip-${index}-${at}`} color={part.color ?? chip.color}>
+                  <Text key={`session-facts-chip-${index}-${at}`} color={part.color ?? chip.color} wrap="truncate-end">
                     {part.text}
                   </Text>
                 ))}
