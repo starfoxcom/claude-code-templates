@@ -16,7 +16,7 @@ import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
 import { applyValues, type Live, newLive } from './live'
 import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, formatLocal, HELP, pausedText } from './texts'
-import { questionText, READ_ZONE, statusText, UNCONFIRMED_NOTICE, zoneOf } from './texts'
+import { armedText, joinedPauseText, questionText, READ_ZONE, statusText, UNCONFIRMED_NOTICE, zoneOf } from './texts'
 
 const CHECK_EVERY_MS = 60_000
 // A beat after a command or the wrap-up's turn ends before compacting, so the engine is between turns.
@@ -517,10 +517,7 @@ async function armByHand($: EngineInterface, which: string, option: string): Pro
   const arm = isEmpty ? { ...base, isQuestioned: true } : base
   await setArm($, arm)
   await scheduleArm($, arm)
-  const lines = [
-    `Armed: this session resumes its saved work at ${localTime(planned.wakeAt)}, after the ` +
-      `${LIMIT_NAMES[planned.kind]} reset. /usage-guard disarm cancels it.`,
-  ]
+  const lines = [armedText(planned.kind, localTime(planned.wakeAt))]
   if (isEmpty) lines.push(EMPTY_ARM_NOTE)
   if (option === 'compact') {
     $.clock.after(COMPACT_DELAY_MS, () => void compactNow($).catch(() => undefined))
@@ -642,12 +639,7 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   await stopBackground($, pause)
   setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause, localTime(pause.wakeAt)))
-  await notice(
-    $,
-    `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes at ` +
-      `${localTime(pause.wakeAt)}: a session with saved work then goes on by itself, and one with nothing ` +
-      `on record is told. To skip the automatic resume, run /usage-guard cancel.`,
-  )
+  await notice($, joinedPauseText(pause, localTime(pause.wakeAt)))
 }
 
 // What shows above the prompt: the shared card every session draws (pause, resume, cancel), then this
