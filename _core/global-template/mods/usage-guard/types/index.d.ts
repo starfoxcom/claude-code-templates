@@ -19,6 +19,8 @@ export type UsageGuardBand = {
 /** The settings pane's own state: the last refusal per field, shown under that field. */
 export type SettingsView = {
   errors: Record<string, string>
+  /** A change saved on a surface whose /config lists no plugin rows, where the field cannot show it. */
+  saved?: Record<string, string>
 }
 
 /**
