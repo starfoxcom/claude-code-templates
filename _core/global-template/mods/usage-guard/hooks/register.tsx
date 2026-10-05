@@ -2,6 +2,14 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { ArmedWake, UsageCard } from '../types'
+import {
+  catchUpOf,
+  caughtUpText,
+  missedArmText,
+  parseSavedArm,
+  quietResumePrompt,
+  quietResumeText,
+} from './arms'
 import type { CompactOutcome, Fill } from './compact'
 import { outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
 import type { Pause } from './plan'
@@ -44,6 +52,7 @@ const COMPACT_DELAY_MS = 1_000
 // How often the card above the prompt re-reads the shared files, so a Dismiss
 // or a cancel in one session shows in the others.
 const REFRESH_MS = 2_000
+const MKDIR_SCRIPT = 'require("fs").mkdirSync(process.argv[1],{recursive:true})'
 const band = atom({ plugin: 'usage-guard', key: 'band' } as const, null)
 const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
 // Module state: a hot reload starts it over, which is safe because the pause
@@ -69,6 +78,9 @@ const live: {
   wrapUpAt: number
   delayMinutes: number
   compactAbovePercent: number
+  catchUpMinutes: number
+  /** The folder for saved arms exists: made once per module load, before the first save. */
+  isArmsDirMade: boolean
 } = {
   zone: { offsetMinutes: 0, name: 'UTC' },
   isTurnRunning: false,
@@ -78,6 +90,8 @@ const live: {
   wrapUpAt: 90,
   delayMinutes: 2,
   compactAbovePercent: 25,
+  catchUpMinutes: 30,
+  isArmsDirMade: false,
 }
 
 async function dataDir($: EngineInterface): Promise<string> {
@@ -339,12 +353,22 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
   if (won === null) return notice($, UNCONFIRMED_NOTICE)
   // Only a session that saved work, or one armed, goes on by itself. Another session in the project
   // would rebuild the same hand-off and work the same tasks beside it, with nobody watching either.
-  const work = isArmedHere || (await hadWork($, pause))
+  const work = await hadWork($, pause)
+  const text = 'Plan limits have reset: resuming the saved work.'
+  if (work === true) return resumeWork($, text)
+  if (isArmedHere) return resumeArmed($, limitName(pause), text)
   if (work === null) return notice($, UNCONFIRMED_NOTICE)
   // Worded as what is on record, not what happened: a wrap-up whose own claim failed before a hot
   // reload, or one before a /clear, saved work that left no claim under this session's id.
-  if (!work) return notice($, NO_WORK_NOTICE)
-  await resumeWork($, 'Plan limits have reset: resuming the saved work.')
+  return notice($, NO_WORK_NOTICE)
+}
+
+// An armed session goes on with its work, or, with nothing pending, only says so: the person asked for
+// the wake-up, and a full resume would rebuild a hand-off for no work.
+async function resumeArmed($: EngineInterface, limit: string, text: string): Promise<void> {
+  if ((await openTasks($)) !== 0) return resumeWork($, text)
+  await notice($, quietResumeText(limit))
+  void $.prompt.submit({ text: quietResumePrompt(limit) }).catch(() => undefined)
 }
 
 // A wrap-up with work leaves a claim (this instance remembers it as handled, another finds it taken).
@@ -419,7 +443,10 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   const isPauseReset = pause && pause.resetsAt === arm.resetsAt && pause.status !== 'cancelled'
   if (won === null) await notice($, UNCONFIRMED_NOTICE)
   else if (isPauseReset) await resume($, arm.resetsAt, true)
-  else await resumeWork($, `The ${LIMIT_NAMES[arm.kind]} reset you armed for has passed: resuming the saved work.`)
+  else {
+    const limit = LIMIT_NAMES[arm.kind] ?? arm.kind
+    await resumeArmed($, limit, `The ${limit} reset you armed for has passed: resuming the saved work.`)
+  }
   // Cleared only if still this arm: the person may have set another while the resume ran.
   const now = await read($, armedWake)
   if (now?.resetsAt === arm.resetsAt && now.kind === arm.kind) await setArm($, null)
@@ -427,6 +454,46 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
 
 async function setArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
   await update($, armedWake, () => arm)
+  await saveArm($, arm)
+}
+
+async function armPath($: EngineInterface): Promise<string> {
+  return `${await dataDir($)}/arms/${await $.session.id()}.json`
+}
+
+// A failed save never fails the command: the arm still stands until this process ends.
+async function saveArm($: EngineInterface, arm: ArmedWake | null): Promise<void> {
+  try {
+    if (!live.isArmsDirMade) {
+      await $.process.run(['node', '-e', MKDIR_SCRIPT, `${await dataDir($)}/arms`], { timeoutMs: 10_000 })
+      live.isArmsDirMade = true
+    }
+    await $.fs.write(await armPath($), JSON.stringify(arm, null, 2))
+  } catch {
+    // Kept in this process's state only.
+  }
+}
+
+// A session started again (a restart, a resume) finds the arm it saved: scheduled again, caught up
+// within the setting's window, or dropped with a note. A hot reload keeps the arm in state instead.
+async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
+  let saved: ArmedWake | undefined
+  try {
+    saved = parseSavedArm(String(await $.fs.read(await armPath($))))
+  } catch {
+    return undefined
+  }
+  if (!saved) return undefined
+  const limit = LIMIT_NAMES[saved.kind] ?? saved.kind
+  const action = catchUpOf(saved.wakeAt, await $.clock.now(), live.catchUpMinutes)
+  if (action === 'drop') {
+    await setArm($, null)
+    await notice($, missedArmText(limit, localTime(saved.wakeAt), live.catchUpMinutes))
+    return undefined
+  }
+  await update($, armedWake, () => saved)
+  if (action === 'fire') await notice($, caughtUpText(limit, localTime(saved.wakeAt)))
+  return saved
 }
 
 // The open tasks in this session's list, from the tasks mod's copy: none when that mod keeps lists but
@@ -536,8 +603,9 @@ async function startTimers($: EngineInterface): Promise<void> {
   await refresh($)
   const pause = await readPause($)
   if (pause?.status === 'active' && pause.wakeAt > (await $.clock.now())) await act($, pause)
-  // A wake armed before a hot reload: the module's timer went with the old instance.
-  const arm = await read($, armedWake)
+  // A wake armed before a hot reload: the module's timer went with the old instance. Before a restart:
+  // the state went with the process, and the saved arm stands in.
+  const arm = (await read($, armedWake)) ?? (await restoreArm($))
   if (arm) await scheduleArm($, arm)
   $.clock.every(CHECK_EVERY_MS, () => void check($).catch(() => undefined))
   $.clock.every(REFRESH_MS, () => void refresh($).catch(() => undefined))
@@ -598,6 +666,7 @@ export const register: Register = (on, options) => {
   live.wrapUpAt = Number(options.wrapUpAt ?? 90)
   live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
   live.compactAbovePercent = Number(options.compactAbovePercent ?? 25)
+  live.catchUpMinutes = Number(options.catchUpMinutes ?? 30)
   settings(on, options)
 
   on('session.start', async ($, e, next) => {
