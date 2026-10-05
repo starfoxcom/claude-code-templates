@@ -30,6 +30,8 @@ export type Live = {
   catchUpMinutes: number
   /** The folder for saved arms exists: made once per module load, before the first save. */
   isArmsDirMade: boolean
+  /** The data folder, read from the environment once per module load: the 2-second refresh needs it. */
+  dir?: string
 }
 
 /** Runs the mod with its settings: the file's values over the options it loaded with. */
