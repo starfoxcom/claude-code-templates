@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { hasPendingWake, keepGoingText, workable } from '../hooks/keepgoing'
+import { hasPendingWake, isPauseLive, keepGoingText, workable } from '../hooks/keepgoing'
 import type { Mirror, MirrorTask } from '../hooks/register'
 
 // Keep going: a turn that ends with work nobody waits for gets a prompt to carry on.
@@ -45,6 +45,17 @@ test('a CI watch still running, or settled and not yet sent, is a pending wake',
   expect(hasPendingWake(JSON.stringify({ watches: [{ outcome: 'passed' }] }))).toBe(false)
   expect(hasPendingWake(JSON.stringify({ watches: [{}] }))).toBe(true)
   expect(hasPendingWake(JSON.stringify({ watches: [{ outcome: 'failed', wakePending: true }] }))).toBe(true)
+})
+
+test("a plan-limit pause counts only while usage-guard's own test holds: active, its wake still ahead", () => {
+  const pause = (fields: object) => JSON.stringify(fields)
+  expect(isPauseLive(pause({ status: 'active', wakeAt: 2_000 }), 1_000)).toBe(true)
+  // Its wake passed while no session was open: the file still says active.
+  expect(isPauseLive(pause({ status: 'active', wakeAt: 1_000 }), 1_000)).toBe(false)
+  expect(isPauseLive(pause({ status: 'active', wakeAt: 999 }), 1_000)).toBe(false)
+  expect(isPauseLive(pause({ status: 'done', wakeAt: 2_000 }), 1_000)).toBe(false)
+  expect(isPauseLive(pause({ status: 'active' }), 1_000)).toBe(false)
+  for (const text of [undefined, '', '{ broken']) expect(isPauseLive(text, 1_000)).toBe(false)
 })
 
 test('the prompt names the first task and how many more', () => {
@@ -109,6 +120,13 @@ test('no prompt when every open task is on hold, the turn was interrupted, or a 
   await $.tool.call({ tool: 'TaskUpdate', taskId: '1', metadata: { hold: 'Alex' } } as never)
   await turnEnds($, clock)
   expect(seen.prompts).toEqual([])
+})
+
+test('a pause whose wake already passed does not hold the prompt back', async ($, on) => {
+  const stale = { [`${DATA}/usage-guard/pause.json`]: JSON.stringify({ status: 'active', wakeAt: 500 }) }
+  const { seen, clock } = world(on, [task('1', 'in_progress')], stale)
+  await turnEnds($, clock)
+  expect(seen.prompts).toHaveLength(1)
 })
 
 test('two prompts that change nothing on the list are the last; the person prompting starts over', async (
