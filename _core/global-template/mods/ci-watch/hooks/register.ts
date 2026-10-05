@@ -448,7 +448,12 @@ async function readIncident($: EngineInterface, now: number): Promise<string | u
 // once with the incident's name (the row shows it too), instead of waiting out the time limit in silence.
 // Returns whether a watch changed.
 async function noteIncidents($: EngineInterface, now: number): Promise<boolean> {
-  const isWaiting = (w: Watch) => !w.outcome && !w.incident && now - w.startedAt > STUCK_MS
+  // Some check still pending (or none reported yet): a watch only confirming finished checks is not stuck.
+  const isPending = (w: Watch) => {
+    const buckets = Object.values(w.checks)
+    return buckets.length === 0 || buckets.some(bucket => PENDING.has(bucket))
+  }
+  const isWaiting = (w: Watch) => !w.outcome && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
   if (!live.watches.some(isWaiting)) return false
   const incident = await readIncident($, now)
   if (!incident) return false
