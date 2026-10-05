@@ -271,8 +271,8 @@ async function statusText($: Engine): Promise<string> {
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
     `The product name may appear in ${names}; AI credit is blocked everywhere.`,
-    line('Today', sumDays(stats, now, 1)),
-    line('Last 7 days', sumDays(stats, now, 7)),
+    line('Today (UTC)', sumDays(stats, now, 1)),
+    line('Last 7 days (UTC)', sumDays(stats, now, 7)),
   ].join('\n')
 }
 

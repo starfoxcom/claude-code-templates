@@ -7,8 +7,9 @@ import type { ConfigKind, Elements, EngineInterface as Engine, On, Register } fr
 // once a minute, so a change reaches the sessions already running.
 // The /config menu cannot be that place: the Desktop app's lists no plugin rows and refuses to set them, so
 // the mod's rows are hidden there. The options the mod loaded with (the manifest's defaults, or a value set
-// in /config before) stay underneath. Every mod with settings carries this file, the same apart from
-// PLUGIN, TITLE and NAME; its command opens the pane by SETTINGS_PANE.
+// in /config before) stay underneath. This file is usage-guard's alone: the other mods' panes are the
+// read-only copy in ci-watch/hooks/settings.tsx; never re-sync one over the other. Its command opens the
+// pane by SETTINGS_PANE.
 
 const PLUGIN = 'usage-guard'
 const TITLE = 'Usage guard settings'

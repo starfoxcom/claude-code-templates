@@ -58,8 +58,8 @@ test('/guards names the mode, where the product may appear, and the counts for t
   expect(text.split('\n')).toEqual([
     'Guards: shadow (never blocks; logs what it would block).',
     'The product name may appear in every repo; AI credit is blocked everywhere.',
-    'Today: 12 writes checked, 1 it would block, 2 the guard scripts blocked.',
-    'Last 7 days: 17 writes checked, 1 it would block, 3 the guard scripts blocked.',
+    'Today (UTC): 12 writes checked, 1 it would block, 2 the guard scripts blocked.',
+    'Last 7 days (UTC): 17 writes checked, 1 it would block, 3 the guard scripts blocked.',
   ])
 })
 
