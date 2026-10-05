@@ -457,7 +457,7 @@ const OPS = {
   ask(s, all, id, args, t) {
     const reason = args.slice(1).join(' ').trim()
     // Nobody ahead (the PC is free, or this session holds it): a card would ask about nothing.
-    if (!isBehind(s, id)) return { error: 'nobody is ahead of this session, so there is nothing to ask: the PC is free for it' }
+    if (!isBehind(s, id)) return { error: 'nobody is ahead of this session: the PC is free for it' }
     s.requests = s.requests.filter(r => r.session !== id)
     s.requests.push({ session: id, name: all[id] ? all[id].name : id.slice(0, 8), reason, at: t, answer: null })
     log({ op: 'ask', session: id, reason })
