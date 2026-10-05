@@ -39,6 +39,15 @@ export type ArmedWake = {
   armedIn?: string
   /** The session id the arm's saved copy is filed under; a /clear moves it to the new one. */
   session?: string
+  /** The project folder the arm was set in: a later session there is offered an arm that never ran. */
+  root?: string
+}
+
+/** Another session's arm in this project whose wake passed while that session was closed. */
+export type AdoptOffer = {
+  /** The session id the arm is filed under. */
+  owner: string
+  arm: ArmedWake
 }
 
 declare module 'claude-code' {
@@ -49,6 +58,8 @@ declare module 'claude-code' {
       armed: ArmedWake | null
       /** What the last press on the arm card did, shown in its place until dismissed. */
       armNote: string | null
+      /** A closed session's arm that never ran, offered here; then what the press did. */
+      adopt: { offer: AdoptOffer | null; text: string | null; note: string | null } | null
     }
   }
 }
