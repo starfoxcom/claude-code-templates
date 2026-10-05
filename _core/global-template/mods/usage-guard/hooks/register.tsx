@@ -24,6 +24,19 @@ import {
 } from './plan'
 import { stopCommandsFor } from './rules'
 import { register as settings, SETTINGS_PANE } from './settings'
+import type { Card, CardButton, Zone } from './texts'
+import {
+  ARGUMENT_HINT,
+  CANCELLED_TEXT,
+  cardTone,
+  formatLocal,
+  HELP,
+  pausedText,
+  questionText,
+  READ_ZONE,
+  UNCONFIRMED_NOTICE,
+  zoneOf,
+} from './texts'
 
 const CHECK_EVERY_MS = 60_000
 // A beat after a command or the wrap-up's turn ends before compacting, so the engine is between turns.
@@ -33,14 +46,6 @@ const COMPACT_DELAY_MS = 1_000
 const REFRESH_MS = 2_000
 const band = atom({ plugin: 'usage-guard', key: 'band' } as const, null)
 const armedWake = atom({ plugin: 'usage-guard', key: 'armed' } as const, null)
-const READ_ZONE = [
-  'node',
-  '-e',
-  'console.log(new Date().getTimezoneOffset() + " " + Intl.DateTimeFormat().resolvedOptions().timeZone)',
-]
-
-type Zone = { offsetMinutes: number; name: string }
-
 // Module state: a hot reload starts it over, which is safe because the pause
 // itself lives in the shared file.
 const live: {
@@ -123,17 +128,15 @@ async function claim($: EngineInterface, name: string): Promise<boolean> {
 async function readZone($: EngineInterface): Promise<void> {
   try {
     const { exitCode, stdout } = await $.process.run(READ_ZONE, { timeoutMs: 10_000 })
-    const [offset, name] = stdout.trim().split(' ')
-    if (exitCode === 0 && Number.isFinite(Number(offset)) && name) live.zone = { offsetMinutes: Number(offset), name }
+    const zone = exitCode === 0 ? zoneOf(stdout) : undefined
+    if (zone) live.zone = zone
   } catch {
     // UTC stays; the times shown say so.
   }
 }
 
 function localTime(ms: number): string {
-  const local = new Date(ms - live.zone.offsetMinutes * 60_000)
-  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][local.getUTCDay()]
-  return `${day} ${local.toISOString().slice(0, 16).replace('T', ' ')} (${live.zone.name})`
+  return formatLocal(ms, live.zone)
 }
 
 // A note in this session's transcript. What the person sees is the card above
@@ -192,24 +195,12 @@ async function cancelPause($: EngineInterface, pause: Pause): Promise<void> {
   await disarm($)
   await writePause($, { ...pause, status: 'cancelled' })
   setStatus($, undefined)
-  await showCard(
-    $,
-    `cancelled:${pause.resetsAt}`,
-    'Automatic resume cancelled for every session. Run /session-start in a session when you want to pick its ' +
-      'saved work back up.',
-  )
+  await showCard($, `cancelled:${pause.resetsAt}`, CANCELLED_TEXT)
 }
 
 async function cancelFromCard($: EngineInterface): Promise<void> {
   const pause = await readPause($)
   if (pause?.status === 'active') await cancelPause($, pause)
-}
-
-function pausedText(pause: Pause): string {
-  return (
-    `${limitName(pause)} plan usage at ${pause.percentUsed}%. Sessions save their work and pause. Work ` +
-    `resumes on its own at ${localTime(pause.wakeAt)}.`
-  )
 }
 
 async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
@@ -230,7 +221,7 @@ async function stopBackground($: EngineInterface, pause: Pause): Promise<void> {
 async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
   setStatus($, `Plan limit near: paused until ${resumeAt}`)
-  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
+  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause, localTime(pause.wakeAt)))
   if (live.workSession !== (await $.session.id())) {
     await notice(
       $,
@@ -330,11 +321,6 @@ function scheduleOwedCompaction($: EngineInterface): void {
   live.compactAfterTurn = undefined
   $.clock.after(COMPACT_DELAY_MS, () => void compactAtPause($, owed).catch(() => undefined))
 }
-
-// When a claim helper fails at the wake: whether this session should go on by itself is not known.
-const UNCONFIRMED_NOTICE =
-  'Plan limits have reset. Whether this session should go on by itself could not be confirmed, so it waits ' +
-  'for you; resume it by hand.'
 
 async function resume($: EngineInterface, resetsAt: string, isArmed = false): Promise<void> {
   // Read first: an arm for this reset counts even if its own timer clears it while this one runs.
@@ -572,7 +558,7 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
   // A project no session had open when the pause began still has its background work stopped.
   await stopBackground($, pause)
   setStatus($, `Plan limit near: paused until ${localTime(pause.wakeAt)}`)
-  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause))
+  await showCard($, `paused:${pause.resetsAt}`, pausedText(pause, localTime(pause.wakeAt)))
   await notice(
     $,
     `Plan limits are nearly used up (${limitName(pause)} at ${pause.percentUsed}%). Work resumes at ` +
@@ -580,17 +566,6 @@ async function meetPause($: EngineInterface, pause: Pause): Promise<void> {
       `on record is told. To skip the automatic resume, run /usage-guard cancel.`,
   )
 }
-
-type Tone = 'green' | 'blue' | 'yellow'
-
-// yellow: the person may act (cancel the resume, run /session-start); blue: information; green: good news.
-function cardTone(id: string): Tone {
-  if (id.startsWith('reset:')) return 'green'
-  return id.startsWith('cancelled:') ? 'blue' : 'yellow'
-}
-
-type CardButton = { key: string; label: string; isPrimary?: boolean; onPress: () => unknown }
-type Card = { key: string; tone: Tone; text: string; buttons: CardButton[] }
 
 // What shows above the prompt: the shared card every session draws (pause, resume, cancel), then this
 // session's own question about an arm set with nothing pending.
@@ -609,9 +584,7 @@ async function cardsAbove($: EngineInterface): Promise<Card[]> {
   }
   const arm = await read($, armedWake)
   if (arm?.isQuestioned) {
-    const text =
-      `Armed to resume at ${localTime(arm.wakeAt)}, but nothing is pending here (no open task that is not on ` +
-      'hold), so the wake-up will have nothing to do.'
+    const text = questionText(localTime(arm.wakeAt))
     const buttons: CardButton[] = [
       { key: 'usage-arm-keep', label: 'Keep it', isPrimary: true, onPress: () => keepArm($) },
       { key: 'usage-arm-cancel', label: 'Cancel the resume', onPress: () => disarm($) },
@@ -716,18 +689,6 @@ async function registerSurface($: EngineInterface): Promise<void> {
     argumentHint: ARGUMENT_HINT,
   })
 }
-
-const ARGUMENT_HINT = '[help | settings | arm 5h|week [compact] | disarm | cancel]'
-const HELP = [
-  '/usage-guard: pauses a session before a plan window runs out and resumes it after the reset.',
-  '  /usage-guard                      the pause status and the wrap-up level',
-  '  /usage-guard cancel               cancel the active pause: no automatic resume',
-  '  /usage-guard arm 5h|week          resume this session after that window resets',
-  '  /usage-guard arm 5h|week compact  the same, and compact the session now',
-  '  /usage-guard disarm               drop the armed resume',
-  '  /usage-guard settings             open the settings pane',
-  '  /usage-guard help                 this list',
-].join('\n')
 
 // `/usage-guard [help | settings | arm 5h|week [compact] | disarm | cancel]`; with no argument, the status.
 async function runCommand($: EngineInterface, args: string): Promise<string> {
