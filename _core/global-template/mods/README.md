@@ -40,6 +40,8 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`. Chan
 | `tasks` | `nudgeAfterTools` | `3` | Tool calls in one turn with no task list before the model is asked to make one. `0` turns the nudge off. |
 | `usage-guard` | `wrapUpAt` | `90` | Percentage of any plan window (5-hour, weekly) at which sessions wrap up. |
 | `usage-guard` | `wakeDelayMinutes` | `2` | How long after the reset sessions resume. |
+| `usage-guard` | `compactAbovePercent` | `25` | A session that will resume on its own compacts after its wrap-up when its context is above this share and the reset is more than an hour away. `0` turns it off. |
+| `usage-guard` | `catchUpMinutes` | `30` | A session armed to resume that was closed at its wake resumes when it starts again within this many minutes of the wake; later, it only says what it missed. `0` never catches up. |
 | `session-facts` | `planWarnAt` | `75` | Plan usage (%) at which a window turns yellow and shows when it resets; it turns red at `usage-guard`'s `wrapUpAt`. |
 | `session-facts` | `cacheWarnMinutes` | `10` | The prompt-cache countdown shows once this few minutes are left. |
 | `session-facts` | `cacheTtlMinutes` | `60` | The prompt-cache lifetime to assume until it is read from the session transcript after each reply (the API records which lifetime each cache write used: 60 minutes on a plan within its included usage, 5 past it or on an API key), and whenever the transcript cannot be read. In that fallback, a miss between 5 minutes and this lifetime switches the countdown to 5 minutes until a warm request outlives them. |
@@ -98,7 +100,7 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 | `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json` |
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
 | `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
-| `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days) |
+| `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days), `arms/<session>.json` (a session's standing arm, kept for a restart; `null` once disarmed or run) |
 | `runners` | `runners.json` (optional): your own runner list, read at session start; the last reading lives in the session |
 | `session-facts` | `<session>.json`: the last reply's time, the prompt-cache lifetime and the last cache check, so the countdown survives a reload; files of other sessions are swept two days after they were last written. `plan.json`: the newest plan figures any session recorded, for a fresh session's first line |
 

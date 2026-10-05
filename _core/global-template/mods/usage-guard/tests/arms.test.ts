@@ -291,6 +291,15 @@ test('an arm is saved for a restart, and a disarm drops the saved copy', async (
   expect(savedArm(seen)).toBe('null')
 })
 
+test('a disarm after a /clear also drops the copy saved under the old session id', async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await arm5h($)
+  seen.sessionId = 'sess-b'
+  await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)
+  expect(savedArm(seen)).toBe('null')
+})
+
 test('a session started again before its wake schedules the saved arm', async ($, on) => {
   const seen = world(on)
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
