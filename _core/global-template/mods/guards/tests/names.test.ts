@@ -41,6 +41,13 @@ test('the first hit in the text is named, whichever list it is in', () => {
 test('an empty list and empty entries catch nothing', () => {
   expect(findName('oldkeep OK', {})).toBeUndefined()
   expect(findName('oldkeep OK', { names: [''], words: [''] })).toBeUndefined()
+  // A blank entry neither turns off the names after it nor matches a space.
+  const blank = { names: [' ', 'oldkeep'], words: ['  ', 'OK'] }
+  expect(findName('fix:  (x) "y"', blank)).toBeUndefined()
+  expect(findName('port the Oldkeep sky', blank)).toBe('Oldkeep')
+  expect(findName('fix: OK width', blank)).toBe('OK')
+  // Spaces around an entry are not part of it.
+  expect(findName('fix: OK width', { words: [' OK '] })).toBe('OK')
 })
 
 test('the rules file must hold lists of strings per repo', () => {

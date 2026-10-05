@@ -21,9 +21,11 @@ export function readNameRules(text: string): NameRules | undefined {
 
 /** The first banned name in the text, as written there, or undefined. */
 export function findName(text: string, rule: NameRule): string | undefined {
+  // Trimmed before the empty ones are dropped: a blank entry would match everywhere, or at every space.
+  const listed = (list?: string[]) => (list ?? []).map(s => s.trim()).filter(Boolean)
   // A name of several words matches across any run of spaces or a line break.
-  const names = (rule.names ?? []).filter(Boolean).map(n => escape(n.trim()).replace(/\s+/g, '\\s+'))
-  const words = (rule.words ?? []).filter(Boolean).map(w => `(?<![\\p{L}\\p{N}_])${escape(w)}(?![\\p{L}\\p{N}_])`)
+  const names = listed(rule.names).map(n => escape(n).replace(/\s+/g, '\\s+'))
+  const words = listed(rule.words).map(w => `(?<![\\p{L}\\p{N}_])${escape(w)}(?![\\p{L}\\p{N}_])`)
   const hits = [
     names.length > 0 ? new RegExp(names.join('|'), 'iu').exec(text) : null,
     words.length > 0 ? new RegExp(words.join('|'), 'u').exec(text) : null,
