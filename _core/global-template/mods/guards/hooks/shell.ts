@@ -40,8 +40,9 @@ const HEREDOC = /^<<(-?)[ \t]*(["']?)([A-Za-z_][\w.-]*)\2/
 // it (`<<'EOF' && git push`). `isQuoted`: its delimiter was quoted, so the body is literal.
 type Pending = { delim: string; strip: boolean; owner?: Statement; isQuoted?: boolean }
 
-// An expansion in an unquoted here-doc body: `$NAME`, `${...}`, `$(...)` or a backtick.
-const BODY_EXPANSION = /\$[A-Za-z_{(]|`/
+// An expansion in an unquoted here-doc body: `$NAME`, `${...}`, `$(...)`, a backtick, or a backslash (the
+// shell drops a backslash-newline, joining two lines, and turns `\$`, `\\` and `` \` `` into one character).
+const BODY_EXPANSION = /\$[A-Za-z_{(]|`|\\/
 
 const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
 
