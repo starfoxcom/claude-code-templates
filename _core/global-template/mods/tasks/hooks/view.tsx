@@ -72,6 +72,33 @@ function countOf(tasks: readonly TaskRow[], kind: Kind): number {
   return tasks.filter(task => kindOf(task) === kind).length
 }
 
+// Finished tasks the phone text lists before it only counts the rest.
+const PHONE_DONE = 5
+
+/**
+ * The list as plain text for a phone chat, which draws neither the band nor the pane: the counts, then
+ * every unfinished task under its kind's icon (with what a held one waits on), then the newest finished.
+ */
+export function phoneText(tasks: readonly TaskRow[]): string {
+  if (tasks.length === 0) return '📋 No task list in this session.'
+  const counts = KINDS.filter(k => countOf(tasks, k.kind) > 0).map(
+    k => `${k.icon} ${countOf(tasks, k.kind)} ${k.title.toLowerCase()}`,
+  )
+  const icon = (task: TaskRow) => KINDS.find(k => k.kind === kindOf(task))?.icon ?? ''
+  const waits = (task: TaskRow) => (task.hold ? ` (waits on: ${task.hold})` : '')
+  const line = (task: TaskRow) => `${icon(task)} #${task.id} ${task.subject}${waits(task)}`
+  const all = ordered(tasks)
+  const isFinished = (task: TaskRow) => ['done', 'dropped'].includes(kindOf(task))
+  const finished = all.filter(isFinished)
+  const rest = finished.length - PHONE_DONE
+  return [
+    `📋 Tasks · ${counts.join(' · ')}`,
+    ...all.filter(task => !isFinished(task)).map(line),
+    ...finished.slice(0, PHONE_DONE).map(line),
+    ...(rest > 0 ? [`… and ${rest} more finished`] : []),
+  ].join('\n')
+}
+
 type Ui = ReturnType<Engine['ui']['resolve']>
 
 // The line above the prompt while only last session's leftovers are listed.
