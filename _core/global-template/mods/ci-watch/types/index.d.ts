@@ -14,6 +14,13 @@ export type Watch = {
   id?: string
   /** Settled, its wake not sent yet: it goes out once no turn runs. Saved, so a reload sends it. */
   wakePending?: boolean
+  /** An open GitHub incident touching Actions while this watch's checks sat pending; its name. */
+  incident?: string
+  /**
+   * The incident's note, not sent yet. Its own flag: `wakePending` is only ever set on a settled watch, and
+   * every path that keeps or drops a wake relies on that. Dropped once the watch settles or its head moves.
+   */
+  incidentPending?: boolean
 }
 
 /** The settings pane's own state: the last refusal per field. */
