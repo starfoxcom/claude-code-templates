@@ -153,6 +153,9 @@ test('a heading or a row line inside a code block is code, never structure', () 
   const fenced = (code: string) => `## What\n- a\n\n## Why\nb\n\n## Notes\n${code}\n\nResolves #12\n`
   expect(checkBody(fenced('```md\n## Why\n\nResolves #4\n```'), 'feat: x', RULE)).toBeUndefined()
   expect(checkBody(fenced('~~~~\n## x\n~~~\nstill code\n~~~~'), 'feat: x', RULE)).toBeUndefined()
+  // A backtick run with another backtick on its line is inline code: it opens no fence.
+  expect(checkBody(fenced('```json``` is the format'), 'feat: x', RULE)).toBeUndefined()
+  expect(checkBody(fenced('~~~ `x`\n## y\n~~~'), 'feat: x', RULE)).toBeUndefined()
   expect(checkBody('## What\n```\n## a\n```\n- a\n\n## Why\nb\n\nResolves #12\n', 'feat: x', RULE)).toBeUndefined()
   // A section holding only a code block is not empty.
   expect(checkBody('## What\n- a\n\n## Why\n```\n## x\n```\n\nResolves #12\n', 'feat: x', RULE)).toBeUndefined()

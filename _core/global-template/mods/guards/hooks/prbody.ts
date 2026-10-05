@@ -130,11 +130,13 @@ export function checkCall(call: PrCall): string | undefined {
 const rowOf = (rule: RepoRule) => (rule.row ? new RegExp(`^(?:${rule.row})$`) : undefined)
 
 // The body's lines with each line of a fenced code block (``` or ~~~, fences included) blanked, so a
-// heading or a row line shown as code never counts as one. A fence left open runs to the end.
+// heading or a row line shown as code never counts as one. A fence left open runs to the end. As in
+// CommonMark, a backtick run followed by another backtick on its line (```x```) is inline code, no fence.
 function outsideFences(lines: string[]): string[] {
   let fence: string | undefined
   return lines.map(l => {
-    const mark = /^ {0,3}(`{3,}|~{3,})/.exec(l)?.[1]
+    const found = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(l)
+    const mark = found?.[1]?.startsWith('`') && found[2]?.includes('`') ? undefined : found?.[1]
     if (fence === undefined && !mark) return l
     if (fence === undefined) fence = mark
     else if (mark?.[0] === fence[0] && mark.length >= fence.length && l.trim() === mark) fence = undefined
