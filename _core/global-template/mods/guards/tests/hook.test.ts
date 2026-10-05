@@ -274,16 +274,14 @@ test('a PR body that cannot be read exactly is named unread, never blocked', { o
   expect(seen.ran).toHaveLength(routes.length)
 })
 
-test('every PR call in a command is checked, and a body path built from a variable is read', {
-  options: { mode: 'enforce' },
-}, async ($, on) => {
+test('a body path built from a variable is read', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': '## What\n- add it\n' })
-  const both = await bash($, 'gh pr create --title "feat: x" --body-file short.md && gh pr edit 5 --add-label bug')
-  expect(String((both as { deny?: string }).deny)).toContain('`## Why` is missing')
   const built = await bash($, 'F=short.md; gh pr create --title "feat: x" --body-file "$F"')
   expect(String((built as { deny?: string }).deny)).toContain('`## Why` is missing')
   expect(seen.ran).toEqual([])
 })
+
+const NOT_PLAIN = 'the PR body (format check, create: not a single plain PR call)'
 
 test('a PowerShell splat is never blocked for flags it may carry', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE })
@@ -291,5 +289,37 @@ test('a PowerShell splat is never blocked for flags it may carry', { options: { 
   await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
   const result = await $.tool.call({ tool: 'PowerShell', command: 'gh pr create @params' } as never)
   expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+// Only a command whose one gh statement is the PR call is judged: with more, the repo, the body file or
+// the title could belong to another statement. Each of these is named unread, never blocked.
+const SHORT = { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': '## What\n- add it\n' }
+
+test('two PR calls in one command are named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, SHORT)
+  const both = await bash($, 'gh pr create --title "feat: x" --body-file short.md && gh pr edit 5 --add-label bug')
+  expect((both as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+test('another gh call naming a repo leaves the PR unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, SHORT)
+  const command = 'gh pr view 12 -R o/other --json body && gh pr create --title "feat: x" --body-file short.md'
+  expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+test('a title built at run time is named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, SHORT)
+  const result = await bash($, 'gh pr create --title "$T" --body-file short.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+})
+
+test('two here-docs on one PR call are named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE })
+  const command = `gh pr create --title "feat: x" --body-file - <<'A' <<'B'\n${FULL}A\n## Why\nb\nB`
+  expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
   expect(lastEntry(seen).unread).toContain('the PR body (format check, create)')
 })

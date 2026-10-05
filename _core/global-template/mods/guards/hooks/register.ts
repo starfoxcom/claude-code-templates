@@ -125,7 +125,9 @@ async function prRules($: Engine): Promise<PrRules | undefined> {
 // writes (its text as the command reading holds it may differ from what lands in the file).
 async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: boolean) {
   if (call.bodyFile === '-') return call.stdinBody
-  const file = call.filePath === undefined ? undefined : plan.files.find(f => f.path === call.filePath)
+  // Another statement naming the same path may sit in another folder: which entry is the PR's is a guess.
+  const files = plan.files.filter(f => f.path === call.filePath)
+  const file = files.length === 1 ? files[0] : undefined
   if (!file || file.written || isUnplaced(plan, file.path, file.folder)) return undefined
   try {
     return String(await $.fs.read(fileAt(file.path, file.folder, cwd, await $.session.cwd(), isBash)))
@@ -134,31 +136,30 @@ async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: 
   }
 }
 
-// Each PR call in the command, in order: the first reason to block. A body that cannot be read exactly
-// is named unread, so the shadow log shows it; it never blocks and never passes in silence.
+// The PR call, judged only in its plain form: the command's one gh statement, with a title written out.
+// With other gh statements the repo, the body file or the title may belong to one of them, so the
+// body is named unread instead, which the shadow log shows; it never blocks and never passes in silence.
 async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash: boolean) {
-  const rule = plan.prs.length > 0 ? ruleFor(await prRules($), repo) : undefined
+  const [call] = plan.prs
+  if (!call) return undefined
+  const isPlain = plan.prs.length === 1 && plan.ghCalls === 1 && !call.isTitleDynamic && !call.isUnknown
+  const rules = await prRules($)
+  if (!rules) return undefined
+  // Before the repo's rule: another statement's `--repo` may have named the wrong repo.
+  if (!isPlain) return void plan.unread.push(`the PR body (format check, ${call.action}: not a single plain PR call)`)
+  const rule = ruleFor(rules, repo)
   if (!rule) return undefined
-  for (const call of plan.prs) {
-    const early = checkCall(call)
-    if (early) return early
-    if (call.bodyFile === undefined && !call.isUnknown) continue
-    const text = call.isUnknown ? undefined : await prBody($, plan, call, cwd, isBash)
-    if (text === undefined) {
-      plan.unread.push(`the PR body (format check, ${call.action})`)
-      continue
-    }
-    let reason: string | undefined
-    try {
-      reason = checkBody(text, call.title, rule)
-    } catch {
-      // A pattern in pr-body.json that does not compile: the body goes unjudged, the other checks still run.
-      plan.unread.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)
-      continue
-    }
-    if (reason) return reason
+  const early = checkCall(call)
+  if (early) return early
+  if (call.bodyFile === undefined) return undefined
+  const text = await prBody($, plan, call, cwd, isBash)
+  if (text === undefined) return void plan.unread.push(`the PR body (format check, ${call.action})`)
+  try {
+    return checkBody(text, call.title, rule)
+  } catch {
+    // A pattern in pr-body.json that does not compile: the body goes unjudged, the other checks still run.
+    return void plan.unread.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)
   }
-  return undefined
 }
 
 // The first reason to block, or undefined.
