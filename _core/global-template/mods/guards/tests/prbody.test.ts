@@ -80,6 +80,12 @@ test('a word the shell may change makes the call unknown, never judged', () => {
   expect(checkCall(pr('create', ['@params']))).toBeUndefined()
 })
 
+test('a PR named by URL is unknown: gh edits the repo in the URL, not the folder', () => {
+  expect(pr('edit', ['https://github.com/o/other/pull/5', '--body-file', 'b.md']).isUnknown).toBe(true)
+  expect(pr('edit', ['5', '--body-file', 'b.md']).isUnknown).toBe(false)
+  expect(pr('edit', ['5', '--body-file', 'docs/b.md']).isUnknown).toBe(false)
+})
+
 test('a second body file makes the call unknown: gh sends the last one', () => {
   expect(pr('create', ['-t', 't', '-F', 'a.md', '-F', 'b.md']).isUnknown).toBe(true)
   expect(pr('create', ['-t', 't', '-F', 'b.md']).isUnknown).toBe(false)
