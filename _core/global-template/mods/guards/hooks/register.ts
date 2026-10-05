@@ -142,7 +142,8 @@ async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: 
 async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash: boolean) {
   const [call] = plan.prs
   if (!call) return undefined
-  const isPlain = plan.prs.length === 1 && plan.ghCalls === 1 && !call.isTitleDynamic && !call.isUnknown
+  const isPlain =
+    plan.prs.length === 1 && plan.ghCalls === 1 && call.isAlone && !call.isTitleDynamic && !call.isUnknown
   const rules = await prRules($)
   if (!rules) return undefined
   // Before the repo's rule: another statement's `--repo` may have named the wrong repo.

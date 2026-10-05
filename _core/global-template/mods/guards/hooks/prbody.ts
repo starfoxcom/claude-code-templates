@@ -29,6 +29,8 @@ export type PrCall = {
   isUnknown: boolean
   /** The title is built at run time, so a title exemption cannot be decided. */
   isTitleDynamic: boolean
+  /** The call is the whole command: one statement, `gh` typed first, nothing wrapped around it. */
+  isAlone?: boolean
 }
 
 /** A word as the command reading hands it over: its text, and whether the shell builds it at run time. */
@@ -56,7 +58,7 @@ function valueAt(words: string[], i: number, long: string, short: string): strin
 export function readPr(
   action: 'create' | 'edit',
   given: PrWord[],
-  found: { stdinBody?: string; filePath?: string } = {},
+  found: { stdinBody?: string; filePath?: string; isAlone?: boolean } = {},
 ): PrCall {
   const call: PrCall = {
     action,
@@ -76,7 +78,8 @@ export function readPr(
     if (/^[@$]/.test(w) && (given[i]?.dynamic || w.startsWith('@')) && !isFlagValue) call.isUnknown = true
     // Only plain spellings are judged; any other is named unread, never read a second, different way.
     if (/^-[A-Za-z]./.test(w) && !isFlagValue) call.isUnknown = true
-    if ((given[i]?.dynamic && /\$\(|`/.test(w)) || w.startsWith("$'")) call.isUnknown = true
+    // Any word the shell may change (a variable, `$'...'`, `$(...)`, a backtick): judged only as typed.
+    if (given[i]?.dynamic || /[$`]/.test(w)) call.isUnknown = true
     if (FILL.test(w)) call.isFilled = true
     else if (/^(?:-b|--body)(?:=|$)/.test(w) || /^-b./.test(w)) call.isInline = true
     const title = valueAt(words, i, '--title', '-t')
@@ -87,6 +90,8 @@ export function readPr(
       call.isTitleDynamic = Boolean(given[isSplit ? i + 1 : i]?.dynamic)
     }
     const file = valueAt(words, i, '--body-file', '-F')
+    // A second body file: gh sends the last, and only one is read.
+    if (file !== undefined && call.bodyFile !== undefined) call.isUnknown = true
     if (file !== undefined) call.bodyFile = file
   }
   return call
