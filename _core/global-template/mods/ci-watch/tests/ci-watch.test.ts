@@ -478,7 +478,8 @@ const PENDING_WATCH: Watch = {
   id: 'w1',
   wakePending: true,
 }
-const RELOAD_STARTS: [string, (clock: { advance: (ms: number) => Promise<unknown> }, $: Engine) => Promise<unknown>][] = [
+type Clock = { advance: (ms: number) => Promise<unknown> }
+const RELOAD_STARTS: [string, (clock: Clock, $: Engine) => Promise<unknown>][] = [
   ['at the turn end', async () => undefined],
   [
     'at a tool call inside the turn, holding it until the turn ends',

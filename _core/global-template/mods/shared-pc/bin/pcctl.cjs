@@ -244,16 +244,26 @@ function normalize(s, all) {
     if (!reserved) grant(s, s.line.shift())
   }
   // Skip-the-line requests: shown in every session until answered; an unanswered one ends when its
-  // session dies, gets the seat anyway, or after 15 minutes. An answered one waits for its session to
-  // read it (`ack`), unless that session died. Swept after the seat changes hands, so a request whose
-  // session was just granted the seat ends in the same pass.
+  // session dies, when nobody is ahead of it any more (it got the seat, or the PC went free), or after
+  // 15 minutes. An answered one waits for its session to read it (`ack`), unless that session died.
+  // Swept after the seat changes hands, so a request that just stopped mattering ends in the same pass.
   s.requests = s.requests.filter(r => {
     if (!isAlive(all, r.session)) return false
     if (r.answer) return true
-    const isServed = s.seat && s.seat.session === r.session && s.seat.since > r.at
-    return !isServed && t - r.at < REQUEST_TTL_MS
+    return isBehind(s, r.session) && t - r.at < REQUEST_TTL_MS
   })
   return s
+}
+
+// Whether another session would use the PC before this one: the seat, a reservation, or a place
+// earlier in the line. Only then is there anything to ask to skip. The seat holder is never behind, and
+// with the seat free the reservation holder is not either (it may take the seat now): the exact
+// opposite of `mayTakeFreeSeat` there.
+function isBehind(s, id) {
+  if (s.seat) return s.seat.session !== id
+  if (s.nextUp) return s.nextUp.session !== id
+  const position = s.line.findIndex(e => e.session === id)
+  return position === -1 ? s.line.length > 0 : position > 0
 }
 
 function grant(s, entry) {
@@ -446,6 +456,8 @@ const OPS = {
   // args: id reason...: a skip-the-line request every session shows until the person answers.
   ask(s, all, id, args, t) {
     const reason = args.slice(1).join(' ').trim()
+    // Nobody ahead (the PC is free, or this session holds it): a card would ask about nothing.
+    if (!isBehind(s, id)) return { error: 'nobody is ahead of this session: the PC is free for it' }
     s.requests = s.requests.filter(r => r.session !== id)
     s.requests.push({ session: id, name: all[id] ? all[id].name : id.slice(0, 8), reason, at: t, answer: null })
     log({ op: 'ask', session: id, reason })
