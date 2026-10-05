@@ -1,6 +1,6 @@
 ---
 name: session-close
-description: Close a work session. Verifies what is really finished, commits, opens or merges the PR, cleans up branches and hands off to the next session. Use at the end of every session or when the conversation is near its context limit.
+description: Close a work session. Verifies what is really finished, commits, opens or merges the PR, cleans up branches and hands off to the next session. Use when the maintainer asks for it, or when every task of the session is done; never just because the context is filling up.
 ---
 
 # /session-close
