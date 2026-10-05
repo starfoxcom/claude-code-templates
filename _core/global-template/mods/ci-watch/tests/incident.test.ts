@@ -138,3 +138,24 @@ test('the row says confirming, not the incident, once every check has passed', (
     color: 'green',
   })
 })
+
+test('a held incident wake stays off a moved head when another watch changes during that poll', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.status = ACTIONS
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+  for (let i = 0; i < 31; i++) await clock.advance(POLL_MS)
+  // The head moves, and while that poll waits on gh a watch starts on another PR (the list changes).
+  seen.head = 'b2'
+  seen.duringChecks = () => {
+    seen.duringChecks = undefined
+    return $.tool.call({ tool: 'mcp__ci-watch__watch', pr: 8, repo: 'o/q' } as never)
+  }
+  await clock.advance(POLL_MS)
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(POLL_MS)
+  expect(seen.prompts.filter(text => text.includes('settled with no failure'))).toEqual([])
+})

@@ -47,14 +47,16 @@ const live = {
 }
 
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
-// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent.
+// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. It is
+// carried only onto the same head: a wake held for an older one (an incident's) never reaches a new head.
 function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   const same = (a: Watch, b: Watch) =>
     a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
   return current.map(w => {
     const p = polled.find(p => same(p, w))
     if (!p) return w
-    return Boolean(p.wakePending) === Boolean(w.wakePending) ? p : { ...p, wakePending: w.wakePending }
+    const isKept = Boolean(p.wakePending) === Boolean(w.wakePending) || p.headSha !== w.headSha
+    return isKept ? p : { ...p, wakePending: w.wakePending }
   })
 }
 
