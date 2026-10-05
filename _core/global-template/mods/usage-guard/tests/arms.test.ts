@@ -336,3 +336,22 @@ test('/usage-guard phone carries the question about an arm with nothing pending'
   expect(lines[0]).toContain('Armed to resume at Fri 2026-10-02 12:02')
   expect(lines).toContain(`🟨 ${EMPTY_ARM_NOTE}`)
 })
+
+test('after a hot reload while idle, a command restores the saved arm and its timer', async ($, on) => {
+  const seen = world(on)
+  // The reload emptied the module and its state, and no turn has run since: only the saved copy is left.
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
+  expect(await status($)).toContain('Armed to resume at Fri 2026-10-02 12:02')
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toHaveLength(1)
+})
+
+test('after a hot reload while idle, disarm finds the saved arm and drops it', async ($, on) => {
+  const seen = world(on)
+  seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
+  const answer = (await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)) as { text: string }
+  expect(answer.text).toContain('Disarmed')
+  expect(savedArm(seen)).toBe('null')
+  await seen.clock.advance(WAKE - NOW)
+  expect(resumes(seen)).toEqual([])
+})
