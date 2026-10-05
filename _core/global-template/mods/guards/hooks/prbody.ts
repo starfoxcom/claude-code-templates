@@ -129,20 +129,33 @@ export function checkCall(call: PrCall): string | undefined {
 // written without anchors never matches a bullet that merely mentions the row.
 const rowOf = (rule: RepoRule) => (rule.row ? new RegExp(`^(?:${rule.row})$`) : undefined)
 
-/** Whether the body carries a line matching the repo's board-row pattern. */
+// The body's lines with each line of a fenced code block (``` or ~~~, fences included) blanked, so a
+// heading or a row line shown as code never counts as one. A fence left open runs to the end.
+function outsideFences(lines: string[]): string[] {
+  let fence: string | undefined
+  return lines.map(l => {
+    const mark = /^ {0,3}(`{3,}|~{3,})/.exec(l)?.[1]
+    if (fence === undefined && !mark) return l
+    if (fence === undefined) fence = mark
+    else if (mark?.[0] === fence[0] && mark.length >= fence.length && l.trim() === mark) fence = undefined
+    return ''
+  })
+}
+
+/** Whether the body carries a line matching the repo's board-row pattern, outside code blocks. */
 export function hasRow(text: string, rule: RepoRule): boolean {
   const row = rowOf(rule)
-  return Boolean(row && text.split(/\r?\n/).some(l => row.test(l.trimEnd())))
+  return Boolean(row && outsideFences(text.split(/\r?\n/)).some(l => row.test(l.trimEnd())))
 }
 
 // A section's text: from its heading to the next heading, or to the repo's board-row line when it has one.
 function section(text: string, heading: string, row?: RegExp): string | undefined {
   const lines = text.split(/\r?\n/)
-  const start = lines.findIndex(l => l.trimEnd() === `## ${heading}`)
+  const bare = outsideFences(lines)
+  const start = bare.findIndex(l => l.trimEnd() === `## ${heading}`)
   if (start === -1) return undefined
-  const rest = lines.slice(start + 1)
-  const end = rest.findIndex(l => l.startsWith('## ') || Boolean(row?.test(l.trimEnd())))
-  return (end === -1 ? rest : rest.slice(0, end)).join('\n')
+  const end = bare.slice(start + 1).findIndex(l => l.startsWith('## ') || Boolean(row?.test(l.trimEnd())))
+  return lines.slice(start + 1, end === -1 ? undefined : start + 1 + end).join('\n')
 }
 
 /** The body against the PR format and the repo's board-row rule. `title` undefined: no title was
