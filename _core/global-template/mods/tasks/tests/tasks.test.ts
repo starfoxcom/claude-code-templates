@@ -498,3 +498,11 @@ test('a handed-over session that is resumed and saves its list is current again'
   await create($, 'more work')
   expect(mirror(seen).handedOverAt).toBeUndefined()
 })
+
+test('a bare /task-list typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
+  const bridge = { command: 'task-list', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n')).toEqual(['📋 No task list in this session.', '/task-list help for more'])
+})

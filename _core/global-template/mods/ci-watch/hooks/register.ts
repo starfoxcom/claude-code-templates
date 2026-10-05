@@ -576,7 +576,9 @@ export const register: Register = (on, options) => {
 
   // `/ci-watch [help | settings | stop | phone]`; with no argument, the watched PRs. An unknown verb gets the help.
   on('command.run', { command: 'ci-watch' }, async ($, e, next) => {
-    const verb = e.args.trim()
+    // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+    // row draws: the bare command answers with the phone text.
+    const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
     if (!['', 'settings', 'stop', 'phone'].includes(verb)) return { text: HELP }
     if (verb === 'settings') {
       await $.ui.open({ id: SETTINGS_PANE, title: 'CI watch settings', focus: true })

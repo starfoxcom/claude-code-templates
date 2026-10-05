@@ -214,3 +214,11 @@ test('/session-info phone gives the row as text, ending with the help hint', asy
   expect(lines[1]).toMatch(/^🌿 /)
   expect(lines.at(-1)).toBe('/session-info help for more')
 })
+
+test('a bare /session-info typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  await start($, 'terminal')
+  const bridge = { command: 'session-info', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n').at(-1)).toBe('/session-info help for more')
+})

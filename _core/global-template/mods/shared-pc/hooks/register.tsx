@@ -130,7 +130,11 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'mcp__shared-pc__pc' }, async ($, e) => ({ result: await toolAction($, e as ToolInput) }))
 
-  on('command.run', { command: 'pc' }, async ($, e) => ({ text: await commandAction($, e.args) }))
+  // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
+  // card draws: the bare command answers with the phone text.
+  on('command.run', { command: 'pc' }, async ($, e) => ({
+    text: await commandAction($, e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')),
+  }))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Remembered for the answer delivery: a running turn gets a note, an idle session a wake-up prompt.

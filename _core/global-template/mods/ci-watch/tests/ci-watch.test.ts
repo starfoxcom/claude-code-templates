@@ -428,3 +428,11 @@ test('/ci-watch answers in the row words, and phone adds each check and the link
   expect(phone.slice(1, 3).sort()).toEqual(['   ⏳ build', '   ✅ review'])
   expect(phone.slice(3)).toEqual(['   https://github.com/o/r/pull/7', '/ci-watch help for more'])
 })
+
+test('a bare /ci-watch typed over Remote Control answers with the phone text', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  const bridge = { command: 'ci-watch', args: '', origin: { kind: 'bridge' } }
+  const answer = (await $.command.run(bridge as never)) as { text: string }
+  expect(answer.text.split('\n')).toEqual(['No PR is being watched.', '/ci-watch help for more'])
+})
