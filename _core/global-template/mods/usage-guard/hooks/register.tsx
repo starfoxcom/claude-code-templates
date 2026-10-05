@@ -24,6 +24,7 @@ import {
   WRAP_UP_ARGS,
 } from './plan'
 import { stopCommandsFor } from './rules'
+import { drawArmLine, drawCards } from './cards'
 import { register as phone } from './phone'
 import { register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
@@ -31,6 +32,7 @@ import type { Live } from './live'
 import { newLive } from './live'
 import {
   ARGUMENT_HINT,
+  armLineText,
   CANCELLED_TEXT,
   cardTone,
   formatLocal,
@@ -662,6 +664,14 @@ async function cardsAbove($: EngineInterface): Promise<Card[]> {
   return cards
 }
 
+// The slim line while an arm stands, so a scheduled wake is never out of sight. It gives way to the arm's
+// own question and to the shared pause card, which already say when the session resumes.
+async function armLine($: EngineInterface): Promise<string | undefined> {
+  const arm = await read($, armedWake)
+  if (!arm || arm.isQuestioned || (await read($, band))?.card) return undefined
+  return armLineText(arm.wakeAt, arm.kind, live.zone)
+}
+
 export const register: Register = (on, options) => {
   live.wrapUpAt = Number(options.wrapUpAt ?? 90)
   live.delayMinutes = Number(options.wakeDelayMinutes ?? 2)
@@ -682,46 +692,22 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // The cards: the same bordered look as shared-pc's, drawn above whatever the
-  // other mods draw there. Each stays until it is answered or dismissed.
+  // The cards, drawn above whatever the other mods draw there, each staying until it is answered or
+  // dismissed; then, under those mods' rows, the slim line of a standing arm.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const inner = await next(e)
     if (e.props.hasSurvey) return inner
     const cards = await cardsAbove($)
-    if (cards.length === 0) return inner
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const line = await armLine($)
+    if (cards.length === 0 && !line) return inner
+    const ui = $.ui.resolve(e)
+    const { Box } = ui
     const width = Math.max(30, Math.min(64, e.props.bodyColumns - 2))
     return (
       <Box flexDirection="column">
-        {cards.map(card => (
-          <Box
-            key={card.key}
-            alignSelf="flex-end"
-            width={width}
-            flexDirection="column"
-            borderStyle="double"
-            borderColor={card.tone}
-            backgroundColor="black"
-            paddingX={1}
-          >
-            <Text bold color="black" backgroundColor={card.tone}>
-              {' USAGE GUARD '}
-            </Text>
-            <Text bold color={card.tone} wrap="wrap">
-              {card.text}
-            </Text>
-            <Box>
-              {card.buttons.map(({ key, label, isPrimary, onPress }) =>
-                isPrimary ? (
-                  <Button key={key} label={label} variant="primary" onPress={onPress} />
-                ) : (
-                  <Button key={key} label={label} onPress={onPress} />
-                ),
-              )}
-            </Box>
-          </Box>
-        ))}
+        {drawCards(ui, cards, width)}
         {inner}
+        {line ? drawArmLine(ui, line, () => cancelFromArmCard($)) : null}
       </Box>
     )
   })
