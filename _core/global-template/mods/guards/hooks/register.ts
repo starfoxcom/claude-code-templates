@@ -112,8 +112,8 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, rules: TextRules, 
       if (fromCommand) continue
       // A Bash /tmp path on Windows is mapped by a guess (Git Bash's mount of TEMP): when the guess
       // misses, the file is named unread rather than refused.
-      // A script run earlier in the command (python, node) may write it: what it writes is in the command
-      // text, which the backstop checks, so the file is named unread rather than missing.
+      // A script whose code is in the command (`python - <<EOF`, `node -e`) may write it: that code is under
+      // the command-text credit check, so the file is named unread rather than missing.
       const isTmpGuess = isBash && live.isWindows && /^\/tmp(?:\/|$)/.test(path.replace(/\\/g, '/'))
       if (written.has(full.toLowerCase()) || isTmpGuess || scripted) {
         plan.unread.push(where)
