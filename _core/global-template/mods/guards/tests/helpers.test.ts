@@ -18,7 +18,9 @@ function world(on: On) {
     return { value: seen.session }
   })
   on('fs.read', ($, e) => {
-    const text = seen.files.get(e.path.replaceAll('\\', '/'))
+    const path = e.path.replaceAll('\\', '/')
+    // The manifest, wherever the plugin root is: a test that needs it lists it as `plugin.json`.
+    const text = seen.files.get(path.endsWith('/plugin.json') ? 'plugin.json' : path)
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
@@ -81,10 +83,9 @@ test('with the default setting, Agent and Workflow calls run and nothing is logg
   expect(logged(seen)).toEqual([])
 })
 
-test('blocked in enforce mode, Agent and Workflow calls are refused, counted and logged', { options: BLOCK }, async (
-  $,
-  on,
-) => {
+test('blocked in enforce mode, Agent and Workflow calls are refused and logged, never counted as writes', {
+  options: BLOCK,
+}, async ($, on) => {
   const seen = world(on)
   await start($)
   expect((await agent($)).deny).toBe(`BLOCKED (guards): ${HELPER_BLOCK}`)
@@ -94,8 +95,45 @@ test('blocked in enforce mode, Agent and Workflow calls are refused, counted and
     ['Agent', true],
     ['Workflow', true],
   ])
-  const stats = JSON.parse(seen.files.get('C:/Users/me/.claude/mods-data/guards/stats.json') ?? '{}')
-  expect(Object.values(stats)).toEqual([expect.objectContaining({ checked: 2, mod: 2, scripts: 0 })])
+  // stats.json counts shell writes for the shadow comparison; helper calls stay out of it.
+  expect(seen.files.get('C:/Users/me/.claude/mods-data/guards/stats.json')).toBeUndefined()
+})
+
+test("one session's allow, block or status look never changes another session's allow", { options: BLOCK }, async (
+  $,
+  on,
+) => {
+  const seen = world(on)
+  await start($)
+  await guards($, 'helpers allow')
+  seen.session = 'sess-b'
+  expect(await guards($, 'helpers')).toContain('blocked')
+  await guards($, 'helpers block')
+  expect((await agent($)).deny).toBe(`BLOCKED (guards): ${HELPER_BLOCK}`)
+  await guards($, 'helpers allow')
+  seen.session = 'sess-a'
+  expect((await agent($)).deny).toBeUndefined()
+  await guards($, 'helpers block')
+  seen.session = 'sess-b'
+  expect((await agent($)).deny).toBeUndefined()
+  expect(seen.ran).toEqual(['Agent', 'Agent'])
+})
+
+test('after a reload, the first helper call reads the saved block before it decides', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on)
+  const manifest = {
+    userConfig: {
+      mode: { type: 'string', options: ['shadow', 'enforce'] },
+      helpers: { type: 'string', options: ['allow', 'block'] },
+    },
+  }
+  seen.files.set('plugin.json', JSON.stringify(manifest))
+  seen.files.set('C:/Users/me/.claude/mods-data/guards/settings.json', '{"helpers":"block"}')
+  // No session.start: a hot reload starts the module over without one.
+  expect((await agent($)).deny).toBe(`BLOCKED (guards): ${HELPER_BLOCK}`)
+  expect(seen.ran).toEqual([])
 })
 
 test('blocked in shadow mode, a helper call runs and is logged as one it would block', {
