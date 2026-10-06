@@ -267,6 +267,22 @@ async function count($: Engine, isModBlock: boolean, isScriptBlock: boolean) {
   await $.fs.write(file, JSON.stringify(stats, null, 1)).catch(() => undefined)
 }
 
+// A check that failed before the command ran, from the guard's own catch or the engine's (a throw
+// anywhere in the hook, or its time budget overrun). Shadow lets the command run, as the scripts still
+// check it; enforce refuses it, so a crash never lets an unchecked write through.
+async function failed($: Engine, tool: string, command: string, error: string, run: () => Promise<any>) {
+  const isEnforced = live.mode === 'enforce'
+  const why = error.slice(0, 200)
+  const entry = { at: Date.now(), tool, error: why, command: command.slice(0, 2000) }
+  await log($, isEnforced ? { ...entry, enforced: true } : entry).catch(() => undefined)
+  if (!isEnforced) return run()
+  return {
+    deny:
+      `BLOCKED (guards): the check failed before it could read this command (${why}). Retry once; ` +
+      'if it fails again, the maintainer can switch guards to shadow: /guards set mode shadow.',
+  }
+}
+
 async function guard($: Engine, tool: string, command: string, run: () => Promise<any>) {
   const plan = inspect(command, tool === 'PowerShell')
   // A write the reading missed still carries the command-text backstop, so text alone is reason to check.
@@ -277,9 +293,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   try {
     reason = await verdict($, plan, tool === 'Bash')
   } catch (err) {
-    // A guard that fails must not stop the work; the scripts still run beside it in shadow.
-    await log($, { at: Date.now(), tool, error: String(err).slice(0, 200), command: command.slice(0, 2000) })
-    return run()
+    return failed($, tool, command, String(err), run)
   }
   // An enforced block is counted and logged like any other decision: it is the one a false block is
   // debugged from. The command never ran, so the scripts' answer is unknown.
@@ -337,10 +351,24 @@ export const register: Register = (on, options) => {
     return result
   })
   on('command.run', { command: 'guards' }, async ($, e) => ({ text: await runCommand($, e.args) }))
-  on('tool.call', { tool: 'Bash' }, ($, e, next) => guard($, 'Bash', String(e.command ?? ''), () => next(e)))
-  on('tool.call', { tool: 'PowerShell' }, ($, e, next) =>
-    guard($, 'PowerShell', String((e as { command?: unknown }).command ?? ''), () => next(e)),
+  // Without a `.catch` the engine skips a hook that throws or overruns its budget, and the command
+  // runs unchecked. A failure after the command ran replays its result.
+  const bash = (e: { command?: unknown }) => String(e.command ?? '')
+  const ps = (e: unknown) => String((e as { command?: unknown }).command ?? '')
+  on('tool.call', { tool: 'Bash' }, ($, e, next) => guard($, 'Bash', bash(e), () => next(e))).catch(
+    ($, e, next) =>
+      next.called ? next(e) : failed($, 'Bash', bash(e), caughtError(next.error), () => next(e)),
   )
+  on('tool.call', { tool: 'PowerShell' }, ($, e, next) => guard($, 'PowerShell', ps(e), () => next(e))).catch(
+    ($, e, next) =>
+      next.called ? next(e) : failed($, 'PowerShell', ps(e), caughtError(next.error), () => next(e)),
+  )
+}
+
+// Why the engine caught the hook, in words for the log and the refusal.
+function caughtError(error: { kind: string; message?: string }): string {
+  if (error.kind !== 'timeout') return error.message ?? 'the check threw'
+  return error.message ? `ran past its time budget: ${error.message}` : 'ran past its time budget'
 }
 
 const ARGUMENT_HINT = '[help | settings | set]'
