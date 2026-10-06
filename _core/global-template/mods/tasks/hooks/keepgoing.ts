@@ -32,6 +32,14 @@ export function hasPendingWake(ciWatchState: string | undefined): boolean {
 }
 
 /**
+ * What the engine's Stop event says will wake the session on its own: background work still in flight (a
+ * shell job run in the background, a subagent, a monitor) or a scheduled wake (`/loop`, a cron, a wakeup).
+ */
+export function hasEngineWake(stop: { background_tasks?: unknown[]; session_crons?: unknown[] }): boolean {
+  return (stop.background_tasks?.length ?? 0) > 0 || (stop.session_crons?.length ?? 0) > 0
+}
+
+/**
  * A plan-limit pause that still holds the session until its wake: active (usage-guard wakes it), or
  * cancelled (the person declined any automatic resume before the reset). A pause whose wake passed while no
  * session was open stays "active" on disk until one starts; past its wake, neither holds anything back.
