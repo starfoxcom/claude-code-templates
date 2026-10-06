@@ -303,6 +303,8 @@ test('a PR body that cannot be read exactly is named unread, never blocked', { o
 const NOT_ALONE = [
   'F=short.md; gh pr create --title "feat: x" --body-file "$F"',
   '(cd sub && make) && gh pr create --title "feat: x" --body-file short.md',
+  // The cd runs in a subshell: gh stays in the session folder.
+  '(cd sub) && gh pr create --title "feat: x" --body-file short.md',
   'bash -c "gh pr create -t t -F - <<\'EOF\'\n$BODY\nEOF"',
   'gh pr create -R "$OWNER/$REPO" -t t --body x',
   'gh pr create -t t -F a.md -F short.md',
@@ -525,10 +527,22 @@ test('a credit line in the script that writes the body file is still refused', {
 })
 
 // Only script code in the command marks a later body file: its text is under the credit check.
-for (const before of ['python gen.py', 'python --version', 'node build.js']) {
+// A script file on disk, a flag that is not inline code for that interpreter, or one that belongs to the script.
+const NOT_INLINE = [
+  'python gen.py',
+  'python --version',
+  'node build.js',
+  'python -E gen.py',
+  'ruby -c gen.rb',
+  'node -c gen.js',
+  'python gen.py -c cfg.ini',
+]
+for (const before of [...NOT_INLINE, "python gen.py <<'EOF'"]) {
   test(`after "${before}" a missing body file is still refused`, { options: { mode: 'enforce' } }, async ($, on) => {
     world(on)
-    const result = await bash($, `${before} && gh api graphql --input su.json`)
+    // A here-doc fed to a script on disk is its data, not its code.
+    const tail = before.includes('<<') ? '\ndata\nEOF' : ''
+    const result = await bash($, `${before} && gh api graphql --input su.json${tail}`)
     expect(String((result as { deny?: string }).deny)).toContain('could not read the body file')
   })
 }

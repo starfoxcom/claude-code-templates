@@ -19,7 +19,7 @@
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
-import { parse, programOf } from './shell'
+import { parse, programOf, runsInlineCode } from './shell'
 import type { Statement, Word } from './shell'
 
 export type Plan = {
@@ -266,10 +266,6 @@ const RAW_WRITES = [
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 
 const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'sl'])
-// Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its text is
-// under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
-const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'deno', 'bun', 'ruby', 'perl'])
-const INLINE_CODE = new Set(['-c', '-e', '-E', '-p', '--eval', '--print', 'eval'])
 
 // The statement a command runs on its own: the only one, or the last after `cd`s to literal folders
 // (`cd "C:/Repos/game" && gh pr create ...`), whose folder is then known. Any other shape has none.
@@ -277,7 +273,7 @@ function aloneOf(statements: Statement[]): Statement | undefined {
   const last = statements.at(-1)
   const isPlainCd = (st: Statement) => {
     const { name, args } = programOf(st)
-    const bare = st.inner.length === 0 && st.heredocs.length === 0 && st.writes.length === 0 && !st.pipeIn
+    const bare = !st.inner.length && !st.heredocs.length && !st.writes.length && !st.pipeIn && !st.isNested
     return bare && CD_NAMES.has(name) && args.length === 1 && !args[0]?.dynamic && !args[0]?.text.startsWith('-')
   }
   return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
@@ -301,7 +297,9 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
     return
   }
   if (readScript(name, args, r)) return
-  if (INTERPRETERS.has(name) && (st.heredocs.length || args.some(a => INLINE_CODE.has(a.text)))) r.ranScript = true
+  // Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its
+  // text is under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
+  if (runsInlineCode(st)) r.ranScript = true
   const before = plan.files.length
   r.statementDir = undefined
   readWrite(st, prev, name, args, r)
