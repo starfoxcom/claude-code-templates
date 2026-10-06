@@ -75,7 +75,7 @@ export function readPr(
   for (let i = 0; i < words.length; i++) {
     const w = words[i] ?? ''
     // A value-taking flag's value is that value only: it is never read again as a flag of its own.
-    const isFlagValue = isNextValue
+    const isFlagValue: boolean = isNextValue
     isNextValue = !isFlagValue && VALUE_FLAGS.has(w)
     // A splat or an unquoted variable in a flag's place (never a value-taking flag's value) may carry any flag.
     if (/^[@$]/.test(w) && (given[i]?.dynamic || w.startsWith('@')) && !isFlagValue) call.isUnknown = true
@@ -139,7 +139,7 @@ function outsideFences(lines: string[]): string[] {
     const mark = found?.[1]?.startsWith('`') && found[2]?.includes('`') ? undefined : found?.[1]
     if (fence === undefined && !mark) return l
     if (fence === undefined) fence = mark
-    else if (mark?.[0] === fence[0] && mark.length >= fence.length && l.trim() === mark) fence = undefined
+    else if (mark && mark[0] === fence[0] && mark.length >= fence.length && l.trim() === mark) fence = undefined
     return ''
   })
 }
