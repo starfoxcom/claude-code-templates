@@ -1,5 +1,6 @@
+import type { ArmedWake } from '../types'
 import type { Pause } from './plan'
-import { LIMIT_NAMES, limitName } from './plan'
+import { armFor, limitName, reasonText } from './plan'
 
 // What the person reads: the cards, the notes, the command's help, and the local time they all show.
 
@@ -25,10 +26,11 @@ export function formatLocal(ms: number, zone: Zone): string {
   return `${day} ${local.toISOString().slice(0, 16).replace('T', ' ')} (${zone.name})`
 }
 
-/** The arm's slim line: the wake as weekday and minute, and the reset it follows. */
-export function armLineText(wakeAt: number, kind: string, zone: Zone): string {
-  const [day, , minute] = formatLocal(wakeAt, zone).split(' ')
-  return `⏰ resumes ${day} ${minute} · after the ${LIMIT_NAMES[kind] ?? kind} reset`
+/** The arm's slim line: the wake as weekday and minute, what it waits for, and the start of its reason. */
+export function armLineText(arm: ArmedWake, zone: Zone): string {
+  const [day, , minute] = formatLocal(arm.wakeAt, zone).split(' ')
+  const reason = !arm.reason ? '' : ` · "${arm.reason.length > 40 ? `${arm.reason.slice(0, 39)}…` : arm.reason}"`
+  return `⏰ resumes ${day} ${minute} · ${armFor(arm.kind)}${reason}`
 }
 
 /** Plain /usage-guard's answer: the pause or its absence, then a standing arm and the last compaction. */
@@ -63,10 +65,11 @@ export function joinedPauseText(pause: Pause, wakeText: string): string {
   )
 }
 
-/** The answer to `/usage-guard arm`. */
-export function armedText(kind: string, wakeText: string): string {
+/** The answer to `/usage-guard arm`: the wake's full date and how far off it is, so a wrong one shows. */
+export function armedText(arm: ArmedWake, wakeText: string, untilText: string): string {
+  const reason = arm.reason ? ` ${reasonText(arm.reason)}` : ''
   return (
-    `Armed: this session resumes its saved work at ${wakeText}, after the ${LIMIT_NAMES[kind]} reset. ` +
+    `Armed: this session resumes its saved work at ${wakeText} (${untilText}), ${armFor(arm.kind)}.${reason} ` +
     '/usage-guard disarm cancels it.'
   )
 }
@@ -99,13 +102,18 @@ export function cardTone(id: string): Tone {
 export type CardButton = { key: string; label: string; isPrimary?: boolean; onPress: () => unknown }
 export type Card = { key: string; tone: Tone; text: string; buttons: CardButton[] }
 
-export const ARGUMENT_HINT = '[help | settings | set | phone | arm 5h|week [compact] | disarm | cancel | adopt]'
+export const COMMAND_TEXT =
+  'Usage pause status. Also: cancel, arm 5h|week|HH:MM [compact] ["reason"], disarm, settings, set'
+export const ARGUMENT_HINT =
+  '[help | settings | set | phone | arm 5h|week|HH:MM [compact] ["reason"] | disarm | cancel | adopt]'
 export const HELP = [
   '/usage-guard: pauses a session before a plan window runs out and resumes it after the reset.',
   '  /usage-guard                      the pause status and the wrap-up level',
   '  /usage-guard cancel               cancel the active pause: no automatic resume',
   '  /usage-guard arm 5h|week          resume this session after that window resets',
-  '  /usage-guard arm 5h|week compact  the same, and compact the session now',
+  '  /usage-guard arm HH:MM            resume it at that 24-hour time (21:05), the next time it comes',
+  '  /usage-guard arm ... compact      the same, and compact the session now',
+  '  /usage-guard arm ... "reason"     the same; the wake hands the session the quoted reason',
   '  /usage-guard disarm               drop the armed resume',
   '  /usage-guard adopt [drop]         run here the resume a closed session missed (drop: forget it)',
   '  /usage-guard settings             open the settings pane',
