@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AdoptOffer } from '../types'
 import { adoptReason, offerText, parseSavedArm, pickOffer } from './arms'
 import { drawCards } from './cards'
-import { CLAIM, LIMIT_NAMES, resumePrompt } from './plan'
+import { armFor, CLAIM, resumePrompt } from './plan'
 import type { Card } from './texts'
 import { formatLocal, READ_ZONE, type Zone, zoneOf } from './texts'
 
@@ -48,7 +48,7 @@ async function lookForOffer($: EngineInterface, isAsked = false): Promise<void> 
   }
   const offer = pickOffer(files, await $.session.id(), await $.session.root(), now)
   if (!offer) return void (await update($, state, () => null))
-  const text = offerText(LIMIT_NAMES[offer.arm.kind] ?? offer.arm.kind, await wakeText($, offer))
+  const text = offerText(armFor(offer.arm.kind), await wakeText($, offer))
   await update($, state, () => ({ offer, text, note: null }))
 }
 
@@ -79,7 +79,6 @@ async function claimArm($: EngineInterface, offer: AdoptOffer): Promise<boolean 
 async function answer($: EngineInterface, isAdopted: boolean): Promise<string> {
   const offer = (await read($, state))?.offer
   if (!offer) return 'No closed session in this project has a missed resume.'
-  const limit = LIMIT_NAMES[offer.arm.kind] ?? offer.arm.kind
   const when = await wakeText($, offer)
   const file = `${await dataDir($)}/arms/${offer.owner}.json`
   const saved = parseSavedArm(String(await $.fs.read(file).catch(() => '')))
@@ -93,7 +92,7 @@ async function answer($: EngineInterface, isAdopted: boolean): Promise<string> {
   if (won === true) await $.fs.write(file, 'null').catch(() => undefined)
   await update($, state, () => ({ offer: null, text: null, note }))
   // From a timer: a prompt submitted inside the command's own run never arrives.
-  const text = resumePrompt(adoptReason(limit, when, offer.owner))
+  const text = resumePrompt(adoptReason(armFor(offer.arm.kind), when, offer.owner, offer.arm.reason))
   if (isAdopted && won === true) $.clock.after(0, () => void $.prompt.submit({ text }).catch(() => undefined))
   return note
 }
