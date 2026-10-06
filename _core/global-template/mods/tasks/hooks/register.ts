@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import { hasPendingWake, isPauseHolding, keepGoingText, MAX_IDLE_PROMPTS, workable } from './keepgoing'
+import { hasEngineWake, hasPendingWake, isPauseHolding, keepGoingText, MAX_IDLE_PROMPTS, workable } from './keepgoing'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { PANE, phoneText } from './view'
 
@@ -125,8 +125,11 @@ const live: {
   // Keep-going prompts sent in a row with no change to the list, and the list's changedAt at the last one.
   idlePrompts: number
   promptedAt?: number
+  // The last turn's end left background work or a scheduled wake that will wake the session (Stop event).
+  hasEngineWake: boolean
 } = {
   turn: 0,
+  hasEngineWake: false,
   isTurnRunning: false,
   toolsThisTurn: 0,
   sawTaskTool: false,
@@ -605,12 +608,13 @@ async function peerFile($: EngineInterface, mod: string, name: string): Promise<
 }
 
 // A turn that ended with work nobody has to wait for gets a prompt to carry on, unless something else
-// wakes the session (a CI watch, a plan-limit pause) or the last prompts changed nothing on the list.
+// wakes the session (background work, a scheduled wake, a CI watch, a plan-limit pause) or the last prompts
+// changed nothing on the list.
 async function keepGoing($: EngineInterface): Promise<void> {
   if (live.isTurnRunning) return
   const mirror = await mirrorOf($)
   const tasks = workable(mirror)
-  if (tasks.length === 0) return
+  if (tasks.length === 0 || live.hasEngineWake) return
   if (hasPendingWake(await peerFile($, 'ci-watch', `${await $.session.id()}.json`))) return
   if (isPauseHolding(await peerFile($, 'usage-guard', 'pause.json'), await $.clock.now())) return
   const isIdle = live.idlePrompts > 0 && live.promptedAt === mirror.changedAt
@@ -685,6 +689,13 @@ export const register: Register = (on, options) => {
     live.sawTaskTool = false
     live.isNudged = false
     live.checkOverlap = false
+    return next(e)
+  })
+
+  // The main session's turn end, with what the engine still has in flight to wake it. Read before the
+  // keep-going look, which waits a moment after the turn completes.
+  on('classic.Stop', async ($, e, next) => {
+    live.hasEngineWake = hasEngineWake(e)
     return next(e)
   })
 
