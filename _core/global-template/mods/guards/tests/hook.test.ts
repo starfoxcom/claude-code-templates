@@ -5,13 +5,22 @@ import { expect, mock, test } from 'claude-code/testing'
 const AI_TRAILER = 'Co-' + 'Authored-By: Cla' + 'ude <noreply@anthro' + 'pic.com>'
 const LOG = 'C:/Users/me/.claude/mods-data/guards/decisions.jsonl'
 
-// `isDiffCut`: the diff went past the engine's output cap.
+// `isDiffCut`: the diff went past the engine's output cap. A call named in `seen.broken` throws.
 function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Windows_NT', isDiffCut = false) {
-  const seen = { files: new Map(Object.entries(files)), ran: [] as string[], runs: [] as string[][] }
+  const seen = {
+    files: new Map(Object.entries(files)),
+    ran: [] as string[],
+    runs: [] as string[][],
+    broken: new Set<string>(),
+  }
+  const env: Record<string, string> = { USERPROFILE: 'C:/Users/me', TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp', OS: os }
+  const unless = (call: string) => {
+    if (seen.broken.has(call)) throw new Error(`${call} is down`)
+  }
   mock.clock(on)
-  mock.env(on, { USERPROFILE: 'C:/Users/me', TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp', OS: os })
-  on('session.id', () => ({ value: 'sess-a' }))
-  on('session.cwd', () => ({ value: 'C:/Repos/my-game' }) as never)
+  on('env.get', ($, e) => (unless('env.get'), { value: env[e.name] }))
+  on('session.id', () => (unless('session.id'), { value: 'sess-a' }))
+  on('session.cwd', () => (unless('session.cwd'), { value: 'C:/Repos/my-game' }) as never)
   on('fs.read', ($, e) => {
     const path = e.path.replaceAll('\\', '/')
     // The manifest, wherever the plugin root is: a test that needs it lists it as `plugin.json`.
@@ -422,3 +431,47 @@ for (const command of ODD_SPELLINGS) {
     expect(lastEntry(seen).unread?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
   })
 }
+
+// A check that fails before the command runs: enforce refuses it, shadow lets it run. The engine's own
+// catch takes a throw outside the guard's try, here the set-up on a call that comes before session.start.
+test('in enforce mode a check that crashes refuses the command', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on)
+  seen.broken.add('env.get')
+  const result = await $.tool.call({ tool: 'Bash', command: "git commit -m 'fix: x'" } as never)
+  expect(seen.ran).toEqual([])
+  expect(String((result as { deny?: string }).deny)).toContain('the check failed')
+  expect(String((result as { deny?: string }).deny)).toContain('env.get')
+})
+
+test('in shadow mode a check that crashes lets the command run', async ($, on) => {
+  const seen = world(on)
+  seen.broken.add('env.get')
+  const result = await $.tool.call({ tool: 'Bash', command: "git commit -m 'fix: x'" } as never)
+  expect(seen.ran).toHaveLength(1)
+  expect((result as { deny?: string }).deny).toBeUndefined()
+})
+
+test('in enforce mode a check error refuses the command and is logged', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on)
+  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
+  seen.broken.add('session.cwd')
+  const result = await $.tool.call({ tool: 'PowerShell', command: "git commit -m 'fix: x'" } as never)
+  expect(seen.ran).toEqual([])
+  expect(String((result as { deny?: string }).deny)).toContain('the check failed')
+  expect(lastEntry(seen)).toMatchObject({ tool: 'PowerShell', enforced: true })
+  expect(lastEntry(seen).error).toContain('session.cwd')
+})
+
+test('a crash after the command ran keeps its result and never runs it twice', async ($, on) => {
+  const seen = world(on)
+  seen.broken.add('session.id')
+  const result = await bash($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
+  expect(seen.ran).toHaveLength(1)
+  expect(result).toEqual({ result: {} })
+})
