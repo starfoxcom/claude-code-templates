@@ -23,6 +23,7 @@ SHELL_SEARCH = re.compile(r"^\s*(rg|ag|ack|git\s+grep)\s|^\s*grep\s(.*\s)?(-[a-z
 PS_LISTING = re.compile(r"^\s*(Get-ChildItem|gci|dir|ls)\s.*-Recurse", re.I)
 PS_SEARCH = re.compile(r"^\s*(sls|Select-String)\s", re.I)
 
+
 def unquote_separators(command):
     """Blank out | ; & and newlines inside quotes, so a search pattern like "a|b" does not split the command."""
     out, quote = [], None
@@ -34,6 +35,7 @@ def unquote_separators(command):
             quote = ch
         out.append(ch)
     return "".join(out)
+
 
 def shell_search(command):
     """True when a command line runs a code search of its own."""
@@ -47,6 +49,7 @@ def shell_search(command):
         if PS_LISTING.search(head) and any(PS_SEARCH.search(s) for s in stages[1:]):
             return True
     return False
+
 
 def classify(name, args):
     """'research', 'fallback', 'bypass', or None for a call that is not a search."""
@@ -63,6 +66,7 @@ def classify(name, args):
             return "bypass" if BYPASS in command else "fallback"
     return None
 
+
 def transcript():
     if len(sys.argv) > 1:
         return sys.argv[1]
@@ -71,6 +75,7 @@ def transcript():
     if not files:
         sys.exit(f"No transcript found for {os.getcwd()}; run this from the repo root.")
     return max(files, key=os.path.getmtime)
+
 
 def tool_calls(path):
     with open(path, encoding="utf-8") as f:
@@ -86,6 +91,7 @@ def tool_calls(path):
                 if isinstance(part, dict) and part.get("type") == "tool_use":
                     yield part.get("name", ""), part.get("input") or {}
 
+
 def main():
     counts = {"research": 0, "fallback": 0, "bypass": 0}
     for name, args in tool_calls(transcript()):
@@ -96,6 +102,7 @@ def main():
     ratio = f"{100 * counts['research'] // total}%" if total else "n/a"
     print(f"tokensave: {counts['research']} calls, plain code searches: {counts['fallback']} "
           f"(plus {counts['bypass']} marked bypasses) -> {ratio}")
+
 
 if __name__ == "__main__":
     main()
