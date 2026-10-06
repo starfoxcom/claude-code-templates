@@ -1,5 +1,6 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
+import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
 import { inspect } from './inspect'
 import type { Folder, Plan } from './inspect'
 import { describeName, findName, readNameRules } from './names'
@@ -13,13 +14,17 @@ import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 // `gh run watch` and PR-body scripts. It reads the command (which program, which flags, which message) instead of
 // scanning raw text, so paths, branch names and flags never trip it. Hot reload watches this file only:
 // change it after editing shell.ts, inspect.ts or policy.ts. Opt-in per repo, from files in
-// mods-data/guards: the PR-body contract (pr-body.json) and banned names (names.json).
+// mods-data/guards: the PR-body contract (pr-body.json) and banned names (names.json). Opt-in by
+// setting: helper agents (`helpers` = block refuses Agent and Workflow calls; see helpers.ts).
 //
 // mode `shadow` (the default while it is new): never blocks; it logs what it would block, and what the
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
 
 const LOG_CAP = 256 * 1024
 const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false, temp: '' }
+// The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
+// hooks worker forgets them, which errs toward the block).
+const helpers = { setting: 'allow' as 'allow' | 'block', allowedIn: new Set<string>() }
 
 // Makes the data folder and records when, and in which mode, the mod loaded.
 const MARK_LOADED = [
@@ -280,7 +285,7 @@ async function failed($: Engine, tool: string, command: string, error: string, r
   if (!isEnforced) return run()
   return {
     deny:
-      `BLOCKED (guards): the check failed before it could read this command (${why}). Retry once; ` +
+      `BLOCKED (guards): the check failed before it could read this call (${why}). Retry once; ` +
       'if it fails again, the maintainer can switch guards to shadow: /guards set mode shadow.',
   }
 }
@@ -320,6 +325,23 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   return result
 }
 
+async function helperState($: Engine) {
+  const { setting, allowedIn } = helpers
+  if (setting === 'allow' || allowedIn.size === 0) return { setting, isAllowedHere: false }
+  return { setting, isAllowedHere: allowedIn.has(await $.session.id()) }
+}
+
+// An Agent or Workflow call: refused in enforce, logged in shadow, while the setting blocks helpers.
+async function helperGuard($: Engine, tool: string, run: () => Promise<any>) {
+  if (!isHelperChecked(await helperState($))) return run()
+  if (!live.dir) await setUp($)
+  const isBlocked = live.mode === 'enforce'
+  // Logged, never counted: stats.json counts shell writes, the denominator of the shadow comparison.
+  const entry ={ at: Date.now(), session: await $.session.id(), tool, mod: HELPER_BLOCK, scripts: null }
+  await log($, { ...entry, ...(isBlocked ? { enforced: true } : {}), unread: [], command: '' })
+  return isBlocked ? { deny: `BLOCKED (guards): ${HELPER_BLOCK}` } : run()
+}
+
 // The settings file at the session's start, before any tool call: the settings module follows it from
 // there. Read here, since an engine handle is never passed into another file.
 async function readSettings($: Engine): Promise<void> {
@@ -338,6 +360,7 @@ export const register: Register = (on, options) => {
       .split(',')
       .map(s => s.trim().toLowerCase())
       .filter(Boolean)
+    helpers.setting = String(values.helpers ?? 'allow') === 'block' ? 'block' : 'allow'
   })
 
   on('session.start', async ($, e, next) => {
@@ -365,6 +388,13 @@ export const register: Register = (on, options) => {
     ($, e, next) =>
       next.called ? next(e) : failed($, 'PowerShell', ps(e), caughtError(next.error), () => next(e)),
   )
+  // A failed helper check refuses only where helpers are blocked: with the setting at allow it never stops one.
+  on('tool.call', { tool: ['Agent', 'Workflow'] }, ($, e, next) => helperGuard($, e.tool, () => next(e))).catch(
+    ($, e, next) =>
+      next.called || helpers.setting === 'allow'
+        ? next(e)
+        : failed($, e.tool, '', caughtError(next.error), () => next(e)),
+  )
 }
 
 // Why the engine caught the hook, in words for the log and the refusal.
@@ -373,12 +403,13 @@ function caughtError(error: { kind: string; message?: string }): string {
   return error.message ? `ran past its time budget: ${error.message}` : 'ran past its time budget'
 }
 
-const ARGUMENT_HINT = '[help | settings | set]'
+const ARGUMENT_HINT = '[help | settings | set | helpers]'
 const HELP = [
   '/guards: reads every shell command that writes history (commits, PRs, issues, releases) for AI credit.',
   '  /guards           the mode, where the product may be named, and what it caught',
   '  /guards settings  open the settings pane',
   '  /guards set       change a setting: set <name> <value>; alone, list them',
+  '  /guards helpers   helper agents: allow or block them for this session',
   '  /guards help      this list',
 ].join('\n')
 
@@ -416,14 +447,26 @@ async function statusText($: Engine): Promise<string> {
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
     `The product name may appear in ${names}; AI credit is blocked everywhere.`,
     ...(banned.length > 0 ? [`Banned names (names.json) are checked in: ${banned.join(', ')}.`] : []),
+    helpersLine(await helperState($), isEnforced),
     line('Today (UTC)', sumDays(stats, now, 1)),
     line('Last 7 days (UTC)', sumDays(stats, now, 7)),
   ].join('\n')
 }
 
-// `/guards [help | settings]`; with no argument, the status. Another word gets the list.
+// `/guards [help | settings | helpers]`; with no argument, the status. Another word gets the list.
 async function runCommand($: Engine, args: string): Promise<string> {
-  const verb = args.trim().split(/\s+/)[0] ?? ''
+  const [verb = '', word = ''] = args.trim().split(/\s+/)
+  if (verb === 'helpers') {
+    const state = await helperState($)
+    const answer = helpersCommand(word, state)
+    // Each session adds or removes only its own allow; a status look changes nothing.
+    if (answer.isAllowedHere !== state.isAllowedHere) {
+      const session = await $.session.id()
+      if (answer.isAllowedHere) helpers.allowedIn.add(session)
+      else helpers.allowedIn.delete(session)
+    }
+    return answer.text
+  }
   if (verb === 'settings') {
     await $.ui.open({ id: SETTINGS_PANE, title: 'Guards settings', focus: true })
     return 'Opened the guards settings.'
