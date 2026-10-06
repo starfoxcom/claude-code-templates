@@ -29,7 +29,8 @@ export type PrCall = {
   isUnknown: boolean
   /** The title is built at run time, so a title exemption cannot be decided. */
   isTitleDynamic: boolean
-  /** The call is the whole command: one statement, `gh` typed first, nothing wrapped around it. */
+  /** The call is the whole command: one statement after any `cd`s to literal folders, `gh` typed first,
+   * nothing wrapped around it. */
   isAlone?: boolean
 }
 

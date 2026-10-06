@@ -523,3 +523,22 @@ test('a credit line in the script that writes the body file is still refused', {
   const result = await bash($, SCRIPT_THEN_API.replace('import json', `import json\n# ${AI_TRAILER}`))
   expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
 })
+
+// Only script code in the command marks a later body file: its text is under the credit check.
+for (const before of ['python gen.py', 'python --version', 'node build.js']) {
+  test(`after "${before}" a missing body file is still refused`, { options: { mode: 'enforce' } }, async ($, on) => {
+    world(on)
+    const result = await bash($, `${before} && gh api graphql --input su.json`)
+    expect(String((result as { deny?: string }).deny)).toContain('could not read the body file')
+  })
+}
+
+test('inline script code (-c, -e) marks a later body file too', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  const inline = [`python -c "open('su.json','w').write('x')"`, `node -e "require('fs').writeFileSync('su.json','x')"`]
+  for (const before of inline) {
+    const result = await bash($, `${before} && gh api graphql --input su.json`)
+    expect((result as { deny?: string }).deny).toBeUndefined()
+  }
+  expect(seen.ran).toHaveLength(2)
+})

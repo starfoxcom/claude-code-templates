@@ -11,7 +11,7 @@
 // - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`,
 //   `ssh host ...`, or any other program that writes to GitHub on its own (a Python script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
-//   file does not exist yet when the guard looks, so it reports that it could not read it;
+//   file does not exist yet, so it reports that it could not read it (unread when inline script code wrote it);
 // - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
 //   unread, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
@@ -74,7 +74,7 @@ type Reading = {
   method?: string
   /** The command's one statement besides leading `cd`s to literal folders: no subshell or wrapper around it. */
   alone?: Statement
-  /** An earlier statement ran a script interpreter, which may write any file. */
+  /** An earlier statement ran script code written in the command, which may write any file. */
   ranScript?: boolean
 }
 
@@ -266,20 +266,21 @@ const RAW_WRITES = [
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 
 const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'sl'])
-// Programs that run a script, which may write files the reading never sees (`python - <<EOF ... open(...)`).
+// Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its text is
+// under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
 const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'deno', 'bun', 'ruby', 'perl'])
+const INLINE_CODE = new Set(['-c', '-e', '-E', '-p', '--eval', '--print', 'eval'])
 
 // The statement a command runs on its own: the only one, or the last after `cd`s to literal folders
 // (`cd "C:/Repos/game" && gh pr create ...`), whose folder is then known. Any other shape has none.
 function aloneOf(statements: Statement[]): Statement | undefined {
   const last = statements.at(-1)
-  if (!last || last.pipeIn) return undefined
   const isPlainCd = (st: Statement) => {
     const { name, args } = programOf(st)
     const bare = st.inner.length === 0 && st.heredocs.length === 0 && st.writes.length === 0 && !st.pipeIn
     return bare && CD_NAMES.has(name) && args.length === 1 && !args[0]?.dynamic && !args[0]?.text.startsWith('-')
   }
-  return statements.slice(0, -1).every(isPlainCd) ? last : undefined
+  return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
 }
 
 function read(statements: Statement[], r: Reading) {
@@ -300,7 +301,7 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
     return
   }
   if (readScript(name, args, r)) return
-  if (INTERPRETERS.has(name)) r.ranScript = true
+  if (INTERPRETERS.has(name) && (st.heredocs.length || args.some(a => INLINE_CODE.has(a.text)))) r.ranScript = true
   const before = plan.files.length
   r.statementDir = undefined
   readWrite(st, prev, name, args, r)
@@ -635,8 +636,8 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     const isLiteral = st.heredocs.length === 1 && !st.hasDynamicBody && !st.pipeIn && st.reads.length === 0
     const stdinBody = isLiteral ? st.heredocs.join('\n') : undefined
     const filePath = plan.files.slice(before).find(f => f.where === where)?.path
-    // The PR call is the whole command, typed as `gh ...` itself: nothing before it moves the folder,
-    // sets a variable or wraps it in another shell.
+    // The PR call is the whole command, typed as `gh ...` itself, after nothing but `cd`s to literal
+    // folders: nothing before it sets a variable or wraps it in another shell.
     const isAlone = r.alone === st && st.inner.length === 0 && st.words[0]?.text === 'gh'
     plan.prs.push(readPr(action, rest, { stdinBody, filePath, isAlone }))
   }
