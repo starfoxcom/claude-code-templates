@@ -37,7 +37,7 @@ function world(on: On, stats?: Record<string, unknown>) {
 test('/guards shows its arguments in the menu and lists them on help', async ($, on) => {
   const { registered, opened } = world(on)
   await $.session.start({ cwd: 'C:/Repos/x', surface: 'terminal', isInteractive: true })
-  expect(registered.find(command => command.name === 'guards')?.argumentHint).toBe('[help | settings | set]')
+  expect(registered.find(command => command.name === 'guards')?.argumentHint).toBe('[help | settings | set | helpers]')
   const help = (await $.command.run({ command: 'guards', args: 'help' } as never)) as { text: string }
   for (const line of help.text.split('\n').slice(1)) expect(line).toMatch(/^ {2}\/guards( \w+)? +\S/)
   // An unknown word gets the same list.
@@ -58,6 +58,7 @@ test('/guards names the mode, where the product may appear, and the counts for t
   expect(text.split('\n')).toEqual([
     'Guards: shadow (never blocks; logs what it would block).',
     'The product name may appear in every repo; AI credit is blocked everywhere.',
+    'Helper agents are allowed (setting helpers = allow).',
     'Today (UTC): 12 writes checked, 1 it would block, 2 the guard scripts blocked.',
     'Last 7 days (UTC): 17 writes checked, 1 it would block, 3 the guard scripts blocked.',
   ])
