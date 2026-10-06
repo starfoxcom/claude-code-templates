@@ -29,6 +29,8 @@ export type Statement = {
   inner: Statement[]
   /** A body holds an expansion the shell fills in at run time (`<<< "$MSG"`, an unquoted `<<EOF`). */
   hasDynamicBody?: boolean
+  /** Inside a `( )` subshell or a PowerShell `{ }` block: a `cd` there may not move what follows. */
+  isNested?: boolean
 }
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
@@ -56,6 +58,8 @@ class Reader {
   private pending: Pending[] = []
   private redirectNext: 'write' | 'read' | 'text' | null = null
   private i = 0
+  // How many `( )` subshells or PowerShell `{ }` blocks the reading is inside.
+  private depth = 0
 
   constructor(
     private readonly command: string,
@@ -112,6 +116,7 @@ class Reader {
     this.redirectNext = null
     if (this.st.words.length > 0 || this.st.heredocs.length > 0) this.out.push(this.st)
     this.st = fresh(pipeNext)
+    if (this.depth > 0) this.st.isNested = true
   }
 
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
@@ -244,6 +249,7 @@ class Reader {
     if (c === '(') this.substitution(this.startWord())
     else if (c === '{' || c === '}') {
       this.i++
+      this.depth = Math.max(0, this.depth + (c === '{' ? 1 : -1))
       this.endStatement()
     } else if (c === '@' && (this.at(1) === '(' || this.at(1) === '{'))
       this.substitution(this.startWord(), this.at(1) === '{')
@@ -263,6 +269,7 @@ class Reader {
     // `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
     if (c !== '(' && c !== ')') return false
     this.i++
+    this.depth = Math.max(0, this.depth + (c === '(' ? 1 : -1))
     this.endStatement()
     return true
   }
@@ -422,4 +429,33 @@ export function programOf(st: Statement): { name: string; args: Word[] } {
   const first = words[k]?.text ?? ''
   const name = (first.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
   return { name, args: words.slice(k + 1) }
+}
+
+// Interpreters, and the flags that carry the program itself on the command line.
+const INLINE_FLAGS: Record<string, string[]> = {
+  python: ['-c'],
+  python3: ['-c'],
+  py: ['-c'],
+  node: ['-e', '-p', '--eval', '--print'],
+  bun: ['-e', '-p', '--eval', '--print'],
+  deno: ['eval'],
+  ruby: ['-e'],
+  perl: ['-e', '-E'],
+}
+
+/**
+ * Script code written in the statement itself: an inline-code flag before the script's own words, or a
+ * here-doc read as the program (`python - <<EOF`, `python <<EOF`). A script file on disk (`python gen.py`,
+ * even fed a here-doc) is not, nor is a flag that belongs to the script (`python gen.py -c cfg`).
+ */
+export function runsInlineCode(st: Statement): boolean {
+  const { name, args } = programOf(st)
+  const flags = INLINE_FLAGS[name]
+  if (!flags) return false
+  for (const a of args) {
+    if (flags.includes(a.text)) return true
+    if (a.text === '-') break
+    if (!a.text.startsWith('-')) return false
+  }
+  return st.heredocs.length > 0
 }
