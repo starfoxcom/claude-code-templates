@@ -97,7 +97,7 @@ function textReason(text: string, where: string, rules: TextRules, creditOnly = 
 async function checkFiles($: Engine, plan: Plan, cwd: string, rules: TextRules, isBash: boolean) {
   const written = new Set(plan.written.map(p => osPath(p, cwd, isBash).toLowerCase()))
   const session = await $.session.cwd()
-  for (const { where, path, written: fromCommand, folder } of plan.files) {
+  for (const { where, path, written: fromCommand, folder, scripted } of plan.files) {
     const full = fileAt(path, folder, cwd, session, isBash)
     if (isUnplaced(plan, path, folder)) {
       if (!fromCommand) plan.unread.push(where)
@@ -112,8 +112,10 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, rules: TextRules, 
       if (fromCommand) continue
       // A Bash /tmp path on Windows is mapped by a guess (Git Bash's mount of TEMP): when the guess
       // misses, the file is named unread rather than refused.
+      // A script run earlier in the command (python, node) may write it: what it writes is in the command
+      // text, which the backstop checks, so the file is named unread rather than missing.
       const isTmpGuess = isBash && live.isWindows && /^\/tmp(?:\/|$)/.test(path.replace(/\\/g, '/'))
-      if (written.has(full.toLowerCase()) || isTmpGuess) {
+      if (written.has(full.toLowerCase()) || isTmpGuess || scripted) {
         plan.unread.push(where)
         continue
       }

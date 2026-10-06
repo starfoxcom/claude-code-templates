@@ -28,8 +28,9 @@ export type Plan = {
   texts: { where: string; text: string; creditOnly?: boolean }[]
   /** Body files the command hands to git or gh, as written (relative to `cwd` when not absolute).
    * `written`: this same command writes the file, and what it writes was read from the command text. */
-  /** `folder`: where a relative path resolves, as the command stands where the file is named. */
-  files: { where: string; path: string; written?: boolean; folder?: Folder }[]
+  /** `folder`: where a relative path resolves, as the command stands where the file is named.
+   * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading. */
+  files: { where: string; path: string; written?: boolean; folder?: Folder; scripted?: boolean }[]
   /** Files the command itself writes (`> file`). */
   written: string[]
   branches: string[]
@@ -71,8 +72,10 @@ type Reading = {
   /** Write statements found so far. */
   writes: number
   method?: string
-  /** The command's only statement, when it has just one at the top: no `cd`, subshell or wrapper around it. */
+  /** The command's one statement besides leading `cd`s to literal folders: no subshell or wrapper around it. */
   alone?: Statement
+  /** An earlier statement ran a script interpreter, which may write any file. */
+  ranScript?: boolean
 }
 
 // `attached`: a flag whose value can only be attached (`-S<keyid>`, `--gpg-sign=<keyid>`); it never takes
@@ -222,7 +225,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     writes: 0,
   }
   const statements = parse(command, powershell)
-  if (statements.length === 1) r.alone = statements[0]
+  r.alone = aloneOf(statements)
   read(statements, r)
   // A body file this same command writes is read from the statement that writes it.
   for (const f of [...plan.files]) {
@@ -263,6 +266,21 @@ const RAW_WRITES = [
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 
 const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'sl'])
+// Programs that run a script, which may write files the reading never sees (`python - <<EOF ... open(...)`).
+const INTERPRETERS = new Set(['python', 'python3', 'py', 'node', 'deno', 'bun', 'ruby', 'perl'])
+
+// The statement a command runs on its own: the only one, or the last after `cd`s to literal folders
+// (`cd "C:/Repos/game" && gh pr create ...`), whose folder is then known. Any other shape has none.
+function aloneOf(statements: Statement[]): Statement | undefined {
+  const last = statements.at(-1)
+  if (!last || last.pipeIn) return undefined
+  const isPlainCd = (st: Statement) => {
+    const { name, args } = programOf(st)
+    const bare = st.inner.length === 0 && st.heredocs.length === 0 && st.writes.length === 0 && !st.pipeIn
+    return bare && CD_NAMES.has(name) && args.length === 1 && !args[0]?.dynamic && !args[0]?.text.startsWith('-')
+  }
+  return statements.slice(0, -1).every(isPlainCd) ? last : undefined
+}
 
 function read(statements: Statement[], r: Reading) {
   statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r))
@@ -282,12 +300,16 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
     return
   }
   if (readScript(name, args, r)) return
+  if (INTERPRETERS.has(name)) r.ranScript = true
   const before = plan.files.length
   r.statementDir = undefined
   readWrite(st, prev, name, args, r)
   // Each body file keeps the folder in effect where it is named: `cd a && ... && cd b` moves it on.
   const folder = r.statementDir ? moveFolder(r.folder, r.statementDir) : r.folder
-  for (const f of plan.files.slice(before)) f.folder ??= folder
+  for (const f of plan.files.slice(before)) {
+    f.folder ??= folder
+    if (r.ranScript) f.scripted = true
+  }
 }
 
 function readWrite(st: Statement, prev: Statement | undefined, name: string, args: Word[], r: Reading) {
