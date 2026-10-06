@@ -1,4 +1,4 @@
-# claude-code-templates — session handoff (2026-10-06 10:32)
+# claude-code-templates — session handoff (2026-10-06 11:34)
 
 Single source of truth for what this session left undone. `/session-start` reads this first. It records only current state that `git log`, open issues, the CHANGELOG and `docs/v2/PLAN.md` don't already show. Everything about the mods (design, decisions, per-machine files, test recipes) lives in `~/.claude/mods/NOTES.md`, not here.
 
@@ -33,6 +33,11 @@ PRs #265 to #270 merged into `develop` (all `--merge`) and are installed live in
 
 ## Open work
 
+- **First: design doc for hand-offs in the tracker, global-first** (approved by the maintainer 2026-10-06; memory `project_handoff_to_tracker`). Write the design, get the sign-off in chat, then template PRs with deep review:
+  - Replace this hand-off file with one system for every bundle: open work as a comment on the worked issue or the Status section of its PR, project state as a tracker status update (a private project is allowed for a public repo), durable decisions in rules and `CLAUDE.md`. Merge `context_refresh_files` and `team_handoff_notes` (documented in `TOGGLES.md`, implemented nowhere) into one tracker setting. Cover the popular trackers: GitHub Issues + Projects, GitLab, Jira, Linear, Azure Boards.
+  - Global-first: `/session-start` and `/session-close` become one global standard in `~/.claude`, and the templates move global wherever they can, with per-project settings layered on top.
+  - Rollout reaches every existing repo (Emberholm, Stockra, onda) when it goes live, plus a migration for older binds.
+  - Rejected designs: a personal layer next to the shared one (the same job twice), a hand-off file per branch (branch and commit churn).
 - **#6 guards enforce decision:** read `~/.claude/mods-data/guards/decisions.jsonl` again after a day of use with the #269 fixes; if the maintainer calls it 100%, switch and drop both scripts (see Decisions).
 - **Offered, not decided:** run the mod test suites (`claude plugin test` per mod) in CI. The deep reviewer noted the green `Engine and hook tests` check covers only the engine and Python tests. Ask before building it (it is a workflow change, so a hotfix to `main`).
 
