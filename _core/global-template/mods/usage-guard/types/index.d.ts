@@ -24,13 +24,14 @@ export type SettingsView = {
 }
 
 /**
- * A wake that resumes this session's work after a reset, armed by hand (`/usage-guard arm 5h|week`).
- * Kept in state so a hot reload (a settings change, an edit)
- * re-arms it.
+ * A wake that resumes this session's work after a reset or at a time of day, armed by hand
+ * (`/usage-guard arm 5h|week|HH:MM`, or the `arm` tool). Kept in state so a hot reload (a settings
+ * change, an edit) re-arms it.
  */
 export type ArmedWake = {
-  /** The limit's kind: `five_hour` or `seven_day`. */
+  /** The limit's kind, `five_hour` or `seven_day`, or `clock` for a time of day. */
   kind: string
+  /** For a reset, its time; for a time of day, the wake's own (the claims are keyed on it). */
   resetsAt: string
   wakeAt: number
   /** Armed with nothing pending: the card above the prompt asks to keep or cancel it, until answered. */
@@ -41,6 +42,8 @@ export type ArmedWake = {
   session?: string
   /** The project folder the arm was set in: a later session there is offered an arm that never ran. */
   root?: string
+  /** What the wake is for, as the person quoted it: handed to the session it wakes. */
+  reason?: string
 }
 
 /** Another session's arm in this project whose wake passed while that session was closed. */

@@ -1,5 +1,5 @@
 import type { AdoptOffer, ArmedWake } from '../types'
-import { projectOf } from './plan'
+import { projectOf, REASON_MAX, reasonText } from './plan'
 
 // An arm survives a restart in `mods-data/usage-guard/arms/<session>.json`: the arm, or `null` once it
 // is dropped or done (mods cannot delete files).
@@ -25,38 +25,37 @@ export function parseSavedArm(text: string): ArmedWake | undefined {
     if (typeof arm.wakeAt !== 'number' || !Number.isFinite(arm.wakeAt)) return undefined
     const armedIn = typeof arm.armedIn === 'string' ? { armedIn: arm.armedIn } : {}
     const root = typeof arm.root === 'string' ? { root: arm.root } : {}
+    const reason = typeof arm.reason === 'string' && arm.reason ? { reason: arm.reason.slice(0, REASON_MAX) } : {}
     const isQuestioned = arm.isQuestioned === true
-    return { kind: arm.kind, resetsAt: arm.resetsAt, wakeAt: arm.wakeAt, isQuestioned, ...armedIn, ...root }
+    return { kind: arm.kind, resetsAt: arm.resetsAt, wakeAt: arm.wakeAt, isQuestioned, ...armedIn, ...root, ...reason }
   } catch {
     return undefined
   }
 }
 
-export function caughtUpText(limit: string, wakeText: string): string {
-  return (
-    `The ${limit} reset this session was armed for came at ${wakeText}, while it was closed: resuming ` +
-    'the work now.'
-  )
+// `armedFor` (here and below): what the arm waited for, as `armFor` says it.
+export function caughtUpText(armedFor: string, wakeText: string): string {
+  return `This session was armed to resume at ${wakeText}, ${armedFor}, which came while it was closed: resuming now.`
 }
 
-export function missedArmText(limit: string, wakeText: string, catchUpMinutes: number): string {
+export function missedArmText(armedFor: string, wakeText: string, catchUpMinutes: number): string {
   const window = catchUpMinutes > 0 ? `more than ${catchUpMinutes} minutes ago` : 'while it was closed'
   return (
-    `This session was armed to resume at ${wakeText}, after the ${limit} reset, but that passed ${window}, ` +
+    `This session was armed to resume at ${wakeText}, ${armedFor}, but that passed ${window}, ` +
     'so it did not resume by itself. Run /session-start to pick the work back up.'
   )
 }
 
 // An armed wake with nothing pending: one line, no hand-off rebuilt and no work started.
-export function quietResumeText(limit: string): string {
+export function quietResumeText(armedFor: string): string {
   return (
-    `The ${limit} reset this session was armed for has passed. Nothing is pending here (no open task that is ` +
-    'not on hold).'
+    `The wake this session was armed for, ${armedFor}, has come. Nothing is pending here (no open task ` +
+    'that is not on hold).'
   )
 }
 
-export function quietResumePrompt(limit: string): string {
-  return `[usage-guard] ${quietResumeText(limit)} Say so in one line and wait for the person.`
+export function quietResumePrompt(armedFor: string): string {
+  return `[usage-guard] ${quietResumeText(armedFor)} Say so in one line and wait for the person.`
 }
 
 // A closed session's arm is offered once its own wake is safely past (an open session fires on time) and
@@ -87,17 +86,18 @@ export function pickOffer(
   return best
 }
 
-export function offerText(limit: string, wakeText: string): string {
+export function offerText(armedFor: string, wakeText: string): string {
   return (
-    `An earlier session in this project was armed to resume at ${wakeText}, after the ${limit} reset, and was ` +
+    `An earlier session in this project was armed to resume at ${wakeText}, ${armedFor}, and was ` +
     'closed before it ran. Resume its work here?'
   )
 }
 
 // The resume an adopting session runs: the work is the earlier session's, so it is rebuilt from its records.
-export function adoptReason(limit: string, wakeText: string, owner: string): string {
+export function adoptReason(armedFor: string, wakeText: string, owner: string, reason?: string): string {
   return (
-    `An earlier session in this project was armed to resume at ${wakeText}, after the ${limit} reset, and was ` +
-    `closed before it ran; the person chose to resume it here. Its task list is mods-data/tasks/${owner}.json.`
+    `An earlier session in this project was armed to resume at ${wakeText}, ${armedFor}, and was closed ` +
+    `before it ran; the person chose to resume it here. Its task list is mods-data/tasks/${owner}.json.` +
+    (reason ? ` ${reasonText(reason)}` : '')
   )
 }
