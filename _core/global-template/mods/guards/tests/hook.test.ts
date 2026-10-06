@@ -536,12 +536,18 @@ const NOT_INLINE = [
   'ruby -c gen.rb',
   'node -c gen.js',
   'python gen.py -c cfg.ini',
+  // Code the shell builds at run time: from a file on disk, or from the environment.
+  'python -c "$(cat gen.py)"',
+  'python -c "$CODE"',
+  'python -c',
 ]
-for (const before of [...NOT_INLINE, "python gen.py <<'EOF'"]) {
+// A here-doc fed to a script on disk is its data, not its code; an unquoted one may pull its code in.
+const HEREDOCS: Record<string, string> = { "python gen.py <<'EOF'": 'data', 'python - <<EOF': '$(cat gen.py)' }
+for (const before of [...NOT_INLINE, ...Object.keys(HEREDOCS)]) {
   test(`after "${before}" a missing body file is still refused`, { options: { mode: 'enforce' } }, async ($, on) => {
     world(on)
-    // A here-doc fed to a script on disk is its data, not its code.
-    const tail = before.includes('<<') ? '\ndata\nEOF' : ''
+    const body = HEREDOCS[before]
+    const tail = body === undefined ? '' : `\n${body}\nEOF`
     const result = await bash($, `${before} && gh api graphql --input su.json${tail}`)
     expect(String((result as { deny?: string }).deny)).toContain('could not read the body file')
   })
