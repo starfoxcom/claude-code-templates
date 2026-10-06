@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { hasPendingWake, isPauseHolding, keepGoingText, workable } from '../hooks/keepgoing'
+import { hasEngineWake, hasPendingWake, isPauseHolding, keepGoingText, workable } from '../hooks/keepgoing'
 import type { Mirror, MirrorTask } from '../hooks/register'
 
 // Keep going: a turn that ends with work nobody waits for gets a prompt to carry on.
@@ -157,4 +157,30 @@ test('the setting turns it off', { options: { keepGoing: false } }, async ($, on
   const { seen, clock } = world(on, [task('1', 'in_progress')])
   await turnEnds($, clock)
   expect(seen.prompts).toEqual([])
+})
+
+test('background work or a scheduled wake at the turn end is a pending wake', () => {
+  expect(hasEngineWake({})).toBe(false)
+  expect(hasEngineWake({ background_tasks: [], session_crons: [] })).toBe(false)
+  expect(hasEngineWake({ background_tasks: [{ type: 'shell' }] })).toBe(true)
+  expect(hasEngineWake({ session_crons: [{ id: 'c' }] })).toBe(true)
+})
+
+// From a peer report: a background engine rebuild was running, and its finish would wake the session.
+test('no prompt while background work the turn left will wake the session', async ($, on) => {
+  const { seen, clock } = world(on, [task('1', 'in_progress')])
+  let inFlight: unknown[] = [{ id: 'bh7', type: 'shell', status: 'running', description: 'rebuild' }]
+  on('classic.Stop', () => ({}) as never)
+  const stop = () => $.classic.Stop({ hook_event_name: 'Stop', background_tasks: inFlight, session_crons: [] } as never)
+  await $.turn.start({ turnId: 't' } as never)
+  await stop()
+  await $.turn.complete({ turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(5_000)
+  expect(seen.prompts).toEqual([])
+  inFlight = []
+  await $.turn.start({ turnId: 't' } as never)
+  await stop()
+  await $.turn.complete({ turnId: 't', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await clock.advance(5_000)
+  expect(seen.prompts).toHaveLength(1)
 })
