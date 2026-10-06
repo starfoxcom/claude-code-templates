@@ -33,8 +33,9 @@ test('an answer that lands mid-turn is submitted as a prompt, never appended', {
   on('command.register', () => ({ value: { command: 'pc' } }))
   on('tool.register', () => ({ value: { tool: 'mcp__shared-pc__pc' } }))
   on('prompt.submit', (_$, e) => {
-    prompts.push(String((e as { text?: string }).text))
-    return { value: undefined } as never
+    const text = String((e as { text?: string }).text)
+    prompts.push(text)
+    return { text }
   })
   on('session.append', (_$, e) => {
     appended.push(e)
