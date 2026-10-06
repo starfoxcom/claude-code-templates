@@ -22,6 +22,21 @@ export type Pause = {
 
 export const LIMIT_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly' }
 
+/** The kind of an arm set for a time of day (`/usage-guard arm 21:05`) rather than a plan window's reset. */
+export const CLOCK = 'clock'
+/** The longest reason an arm carries to its wake, in characters. */
+export const REASON_MAX = 300
+
+/** What an arm waits for, as the texts say it: "after the 5-hour reset", or "at the time you set". */
+export function armFor(kind: string): string {
+  return kind === CLOCK ? 'at the time you set' : `after the ${LIMIT_NAMES[kind] ?? kind} reset`
+}
+
+/** The line that hands an arm's reason to the session it wakes. */
+export function reasonText(reason: string): string {
+  return `The reason this wake was set with: "${reason}".`
+}
+
 export const WRAP_UP_ARGS =
   'Plan usage limit nearly reached (automatic wrap-up). Commit locally only: no push, no PR, no CI. ' +
   'Save the hand-off so the work can resume after the reset, stop every background task and monitor, ' +

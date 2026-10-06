@@ -123,6 +123,10 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
     seen.commands.push({ command: e.command, args: e.args })
     return {}
   })
+  on('tool.register', ($, e) => {
+    tools.push(e.name)
+    return { value: { tool: `mcp__usage-guard__${e.name}` } as never }
+  })
   on('prompt.submit', ($, e) => {
     seen.prompts.push(e.text)
     return { text: e.text }
@@ -212,6 +216,8 @@ export async function mountCard($: Engine, surface: 'terminal' | 'desktop' = 'te
 }
 
 export const registered: { name: string; argumentHint?: string }[] = []
+/** The tools the mod registered, by short name. */
+export const tools: string[] = []
 
 // The test runner has timers; the mod sandbox's types do not list them.
 declare function setTimeout(callback: () => void, ms: number): unknown
