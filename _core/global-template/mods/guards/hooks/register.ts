@@ -22,9 +22,9 @@ import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 const LOG_CAP = 256 * 1024
 const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false, temp: '' }
-// The helper setting, and the session that typed `/guards helpers allow` (module state: a replaced
-// hooks worker forgets it, which errs toward the block).
-const helpers = { setting: 'allow' as 'allow' | 'block', allowedIn: '' }
+// The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
+// hooks worker forgets them, which errs toward the block).
+const helpers = { setting: 'allow' as 'allow' | 'block', allowedIn: new Set<string>() }
 
 // Makes the data folder and records when, and in which mode, the mod loaded.
 const MARK_LOADED = [
@@ -326,8 +326,9 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
 }
 
 async function helperState($: Engine) {
-  if (helpers.setting === 'allow' || !helpers.allowedIn) return { setting: helpers.setting, isAllowedHere: false }
-  return { setting: helpers.setting, isAllowedHere: helpers.allowedIn === (await $.session.id()) }
+  const { setting, allowedIn } = helpers
+  if (setting === 'allow' || allowedIn.size === 0) return { setting, isAllowedHere: false }
+  return { setting, isAllowedHere: allowedIn.has(await $.session.id()) }
 }
 
 // An Agent or Workflow call: refused in enforce, logged in shadow, while the setting blocks helpers.
@@ -335,8 +336,8 @@ async function helperGuard($: Engine, tool: string, run: () => Promise<any>) {
   if (!isHelperChecked(await helperState($))) return run()
   if (!live.dir) await setUp($)
   const isBlocked = live.mode === 'enforce'
-  await count($, true, false)
-  const entry = { at: Date.now(), session: await $.session.id(), tool, mod: HELPER_BLOCK, scripts: null }
+  // Logged, never counted: stats.json counts shell writes, the denominator of the shadow comparison.
+  const entry ={ at: Date.now(), session: await $.session.id(), tool, mod: HELPER_BLOCK, scripts: null }
   await log($, { ...entry, ...(isBlocked ? { enforced: true } : {}), unread: [], command: '' })
   return isBlocked ? { deny: `BLOCKED (guards): ${HELPER_BLOCK}` } : run()
 }
@@ -456,8 +457,14 @@ async function statusText($: Engine): Promise<string> {
 async function runCommand($: Engine, args: string): Promise<string> {
   const [verb = '', word = ''] = args.trim().split(/\s+/)
   if (verb === 'helpers') {
-    const answer = helpersCommand(word, await helperState($))
-    helpers.allowedIn = answer.isAllowedHere ? await $.session.id() : ''
+    const state = await helperState($)
+    const answer = helpersCommand(word, state)
+    // Each session adds or removes only its own allow; a status look changes nothing.
+    if (answer.isAllowedHere !== state.isAllowedHere) {
+      const session = await $.session.id()
+      if (answer.isAllowedHere) helpers.allowedIn.add(session)
+      else helpers.allowedIn.delete(session)
+    }
     return answer.text
   }
   if (verb === 'settings') {
