@@ -446,16 +446,18 @@ const INLINE_FLAGS: Record<string, string[]> = {
 /**
  * Script code written in the statement itself: an inline-code flag before the script's own words, or a
  * here-doc read as the program (`python - <<EOF`, `python <<EOF`). A script file on disk (`python gen.py`,
- * even fed a here-doc) is not, nor is a flag that belongs to the script (`python gen.py -c cfg`).
+ * even fed a here-doc) is not, nor is a flag that belongs to the script (`python gen.py -c cfg`), nor code
+ * the shell builds at run time (`-c "$(cat gen.py)"`, `-c "$CODE"`, an unquoted here-doc with an expansion).
  */
 export function runsInlineCode(st: Statement): boolean {
   const { name, args } = programOf(st)
   const flags = INLINE_FLAGS[name]
   if (!flags) return false
-  for (const a of args) {
-    if (flags.includes(a.text)) return true
+  for (const [k, a] of args.entries()) {
+    const code = args[k + 1]
+    if (flags.includes(a.text)) return code !== undefined && !code.dynamic
     if (a.text === '-') break
     if (!a.text.startsWith('-')) return false
   }
-  return st.heredocs.length > 0
+  return st.heredocs.length > 0 && !st.hasDynamicBody
 }
