@@ -13,7 +13,8 @@ function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Wind
     runs: [] as string[][],
     broken: new Set<string>(),
   }
-  const env: Record<string, string> = { USERPROFILE: 'C:/Users/me', TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp', OS: os }
+  const temp = 'C:\\Users\\me\\AppData\\Local\\Temp'
+  const env: Record<string, string> = { USERPROFILE: 'C:/Users/me', TEMP: temp, OS: os }
   const unless = (call: string) => {
     if (seen.broken.has(call)) throw new Error(`${call} is down`)
   }
@@ -474,4 +475,51 @@ test('a crash after the command ran keeps its result and never runs it twice', a
   const result = await bash($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
   expect(seen.ran).toHaveLength(1)
   expect(result).toEqual({ result: {} })
+})
+
+// From the shadow trial: Emberholm opens every PR as `cd "<repo>" && gh pr create ...`.
+test('a PR call after a cd to a literal folder is judged there', { options: { mode: 'enforce' } }, async ($, on) => {
+  world(on, { [RULES]: ROW_RULE, 'C:/Repos/other/b.md': NO_ROW })
+  const result = await bash($, 'cd "C:/Repos/other" && gh pr create --title "feat: x" --body-file b.md')
+  expect(String((result as { deny?: string }).deny)).toContain('PR-body contract')
+  const full = await bash($, 'cd C:/Repos/other && cd sub && gh pr create --title "feat: x" --body-file ../b.md')
+  expect(String((full as { deny?: string }).deny)).toContain('PR-body contract')
+})
+
+test('a PR call after a cd built at run time is named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': NO_ROW })
+  const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).unread?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
+})
+
+// From the shadow trial: a python here-doc writes the API input, then gh sends it.
+const SCRIPT_THEN_API = [
+  "python - <<'EOF'",
+  'import json',
+  "open('su.json','w').write(json.dumps({'query': 'q'}))",
+  'EOF',
+  'gh api graphql --input su.json',
+].join('\n')
+
+test('a body file a script in the same command writes is named unread, never missing', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on)
+  const result = await bash($, SCRIPT_THEN_API)
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(1)
+  expect(lastEntry(seen).unread).toEqual(['the GitHub API call'])
+  // With no script before it, a missing file is still refused.
+  const missing = await bash($, 'gh api graphql --input su.json')
+  expect(String((missing as { deny?: string }).deny)).toContain('could not read the body file')
+})
+
+test('a credit line in the script that writes the body file is still refused', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  world(on)
+  const result = await bash($, SCRIPT_THEN_API.replace('import json', `import json\n# ${AI_TRAILER}`))
+  expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
 })
