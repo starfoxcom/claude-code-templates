@@ -11,7 +11,7 @@
 // - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`,
 //   `ssh host ...`, or any other program that writes to GitHub on its own (a Python script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
-//   file does not exist yet when the guard looks, so it reports that it could not read it;
+//   file does not exist yet, so it reports that it could not read it (unread when inline script code wrote it);
 // - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
 //   unread, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
@@ -19,7 +19,7 @@
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
-import { parse, programOf } from './shell'
+import { parse, programOf, runsInlineCode } from './shell'
 import type { Statement, Word } from './shell'
 
 export type Plan = {
@@ -28,8 +28,9 @@ export type Plan = {
   texts: { where: string; text: string; creditOnly?: boolean }[]
   /** Body files the command hands to git or gh, as written (relative to `cwd` when not absolute).
    * `written`: this same command writes the file, and what it writes was read from the command text. */
-  /** `folder`: where a relative path resolves, as the command stands where the file is named. */
-  files: { where: string; path: string; written?: boolean; folder?: Folder }[]
+  /** `folder`: where a relative path resolves, as the command stands where the file is named.
+   * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading. */
+  files: { where: string; path: string; written?: boolean; folder?: Folder; scripted?: boolean }[]
   /** Files the command itself writes (`> file`). */
   written: string[]
   branches: string[]
@@ -71,8 +72,10 @@ type Reading = {
   /** Write statements found so far. */
   writes: number
   method?: string
-  /** The command's only statement, when it has just one at the top: no `cd`, subshell or wrapper around it. */
+  /** The command's one statement besides leading `cd`s to literal folders: no subshell or wrapper around it. */
   alone?: Statement
+  /** An earlier statement ran script code written in the command, which may write any file. */
+  ranScript?: boolean
 }
 
 // `attached`: a flag whose value can only be attached (`-S<keyid>`, `--gpg-sign=<keyid>`); it never takes
@@ -222,7 +225,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     writes: 0,
   }
   const statements = parse(command, powershell)
-  if (statements.length === 1) r.alone = statements[0]
+  r.alone = aloneOf(statements)
   read(statements, r)
   // A body file this same command writes is read from the statement that writes it.
   for (const f of [...plan.files]) {
@@ -264,6 +267,18 @@ const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toL
 
 const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'sl'])
 
+// The statement a command runs on its own: the only one, or the last after `cd`s to literal folders
+// (`cd "C:/Repos/game" && gh pr create ...`), whose folder is then known. Any other shape has none.
+function aloneOf(statements: Statement[]): Statement | undefined {
+  const last = statements.at(-1)
+  const isPlainCd = (st: Statement) => {
+    const { name, args } = programOf(st)
+    const bare = !st.inner.length && !st.heredocs.length && !st.writes.length && !st.pipeIn && !st.isNested
+    return bare && CD_NAMES.has(name) && args.length === 1 && !args[0]?.dynamic && !args[0]?.text.startsWith('-')
+  }
+  return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
+}
+
 function read(statements: Statement[], r: Reading) {
   statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r))
 }
@@ -282,12 +297,18 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
     return
   }
   if (readScript(name, args, r)) return
+  // Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its
+  // text is under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
+  if (runsInlineCode(st)) r.ranScript = true
   const before = plan.files.length
   r.statementDir = undefined
   readWrite(st, prev, name, args, r)
   // Each body file keeps the folder in effect where it is named: `cd a && ... && cd b` moves it on.
   const folder = r.statementDir ? moveFolder(r.folder, r.statementDir) : r.folder
-  for (const f of plan.files.slice(before)) f.folder ??= folder
+  for (const f of plan.files.slice(before)) {
+    f.folder ??= folder
+    if (r.ranScript) f.scripted = true
+  }
 }
 
 function readWrite(st: Statement, prev: Statement | undefined, name: string, args: Word[], r: Reading) {
@@ -613,8 +634,8 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     const isLiteral = st.heredocs.length === 1 && !st.hasDynamicBody && !st.pipeIn && st.reads.length === 0
     const stdinBody = isLiteral ? st.heredocs.join('\n') : undefined
     const filePath = plan.files.slice(before).find(f => f.where === where)?.path
-    // The PR call is the whole command, typed as `gh ...` itself: nothing before it moves the folder,
-    // sets a variable or wraps it in another shell.
+    // The PR call is the whole command, typed as `gh ...` itself, after nothing but `cd`s to literal
+    // folders: nothing before it sets a variable or wraps it in another shell.
     const isAlone = r.alone === st && st.inner.length === 0 && st.words[0]?.text === 'gh'
     plan.prs.push(readPr(action, rest, { stdinBody, filePath, isAlone }))
   }
