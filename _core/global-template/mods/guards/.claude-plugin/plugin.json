@@ -1,7 +1,7 @@
 {
   "name": "guards",
   "version": "0.1.0",
-  "description": "Keeps AI credit out of commits, PRs, issues, comments and releases, and stops the streaming CI log watcher, by reading each command instead of scanning its raw text.",
+  "description": "Keeps AI credit out of commits, PRs, issues, comments and releases, and stops the streaming CI log watcher, by reading each command instead of scanning its raw text. Optionally blocks helper agents.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "mode": {
@@ -16,6 +16,13 @@
       "title": "Repos that may name the product",
       "description": "Comma-separated repo folder names (case-insensitive, e.g. \"my-cli-plugin, docs-site\") whose subject is Claude Code itself, so commit, PR and branch text there may name the product. \"*\" (the default) allows the plain product name everywhere, as the toolkit's attribution rule does (no credit, mentions are fine); a list narrows it to those repos; empty blocks it in every repo. AI credit lines stay blocked everywhere.",
       "default": "*"
+    },
+    "helpers": {
+      "type": "string",
+      "title": "Helper agents",
+      "description": "allow (the default): guards never touches subagents, forks or workflows. block: Agent and Workflow calls are refused in enforce mode and logged in shadow mode, unless the person types /guards helpers allow in that session.",
+      "options": ["allow", "block"],
+      "default": "allow"
     }
   }
 }
