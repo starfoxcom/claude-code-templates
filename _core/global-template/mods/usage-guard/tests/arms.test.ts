@@ -147,11 +147,12 @@ test('arm with compact that the engine refuses or a hook vetoes still arms, and 
   expect(await status($)).toContain('Not compacted: blocked by a hook')
 })
 
-test('arm with an unknown option arms nothing', async ($, on) => {
+test('arm with an unquoted word arms nothing and shows the quoted form', async ($, on) => {
   const seen = world(on)
   await start($)
   const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h now' } as never)
-  expect(answer).toEqual(expect.objectContaining({ text: expect.stringContaining('Unknown option "now"') }))
+  const quoted = 'Put the reason in double quotes: /usage-guard arm 5h "now"'
+  expect(answer).toEqual(expect.objectContaining({ text: quoted }))
   await seen.clock.advance(WAKE - NOW)
   expect(resumes(seen)).toEqual([])
   expect(seen.compactions).toEqual([])

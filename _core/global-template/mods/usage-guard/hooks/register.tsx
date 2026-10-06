@@ -6,8 +6,8 @@ import { catchUpOf, caughtUpText, missedArmText, parseSavedArm, quietResumePromp
 import type { CompactOutcome, Fill } from './compact'
 import { measured, outcomeMark, outcomeOf, outcomeText, PAUSE_INSTRUCTIONS, shouldCompactAtPause } from './compact'
 import type { Pause } from './plan'
-import { CLAIM, countOpenTasks, covers, EMPTY_ARM_NOTE, hotLimits, joinPause, LIMIT_NAMES, limitName } from './plan'
-import { NO_WORK_NOTICE, planArm, planPause, projectOf, resetKey, resumePrompt, WRAP_UP_ARGS } from './plan'
+import { armFor, CLAIM, countOpenTasks, covers, EMPTY_ARM_NOTE, hotLimits, joinPause, limitName } from './plan'
+import { NO_WORK_NOTICE, planPause, projectOf, reasonText, resetKey, resumePrompt, WRAP_UP_ARGS } from './plan'
 import { stopCommandsFor } from './rules'
 import { drawArmLine, drawCards } from './cards'
 import { register as adopt } from './adopt'
@@ -15,8 +15,10 @@ import { register as phone } from './phone'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import type { Card, CardButton } from './texts'
 import { applyValues, type Live, newLive } from './live'
-import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, formatLocal, HELP, pausedText } from './texts'
-import { armedText, joinedPauseText, questionText, READ_ZONE, statusText, UNCONFIRMED_NOTICE, zoneOf } from './texts'
+import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, COMMAND_TEXT, formatLocal, HELP } from './texts'
+import { armedText, joinedPauseText, pausedText, questionText, READ_ZONE, statusText } from './texts'
+import { UNCONFIRMED_NOTICE, zoneOf } from './texts'
+import { ARM_TOOL, ARM_TOOL_NAME, type ArmRequest, parseArmArgs, planWake, toolRequest, untilText } from './wake'
 
 const CHECK_EVERY_MS = 60_000
 // A beat after a command or the wrap-up's turn ends before compacting, so the engine is between turns.
@@ -41,13 +43,16 @@ async function pausePath($: EngineInterface): Promise<string> {
   return `${await dataDir($)}/pause.json`
 }
 
-async function readPause($: EngineInterface): Promise<Pause | undefined> {
+// One of this mod's JSON files, or undefined when it is missing or unreadable.
+async function readJson<T>($: EngineInterface, path: string): Promise<T | undefined> {
   try {
-    return JSON.parse(String(await $.fs.read(await pausePath($)))) as Pause
+    return JSON.parse(String(await $.fs.read(path))) as T
   } catch {
     return undefined
   }
 }
+
+const readPause = async ($: EngineInterface) => readJson<Pause>($, await pausePath($))
 
 async function writePause($: EngineInterface, pause: Pause): Promise<void> {
   await $.fs.write(await pausePath($), JSON.stringify(pause, null, 2))
@@ -104,13 +109,7 @@ async function cardPath($: EngineInterface): Promise<string> {
   return (await pausePath($)).replace(/pause\.json$/, 'card.json')
 }
 
-async function readCard($: EngineInterface): Promise<UsageCard | undefined> {
-  try {
-    return JSON.parse(String(await $.fs.read(await cardPath($)))) as UsageCard
-  } catch {
-    return undefined
-  }
-}
+const readCard = async ($: EngineInterface) => readJson<UsageCard>($, await cardPath($))
 
 // One card per event, shared by every session: the first session to reach the
 // event writes it, so a card someone already dismissed is not raised again by
@@ -154,11 +153,6 @@ async function cancelPause($: EngineInterface, pause: Pause): Promise<void> {
 async function cancelFromCard($: EngineInterface): Promise<void> {
   const pause = await readPause($)
   if (pause?.status === 'active') await cancelPause($, pause)
-}
-
-async function hasCommand($: EngineInterface, name: string): Promise<boolean> {
-  const commands = await $.command.list().catch(() => [])
-  return commands.some(command => command.name === name)
 }
 
 // Every session stops its own project's background work, once per project per reset: sessions in two
@@ -219,7 +213,8 @@ async function runPendingWrapUp($: EngineInterface): Promise<void> {
 async function startWrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
   live.compactAfterTurn = pause
-  if (await hasCommand($, 'session-close')) {
+  const commands = await $.command.list().catch(() => [])
+  if (commands.some(command => command.name === 'session-close')) {
     void $.command.run({ command: 'session-close', args: WRAP_UP_ARGS }).catch(() => undefined)
   } else {
     void $.prompt
@@ -314,8 +309,9 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
   // would rebuild the same hand-off and work the same tasks beside it, with nobody watching either.
   const work = await hadWork($, pause)
   const text = 'Plan limits have reset: resuming the saved work.'
-  if (work === true) return resumeWork($, text)
-  if (isArmedHere) return resumeArmed($, limitName(pause), text, held?.armedIn)
+  const reason = isArmedHere ? held?.reason : undefined
+  if (work === true) return resumeWork($, text, reason)
+  if (isArmedHere) return resumeArmed($, `after the ${limitName(pause)} reset`, text, held?.armedIn, reason)
   if (work === null) return notice($, UNCONFIRMED_NOTICE)
   // Worded as what is on record, not what happened: a wrap-up whose own claim failed before a hot
   // reload, or one before a /clear, saved work that left no claim under this session's id.
@@ -323,12 +319,14 @@ async function resume($: EngineInterface, resetsAt: string, isArmed = false): Pr
 }
 
 // An armed session goes on with its work, or, with nothing pending, only says so: the person asked for
-// the wake-up, and a full resume would rebuild a hand-off for no work. A /clear starts an empty task
-// list, so the list of the session the arm was set in counts too. Callers pass it: the arm may be gone.
-async function resumeArmed($: EngineInterface, limit: string, text: string, armedIn?: string): Promise<void> {
-  if ((await openTasks($)) !== 0 || (armedIn && (await openTasks($, armedIn)) !== 0)) return resumeWork($, text)
-  await notice($, quietResumeText(limit))
-  void $.prompt.submit({ text: quietResumePrompt(limit) }).catch(() => undefined)
+// the wake-up, and a full resume would rebuild a hand-off for no work. A reason is work of its own. A
+// /clear starts an empty task list, so the list of the session the arm was set in counts too. Callers
+// pass both: the arm may be gone.
+async function resumeArmed($: EngineInterface, armedFor: string, text: string, armedIn?: string, reason?: string) {
+  const isPending = (await openTasks($)) !== 0 || (armedIn !== undefined && (await openTasks($, armedIn)) !== 0)
+  if (reason || isPending) return resumeWork($, text, reason)
+  await notice($, quietResumeText(armedFor))
+  void $.prompt.submit({ text: quietResumePrompt(armedFor) }).catch(() => undefined)
 }
 
 // A wrap-up with work leaves a claim (this instance remembers it as handled, another finds it taken).
@@ -350,9 +348,10 @@ async function hadWork($: EngineInterface, pause: Pause): Promise<boolean | null
 // Never the project's /session-start: a ritual that proposes a plan and waits for an OK would wake the
 // session only to stop it again. The engine runs a plugin's prompt once the session is idle, so a
 // person typing meanwhile is never cut off.
-async function resumeWork($: EngineInterface, text: string): Promise<void> {
-  await notice($, text)
-  void $.prompt.submit({ text: resumePrompt(text) }).catch(() => undefined)
+async function resumeWork($: EngineInterface, text: string, reason?: string): Promise<void> {
+  const said = reason ? `${text} ${reasonText(reason)}` : text
+  await notice($, said)
+  void $.prompt.submit({ text: resumePrompt(said) }).catch(() => undefined)
 }
 
 async function armWake($: EngineInterface, pause: Pause): Promise<void> {
@@ -409,9 +408,8 @@ async function wakeArmed($: EngineInterface, arm: ArmedWake): Promise<void> {
   if (won === null) await notice($, UNCONFIRMED_NOTICE)
   else if (isPauseReset) await resume($, arm.resetsAt, true)
   else {
-    const limit = LIMIT_NAMES[arm.kind] ?? arm.kind
-    const text = `The ${limit} reset you armed for has passed: resuming the saved work.`
-    await resumeArmed($, limit, text, current.armedIn)
+    const text = `The wake you armed, ${armFor(arm.kind)}, has come: resuming the saved work.`
+    await resumeArmed($, armFor(arm.kind), text, current.armedIn, current.reason)
   }
   // Cleared only if still this arm: the person may have set another while the resume ran.
   const now = await read($, armedWake)
@@ -475,15 +473,14 @@ async function restoreArm($: EngineInterface): Promise<ArmedWake | undefined> {
   const parsed = parseSavedArm(String(text))
   if (!parsed) return undefined
   const saved = { ...parsed, session: await $.session.id() }
-  const limit = LIMIT_NAMES[saved.kind] ?? saved.kind
   const action = catchUpOf(saved.wakeAt, await $.clock.now(), live.catchUpMinutes)
   if (action === 'drop') {
     await setArm($, null)
-    await notice($, missedArmText(limit, localTime(saved.wakeAt), live.catchUpMinutes))
+    await notice($, missedArmText(armFor(saved.kind), localTime(saved.wakeAt), live.catchUpMinutes))
     return undefined
   }
   await update($, armedWake, () => saved)
-  if (action === 'fire') await notice($, caughtUpText(limit, localTime(saved.wakeAt)))
+  if (action === 'fire') await notice($, caughtUpText(armFor(saved.kind), localTime(saved.wakeAt)))
   return saved
 }
 
@@ -503,23 +500,26 @@ async function openTasks($: EngineInterface, sessionId?: string): Promise<number
   }
 }
 
-// An arm with nothing pending is still set, since the person asked for it, but says so and asks: a card
-// above the prompt where there is one, and the answer itself names the command for a surface without it.
+// An arm with nothing pending and no reason is still set, since the person asked for it, but says so and
+// asks: a card above the prompt where there is one, and the answer itself names the command for a surface
+// without it. The answer gives the full date and how far off it is, so a wrong time shows at once.
 // `compact`: the person asked for it, so it runs whatever the context's size or the time to the wake.
-async function armByHand($: EngineInterface, which: string, option: string): Promise<string> {
-  if (option !== '' && option !== 'compact')
-    return `Unknown option "${option}". Use: /usage-guard arm 5h|week [compact]`
-  const { rateLimits } = await $.session.usage()
-  const planned = planArm(rateLimits, which, live.delayMinutes, await $.clock.now())
+async function armByHand($: EngineInterface, request: ArmRequest | string): Promise<string> {
+  if (typeof request === 'string') return request
+  // Read again: the zone may have changed (daylight saving) since this module loaded.
+  await readZone($)
+  const now = await $.clock.now()
+  const planned = planWake(request, (await $.session.usage()).rateLimits, live.delayMinutes, now, live.zone)
   if (typeof planned === 'string') return planned
-  const isEmpty = (await openTasks($)) === 0
-  const base = { ...planned, armedIn: await $.session.id() }
-  const arm = isEmpty ? { ...base, isQuestioned: true } : base
+  const earlier = await read($, armedWake)
+  const isEmpty = !planned.reason && (await openTasks($)) === 0
+  const arm: ArmedWake = { ...planned, armedIn: await $.session.id(), ...(isEmpty ? { isQuestioned: true } : {}) }
   await setArm($, arm)
   await scheduleArm($, arm)
-  const lines = [armedText(planned.kind, localTime(planned.wakeAt))]
+  const lines = [armedText(arm, localTime(arm.wakeAt), untilText(arm.wakeAt, now))]
+  if (earlier && earlier.wakeAt !== arm.wakeAt) lines.push(`It replaces the wake set for ${localTime(earlier.wakeAt)}.`)
   if (isEmpty) lines.push(EMPTY_ARM_NOTE)
-  if (option === 'compact') {
+  if (request.isCompact) {
     $.clock.after(COMPACT_DELAY_MS, () => void compactNow($).catch(() => undefined))
     lines.push('Compacting this session in a moment; /usage-guard then says how it went.')
   }
@@ -680,7 +680,7 @@ async function cardsAbove($: EngineInterface): Promise<Card[]> {
 async function armLine($: EngineInterface): Promise<string | undefined> {
   const arm = await read($, armedWake)
   if (!arm || arm.isQuestioned || (await read($, band))?.card) return undefined
-  return armLineText(arm.wakeAt, arm.kind, live.zone)
+  return armLineText(arm, live.zone)
 }
 
 export const register: Register = (on, options) => {
@@ -698,7 +698,9 @@ export const register: Register = (on, options) => {
     // The timers (and with them a saved arm) first: a refused command must never cost the arm's wake,
     // and a start after a reload may find /usage-guard already registered.
     await startTimers($)
-    await registerSurface($).catch(() => undefined)
+    const command = { name: 'usage-guard', description: COMMAND_TEXT, argumentHint: ARGUMENT_HINT }
+    await $.command.register(command).catch(() => undefined)
+    await $.tool.register(ARM_TOOL).catch(() => undefined)
     return result
   })
 
@@ -738,9 +740,10 @@ export const register: Register = (on, options) => {
 
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
-    // Core marks a call read-only (true) or leaves the flag out, never false: any
-    // answered call without the mark may have changed something.
-    if (!result.deny && !result.isError && result.isReadOnly !== true) live.workSession = await $.session.id()
+    // Core marks a call read-only (true) or leaves the flag out, never false: any answered call without the
+    // mark may have changed something. Setting an arm changes no work.
+    const isWork = !result.deny && !result.isError && result.isReadOnly !== true && !ARM_TOOL_NAME.test(e.tool)
+    if (isWork) live.workSession = await $.session.id()
     return result
   })
 
@@ -764,26 +767,25 @@ export const register: Register = (on, options) => {
     await startTimers($).catch(() => undefined)
     return { text: await runCommand($, e.args) }
   })
-}
 
-async function registerSurface($: EngineInterface): Promise<void> {
-  await $.command.register({
-    name: 'usage-guard',
-    description:
-      'Usage pause status. Also: cancel, arm 5h|week [compact] (resume after that reset), disarm, settings, set',
-    argumentHint: ARGUMENT_HINT,
+  // The same arm for Claude, asked for a wake-up. A pattern, as the generated tool names list only the
+  // tools already live on the machine that wrote them.
+  on('tool.call', { tool: ARM_TOOL_NAME }, async ($, e) => {
+    await startTimers($).catch(() => undefined)
+    const input = e as { at?: unknown; reason?: unknown }
+    return { result: await armByHand($, toolRequest(input)) }
   })
 }
 
-// `/usage-guard [help | settings | arm 5h|week [compact] | disarm | cancel]`; with no argument, the status.
+// `/usage-guard [help | settings | arm ... | disarm | cancel]`; with no argument, the status.
 async function runCommand($: EngineInterface, args: string): Promise<string> {
-  const [verb = '', which = '', option = ''] = args.trim().split(/\s+/)
+  const [verb = ''] = args.trim().split(/\s+/)
   if (verb === 'help') return HELP
   if (verb === 'settings') {
     await $.ui.open({ id: SETTINGS_PANE, title: 'Usage guard settings', focus: true })
     return 'Opened the usage-guard settings.'
   }
-  if (verb === 'arm') return armByHand($, which, option)
+  if (verb === 'arm') return armByHand($, parseArmArgs(args.trim().slice(verb.length)))
   if (verb === 'disarm') return disarm($)
   const pause = await readPause($)
   if (verb === 'cancel' && pause?.status === 'active') {
