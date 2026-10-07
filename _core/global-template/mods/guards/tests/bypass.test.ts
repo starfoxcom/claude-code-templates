@@ -25,7 +25,7 @@ const REFUSED: [string, string, boolean?][] = [
   ['git commit --reuse-message=HEAD', "reusing another commit's message"],
   ['git commit -ac HEAD', "reusing another commit's message"],
   ['eval git commit -m "$MSG"', 'eval'],
-  ['eval "git commit --no-verify -m x"', 'eval'],
+  ['eval "git commit --no-verify -m x"', 'skipping git hooks'],
   // Shapes a text mask got wrong: an escaped quote, an emoji, a CRLF here-doc, a here-doc named in a message.
   [String.raw`git commit -m Don\'t -m 'x' --no-verify`, 'skipping git hooks'],
   ["git commit -m '\u{1F41B}\u{1F527} fix' -n", 'skipping git hooks'],
@@ -148,7 +148,7 @@ const WRAPPED_REFUSED: [string, string, boolean?][] = [
   ['git config --rename-section core old', 'skipping git hooks'],
   ['git config --rename-section staged hooks', 'skipping git hooks'],
   ['git config remove-section core', 'skipping git hooks'],
-  ['Invoke-Expression "git commit --no-verify -m x"', 'eval', true],
+  ['Invoke-Expression "git commit --no-verify -m x"', 'skipping git hooks', true],
   ["iex 'git commit -m x'", 'eval', true],
   // A script held in a variable the command sets is read with its value.
   ['CMD="git commit --no-verify -m x"; bash -c "$CMD"', 'skipping git hooks'],
@@ -263,4 +263,70 @@ test('a hashtable added to after it was typed is unread', () => {
   expect(unread("$p = @{ Title = 't' }; $p += @{ Body = $env:B }; gh pr create @p")).toEqual(['the PR text'])
   expect(unread("$p = @{ Title = 't' }; $p.Add('Body', $b); gh pr create @p")).toEqual(['the PR text'])
   expect(unread("$m = 'fix: x'; $m += $env:T; git commit -m $m")).toEqual(['the commit message'])
+})
+
+// `eval` runs its words in this shell: read there, so a route inside it is refused by its own rule, and an
+// `eval` beside a read-only git command passes.
+const EVAL_REFUSED: [string, string][] = [
+  ['eval "git config core.hooksPath /x"', 'skipping git hooks'],
+  ["eval 'export LEFTHOOK=0'", 'disabling lefthook'],
+  ['eval "lefthook uninstall"', 'disabling lefthook'],
+  ["eval 'git commit -m x'", 'eval'],
+  ['C="git commit -m x"; eval "$C"', 'eval'],
+  ['eval "$(ssh-agent -s)"; git commit -m x', 'eval'],
+]
+
+for (const [command, reason] of EVAL_REFUSED) {
+  test(`refused: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, false).block).toContain(reason)
+  })
+}
+
+test('an eval beside a read-only git command passes', () => {
+  for (const command of [
+    'eval "$(ssh-agent -s)"; git log --grep=commit -n 3',
+    'eval "$(ssh-agent -s)"; git show HEAD:docs/commit-format.md',
+    'eval "$(ssh-agent -s)"; git tag -l',
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+})
+
+test('a variable holding a here-doc or a file is read through it', () => {
+  const plan = (c: string) => inspect(c, false)
+  const doc = plan("MSG=$(cat <<'EOF'\nfix: x\n\nBody.\nEOF\n); git commit -m \"$MSG\"")
+  expect(doc.unread).toEqual([])
+  expect(doc.texts.map(t => t.text)).toContain('fix: x\n\nBody.')
+  const filled = plan('T=x; MSG=$(cat <<EOF\nfix: $T\nEOF\n); git commit -m "$MSG"')
+  expect(filled.texts.map(t => t.text)).toContain('fix: x')
+  const file = plan('BODY=$(cat b.md); gh pr create -t t -b "$BODY"')
+  expect(file.unread).toEqual([])
+  expect(file.files.map(f => f.path)).toEqual(['b.md'])
+  // Another program's output, or a here-doc that names an outside variable, stays unread.
+  expect(plan('BODY=$(gh pr view 5 --json body); gh pr create -t t -b "$BODY"').unread).toEqual(['the PR text'])
+  expect(plan('MSG=$(cat <<EOF\n$OUT\nEOF\n); git commit -m "$MSG"').unread).toEqual(['the commit message'])
+})
+
+test('a hashtable with escaped text or a here-string is typed', () => {
+  const unread = (c: string) => inspect(c, true).unread
+  expect(unread('$p = @{ Title = "t"; Body = "## What`n- add it" }; gh pr create @p')).toEqual([])
+  expect(unread("$p = @{ Title = 't'; Body = @'\n## What\n- add it\n'@ }; gh pr create @p")).toEqual([])
+  expect(unread('$p = @{ Title = "t"; Body = "cost: `$5" }; gh pr create @p')).toEqual([])
+  expect(unread('$p = @{ Title = "t"; Body = "cost: $five" }; gh pr create @p')).toEqual(['the PR text'])
+})
+
+test('two substitutions in one word are two subshells', () => {
+  const plan = inspect('M=a; X=$(M=b; echo)$(git commit -m "$M")', false)
+  expect(plan.unread).toEqual([])
+  expect(plan.texts.filter(t => !t.creditOnly && t.where === 'the commit message').map(t => t.text)).toEqual(['a'])
+})
+
+test('listing tags or notes writes nothing; making one does', () => {
+  const reads = ['git tag', 'git tag -l', 'git tag --list v1*', 'git tag -n5', 'git tag -d v1', 'git notes list']
+  for (const command of reads) {
+    expect([command, inspect(command, false).isWrite]).toEqual([command, false])
+  }
+  for (const command of ["git tag -a v1 -m 'v1'", 'git tag v1', "git notes add -m 'x'"]) {
+    expect([command, inspect(command, false).isWrite]).toEqual([command, true])
+  }
 })

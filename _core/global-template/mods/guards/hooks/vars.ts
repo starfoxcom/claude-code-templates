@@ -6,8 +6,8 @@
 import type { Word } from './shell'
 
 /** A variable's value: `literal` when it is known, `scope` where it was set, `exported` when a child shell
- * sees it too. */
-export type Var = { text: string; literal: boolean; scope: string; exported?: boolean }
+ * sees it too, `file` the file whose text it holds (`$(cat b.md)`). */
+export type Var = { text: string; literal: boolean; scope: string; exported?: boolean; file?: string }
 
 /** What the reading knows of variables at the statement it reads. */
 export type VarState = {
@@ -29,8 +29,29 @@ export function setVar(r: VarState, name: string, value: Word | undefined, expor
   const scope = r.scope
   if (!value) return store(r, name, { text: '', literal: false, scope }, exported)
   if (!value.dynamic) return store(r, name, { text: value.text, literal: true, scope }, exported)
+  const held = catValue(value, r)
+  if (held) return store(r, name, { ...held, scope }, exported)
   const e = expand(value.text, r)
   store(r, name, { text: e.unresolved ? value.text : e.text, literal: !e.unresolved, scope }, exported)
+}
+
+/** A file printed by `cat` or `Get-Content` inside `$(...)`: its path is in the first group that matched. */
+export const CAT_FILE =
+  /(?:\$|^)\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$]+))(?:\s+-Raw)?\s*\)/i
+const CAT_HEREDOC = /^\$\(\s*cat\s+<<-?[ \t]*(['"]?)[A-Za-z_][\w.-]*\1[^\n]*\n[\s\S]*\)$/
+
+// A value that is wholly one `$(cat ...)`: a here-doc's text (filled in when its delimiter is bare), or a
+// file the reading can read.
+function catValue(value: Word, r: VarState): { text: string; literal: boolean; file?: string } | undefined {
+  const doc = CAT_HEREDOC.exec(value.text)
+  const body = value.bodies[0]
+  if (doc && value.bodies.length === 1 && body !== undefined) {
+    const e = doc[1] ? { text: body, unresolved: false } : expandBody(body, r)
+    return { text: e.unresolved ? body : e.text, literal: !e.unresolved }
+  }
+  const file = CAT_FILE.exec(value.text)
+  if (!file || file.index !== 0 || file[0].length !== value.text.length) return undefined
+  return { text: value.text, literal: false, file: file[1] ?? file[2] ?? file[3] }
 }
 
 /** Keeps `v` as the variable's value in its scope; a variable once exported stays exported. */
@@ -59,17 +80,23 @@ export function lookup(r: VarState, name: string): Var | undefined {
 
 const SUBSTITUTION = /\$\((?:[^()]|\([^()]*\))*\)/g
 
-/** A value with its variables replaced by what the command set them to; `unresolved` when any part is
- * built at run time in a way the reading does not know. */
-export function expand(text: string, r: VarState): { text: string; unresolved: boolean } {
-  let unresolved = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`'))
+/** What `expand` found: the filled-in text; `unresolved` when any part is built at run time in a way the
+ * reading does not know; `files` read by variables that hold a file's text, `isFilesOnly` when those are
+ * the only unknown parts. */
+export type Expanded = { text: string; unresolved: boolean; files: string[]; isFilesOnly: boolean }
+
+/** A value with its variables replaced by what the command set them to. */
+export function expand(text: string, r: VarState): Expanded {
+  let isOther = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`'))
+  const files: string[] = []
   const out = text.replace(SUBSTITUTION, ' ').replace(/\$\{?([A-Za-z_]\w*)\}?/g, (_, name: string) => {
     const v = lookup(r, name)
     if (v?.literal) return v.text
-    unresolved = true
+    if (v?.file) files.push(v.file)
+    else isOther = true
     return ' '
   })
-  return { text: out, unresolved }
+  return { text: out, unresolved: isOther || files.length > 0, files, isFilesOnly: !isOther && files.length > 0 }
 }
 
 // An unquoted here-doc or here-string body as the shell fills it in. A backslash before `$`, a backtick
