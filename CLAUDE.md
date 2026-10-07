@@ -85,7 +85,7 @@ Per `.claude/rules/review-tiers.md` (resolved from canonical `_core/project-temp
 - **Binary verdict rule.** `🟢 LGTM` only when fully clean. `🔴 Blocking` when *any* real finding exists. No "minor non-blocking" rot. This applies to both tiers.
 - **Auto-fire deep review** on the trigger surface (parsing/codec/serialization, threading, scheduling, save/load formats, mod-loader DAG changes — full list in `.claude/rules/review-tiers.md` § Deep review triggers). The routine reviewer applies the `needs-deep-review` label automatically.
 - **Strict OSS review posture on `main` AND `develop`:**
-  - Required status checks: `Evaluate review outcome` and `Claude On-Demand` must pass before merge. On `develop`, `Engine and hook tests` (the `Tests` workflow: engine, Python twin and guard-hook tests) is required too; it runs on every PR so it never waits on a docs-only one
+  - Required status checks: `Evaluate review outcome` and `Claude On-Demand` must pass before merge. On `develop`, `Engine and hook tests` (the `Tests` workflow: engine, Python twin and guard-hook tests) and `Mod tests` (every template mod's suite on a Windows runner) are required too; both run on every PR so they never wait on a docs-only one
   - Required approvals: 0 (the AI gates decide; a solo maintainer cannot approve their own PR)
   - Bypass actors: none. Nobody, admins included, can merge past the gates
   - Every external contribution: AI routine review verdict + maintainer eyes-on review before merge
