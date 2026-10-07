@@ -24,6 +24,10 @@ import {
 
 // Compaction at a pause and on an armed resume, arms with nothing pending, saved arms, and the phone view.
 
+// For tests that run the fake clock to a wake or keep a card mounted through it: past the 5 s default on
+// a slower machine.
+const LONG = { timeoutMs: 15_000 }
+
 // A working session crosses the line at a turn's end, so the wrap-up (/session-close) runs as the next turn.
 async function crossAndWrapUp($: Engine, seen: World, resetsAt = RESET): Promise<void> {
   await start($)
@@ -113,7 +117,10 @@ test('a compaction at the pause that freed nothing says so instead of claiming i
 const status = async ($: Engine) =>
   ((await $.command.run({ command: 'usage-guard', args: '' } as never)) as { text: string }).text
 
-test('arm with compact compacts a moment later, whatever the context size, then resumes later', async ($, on) => {
+test(
+  'arm with compact compacts a moment later, whatever the context size, then resumes later',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   seen.context = { ...seen.context, tokens: 400_000 }
   await start($)
@@ -147,7 +154,7 @@ test('arm with compact that the engine refuses or a hook vetoes still arms, and 
   expect(await status($)).toContain('Not compacted: blocked by a hook')
 })
 
-test('arm with an unquoted word arms nothing and shows the quoted form', async ($, on) => {
+test('arm with an unquoted word arms nothing and shows the quoted form', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h now' } as never)
@@ -185,9 +192,6 @@ function tasksFile(seen: World, tasks: { status: string; hold?: string }[]): voi
   seen.hasTasksMod = true
   seen.files.set(`${TASKS_DIR}/${seen.sessionId}.json`, JSON.stringify({ session: seen.sessionId, tasks }))
 }
-
-// A card stays mounted while the clock runs to the wake, redrawn at every refresh: past the 5 s default.
-const LONG = { timeoutMs: 15_000 }
 
 const arm5h = async ($: Engine) =>
   ((await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)) as { text: string }).text
@@ -316,7 +320,10 @@ test('an arm a longer pause moves keeps the session it was set in, and still res
   expect(quietWakes(seen)).toEqual([])
 })
 
-test('a pause resume still counts the arming session after the arm is cleared midway', async ($, on) => {
+test(
+  'a pause resume still counts the arming session after the arm is cleared midway',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [{ status: 'in_progress' }])
   await start($)
@@ -335,7 +342,10 @@ test('a pause resume still counts the arming session after the arm is cleared mi
   expect(quietWakes(seen)).toEqual([])
 })
 
-test('an armed session with nothing pending gets the one-line prompt at a pause reset too', async ($, on) => {
+test(
+  'an armed session with nothing pending gets the one-line prompt at a pause reset too',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [])
   await start($)
