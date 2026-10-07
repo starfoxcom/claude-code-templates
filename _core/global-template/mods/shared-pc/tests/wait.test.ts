@@ -29,7 +29,7 @@ function fakeHost(on: any, waitOutput: string) {
   })
   on('process.spawn', async function* () {
     yield { stream: 'stdout', text: waitOutput }
-    return { code: 0, signal: null }
+    return { value: { code: 0, signal: null } } as never
   })
   on('fs.read', (_$: unknown, e: { path?: string }) => {
     const path = String(e.path ?? '').replace(/\\/g, '/')
