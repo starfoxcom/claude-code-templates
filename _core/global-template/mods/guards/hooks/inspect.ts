@@ -9,7 +9,7 @@
 // is made by something the reading cannot follow, the message is named in `unread`, and the call is
 // refused: what reaches history unread is never passed. What it cannot see at all (also listed in
 // mods/README.md):
-// - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`,
+// - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`),
 //   `ssh host ...`, or any other program that writes to GitHub on its own (a Python script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
 //   file does not exist yet, so it reports that it could not read it (unread when inline script code wrote it);
@@ -18,7 +18,7 @@
 // Both are refused like any other unread message.
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
-import { bypassReason } from './bypass'
+import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
@@ -96,6 +96,8 @@ type Reading = {
   alone?: Statement
   /** An earlier statement ran script code written in the command, which may write any file. */
   ranScript?: boolean
+  /** A statement runs `eval`. */
+  hasEval?: boolean
 }
 
 
@@ -124,8 +126,8 @@ export function inspect(command: string, powershell: boolean): Plan {
   const statements = parse(command, powershell)
   r.alone = aloneOf(statements)
   read(statements, r)
-  // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
-  plan.block ??= bypassReason(command, powershell)
+  // `eval` builds its command at run time: refused in a command that writes history anywhere.
+  if (r.hasEval && (plan.isWrite || RAW_WRITES.some(re => re.test(command)))) plan.block ??= EVAL
   // A body file this same command writes is read from the statement that writes it. What another
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
   // so that is noted, not refused.
@@ -194,6 +196,9 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
   plan.written.push(...writes)
   for (const path of writes) r.writers.set(norm(path), { st, ps: r.ps })
   const { name, args } = programOf(st)
+  // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
+  plan.block ??= bypassOf(st, name, args)
+  if (name === 'eval') r.hasEval = true
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
     const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
@@ -298,18 +303,18 @@ function assign(st: Statement, name: string, args: Word[], r: Reading): boolean 
   if (r.ps) {
     const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
     if (spaced && w[1]?.text === '=') {
-      set(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined)
+      set(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined, st.isNested)
       return true
     }
     const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
-    if (joined) set(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
+    if (joined) set(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' }, st.isNested)
     return Boolean(joined)
   }
   const pairs = name === '' ? w : /^(export|declare|local|readonly|typeset)$/.test(name) ? args : null
   if (pairs) {
     for (const a of pairs) {
       const m = /^([A-Za-z_]\w*)=/.exec(a.text)
-      if (m) set(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) })
+      if (m) set(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) }, st.isNested)
     }
     return true
   }
@@ -321,9 +326,11 @@ function assign(st: Statement, name: string, args: Word[], r: Reading): boolean 
   return false
 }
 
-function set(r: Reading, name: string, value: Word | undefined) {
+// A variable set inside a subshell (`(S=/x); gh ... "$S/b.md"`) is gone after it: its value is unknown.
+function set(r: Reading, name: string, value: Word | undefined, isNested = false) {
   const key = name.toLowerCase()
   if (!value) return void r.vars.delete(key)
+  if (isNested) return void r.vars.set(key, { text: value.text, literal: false })
   if (!value.dynamic) return void r.vars.set(key, { text: value.text, literal: true })
   const e = expand(value.text, r)
   r.vars.set(key, { text: e.unresolved ? value.text : e.text, literal: !e.unresolved })

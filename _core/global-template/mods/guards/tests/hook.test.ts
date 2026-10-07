@@ -617,3 +617,19 @@ test('history rewriting is refused even when it only asks for the version', {
   expect(String((result as { deny?: string }).deny)).toContain('history rewriting')
   expect(seen.ran).toEqual([])
 })
+
+test('a message the command cannot show is refused in enforce mode', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  for (const command of [
+    'git commit -F -',
+    'git commit -m "fix: $(date)"',
+    '(S=/safe); gh pr create -t t --body-file "$S/b.md"',
+  ]) {
+    const result = await bash($, command)
+    expect([command, String((result as { deny?: string }).deny)]).toEqual([
+      command,
+      expect.stringContaining('is built in a way the guard cannot read'),
+    ])
+  }
+  expect(seen.ran).toEqual([])
+})
