@@ -2,7 +2,15 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { checkCache, nextLifetime, parseMemory, SHORT_LIFETIME_MS, writtenLifetime } from '../hooks/cache'
+import {
+  checkCache,
+  idleCompactAt,
+  idleCompactMin,
+  nextLifetime,
+  parseMemory,
+  SHORT_LIFETIME_MS,
+  writtenLifetime,
+} from '../hooks/cache'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
@@ -68,9 +76,9 @@ test('nextLifetime: 5 minutes once a miss proves it, the setting again once a wa
 const COMPACTION = { trigger: 'auto', messages: [{ role: 'user', text: 'old', toolUses: [] }] } as never
 const PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 100 } as never
 
-function world(on: On) {
+function world(on: On, env: Record<string, string> = {}) {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  mock.env(on, { USERPROFILE: 'C:/Users/me', ...env })
   // The zone probe, or the transcript's cache lines when the command names the transcript.
   const transcript = { lines: '', reads: [] as string[] }
   on('process.run', ($, e) => {
@@ -329,6 +337,72 @@ test('a lifetime the transcript confirmed is not cut to 5 minutes by a mid-life 
   // Named a break, and the countdown keeps the hour: 30 of its minutes are still ahead, so it stays hidden.
   expect(await ui.find({ type: 'Text', text: /^cache broke early · resent 230k$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /left|likely expired|lasts 5m/ })).toBeUndefined()
+})
+
+test('idleCompactMin: 200k unless the variable names a size, never under 100k', () => {
+  const cases: [string | undefined, number][] = [
+    [undefined, 200_000],
+    ['', 200_000],
+    ['lots', 200_000],
+    ['0', 200_000],
+    ['-5', 200_000],
+    ['99999', 100_000],
+    ['100000', 100_000],
+    ['150000', 150_000],
+    ['400000', 400_000],
+  ]
+  for (const [raw, tokens] of cases) expect([raw, idleCompactMin(raw)]).toEqual([raw, tokens])
+})
+
+test('idleCompactAt: nine tenths into a one-hour lifetime, from the minimum size up', () => {
+  const at = NOW + 54 * MINUTE
+  const cases: [number, number | undefined, number | undefined][] = [
+    [HOUR, 200_000, at],
+    [HOUR, 199_999, undefined],
+    [HOUR, 450_000, at],
+    [HOUR, undefined, undefined],
+    [SHORT_LIFETIME_MS, 450_000, undefined],
+  ]
+  for (const [lifetime, tokens, expected] of cases) {
+    expect([lifetime, tokens, idleCompactAt(NOW, lifetime, tokens, 200_000)]).toEqual([lifetime, tokens, expected])
+  }
+})
+
+test('a big conversation counts down to the idle compaction, uncolored, instead of the cold start', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(50 * MINUTE)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache 10m left · idle compact ~09:54$/, color: undefined } as never))
+    .toBeDefined()
+  // Its time passed with no compaction (someone at the keyboard, a turn running): the cold start is back.
+  await clock.advance(5 * MINUTE)
+  const text = /^cache 5m left · cold start 250k$/
+  expect(await ui.find({ type: 'Text', text, color: 'yellow' } as never)).toBeDefined()
+})
+
+test('a minimum raised past the conversation size keeps the cold start countdown', async ($, on) => {
+  const { clock } = world(on, { CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS: '300000' })
+  await start($)
+  await turn($)
+  await clock.advance(50 * MINUTE)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache 10m left · cold start 250k$/ })).toBeDefined()
+})
+
+test('after a compaction the countdown waits for the next reply', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(54 * MINUTE)
+  await $.session.compact(COMPACTION)
+  await clock.advance(10 * MINUTE)
+  const ui = await row($)
+  expect(await ui.find({ type: 'Text', text: /^cache/ })).toBeUndefined()
+  await turn($)
+  await clock.advance(55 * MINUTE)
+  expect(await ui.find({ type: 'Text', text: /^cache 5m left/ })).toBeDefined()
 })
 
 test('a resumed plan session still says plan usage is unknown until its first reply', async ($, on) => {
