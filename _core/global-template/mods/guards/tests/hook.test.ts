@@ -562,3 +562,34 @@ test('inline script code (-c, -e) marks a later body file too', { options: { mod
   }
   expect(seen.ran).toHaveLength(2)
 })
+
+// From the second shadow trial: a body file named by a variable the command sets.
+test('a body file written under a variable set in the same command passes', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on)
+  const command = [
+    'S="C:/Users/me/AppData/Local/Temp/scratch"; cat > "$S/i972.md" <<\'EOF\'',
+    'Row 9.72 measured.',
+    'EOF',
+    'gh issue comment 314 --body-file "$S/i972.md"',
+  ].join('\n')
+  expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
+  // Its text is read from the command, so a credit in it is still found.
+  const credit = await bash($, command.replace('Row 9.72 measured.', AI_TRAILER))
+  expect(String((credit as { deny?: string }).deny)).toContain('AI credit')
+  expect(seen.ran).toHaveLength(1)
+})
+
+test('a PowerShell field file named by a variable set in the command is read from its full path', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on, { 'C:/Users/me/q/rows.graphql': 'query { viewer { login } }' })
+  on('tool.call', { tool: 'PowerShell' }, () => ({ result: {} as never }))
+  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
+  const command = String.raw`$q = "C:\Users\me\q\rows.graphql"; gh api graphql -F query=@$q`
+  const result = await $.tool.call({ tool: 'PowerShell', command } as never)
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(seen.files.has(LOG)).toBe(false)
+})
