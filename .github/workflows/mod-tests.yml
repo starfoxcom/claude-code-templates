@@ -27,8 +27,8 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR cancels its older run; each develop commit and each
-# scheduled run gets its own group.
+# A new push to a PR cancels its older run; each develop commit gets its own
+# group, and a scheduled run is grouped by main's head commit.
 concurrency:
   group: mod-tests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
@@ -122,7 +122,8 @@ jobs:
 
   # A red weekly run has no PR to show it, so it opens an issue, or comments on
   # the one still open. A run that hits its time limit ends cancelled, not
-  # failed, so anything short of success reports.
+  # failed, so anything short of success reports, and the issue names the
+  # result instead of assuming the CLI broke.
   report:
     name: Report a weekly failure
     needs: test
@@ -137,9 +138,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.test.result }}
         run: |
-          title="Scheduled mod tests failed"
-          body="The weekly mod tests failed on the newest CLI release. Run: $RUN_URL"
+          title="Scheduled mod tests did not pass"
+          body="The weekly mod tests on the newest CLI release ended with result: $RESULT. Run: $RUN_URL"
           number=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" \
             --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")
           if [ -n "$number" ]; then
