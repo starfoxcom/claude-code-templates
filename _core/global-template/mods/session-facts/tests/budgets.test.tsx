@@ -130,6 +130,18 @@ test('cacheChip: hidden while warm, then a countdown naming the cold start, then
   expect(cacheChip({ ...B, cacheExpiresAt: undefined }, NOW)).toBeUndefined()
 })
 
+test('cacheChip: a coming idle compaction is named uncolored, then the cold start once its time passes', () => {
+  const idle = { ...B, cacheExpiresAt: NOW + 10 * MINUTE, idleCompactAt: NOW + 4 * MINUTE }
+  expect(cacheChip({ ...idle, cacheExpiresAt: NOW + 11 * MINUTE }, NOW)).toBeUndefined()
+  expect(cacheChip(idle, NOW)).toEqual({ text: 'cache 10m left · idle compact ~09:04' })
+  expect(cacheChip(idle, NOW + 4 * MINUTE - 1)).toEqual({ text: 'cache 6m left · idle compact ~09:04' })
+  const after = { text: 'cache 6m left · cold start 250k', color: 'yellow' }
+  expect(cacheChip(idle, NOW + 4 * MINUTE)).toEqual(after)
+  const notice = { at: NOW, resent: 230_000, miss: 'early' as const }
+  const named = cacheChip({ ...idle, cacheCheck: notice }, NOW)
+  expect(named?.text).toBe('cache broke early · 10m left · idle compact ~09:04')
+})
+
 const WARM_FOR_AN_HOUR = { ...B, cacheExpiresAt: NOW + 60 * MINUTE }
 const NOTICE_CASES: { name: string; check: Budgets['cacheCheck']; chip?: { text: string; color?: string } }[] = [
   { name: 'a warm check says nothing', check: { at: NOW, resent: 1_000 } },
