@@ -38,8 +38,9 @@ defaults:
     shell: bash
 
 env:
-  # The release the mods were last verified on. Raise it in the PR that brings
-  # the mods up to a new release.
+  # The release the mods were last verified on. Like every workflow change, a
+  # raise lands on main first as a hotfix and then cascades to develop, ahead
+  # of the PR that brings the mods up to that release.
   PINNED_VERSION: "2.1.292"
   DISABLE_AUTOUPDATER: "1"
   DISABLE_TELEMETRY: "1"
@@ -58,14 +59,20 @@ jobs:
           ref: ${{ github.event_name == 'schedule' && 'develop' || '' }}
           persist-credentials: false
 
-      # main has no mods until v2.0.0: the job notes that and passes.
+      # main has no mods until v2.0.0: the job notes that and passes. develop
+      # must always have them, so a missing folder there fails instead of
+      # passing by testing nothing. A scheduled run tests develop.
       - name: Check for the mods
         id: mods
+        env:
+          BRANCH: ${{ github.event_name == 'schedule' && 'develop' || github.base_ref || github.ref_name }}
         run: |
           if [ -d _core/global-template/mods ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "$BRANCH" = "develop" ]; then
+            echo "::error::develop has no _core/global-template/mods"; exit 1
           else
-            echo "::notice::No mods on this branch yet, so there is nothing to test."
+            echo "::notice::No mods on $BRANCH yet, so there is nothing to test."
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -101,23 +108,25 @@ jobs:
           fi
           exit "$status"
 
+      # Runs even when a mod suite failed, so one run names every broken part.
       - name: Helper script tests
-        if: steps.mods.outputs.present == 'true'
+        if: ${{ !cancelled() && steps.mods.outputs.present == 'true' }}
         run: |
           shopt -s nullglob
           specs=(_core/global-template/mods/*/test-helper/*.spec.cjs)
           if [ "${#specs[@]}" -eq 0 ]; then
-            echo "::notice::No helper script tests."
-            exit 0
+            echo "::error::No helper script test was found."
+            exit 1
           fi
           node --test "${specs[@]}"
 
   # A red weekly run has no PR to show it, so it opens an issue, or comments on
-  # the one still open.
+  # the one still open. A run that hits its time limit ends cancelled, not
+  # failed, so anything short of success reports.
   report:
     name: Report a weekly failure
     needs: test
-    if: failure() && github.event_name == 'schedule'
+    if: always() && github.event_name == 'schedule' && needs.test.result != 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
