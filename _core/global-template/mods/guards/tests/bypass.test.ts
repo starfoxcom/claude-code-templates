@@ -307,6 +307,109 @@ test('a variable holding a here-doc or a file is read through it', () => {
   expect(plan('MSG=$(cat <<EOF\n$OUT\nEOF\n); git commit -m "$MSG"').unread).toEqual(['the commit message'])
 })
 
+// A message that is wholly one `$(cat <<EOF ... EOF)` is read as the shell fills it in; anything else
+// built at run time in the word, or after the here-doc, leaves it unread.
+const CAT_UNREAD = [
+  'git commit -m "$(cat <<EOF\n$OUT\nEOF\n)"',
+  'git commit -m "$(cat <<EOF\n$(git log -1 --format=%B)\nEOF\n)"',
+  'git commit -m "$(cat <<EOF\nfix: `date`\nEOF\n)"',
+  "git commit -m \"$(cat <<'EOF'\nfix: x\nEOF\n) $OUT\"",
+  'git commit -m "$(cat b.md) $OUT"',
+  'git commit -m "$(cat b.md)$(git log -1 --format=%B)"',
+  "MSG=\"$(cat <<'EOF'\nfix: x\nEOF\n)$(git log -1 --format=%B)\"; git commit -m \"$MSG\"",
+  // A pipe on the `cat` line changes the text; a second here-doc line after the first ends it.
+  "git commit -m \"$(cat <<'EOF' | rev\nfix: x\nEOF\n)\"",
+  "git commit -m \"$(cat <<'EOF'\nfix: x\nEOF\necho more\nEOF\n)\"",
+  // `-F "$(cat name.txt)"` names a file by another file's text.
+  'git commit -F "$(cat name.txt)"',
+]
+
+for (const command of CAT_UNREAD) {
+  test(`unread: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, false).unread).toEqual(['the commit message'])
+  })
+}
+
+test('a quoted here-doc message is read as typed, a bare one filled in', () => {
+  const plan = (c: string) => inspect(c, false)
+  const messages = (c: string) => plan(c).texts.filter(t => !t.creditOnly).map(t => t.text)
+  // The harness form, with a body that only mentions a file or a variable.
+  const quoted = "git commit -m \"$(cat <<'EOF'\nfix: read $(cat b.md) and $OUT\nEOF\n)\""
+  expect([plan(quoted).unread, plan(quoted).files]).toEqual([[], []])
+  expect(messages(quoted)).toContain('fix: read $(cat b.md) and $OUT')
+  const bare = 'T=x; git commit -m "$(cat <<EOF\nfix: $T\nEOF\n)"'
+  expect(plan(bare).unread).toEqual([])
+  expect(messages(bare)).toContain('fix: x')
+  // Indented, ` EOF` is body text and the next exact line ends it.
+  expect(messages("git commit -m \"$(cat <<'EOF'\nfix: x\n EOF\nEOF\n)\"")).toContain('fix: x\n EOF')
+  expect(messages("git commit -m \"$(cat <<-'EOF'\n\tfix: x\n\tEOF\n)\"")).toContain('fix: x')
+  // Handed over as a file: `<(cat <<'EOF' ... EOF)` is the text, `<(cat b.md)` the file.
+  expect(messages("gh pr create -t t -F <(cat <<'EOF'\n## What\nEOF\n)")).toContain('## What')
+  expect(plan('gh pr create -t t -F <(cat b.md)').files.map(f => f.path)).toEqual(['b.md'])
+  expect(plan('gh pr create -t t -F "$(cat b.md)"').unread).toEqual(['the PR text'])
+})
+
+// A value set where the outer read cannot see it: inside a subshell holding a case block, or a subshell
+// an eval opens. The commit reads the outer `$M`, from outside the command.
+const SCOPED_UNREAD = [
+  "(case $x in a) M='fix: x';; esac); git commit -m \"$M\"",
+  '(case $x in (a|b) M=b;; *) M=c;; esac); git commit -m "$M"',
+  '(case $x in @(a|b)) M=b ;& c) M=c ;;& esac); git commit -m "$M"',
+  '(case $x in\n  a)\n    M=b\n    ;;\nesac\n); git commit -m "$M"',
+  '(if true; then case $x in a) M=b; esac; fi); git commit -m "$M"',
+  '(M=b); eval "(git commit -m \\"\\$M\\")"',
+]
+
+for (const command of SCOPED_UNREAD) {
+  test(`unread: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, false).unread).toEqual(['the commit message'])
+  })
+}
+
+test('a case block is read as the shell reads it', () => {
+  const messages = (c: string) =>
+    inspect(c, false).texts.filter(t => !t.creditOnly && t.where === 'the commit message').map(t => t.text)
+  // The outer value stays where a subshell with a case block sets its own.
+  expect(messages('M=a; (cd sub; case $x in a) M=b;; esac); git commit -m "$M"')).toEqual(['a'])
+  // In place, the arm's value is the one read; a commit inside an arm is read as one.
+  expect(messages('case $x in a) M=b;; esac; git commit -m "$M"')).toEqual(['b'])
+  expect(messages("case $x in a) git commit -m 'fix: y';; esac")).toEqual(['fix: y'])
+  // A `$(...)` with a case block ends at its own `)`: the commit after it is read.
+  const sub = inspect("X=$(case $y in a) echo a;; esac); git commit --no-verify -m 'fix: z'", false)
+  expect(sub.block).toContain('skipping git hooks')
+  // The word `case` as an argument opens nothing.
+  expect(messages("git commit -m 'docs: the case in point'")).toEqual(['docs: the case in point'])
+  expect(inspect('echo case a in b) ; (M=b); git commit -m "$M"', false).unread).toEqual(['the commit message'])
+})
+
+test('assignments in front of a child shell reach it, as bash passes them', () => {
+  const read = (c: string) => inspect(c, false)
+  for (const command of [
+    `M='fix: x' bash -c 'git commit -m "$M"'`,
+    `env M='fix: x' bash -c 'git commit -m "$M"'`,
+    `T=x; M="fix: $T" bash -c 'git commit -m "$M"'`,
+    `M='fix: x' bash <<'EOF'\ngit commit -m "$M"\nEOF`,
+  ]) {
+    expect([command, read(command).unread]).toEqual([command, []])
+  }
+  const messages = (c: string) => read(c).texts.filter(t => !t.creditOnly && t.where === 'the commit message')
+  expect(messages(`M='fix: x' bash -c 'git commit -m "$M"'`).map(t => t.text)).toEqual(['fix: x'])
+  // Only the child sees it, and `env -i` or `env -u` takes an exported value away.
+  expect(read(`M=a bash -c 'true'; git commit -m "$M"`).unread).toEqual(['the commit message'])
+  expect(messages(`export M=a; env -i bash -c 'git commit -m "$M"'`).map(t => t.text)).toEqual([''])
+  expect(messages(`export M=a; env -u M bash -c 'git commit -m "$M"'`).map(t => t.text)).toEqual([''])
+  expect(messages(`export M=a; env -uM bash -c 'git commit -m "$M"'`).map(t => t.text)).toEqual([''])
+})
+
+test('an assignment in front of eval is seen by its words, and unknown after it', () => {
+  const read = (c: string) => inspect(c, false)
+  const messages = (c: string) => read(c).texts.filter(t => !t.creditOnly && t.where === 'the commit message')
+  expect(messages(`M=a; M=b eval 'git commit -m "$M"'`).map(t => t.text)).toEqual(['b'])
+  expect(read(`M=a; M=b eval 'true'; git commit -m "$M"`).unread).toEqual(['the commit message'])
+  // The eval's top level runs in place: what it sets is known after it.
+  expect(messages(`eval 'M=b'; git commit -m "$M"`).map(t => t.text)).toEqual(['b'])
+})
+
 test('a hashtable with escaped text or a here-string is typed', () => {
   const unread = (c: string) => inspect(c, true).unread
   expect(unread('$p = @{ Title = "t"; Body = "## What`n- add it" }; gh pr create @p')).toEqual([])

@@ -24,9 +24,9 @@ export function within(outer: string, tag: string | undefined): string {
   return outer && tag ? `${outer}/${tag}` : outer || tag || ''
 }
 
-/** Sets a variable where the statement being read runs; a value it cannot read (none given) is unknown. */
-export function setVar(r: VarState, name: string, value: Word | undefined, exported = false) {
-  const scope = r.scope
+/** Sets a variable where the statement being read runs (or in `scope`, for a child shell's inherited
+ * value); a value it cannot read (none given) is unknown. Its expansions are filled in where it is read. */
+export function setVar(r: VarState, name: string, value: Word | undefined, exported = false, scope = r.scope) {
   if (!value) return store(r, name, { text: '', literal: false, scope }, exported)
   if (!value.dynamic) return store(r, name, { text: value.text, literal: true, scope }, exported)
   const held = catValue(value, r)
@@ -35,23 +35,43 @@ export function setVar(r: VarState, name: string, value: Word | undefined, expor
   store(r, name, { text: e.unresolved ? value.text : e.text, literal: !e.unresolved, scope }, exported)
 }
 
-/** A file printed by `cat` or `Get-Content` inside `$(...)`: its path is in the first group that matched. */
-export const CAT_FILE =
-  /(?:\$|^)\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$]+))(?:\s+-Raw)?\s*\)/i
-const CAT_HEREDOC = /^\$\(\s*cat\s+<<-?[ \t]*(['"]?)[A-Za-z_][\w.-]*\1[^\n]*\n[\s\S]*\)$/
+/** A value that is wholly one file printed by `cat` or `Get-Content`: `$(cat b.md)`, PowerShell's
+ * `(Get-Content b.md -Raw)`; its path is in the first group that matched. */
+const CAT_FILE =
+  /^[$<]?\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$`]+))(?:\s+-Raw)?\s*\)$/i
+const CAT_HEREDOC = /^[$<]\(\s*cat\s+<<(-?)[ \t]*(['"]?)([A-Za-z_][\w.-]*)\2[ \t]*\r?\n/
 
-// A value that is wholly one `$(cat ...)`: a here-doc's text (filled in when its delimiter is bare), or a
-// file the reading can read.
-function catValue(value: Word, r: VarState): { text: string; literal: boolean; file?: string } | undefined {
-  const doc = CAT_HEREDOC.exec(value.text)
-  const body = value.bodies[0]
-  if (doc && value.bodies.length === 1 && body !== undefined) {
-    const e = doc[1] ? { text: body, unresolved: false } : expandBody(body, r)
+/** What a value that is wholly one `$(cat ...)` holds: a here-doc's text (filled in when its delimiter is
+ * bare, `literal` false when a part stays unknown), or the file it prints. `opener`: `$` for a
+ * substitution, `<` for a process substitution (`-F <(cat <<'EOF' ... EOF)`). Anything else in the value,
+ * on the `cat` line or after the here-doc makes it no such value. */
+export function catValue(value: Word, r: VarState, opener: '$' | '<' = '$'): Held | undefined {
+  const t = value.text
+  // PowerShell's `(Get-Content b.md)` runs in place, with no `$`.
+  const isOpen = (t[0] === opener && t[1] === '(') || (r.ps && opener === '$' && t[0] === '(')
+  if (!isOpen) return undefined
+  const doc = r.ps ? null : CAT_HEREDOC.exec(t)
+  if (doc) {
+    const body = heredocBody(t.slice(doc[0].length), doc[3] ?? '', doc[1] === '-')
+    if (body === undefined) return undefined
+    const e = doc[2] ? { text: body, unresolved: false } : expandBody(body, r)
     return { text: e.unresolved ? body : e.text, literal: !e.unresolved }
   }
-  const file = CAT_FILE.exec(value.text)
-  if (!file || file.index !== 0 || file[0].length !== value.text.length) return undefined
-  return { text: value.text, literal: false, file: file[1] ?? file[2] ?? file[3] }
+  const file = CAT_FILE.exec(t)
+  if (!file) return undefined
+  return { text: t, literal: false, file: file[1] ?? file[2] ?? file[3] }
+}
+
+type Held = { text: string; literal: boolean; file?: string }
+
+// The body of a here-doc that closes its `$(...)`: the lines up to the first one that is exactly the
+// delimiter (tabs stripped under `<<-`), followed by nothing but the closing paren.
+function heredocBody(rest: string, delim: string, strip: boolean): string | undefined {
+  const lines = rest.split('\n').map(l => l.replace(/\r$/, ''))
+  const cut = (l: string) => (strip ? l.replace(/^\t+/, '') : l)
+  const end = lines.findIndex(l => cut(l) === delim)
+  if (end === -1 || lines.slice(end + 1).join('\n').trim() !== ')') return undefined
+  return lines.slice(0, end).map(cut).join('\n')
 }
 
 /** Keeps `v` as the variable's value in its scope; a variable once exported stays exported. */
