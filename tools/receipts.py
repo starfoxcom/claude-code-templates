@@ -6,8 +6,8 @@ Two sources:
 - GitHub PR history through `gh` (durable).
 
 Usage:
-    python tools/receipts.py --project ../GameProject --project ../Stockra
-    python tools/receipts.py --project ../Stockra --since 2026-05-13 --json out.json
+    python tools/receipts.py --project ../GameProject --project ../BusinessApp
+    python tools/receipts.py --project ../BusinessApp --since 2026-05-13 --json out.json
 
 Prints a summary per project; --json also writes the raw numbers.
 Standard library only. Needs `gh` logged in for the GitHub part.
@@ -221,7 +221,7 @@ def verdict_word(line):
 def verdict(body):
     """'green', 'red' or None for one review-bot comment.
 
-    GameProject and Stockra reviewers write the verdict first, on a plain line;
+    GameProject and BusinessApp reviewers write the verdict first, on a plain line;
     this repo's write it last. Each project's gate reads its own end. So: the
     first real line (after blank lines, headings and the job-status header)
     when it carries the glyph, otherwise the last line that does. List items
