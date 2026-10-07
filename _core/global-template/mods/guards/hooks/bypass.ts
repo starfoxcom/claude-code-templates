@@ -21,6 +21,13 @@ const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--na
 const HOOKED = new Set(['commit', 'merge', 'push', 'am', 'rebase', 'cherry-pick', 'revert', 'tag', 'notes'])
 const HOOKS_KEY = /^(core\.hookspath|hooks\.)/i
 const CONFIG_WRITES = /^--(unset|unset-all|replace-all|add)$/
+// `git config` flags whose next word is their value, and the subcommand words of git 2.46+ (`config set`).
+const CONFIG_VALUE_FLAGS = /^(-f|--file|--blob|--type|--default|--comment|--value)$/
+const CONFIG_VERBS = /^(set|unset|unset-all|replace-all|add)$/
+// A hooks setting passed through the environment: `GIT_CONFIG_PARAMETERS`, or `GIT_CONFIG_KEY_<n>`.
+const ENV_HOOKS = /^(GIT_CONFIG_PARAMETERS=.*(core\.hookspath|hooks\.)|GIT_CONFIG_KEY_\d+=(core\.hookspath|hooks\.))/i
+// Lefthook skips every hook with `LEFTHOOK=0` or `false`, and named ones with `LEFTHOOK_EXCLUDE`.
+const LEFTHOOK_OFF = /^(LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE=.*)$/i
 // Words that may stand before an assignment the shell applies to the command (`env LEFTHOOK=0 git ...`).
 const ASSIGN_LEAD = /^[A-Za-z_]\w*=|^(env|export|sudo|declare|local|typeset|readonly)$/
 
@@ -33,6 +40,9 @@ function gitParts(args: Word[]): { sub: string; rest: Word[]; settings: string[]
     if (GIT_VALUE_OPTIONS.has(t)) {
       if (t === '-c') settings.push(args[k + 1]?.text ?? '')
       k += 2
+    } else if (t.startsWith('--config-env=')) {
+      settings.push(t.slice('--config-env='.length))
+      k++
     } else if (t.startsWith('-')) k++
     else break
   }
@@ -70,8 +80,20 @@ function commitReason(rest: Word[]): string | undefined {
 
 // `git config core.hooksPath x` (or `--unset`): a setting that moves or drops the hooks. Reading it passes.
 function configReason(rest: Word[]): string | undefined {
-  const keys = rest.filter(w => !w.text.startsWith('-')).map(w => w.text)
-  const isWrite = keys.length >= 2 || rest.some(w => CONFIG_WRITES.test(w.text))
+  const keys: string[] = []
+  let isWrite = false
+  for (let i = 0; i < rest.length; i++) {
+    const text = rest[i]?.text ?? ''
+    if (CONFIG_VALUE_FLAGS.test(text)) i++
+    else if (CONFIG_WRITES.test(text)) isWrite = true
+    else if (!text.startsWith('-')) keys.push(text)
+  }
+  // `git config set|unset <key> ...`: the verb writes, the key follows it.
+  if (CONFIG_VERBS.test(keys[0] ?? '')) {
+    isWrite = true
+    keys.shift()
+  }
+  isWrite ||= keys.length >= 2
   return isWrite && HOOKS_KEY.test(keys[0] ?? '') ? HOOK_SKIP : undefined
 }
 
@@ -85,14 +107,17 @@ function gitReason(args: Word[]): string | undefined {
   return sub === 'commit' ? commitReason(rest) : undefined
 }
 
-// `LEFTHOOK=0` applied to a command or exported, `$env:LEFTHOOK = 0` in PowerShell, or `lefthook uninstall`.
-function lefthookReason(st: Statement, name: string, args: Word[]): string | undefined {
+// What the shell applies to a command or exports (`LEFTHOOK=0 git ...`, `export LEFTHOOK=false`,
+// `$env:LEFTHOOK = 0`): lefthook switched off, or a hooks setting passed through git's environment.
+// `lefthook uninstall` too.
+function envReason(st: Statement, name: string, args: Word[]): string | undefined {
   if (name === 'lefthook' && args[0]?.text === 'uninstall') return LEFTHOOK
   const words = st.words.map(w => w.text)
-  const ps = /^\$env:LEFTHOOK$/i.test(words[0] ?? '') && words[1] === '=' && words[2] === '0'
-  if (ps || /^\$env:LEFTHOOK=0$/i.test(words[0] ?? '')) return LEFTHOOK
-  for (const text of words) {
-    if (/^LEFTHOOK=0$/i.test(text)) return LEFTHOOK
+  const ps = /^\$env:(\w+)(?:=(.*))?$/i.exec(words[0] ?? '')
+  const assigned = ps ? `${ps[1]}=${ps[2] ?? (words[1] === '=' ? (words[2] ?? '') : '')}` : undefined
+  for (const text of assigned === undefined ? words : [assigned]) {
+    if (LEFTHOOK_OFF.test(text)) return LEFTHOOK
+    if (ENV_HOOKS.test(text)) return HOOK_SKIP
     if (!ASSIGN_LEAD.test(text)) break
   }
   return undefined
@@ -100,5 +125,5 @@ function lefthookReason(st: Statement, name: string, args: Word[]): string | und
 
 /** The reason to refuse one statement as a route around the check, or undefined. */
 export function bypassOf(st: Statement, name: string, args: Word[]): string | undefined {
-  return lefthookReason(st, name, args) ?? (name === 'git' ? gitReason(args) : undefined)
+  return envReason(st, name, args) ?? (name === 'git' ? gitReason(args) : undefined)
 }

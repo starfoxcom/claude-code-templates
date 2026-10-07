@@ -80,3 +80,37 @@ test('a variable set inside a subshell is unknown after it', () => {
     '/safe/b.md',
   ])
 })
+
+// Every ordinary spelling that moves the hooks or switches lefthook off.
+const MORE_REFUSED: [string, string, boolean?][] = [
+  ['git config set core.hooksPath /x', 'skipping git hooks'],
+  ['git config unset core.hooksPath', 'skipping git hooks'],
+  ['git config --file .git/config core.hooksPath /x', 'skipping git hooks'],
+  ['git config -f .git/config core.hooksPath /x', 'skipping git hooks'],
+  ['git config --global core.hooksPath /x', 'skipping git hooks'],
+  ['git --config-env=core.hooksPath=HP commit -m x', 'skipping git hooks'],
+  ["GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x", 'skipping git hooks'],
+  ['GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/x git commit -m x', 'skipping git hooks'],
+  ['LEFTHOOK=false git commit -m x', 'disabling lefthook'],
+  ['export LEFTHOOK=false', 'disabling lefthook'],
+  ['LEFTHOOK_EXCLUDE=commit-msg git commit -m x', 'disabling lefthook'],
+  ["$env:LEFTHOOK = 'false'", 'disabling lefthook', true],
+  ['$env:LEFTHOOK_EXCLUDE="commit-msg"', 'disabling lefthook', true],
+]
+
+for (const [command, reason, ps] of MORE_REFUSED) {
+  test(`refused: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, ps ?? false).block).toContain(reason)
+  })
+}
+
+test('reading a hooks setting, or a file named like one, passes', () => {
+  for (const command of ['git config get core.hooksPath', 'git config --file core.hooksPath --list']) {
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+})
+
+test('a PowerShell splat built at run time is unread; a typed one is checked as typed', () => {
+  expect(inspect('$p = @{ Title = "$env:T" }; gh pr create @p', true).unread).toEqual(['the PR text'])
+  expect(inspect("$p = @{ Title = 'feat: x' }; gh pr create @p", true).unread).toEqual([])
+})
