@@ -113,14 +113,18 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, rules: TextRules, 
       text = String(await $.fs.read(full))
     } catch {
       // A body file this same command writes does not exist yet: what it writes was read from the
-      // command text above. One written under another spelling of its path is named unread.
+      // command text above. One written under another spelling of its path is left as a note: the
+      // command text, here-doc included, is under the credit check.
       if (fromCommand) continue
-      // A Bash /tmp path on Windows is mapped by a guess (Git Bash's mount of TEMP): when the guess
-      // misses, the file is named unread rather than refused.
-      // A script whose code is in the command (`python - <<EOF`, `node -e`) may write it: that code is under
-      // the command-text credit check, so the file is named unread rather than missing.
+      // Likewise a file a script whose code is in the command (`python - <<EOF`, `node -e`) may write: that
+      // code is under the credit check.
+      if (written.has(full.toLowerCase()) || scripted) {
+        plan.notes.push(`${where} (written by this command, ${scripted ? 'by its script' : 'under another spelling'})`)
+        continue
+      }
+      // A Bash /tmp path on Windows is mapped by a guess (Git Bash's mount of TEMP): a miss cannot be read.
       const isTmpGuess = isBash && live.isWindows && /^\/tmp(?:\/|$)/.test(path.replace(/\\/g, '/'))
-      if (written.has(full.toLowerCase()) || isTmpGuess || scripted) {
+      if (isTmpGuess) {
         plan.unread.push(where)
         continue
       }
@@ -169,7 +173,7 @@ async function prBody($: Engine, plan: Plan, call: PrCall, cwd: string, isBash: 
 
 // The PR call, judged only in its plain form: the command's one gh statement, with a title written out.
 // With other gh statements the repo, the body file or the title may belong to one of them, so the
-// body is named unread instead, which the shadow log shows; it never blocks and never passes in silence.
+// body is left as a note instead, which the shadow log shows; it never blocks and never passes in silence.
 async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash: boolean) {
   const [call] = plan.prs
   if (!call) return undefined
@@ -178,24 +182,32 @@ async function checkPr($: Engine, plan: Plan, cwd: string, repo: string, isBash:
   const rules = await prRules($)
   if (!rules) return undefined
   // Before the repo's rule: another statement's `--repo` may have named the wrong repo.
-  if (!isPlain) return void plan.unread.push(`the PR body (format check, ${call.action}: not a single plain PR call)`)
+  if (!isPlain) return void plan.notes.push(`the PR body (format check, ${call.action}: not a single plain PR call)`)
   const rule = ruleFor(rules, repo)
   if (!rule) return undefined
   const early = checkCall(call)
   if (early) return early
   if (call.bodyFile === undefined) return undefined
   const text = await prBody($, plan, call, cwd, isBash)
-  if (text === undefined) return void plan.unread.push(`the PR body (format check, ${call.action})`)
+  if (text === undefined) return void plan.notes.push(`the PR body (format check, ${call.action})`)
   try {
     const reason = checkBody(text, call.hasTitle ? call.title : undefined, rule)
-    // No title: whether this PR may skip the board row is unknown, so a missing row is named unread.
+    // No title: whether this PR may skip the board row is unknown, so a missing row is left as a note.
     if (!reason && !call.hasTitle && rule.row && !hasRow(text, rule))
-      plan.unread.push(`the PR body's board row (format check, ${call.action}: no --title to judge it)`)
+      plan.notes.push(`the PR body's board row (format check, ${call.action}: no --title to judge it)`)
     return reason
   } catch {
     // A pattern in pr-body.json that does not compile: the body goes unjudged, the other checks still run.
-    return void plan.unread.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)
+    return void plan.notes.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)
   }
+}
+
+function unreadReason(where: string): string {
+  return (
+    `${where} is built in a way the guard cannot read (a variable set outside this command, another ` +
+    "program's output, a file it cannot find, a script built at run time). Write the text out, use a " +
+    'here-doc, or write the body file in an earlier command.'
+  )
 }
 
 // The first reason to block, or undefined.
@@ -227,9 +239,13 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
     )
     const hit = checkAddedLines(diff.out)
     if (hit) return `AI credit line added to ${hit.file}: "${hit.line}". Remove it before committing.`
-    // A diff past the output cap was read only in part: the rest is named unread, never passed as clean.
-    if (diff.isCut) plan.unread.push('the lines the commit adds past the first part of its diff')
+    // A diff past the output cap was read only in part: the rest is noted, never passed as clean.
+    if (diff.isCut) plan.notes.push('the lines the commit adds past the first part of its diff')
   }
+  // A message the reading could not follow is refused, as the shipped attribution hook refuses text it
+  // cannot read: what reaches history unread is never passed.
+  const [unread] = plan.unread
+  if (unread) return unreadReason(unread)
   // Last: a credit anywhere outranks the PR format.
   const prReason = await checkPr($, plan, cwd, repo, isBash)
   return prReason ? `PR-body contract: ${prReason}` : undefined
@@ -310,7 +326,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
     ? undefined
     : (result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined))
   await count($, Boolean(reason), Boolean(scripts))
-  if (reason || scripts || plan.unread.length > 0) {
+  if (reason || scripts || plan.unread.length > 0 || plan.notes.length > 0) {
     await log($, {
       at: Date.now(),
       session: await $.session.id(),
@@ -319,6 +335,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
       scripts: scripts ? String(scripts).slice(0, 300) : null,
       ...(isBlocked ? { enforced: true } : {}),
       unread: plan.unread,
+      notes: plan.notes,
       command: command.slice(0, 2000),
     })
   }

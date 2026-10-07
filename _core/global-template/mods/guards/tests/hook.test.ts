@@ -108,9 +108,9 @@ test(
     const result = await bash($, 'gh pr create --title t --body-file /tmp/body.md')
     expect((result as { deny?: string }).deny).toBeUndefined()
     expect(seen.ran).toHaveLength(1)
-    // Not there either: the mapping was a guess, so the file is named unread, never refused.
+    // Not there either: the mapping was a guess, so the file is named unread and refused.
     const missed = await bash($, 'gh pr create --title t --body-file /tmp/gone.md')
-    expect((missed as { deny?: string }).deny).toBeUndefined()
+    expect(String((missed as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
     expect(entry.unread?.length).toBe(1)
   },
@@ -133,9 +133,9 @@ test(
       expect((result as { deny?: string }).deny).toBeUndefined()
     }
     expect(seen.ran).toHaveLength(2)
-    // After `popd` the folder is not known: the file is named unread, never refused.
+    // After `popd` the folder is not known: the file is named unread and refused.
     const popped = await bash($, 'pushd x; popd; git commit -F m.txt')
-    expect((popped as { deny?: string }).deny).toBeUndefined()
+    expect(String((popped as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
     expect(entry.unread?.length).toBe(1)
   },
@@ -152,13 +152,14 @@ test('a body file the same command writes is read from the command text', async 
   await bash($, `cat > /tmp/b.md <<'EOF'\n## What\n${AI_TRAILER}\nEOF\ngh pr create --title t --body-file /tmp/b.md`)
   const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
   expect(entry.mod).toContain('file /tmp/b.md')
-  // Written by another program: the guard cannot read it, and says so.
+  // Written by another program: the guard cannot read it and notes it; a file the command writes passes.
   await bash($, 'gh pr view 5 --json body --jq .body > /tmp/c.md; gh pr edit 5 --body-file /tmp/c.md')
   const next = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-  expect(next.unread).toEqual(['the PR edit (file /tmp/c.md)'])
+  expect(next.mod).toBeNull()
+  expect(next.notes).toEqual(['the PR edit (file /tmp/c.md)'])
 })
 
-test('a relative body file under a folder built at run time is named unread, never refused', async ($, on) => {
+test('a relative body file under a folder built at run time is named unread and refused', async ($, on) => {
   const seen = world(on)
   for (const command of [
     'cd "$REPO" && gh pr create --title t --body-file body.md',
@@ -166,7 +167,7 @@ test('a relative body file under a folder built at run time is named unread, nev
   ]) {
     await bash($, command)
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-    expect(entry.mod).toBeNull()
+    expect(entry.mod).toContain('cannot read')
     expect(entry.unread?.length).toBe(1)
   }
   // A file of the same name in the session folder is a different file: still named unread, never read.
@@ -174,6 +175,7 @@ test('a relative body file under a folder built at run time is named unread, nev
   await bash($, 'cd "$REPO" && gh pr create --title t --body-file body.md')
   const sameName = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
   expect(sameName.unread?.length).toBe(1)
+  expect(sameName.mod).toContain('cannot read')
   // A literal folder still refuses a file that is not there.
   await bash($, 'cd C:/Repos/other && gh pr create --title t --body-file body.md')
   const literal = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
@@ -192,7 +194,7 @@ test('a diff past the output cap names the rest of the added lines unread', asyn
   await bash($, "git commit -m 'feat: x'")
   const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
   expect(entry.mod).toBeNull()
-  expect(entry.unread).toEqual(['the lines the commit adds past the first part of its diff'])
+  expect(entry.notes).toEqual(['the lines the commit adds past the first part of its diff'])
 })
 
 test('read-only and clean commands run untouched and log nothing', async ($, on) => {
@@ -241,7 +243,7 @@ const lastEntry = (seen: { files: Map<string, string> }) =>
   JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
 // The last logged command named its PR body unread (for whichever reason).
 const isPrUnread = (seen: { files: Map<string, string> }) =>
-  (lastEntry(seen).unread ?? []).some((u: string) => u.startsWith('the PR body'))
+  (lastEntry(seen).notes ?? []).some((u: string) => u.startsWith('the PR body'))
 
 test('a body file the same command writes is named unread; a here-doc on stdin is checked', {
   options: { mode: 'enforce' },
@@ -262,8 +264,9 @@ test('a relative body file under a folder built at run time is never judged from
 }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
   const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
-  expect((result as { deny?: string }).deny).toBeUndefined()
-  expect(isPrUnread(seen)).toBe(true)
+  // Refused as unread, never for the format of the session folder's b.md.
+  expect(String((result as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+  expect(lastEntry(seen).unread).toEqual(['the PR text'])
 })
 
 test('an invalid pattern in the rules file leaves the PR unjudged and the credit checks running', {
@@ -273,7 +276,7 @@ test('an invalid pattern in the rules file leaves the PR unjudged and the credit
   const seen = world(on, { [RULES]: bad, 'C:/Repos/my-game/b.md': FULL })
   const pr = await bash($, 'gh pr create --title "feat: x" --body-file b.md')
   expect((pr as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain('the PR body (pr-body.json has an invalid pattern for my-game)')
+  expect(lastEntry(seen).notes).toContain('the PR body (pr-body.json has an invalid pattern for my-game)')
   const credit = await bash($, `gh pr create --title "feat: x" --body-file b.md --body '${AI_TRAILER}'`)
   expect(String((credit as { deny?: string }).deny)).toContain('AI credit')
 })
@@ -305,7 +308,6 @@ const NOT_ALONE = [
   '(cd sub && make) && gh pr create --title "feat: x" --body-file short.md',
   // The cd runs in a subshell: gh stays in the session folder.
   '(cd sub) && gh pr create --title "feat: x" --body-file short.md',
-  'bash -c "gh pr create -t t -F - <<\'EOF\'\n$BODY\nEOF"',
   'gh pr create -R "$OWNER/$REPO" -t t --body x',
   'gh pr create -t t -F a.md -F short.md',
   "gh pr create -t $'docs(x): y' -F short.md",
@@ -328,13 +330,17 @@ for (const command of NOT_ALONE) {
 
 const NOT_PLAIN = 'the PR body (format check, create: not a single plain PR call)'
 
-test('a PowerShell splat is never blocked for flags it may carry', { options: { mode: 'enforce' } }, async ($, on) => {
+test('a PowerShell splat set in the command is checked as typed; one from outside is refused', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE })
   on('tool.call', { tool: 'PowerShell' }, () => ({ result: {} as never }))
   await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
-  const result = await $.tool.call({ tool: 'PowerShell', command: 'gh pr create @params' } as never)
-  expect((result as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+  const set = "$params = @{ Title = 'feat: x' }; gh pr create @params"
+  expect(((await $.tool.call({ tool: 'PowerShell', command: set } as never)) as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).notes).toContain(NOT_PLAIN)
+  const outside = await $.tool.call({ tool: 'PowerShell', command: 'gh pr create @params' } as never)
+  expect(String((outside as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
 })
 
 // Only a command whose one gh statement is the PR call is judged: with more, the repo, the body file or
@@ -345,21 +351,21 @@ test('two PR calls in one command are named unread', { options: { mode: 'enforce
   const seen = world(on, SHORT)
   const both = await bash($, 'gh pr create --title "feat: x" --body-file short.md && gh pr edit 5 --add-label bug')
   expect((both as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+  expect(lastEntry(seen).notes).toContain(NOT_PLAIN)
 })
 
 test('another gh call naming a repo leaves the PR unread', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, SHORT)
   const command = 'gh pr view 12 -R o/other --json body && gh pr create --title "feat: x" --body-file short.md'
   expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+  expect(lastEntry(seen).notes).toContain(NOT_PLAIN)
 })
 
-test('a title built at run time is named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+test('a title built at run time is refused as unread', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, SHORT)
   const result = await bash($, 'gh pr create --title "$T" --body-file short.md')
-  expect((result as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain(NOT_PLAIN)
+  expect(String((result as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+  expect(lastEntry(seen).unread).toEqual(['the PR text'])
 })
 
 test('two here-docs on one PR call are named unread', { options: { mode: 'enforce' } }, async ($, on) => {
@@ -409,7 +415,7 @@ test('a PR edit with no title is judged without the board row, which is named un
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- a\n\n## Why\nb\n' })
   const result = await bash($, 'gh pr edit 7 --body-file b.md')
   expect((result as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread).toContain("the PR body's board row (format check, edit: no --title to judge it)")
+  expect(lastEntry(seen).notes).toContain("the PR body's board row (format check, edit: no --title to judge it)")
   const short = await bash($, 'gh pr edit 7 --body-file short.md')
   expect(short).toBeDefined()
 })
@@ -431,7 +437,7 @@ for (const command of ODD_SPELLINGS) {
     const files = { [RULES]: ROW_RULE, 'C:/Repos/my-game/name.txt': 'b.md\n', 'C:/Repos/my-game/b.md': NO_ROW }
     const seen = world(on, files)
     expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
-    expect(lastEntry(seen).unread?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
+    expect(lastEntry(seen).notes?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
   })
 }
 
@@ -488,11 +494,11 @@ test('a PR call after a cd to a literal folder is judged there', { options: { mo
   expect(String((full as { deny?: string }).deny)).toContain('PR-body contract')
 })
 
-test('a PR call after a cd built at run time is named unread', { options: { mode: 'enforce' } }, async ($, on) => {
+test('a PR call after a cd built at run time is refused as unread', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': NO_ROW })
   const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
-  expect((result as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).unread?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
+  expect(String((result as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+  expect(lastEntry(seen).unread).toEqual(['the PR text'])
 })
 
 // From the shadow trial: a python here-doc writes the API input, then gh sends it.
@@ -504,14 +510,14 @@ const SCRIPT_THEN_API = [
   'gh api graphql --input su.json',
 ].join('\n')
 
-test('a body file a script in the same command writes is named unread, never missing', {
+test('a body file a script in the same command writes is noted, never missing', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
   const seen = world(on)
   const result = await bash($, SCRIPT_THEN_API)
   expect((result as { deny?: string }).deny).toBeUndefined()
   expect(seen.ran).toHaveLength(1)
-  expect(lastEntry(seen).unread).toEqual(['the GitHub API call'])
+  expect(lastEntry(seen).notes).toEqual(['the GitHub API call (written by this command, by its script)'])
   // With no script before it, a missing file is still refused.
   const missing = await bash($, 'gh api graphql --input su.json')
   expect(String((missing as { deny?: string }).deny)).toContain('could not read the body file')
@@ -563,7 +569,16 @@ test('inline script code (-c, -e) marks a later body file too', { options: { mod
   expect(seen.ran).toHaveLength(2)
 })
 
-// From the second shadow trial: a body file named by a variable the command sets.
+// From the second shadow trial: the shapes where the mod and the shipped scripts disagreed.
+test('a GitHub API call whose text uses a variable from outside the command is refused', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on)
+  const loop = 'for id in A B; do gh api graphql -f query="mutation { x(id: \\"$id\\") { y } }"; done'
+  expect(String((await bash($, loop) as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+  expect(seen.ran).toEqual([])
+})
+
 test('a body file written under a variable set in the same command passes', { options: { mode: 'enforce' } }, async (
   $,
   on,
@@ -592,4 +607,13 @@ test('a PowerShell field file named by a variable set in the command is read fro
   const result = await $.tool.call({ tool: 'PowerShell', command } as never)
   expect((result as { deny?: string }).deny).toBeUndefined()
   expect(seen.files.has(LOG)).toBe(false)
+})
+
+test('history rewriting is refused even when it only asks for the version', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on)
+  const result = await bash($, 'git filter-repo --version')
+  expect(String((result as { deny?: string }).deny)).toContain('history rewriting')
+  expect(seen.ran).toEqual([])
 })
