@@ -1,6 +1,6 @@
 # Hand-offs in the tracker, project settings and shared setups
 
-Status: draft for the maintainer's sign-off, 2026-10-06. Direction approved the same day: one tracker-based hand-off for every bundle, global-first, plus a way to share a project's setup with its team. This file is the record; the sign-off happens in chat. Amended 2026-10-07: project status updates post only on a real change of state (see Project status updates), agreed with the maintainer for all four projects.
+Status: signed off by the maintainer on 2026-10-07; drafted 2026-10-06. Direction approved the same day: one tracker-based hand-off for every bundle, global-first, plus a way to share a project's setup with its team. This file is the record; the sign-off happens in chat. Amended 2026-10-07: project status updates post only on a real change of state (see Project status updates), agreed with the maintainer for all four projects.
 
 ## Problem
 
@@ -8,7 +8,7 @@ Every bound project keeps one `<PROJECT>-CONTEXT_<date>.md` at the repo root, re
 
 - **Cost.** Each close is a commit, a PR and a CI run, even for a solo project with nothing else to ship. This repo merged two such PRs on 2026-10-06 alone (#271, #272).
 - **Teams.** One file for everyone means merge conflicts, items nobody owns, and a stale list when two people close sessions on different branches.
-- **Duplication.** GameProject, Stockra and voiceapp already keep work state on a GitHub Project board (issue bodies with a `### Current state` section and a `Full history` block, one project status update per session, a board checker). The per-session updates turned into a session log: GameProject's board holds 53 of them, some days three or four. Their hand-off files shrank to 30 to 80 lines and repeat part of the board.
+- **Duplication.** The maintainer's three other projects already keep work state on a GitHub Project board (issue bodies with a `### Current state` section and a `Full history` block, one project status update per session, a board checker). The per-session updates turned into a session log, some days three or four of them. Their hand-off files shrank to 30 to 80 lines and repeat part of the board.
 - **Dead switch.** `team_handoff_notes` is documented in `TOGGLES.md` and implemented nowhere. `context_refresh_files` is the file system above.
 
 ## Decision
@@ -41,7 +41,7 @@ The rule lives in one place per machine, `~/.claude/rules/status-updates.md` (li
 
 ### Trackers
 
-Each tracker is a small data profile (like the code-research profiles): how to list my open items, read and edit an item's body, create an item, post a project status update, and which CLI or MCP server does it. The issues may live in a different repo or project from the code: GameProject's board is the public `the public board` repo with codenames only, while its code repo is private.
+Each tracker is a small data profile (like the code-research profiles): how to list my open items, read and edit an item's body, create an item, post a project status update, and which CLI or MCP server does it. The issues may live in a different repo or project from the code, for example a board kept apart from a private code repo.
 
 | Tracker | Item state | Project status | Access |
 |---|---|---|---|
@@ -54,7 +54,7 @@ Each tracker is a small data profile (like the code-research profiles): how to l
 
 GitHub ships first, with tests, and becomes the default; setup detects it from the git remote. Every other profile is listed as supported only after a run against a free account of that tracker; until then setup marks it untested. A tracker with no native project status gets the same fallback, the pinned status item.
 
-Issue bodies follow the shape GameProject and Stockra already enforce with the global `issue-body-contract.py` hook (what it is, why it matters, current state, done when, blocked by, milestone, then the full-history block). Shipping that hook as a canonical, opt-in guard is a follow-up, not part of this change.
+Issue bodies follow the shape two of those projects already enforce with the global `issue-body-contract.py` hook (what it is, why it matters, current state, done when, blocked by, milestone, then the full-history block). Shipping that hook as a canonical, opt-in guard is a follow-up, not part of this change.
 
 ## Settings layers
 
@@ -66,7 +66,7 @@ Bindwright settings sit in three layers, the same way Claude Code's own settings
 | Project | `.bindwright/project.json`, committed | The team's setup: tracker profile and ids, branch names, review gate settings, chosen rules and switches, extras the project requires or recommends | Yes, through git |
 | Personal, this project | `.bindwright/local.json`, git-ignored | One person's overrides for this project | No |
 
-`.bindwright/project.json` is the "saved answers" that Phase 2b already plans for `.bindwright/`, so nothing new is added to the repo layout. Beside it, `.bindwright/session-steps.md` holds the project's own session steps in two sections, `## Extra start steps` and `## Extra close steps`, which the global session skills run at fixed points: GameProject's board checker, scheduled-failure issue sweep and devlog step, Stockra's visual gate, voiceapp's analyzer runs. The session skills read both files directly, so they work before the plugin exists and nothing moves when it lands.
+`.bindwright/project.json` is the "saved answers" that Phase 2b already plans for `.bindwright/`, so nothing new is added to the repo layout. Beside it, `.bindwright/session-steps.md` holds the project's own session steps in two sections, `## Extra start steps` and `## Extra close steps`, which the global session skills run at fixed points: a board checker, a sweep of scheduled-failure issues, a visual gate, analyzer runs. The session skills read both files directly, so they work before the plugin exists and nothing moves when it lands.
 
 ## Sharing a setup with the team
 
@@ -92,16 +92,16 @@ Checked 2026-10-06 against this machine's hooks, mods, workflows and the four re
 
 | Part | What changes | Handling |
 |---|---|---|
-| Skill precedence | Installing global skills silently replaces the project skills of every repo at once, including GameProject's 139-line close with its board, devlog and DoD steps. | The global install waits until all four repos carry their `.bindwright/session-steps.md`; until then each repo runs a project copy rendered from the global source. Done in one window, with the other local sessions told first. |
-| `~/.claude/skill-contracts.json` | GameProject's close contract requires writing and `git rm`-ing `GAMEPROJECT-CONTEXT_*.md`; after the move it would report two missed steps every close. | The GameProject migration PR changes those two entries in the same window. Its board-check entry stays valid; its every-close status-update entry was removed on 2026-10-07 with the new status-update rule. |
-| `issue-body-contract.py` | Already demands the issue-body shape this design uses, for GameProject and Stockra. | No change. The global skill writes bodies through `--body-file`, which the hook requires. |
+| Skill precedence | Installing global skills silently replaces the project skills of every repo at once, including the long project-specific closes with their board and definition-of-done steps. | The global install waits until all four repos carry their `.bindwright/session-steps.md`; until then each repo runs a project copy rendered from the global source. Done in one window, with the other local sessions told first. |
+| `~/.claude/skill-contracts.json` | One project's close contract requires writing and `git rm`-ing its `*-CONTEXT_*.md`; after the move it would report two missed steps every close. | That project's migration PR changes those two entries in the same window. Its board-check entry stays valid; its every-close status-update entry was removed on 2026-10-07 with the new status-update rule. |
+| `issue-body-contract.py` | Already demands the issue-body shape this design uses, for two of the projects. | No change. The global skill writes bodies through `--body-file`, which the hook requires. |
 | tasks, usage-guard, shared-pc mods | Their texts say "check against the hand-off" or "write the hand-off" without naming a file. | Still correct; the tasks mod's line gets one wording pass to say "the tracker". |
 | compact-handoff mod | Carries work across a compaction inside one session, a different job. | No change. |
-| CI | GameProject and Stockra list `*-CONTEXT_*.md` under `paths-ignore`. | Harmless leftovers; removed later in a workflow-only PR. This repo's workflows and the canonical templates do not reference the file. |
+| CI | Two of the projects list `*-CONTEXT_*.md` under `paths-ignore`. | Harmless leftovers; removed later in a workflow-only PR. This repo's workflows and the canonical templates do not reference the file. |
 | Templates and engine | Only the two session skills, the four bundle files and one engine default use the two switches. | Replaced by the `tracker` setting in build step 1, with the golden test updated. |
 | Unattended runs | `/session-close` at the end of a run now writes to the tracker instead of opening a PR. | Fewer things to watch; no CI wait at the end. |
 | Session start | A few tracker queries instead of reading one file. | Seconds. Offline, it plans from git and says so. |
-| Public boards | Hand-off text lands in issues, which are public for a public repo or board. | Same exposure as the committed file today; GameProject's codename check keeps covering its board. |
+| Public boards | Hand-off text lands in issues, which are public for a public repo or board. | Same exposure as the committed file today. A project whose board is public keeps its own check that only codenames land there. |
 
 Nothing in the current workflow breaks if the build order below is kept. The one real risk is the skill swap, and the order is built around it.
 
@@ -123,7 +123,7 @@ Nothing in the current workflow breaks if the build order below is kept. The one
 
 1. Canonical: tracker profiles (GitHub), the status-update rule as a canonical rule, the `tracker` setting replacing the two switches, the `.bindwright/project.json` and `session-steps.md` templates, the session skills reading them, engine golden tests updated. Deep review.
 2. This repo moves its hand-off to the tracker, using a project copy of the new skills.
-3. GameProject, Stockra and voiceapp move, one PR each, each with its `session-steps.md`; GameProject's skill contracts change in the same window.
+3. The other three projects move, one PR each, each with its `session-steps.md`; skill contracts that name a context file change in the same window.
 4. With all four on the new skills, install the global copies and delete the project copies in one window.
 5. The plugin carries the skills to teammates, with `/bindwright:export` and `/bindwright:join` (Phase 2b).
 6. Each non-GitHub profile, after its free-account run.
