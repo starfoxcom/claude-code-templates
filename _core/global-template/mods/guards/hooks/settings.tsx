@@ -281,11 +281,16 @@ export function register(on: On, options: Options, apply: (values: Values) => vo
   apply(options)
 
   // Narrowed by tool, so it sits beside the mod's own tool.call hook: a hot reload starts the module over
-  // without a session.start, and its first common tool call picks the file up again.
-  on('tool.call', { tool: ['Bash', 'PowerShell', 'Read', 'Edit', 'Write', 'Grep', 'Glob'] }, async ($, e, next) => {
-    await followSettings($)
-    return next(e)
-  })
+  // without a session.start, and its first common tool call picks the file up again. Agent and Workflow
+  // are here so the helper block reads the file before it decides.
+  on(
+    'tool.call',
+    { tool: ['Bash', 'PowerShell', 'Read', 'Edit', 'Write', 'Grep', 'Glob', 'Agent', 'Workflow'] },
+    async ($, e, next) => {
+      await followSettings($)
+      return next(e)
+    },
+  )
 
   // The mod's own /config rows are hidden: a change there would not reach the file this mod runs from.
   on('config.describe', async ($, e, next) => {
