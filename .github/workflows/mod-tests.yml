@@ -2,14 +2,15 @@ name: Mod tests
 
 # Runs every mod's own test suite (`plugin test` in each folder under
 # _core/global-template/mods) and the node tests of the mods' helper scripts.
-# Pull requests and pushes test against a pinned Claude Code release, so a PR's
-# result depends only on the PR. The weekly run uses the newest release, so an
-# engine change that breaks a mod shows up as an issue before anyone upgrades
-# into it. Pull requests run whatever they change, so the check can be made
-# required without waiting forever on a PR that touches no mod.
+# Pull requests and pushes test against a pinned Claude Code release, so a new
+# release does not change a PR's result. The weekly run uses the newest
+# release, so an engine change that breaks a mod shows up as an issue within a
+# week of its release, without waiting for a PR. Pull requests run whatever
+# they change, so the check can be made required without waiting forever on a
+# PR that touches no mod.
 #
-# Windows runner: the mods are built and used on Windows, and their test fakes
-# answer Windows paths (C:/Users/...), which Linux does not treat as absolute.
+# Windows runner: the mods' test fakes answer Windows paths (C:/Users/...),
+# which Linux does not treat as absolute.
 # The type check stays local: its engine typings are generated per machine and
 # are not committed.
 
@@ -59,7 +60,7 @@ jobs:
           ref: ${{ github.event_name == 'schedule' && 'develop' || '' }}
           persist-credentials: false
 
-      # main has no mods until v2.0.0: the job notes that and passes. develop
+      # main has no mods yet: the job notes that and passes. develop
       # must always have them, so a missing folder there fails instead of
       # passing by testing nothing. A scheduled run tests develop.
       - name: Check for the mods
