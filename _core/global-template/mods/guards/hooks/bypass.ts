@@ -31,6 +31,10 @@ const CONFIG_VERBS = /^(set|unset|unset-all|replace-all|add)$/
 const ENV_HOOKS = /^(GIT_CONFIG_PARAMETERS=.*(core\.hookspath|hooks\.)|GIT_CONFIG_KEY_\d+=(core\.hookspath|hooks\.))/i
 // Lefthook skips every hook with `LEFTHOOK=0` or `false`, and named ones with `LEFTHOOK_EXCLUDE`.
 const LEFTHOOK_OFF = /^(LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE=.*)$/i
+// Package runners that start a tool by name (`npx lefthook uninstall`, `pnpm exec lefthook ...`).
+const RUNNERS = /^(npx|pnpx|bunx|pnpm|yarn|bun|npm)$/
+const LEFTHOOK_TOOL = /^(@evilmartians\/)?lefthook(@\S*)?$/
+
 // Builtins whose arguments are the assignments themselves (`export LEFTHOOK=0`, `declare -x LEFTHOOK=0`).
 const ASSIGNS = /^(export|declare|local|typeset|readonly)$/
 
@@ -121,7 +125,8 @@ function gitReason(args: Word[]): string | undefined {
   if (sub === 'config') return configReason(rest)
   if (!HOOKED.has(sub)) return undefined
   if (settings.some(s => HOOKS_KEY.test(s))) return HOOK_SKIP
-  // A commit's flags are walked past their values (`-m '--no-verify'` is a message); the rest take none.
+  // A commit's flags are walked past their values (`-m '--no-verify'` is a message); on the rest only a
+  // word that is exactly `--no-verify` counts, and no real message or path is.
   if (sub === 'commit') return commitReason(rest)
   return rest.some(w => w.text === '--no-verify') ? HOOK_SKIP : undefined
 }
@@ -131,7 +136,9 @@ function gitReason(args: Word[]): string | undefined {
 // git's environment. Every word before the program counts, past keywords and wrappers. `lefthook
 // uninstall` too.
 function envReason(st: Statement, name: string, args: Word[]): string | undefined {
-  if (name === 'lefthook' && args[0]?.text === 'uninstall') return LEFTHOOK
+  const tool = RUNNERS.test(name) ? args.findIndex(a => LEFTHOOK_TOOL.test(a.text)) : -1
+  const lefthook = name === 'lefthook' ? args : tool === -1 ? [] : args.slice(tool + 1)
+  if (lefthook.find(a => !a.text.startsWith('-'))?.text === 'uninstall') return LEFTHOOK
   const words = st.words.map(w => w.text)
   const ps = /^\$env:(\w+)(?:=(.*))?$/i.exec(words[0] ?? '')
   const assigned = ps ? `${ps[1]}=${ps[2] ?? (words[1] === '=' ? (words[2] ?? '') : '')}` : undefined

@@ -211,3 +211,56 @@ test('a command held in a variable from outside is out of reach', () => {
   expect(inspect('eval "$CMD"', false).block).toBeUndefined()
   expect(inspect('bash -c "$CMD"', false).isWrite).toBe(false)
 })
+
+// Lefthook through a package runner, commands in backticks, and a script a shell reads from a here-doc.
+const HIDDEN_REFUSED: [string, string][] = [
+  ['npx lefthook uninstall', 'disabling lefthook'],
+  ['npx --yes lefthook uninstall', 'disabling lefthook'],
+  ['pnpm exec lefthook uninstall', 'disabling lefthook'],
+  ['yarn lefthook uninstall', 'disabling lefthook'],
+  ['bunx @evilmartians/lefthook uninstall', 'disabling lefthook'],
+  ['OUT=`git commit --no-verify -m x`', 'skipping git hooks'],
+  ['echo "`git commit -n -m x`"', 'skipping git hooks'],
+  ["bash <<'EOF'\ngit commit -n -m x\nEOF", 'skipping git hooks'],
+  ["sh -s <<< 'git push --no-verify'", 'skipping git hooks'],
+]
+
+for (const [command, reason] of HIDDEN_REFUSED) {
+  test(`refused: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, false).block).toContain(reason)
+  })
+}
+
+test('lefthook run or installed through a runner, and a backtick read, pass', () => {
+  for (const command of ['npx lefthook install', 'npx lefthook run pre-commit', 'echo `date`']) {
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+})
+
+test('each value is read where it was set: a subshell, a substitution or a child shell', () => {
+  const read = (c: string) => inspect(c, false)
+  const messages = (c: string) => read(c).texts.filter(t => !t.creditOnly && t.where === 'the commit message')
+  // A subshell or a `$(...)` that sets the same name leaves the outer value alone.
+  for (const command of [
+    'M=a; (M=b); git commit -m "$M"',
+    'M=a; X=$(M=b; echo); git commit -m "$M"',
+    'M=a; X=`M=b`; git commit -m "$M"',
+  ]) {
+    expect([command, read(command).unread, messages(command).map(t => t.text)]).toEqual([command, [], ['a']])
+  }
+  // Set only inside one, it is gone outside.
+  expect(read('X=$(M=b; echo); git commit -m "$M"').unread).toEqual(['the commit message'])
+  // A child shell sees only an exported value.
+  expect(read(`M=a; bash -c 'git commit -m "$M"'`).unread).toEqual(['the commit message'])
+  expect(read(`export M=a; bash -c 'git commit -m "$M"'`).unread).toEqual([])
+  expect(read(`M=a; export M; bash -c 'git commit -m "$M"'`).unread).toEqual([])
+  // A here-doc script the shell reads fills in the outer shell's variables first.
+  expect(read('M=a; bash <<EOF\ngit commit -m "$M"\nEOF').unread).toEqual([])
+})
+
+test('a hashtable added to after it was typed is unread', () => {
+  const unread = (c: string) => inspect(c, true).unread
+  expect(unread("$p = @{ Title = 't' }; $p += @{ Body = $env:B }; gh pr create @p")).toEqual(['the PR text'])
+  expect(unread("$p = @{ Title = 't' }; $p.Add('Body', $b); gh pr create @p")).toEqual(['the PR text'])
+  expect(unread("$m = 'fix: x'; $m += $env:T; git commit -m $m")).toEqual(['the commit message'])
+})
