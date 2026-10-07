@@ -424,7 +424,6 @@ test('a PR edit with no title is judged without the board row, which is named un
 const ODD_SPELLINGS = [
   'gh pr create -dF b.md -t "feat: x"',
   'gh pr create -tfeat -F b.md',
-  'gh pr create --title "feat: x" --body-file "$(cat name.txt)"',
   "gh pr create --title \"feat: x\" -F - <<< $'## What\\n- a\\n\\n## Why\\nb\\n\\nResolves #1'",
 ]
 // A body the check would refuse (no board row), so a misread spelling shows as a block.
@@ -440,6 +439,14 @@ for (const command of ODD_SPELLINGS) {
     expect(lastEntry(seen).notes?.some((u: string) => u.startsWith('the PR body'))).toBe(true)
   })
 }
+
+// The file `name.txt` holds the body file's name, not the body: the body cannot be read.
+test('a body file named by another file is refused as unread', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/name.txt': 'b.md\n', 'C:/Repos/my-game/b.md': NO_ROW })
+  const result = await bash($, 'gh pr create --title "feat: x" --body-file "$(cat name.txt)"')
+  expect(String((result as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+  expect(lastEntry(seen).unread).toEqual(['the PR text'])
+})
 
 // A check that fails before the command runs: enforce refuses it, shadow lets it run. The engine's own
 // catch takes a throw outside the guard's try, here the set-up on a call that comes before session.start.

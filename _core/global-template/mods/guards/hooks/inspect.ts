@@ -24,8 +24,9 @@ import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
+import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
-import { CAT_FILE, expand, expandBody, lookup, setVar, store, within } from './vars'
+import { catValue, expand, expandBody, lookup, setVar, store, within } from './vars'
 import type { VarState } from './vars'
 import {
   COMMIT,
@@ -214,7 +215,7 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading, o
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
-  if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(args, r)
+  if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
     const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
@@ -261,12 +262,29 @@ function moveFolder(folder: Folder, target: Word | undefined): Folder {
 // `eval` and `Invoke-Expression` run their words as a command in this same shell: read here, with the
 // variables set earlier filled in. Words built in a way the reading cannot follow hide the command, so
 // they are refused when their text names a history write.
-function readEval(args: Word[], r: Reading) {
+function readEval(st: Statement, args: Word[], r: Reading) {
   r.hasEval = true
   const text = args.map(a => a.text).join(' ')
   const e = args.some(a => a.dynamic) ? expand(text, r) : { text, unresolved: false }
-  if (!e.unresolved) return read(parse(e.text, r.ps), r, r.scope)
-  if (RAW_WRITES.some(re => re.test(text))) r.plan.block ??= EVAL
+  if (e.unresolved) {
+    if (RAW_WRITES.some(re => re.test(text))) r.plan.block ??= EVAL
+    return
+  }
+  // `M=x eval '...'`: the words see `M=x`; whether the shell keeps it afterwards depends on its mode, so
+  // after the eval it is unknown.
+  const names: string[] = []
+  for (const w of st.words.slice(0, st.words.length - args.length - 1)) {
+    const m = /^([A-Za-z_]\w*)=/.exec(w.text)
+    if (!m) continue
+    names.push(m[1] ?? '')
+    setVar(r, m[1] ?? '', { ...w, text: w.text.slice(m[0].length) })
+  }
+  // The eval's own subshells are numbered apart from the command's; its top level runs in place.
+  const n = ++r.opened
+  const statements = parse(e.text, r.ps)
+  for (const s of statements) if (s.scope) s.scope = `e${n}/${s.scope}`
+  read(statements, r, r.scope)
+  for (const name of names) setVar(r, name, undefined)
 }
 
 // `bash -c '...'` and the like: the script is read as commands of its own, run in a child shell that
@@ -282,11 +300,28 @@ function readScript(st: Statement, name: string, args: Word[], r: Reading): bool
   const ps = r.ps
   const writes = r.writes
   const child = within(r.scope, `p${++r.opened}`)
+  inherit(st, args, r, child)
   r.ps = inner.ps
   read(isKnown ? parse(e.text, inner.ps) : inner.statements, r, child)
   r.ps = ps
   if (inner.dynamic && !isKnown && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
   return true
+}
+
+// What a child shell gets besides the exported values: the assignments in front of it (`M=x bash -c`,
+// `env M=x bash -c`), filled in where they are typed, and nothing of what `env -i` or `env -u M` clears.
+function inherit(st: Statement, args: Word[], r: Reading, child: string) {
+  const lead = st.words.slice(0, st.words.length - args.length - 1)
+  const isEnv = lead.some(w => w.text === 'env')
+  const clear = (name: string) => store(r, name, { text: '', literal: true, scope: child }, true)
+  for (let i = 0; i < lead.length; i++) {
+    const t = lead[i]?.text ?? ''
+    if (isEnv && /^(-i|-|--ignore-environment)$/.test(t)) for (const name of r.vars.keys()) clear(name)
+    const unset = isEnv ? /^(?:-u|--unset=?)(.*)$/.exec(t) : null
+    if (unset) clear(unset[1] || (lead[++i]?.text ?? ''))
+    const m = /^([A-Za-z_]\w*)=/.exec(t)
+    if (m && !unset) setVar(r, m[1] ?? '', { ...(lead[i] as Word), text: t.slice(m[0].length) }, true, child)
+  }
 }
 
 // PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed; one
@@ -374,56 +409,6 @@ function assign(st: Statement, name: string, args: Word[], r: Reading): boolean 
     return true
   }
   return false
-}
-
-// `isBody`: the script is a here-doc fed to the shell, filled in as one.
-type Script = { statements: Statement[]; ps: boolean; dynamic: boolean; text?: string; isBody?: boolean }
-
-const SHELLS = /^(bash|sh|zsh|dash|ksh)$/
-
-// A shell reading its script from a here-doc or here-string (`bash <<'EOF'`, `sh -s <<< '...'`): nothing
-// but flags on the line.
-function stdinScript(st: Statement, args: Word[]): Script | undefined {
-  const text = st.heredocs[0]
-  if (text === undefined || st.heredocs.length > 1 || args.some(a => !a.text.startsWith('-'))) return undefined
-  return { statements: parse(text, false), ps: false, dynamic: Boolean(st.hasDynamicBody), text, isBody: true }
-}
-
-// `bash -c '...'`, `powershell -Command "..."`, `cmd /c ...`: the script is read as a command of its own.
-// `text`: the script as typed, when it is one command line.
-function script(st: Statement, name: string, args: Word[]): Script | undefined {
-  const of = (i: number, ps: boolean) => {
-    const rest = args.slice(i + 1)
-    if (i === -1 || rest.length === 0) return undefined
-    const text = rest.length === 1 ? (rest[0]?.text ?? '') : rest.map(a => a.text).join(' ')
-    return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic), text }
-  }
-  if (SHELLS.test(name)) {
-    const i = args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a.text))
-    return i === -1 ? stdinScript(st, args) : of(i, false)
-  }
-  if (/^(pwsh|powershell)$/.test(name))
-    return of(
-      args.findIndex(a => /^-(c|command)$/i.test(a.text)),
-      true,
-    )
-  if (name === 'cmd') {
-    // Git Bash turns `/c` into a path, so it is typed `//c` there.
-    const i = args.findIndex(a => /^\/{1,2}[ck]$/i.test(a.text))
-    if (i === -1) return undefined
-    const words = args.slice(i + 1)
-    // `cmd /c "git commit -m \"...\""`: the command as one quoted word is read as a command line.
-    if (words.length === 1) {
-      const text = words[0]?.text ?? ''
-      return { statements: parse(text, false), ps: false, dynamic: words[0]?.dynamic ?? false, text }
-    }
-    return {
-      statements: [{ words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }],
-      ps: false,
-      dynamic: false,
-    }
-  }
-  return undefined
 }
 
 function setCwd(plan: Plan, word: Word | undefined) {
@@ -712,7 +697,10 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       if (!value.dynamic) return void plan.files.push({ where, path: value.text })
       const e = expand(value.text, r)
       if (!e.unresolved) return void plan.files.push({ where, path: e.text })
-      return fileOrUnread(value, plan, where)
+      // `-F <(cat <<'EOF' ... EOF)` hands over the here-doc's text; any other path built at run time
+      // names a file the reading cannot know.
+      if (!held(value, r, where, '<')) plan.unread.push(where)
+      return
     }
     case 'repo':
       plan.repo = value.text.split('/').pop()
@@ -754,8 +742,8 @@ function filePath(path: string, r: Reading, where: string) {
   r.plan.files.push({ where, path: full })
 }
 
-// A message value: literal text is checked; text built at run time is read where the reading can
-// (a variable set earlier, a here-doc inside `$(cat <<'EOF' ... EOF)`, a `$(cat file)`) and named as
+// A message value: literal text is checked; text built at run time is read where the reading can (a
+// variable set earlier, a value that is wholly `$(cat <<'EOF' ... EOF)` or `$(cat file)`) and named as
 // unread otherwise. The value as typed is checked for credit too: a credit inside `$(echo '...')` or
 // `$(printf ...)` is in the command text itself.
 function message(value: Word, r: Reading, where: string) {
@@ -763,16 +751,21 @@ function message(value: Word, r: Reading, where: string) {
   if (!value.dynamic) return void plan.texts.push({ where, text: value.text })
   for (const body of value.bodies) plan.texts.push({ where, text: body })
   plan.texts.push({ where, text: value.text, creditOnly: true })
+  if (held(value, r, where)) return
   const e = expand(value.text, r)
   plan.texts.push({ where, text: e.text })
   // Variables that hold a file's text (`BODY=$(cat b.md)`): the file is read instead.
   if (e.isFilesOnly) for (const path of e.files) plan.files.push({ where, path })
-  else if (e.unresolved) fileOrUnread(value, plan, where)
+  else if (e.unresolved) plan.unread.push(where)
 }
 
-function fileOrUnread(value: Word, plan: Plan, where: string) {
-  const cat = CAT_FILE.exec(value.text)
-  if (cat) return void plan.files.push({ where, path: (cat[1] ?? cat[2] ?? cat[3]) as string })
-  if (value.bodies.length > 0) return
-  plan.unread.push(where)
+// A value that is wholly one `cat` of a here-doc or a file: the here-doc's text is checked (unread when
+// a part of it stays unknown), the file is read. True when it was one.
+function held(value: Word, r: Reading, where: string, opener: '$' | '<' = '$'): boolean {
+  const v = catValue(value, r, opener)
+  if (!v) return false
+  if (v.file) r.plan.files.push({ where, path: v.file })
+  else r.plan.texts.push({ where, text: v.text })
+  if (!v.file && !v.literal) r.plan.unread.push(where)
+  return true
 }

@@ -51,6 +51,9 @@ type Pending = { delim: string; strip: boolean; owner?: Statement; isQuoted?: bo
 // shell drops a backslash-newline, joining two lines, and turns `\$`, `\\` and `` \` `` into one character).
 const BODY_EXPANSION = /\$[A-Za-z_{(]|`|\\/
 
+// Words after which the next one is still in command position, where `case` opens a block.
+const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', '{', 'time'])
+
 const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
 
 // One pass over the command text, a character at a time; each method reads one kind of thing.
@@ -70,19 +73,32 @@ class Reader {
   private opened = 0
   // `$(...)` and backtick substitutions read so far.
   private groups = 0
+  // The Bash `case` blocks open now, innermost last: `head` before its `in`, `pattern` while an arm's
+  // pattern is due, `body` inside an arm; `at` is the index of its `case` word, `depth` where it opened.
+  private cases: { state: 'head' | 'pattern' | 'body'; at: number; depth: number }[] = []
+  // A Bash `$(...)` read by a reader of its own: the `)` that closes it ends the reading.
+  private isClosed = false
 
   constructor(
     private readonly command: string,
     private readonly powershell: boolean,
+    start = 0,
+    private readonly isSubstitution = false,
   ) {
     this.esc = powershell ? '`' : '\\'
     this.n = command.length
+    this.i = start
   }
 
   run(): Statement[] {
-    while (this.i < this.n) this.step(this.command[this.i] ?? '')
+    while (this.i < this.n && !this.isClosed) this.step(this.command[this.i] ?? '')
     this.endStatement()
     return this.out
+  }
+
+  /** Where the reading stopped: past the `)` that closed a substitution, or the end of the text. */
+  get position(): number {
+    return this.i
   }
 
   private at(offset: number): string {
@@ -118,7 +134,54 @@ class Reader {
       ;(attached[1] === '<' ? this.st.reads : this.st.writes).push(attached[2] ?? '')
       return
     }
+    if (isPlain && this.caseWord(w.text)) return
     this.st.words.push(w)
+  }
+
+  // `case`, its `in` and `esac` where the shell reads them as its own words. True for an `esac`, which
+  // ends the block and is no command word.
+  private caseWord(text: string): boolean {
+    if (this.powershell) return false
+    const words = this.st.words
+    const top = this.cases.at(-1)
+    const here = top?.depth === this.depth ? top : undefined
+    const isCommand = words.every(x => KEYWORDS.has(x.text))
+    if (text === 'case' && isCommand) this.cases.push({ state: 'head', at: words.length, depth: this.depth })
+    else if (text === 'in' && here?.state === 'head' && words.length === here.at + 2) here.state = 'pattern'
+    else if (text === 'esac' && words.length === 0 && here && here.state !== 'head') {
+      this.cases.pop()
+      return true
+    }
+    return false
+  }
+
+  // A case pattern (`a)`, `(a|b)`, `@(x|y))`) where one is due, read whole: it runs nothing, and its `)`
+  // closes no subshell. An `esac` there ends the block. True when the reading took `c` so.
+  private casePattern(c: string): boolean {
+    const top = this.cases.at(-1)
+    if (this.word || top?.state !== 'pattern' || top.depth !== this.depth) return false
+    // The `case ... in` words are a statement of their own: a `$(...)` in its subject runs.
+    this.endStatement()
+    if (/^esac(?=$|[\s;&|)])/.test(this.command.slice(this.i, this.i + 5))) {
+      this.cases.pop()
+      this.i += 4
+      return true
+    }
+    if (c === '(') this.i++
+    let nest = 0
+    let quote = ''
+    for (; this.i < this.n; this.i++) {
+      const d = this.command[this.i]
+      if (quote && d === quote) quote = ''
+      else if (d === '\\' && quote !== "'") this.i++
+      else if (quote) continue
+      else if (d === "'" || d === '"') quote = d
+      else if (d === '(') nest++
+      else if (d === ')' && nest-- === 0) break
+    }
+    this.i++
+    top.state = 'body'
+    return true
   }
 
   private endStatement(pipeNext = false) {
@@ -139,7 +202,8 @@ class Reader {
         const raw = this.command.slice(this.i, end === -1 ? this.n : end).replace(/\r$/, '')
         this.i = end === -1 ? this.n : end + 1
         const line = strip ? raw.replace(/^\t+/, '') : raw
-        if (line.trim() === delim) break
+        // Only a line that is exactly the delimiter ends the body; ` EOF` or `EOF ` is body text.
+        if (line === delim) break
         lines.push(line)
       }
       const body = lines.join('\n')
@@ -167,16 +231,26 @@ class Reader {
     return true
   }
 
-  // `$(` at `i` (PowerShell also `(`, `@(` and `@{`): the substitution read whole and kept raw, its own
-  // here-doc bodies collected, and the commands inside it read as statements of their own.
+  // `$(`, `<(` or `>(` at `i` (PowerShell `$(`, `(`, `@(` and `@{`): the substitution read whole and kept
+  // raw, and the commands inside it read as statements of their own. In Bash a reader of its own reads
+  // them up to the `)` that closes them, as the shell does, and their here-doc bodies are the word's.
   private substitution(w: Word, braces = false) {
     const start = this.i
-    this.skipSubstitution(w, braces)
-    const raw = this.command.slice(start, this.i)
-    w.text += raw
     w.dynamic = true
-    const open = raw.indexOf(braces ? '{' : '(')
-    if (!braces && open !== -1 && raw.endsWith(')')) this.pushInner(parse(raw.slice(open + 1, -1), this.powershell))
+    if (this.powershell) {
+      this.skipSubstitution(braces)
+      const raw = this.command.slice(start, this.i)
+      w.text += raw
+      const open = raw.indexOf('(')
+      if (!braces && open !== -1 && raw.endsWith(')')) this.pushInner(parse(raw.slice(open + 1, -1), true))
+      return
+    }
+    const sub = new Reader(this.command, false, this.command.indexOf('(', start) + 1, true)
+    const statements = sub.run()
+    this.i = sub.position
+    w.text += this.command.slice(start, this.i)
+    w.bodies.push(...statements.flatMap(st => st.heredocs))
+    this.pushInner(statements)
   }
 
   // A Bash backtick substitution at `i`, kept raw like `$(...)`; the commands inside, with the backslash
@@ -203,14 +277,17 @@ class Reader {
     this.st.inner.push(...statements)
   }
 
-  // Moves `i` past the closing bracket of the substitution at `i`, reading its here-doc bodies into `w`.
-  private skipSubstitution(w: Word, braces: boolean) {
+  // Moves `i` past the closing bracket of the PowerShell substitution at `i`, past quotes and here-strings.
+  private skipSubstitution(braces: boolean) {
     let depth = 0
     let quote = ''
-    let inner: Pending[] = []
     while (this.i < this.n) {
       const c = this.command[this.i]
-      if (quote) {
+      const hereString = !quote && c === '@' ? /^@(['"])[ \t]*\r?\n/.exec(this.command.slice(this.i)) : null
+      if (hereString) {
+        const close = this.command.indexOf(`\n${hereString[1]}@`, this.i)
+        this.i = close === -1 ? this.n : close + 3
+      } else if (quote) {
         if (c === quote) quote = ''
         else if (c === this.esc && quote === '"') this.i++
         this.i++
@@ -224,33 +301,12 @@ class Reader {
         depth--
         this.i++
         if (depth === 0) return
-      } else if (c === '\n' && inner.length > 0) {
-        this.i++
-        this.innerBodies(inner, w)
-        inner = []
-      } else if (!this.innerHeredoc(c, inner)) this.i++
+      } else this.i++
     }
   }
 
-  // A here-doc opened inside a substitution: queued apart from the line's own. True when one was.
-  private innerHeredoc(c: string | undefined, inner: Pending[]): boolean {
-    if (c !== '<' || !this.command.startsWith('<<', this.i) || this.command.startsWith('<<<', this.i)) return false
-    const m = HEREDOC.exec(this.command.slice(this.i))
-    if (!m) return false
-    inner.push({ delim: m[3] ?? '', strip: m[1] === '-' })
-    this.i += m[0].length
-    return true
-  }
-
-  private innerBodies(inner: Pending[], w: Word) {
-    const saved = this.pending
-    this.pending = inner
-    this.readBodies(w.bodies)
-    this.pending = saved
-  }
-
   private step(c: string) {
-    if (this.layout(c) || this.structure(c) || this.separator(c)) return
+    if (this.layout(c) || this.casePattern(c) || this.structure(c) || this.separator(c)) return
     if (c === '<' && this.heredocStart()) return
     if (this.hereString(c)) return
     this.wordChar(c)
@@ -303,6 +359,10 @@ class Reader {
     // `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
     if (c !== '(' && c !== ')') return false
     this.i++
+    if (c === ')' && this.isSubstitution && this.depth === 0) {
+      this.isClosed = true
+      return true
+    }
     this.depth = Math.max(0, this.depth + (c === '(' ? 1 : -1))
     if (c === '(') this.scopes.push(++this.opened)
     else this.scopes.pop()
@@ -318,6 +378,14 @@ class Reader {
       return true
     }
     if (c !== ';' && c !== '|' && c !== '&') return false
+    // `;;`, `;&` and `;;&` end a case arm: the next pattern is due.
+    const top = this.cases.at(-1)
+    if (c === ';' && /[;&]/.test(this.at(1)) && top?.state === 'body' && top.depth === this.depth) {
+      this.i += this.command.startsWith(';;&', this.i) ? 3 : 2
+      top.state = 'pattern'
+      this.endStatement()
+      return true
+    }
     // PowerShell's call operator `& "path"` and a redirect's `>&` are not separators.
     if (c === '&' && this.powershell && !this.word && this.st.words.length === 0) {
       this.i++
