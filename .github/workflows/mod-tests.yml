@@ -1,0 +1,152 @@
+name: Mod tests
+
+# Runs every mod's own test suite (`plugin test` in each folder under
+# _core/global-template/mods) and the node tests of the mods' helper scripts.
+# Pull requests and pushes test against a pinned Claude Code release, so a new
+# release does not change a PR's result. The weekly run uses the newest
+# release, so an engine change that breaks a mod shows up as an issue within a
+# week of its release, without waiting for a PR. Pull requests run whatever
+# they change, so the check can be made required without waiting forever on a
+# PR that touches no mod.
+#
+# Windows runner: the mods' test fakes answer Windows paths (C:/Users/...),
+# which Linux does not treat as absolute.
+# The type check stays local: its engine typings are generated per machine and
+# are not committed.
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop]
+    paths:
+      - "_core/global-template/mods/**"
+      - ".github/workflows/mod-tests.yml"
+  schedule:
+    - cron: "17 9 * * 1"
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels its older run; each develop commit gets its own
+# group, and a scheduled run is grouped by main's head commit.
+concurrency:
+  group: mod-tests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # The release the mods were last verified on. Raising it is a workflow
+  # change, so it follows git.md's rule for those, and the mods on each branch
+  # the raise reaches must already pass on the new release.
+  PINNED_VERSION: "2.1.292"
+  DISABLE_AUTOUPDATER: "1"
+  DISABLE_TELEMETRY: "1"
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+
+jobs:
+  test:
+    name: Mod tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      # A scheduled run starts on the default branch (main); it tests develop,
+      # where the mods are worked on. Every other event checks out its own ref.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'develop' || '' }}
+          persist-credentials: false
+
+      # main has no mods yet: the job notes that and passes. develop
+      # must always have them, so a missing folder there fails instead of
+      # passing by testing nothing. A scheduled run tests develop.
+      - name: Check for the mods
+        id: mods
+        env:
+          BRANCH: ${{ github.event_name == 'schedule' && 'develop' || github.base_ref || github.ref_name }}
+        run: |
+          if [ -d _core/global-template/mods ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "$BRANCH" = "develop" ]; then
+            echo "::error::develop has no _core/global-template/mods"; exit 1
+          else
+            echo "::notice::No mods on $BRANCH yet, so there is nothing to test."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install the CLI
+        if: steps.mods.outputs.present == 'true'
+        env:
+          VERSION: ${{ github.event_name == 'schedule' && 'latest' || env.PINNED_VERSION }}
+        run: |
+          npm install --global --no-fund --no-audit "@anthropic-ai/claude-code@$VERSION"
+          claude --version
+
+      # Every suite runs even after one fails, so one run names every broken mod.
+      # A run that found no suite fails: CI must not pass by testing nothing.
+      - name: Mod test suites
+        if: steps.mods.outputs.present == 'true'
+        run: |
+          status=0
+          ran=0
+          for dir in _core/global-template/mods/*/; do
+            [ -d "${dir}tests" ] || continue
+            name=$(basename "$dir")
+            ran=$((ran + 1))
+            echo "::group::$name"
+            if ! (cd "$dir" && claude plugin test .); then
+              echo "::error::$name: its tests failed"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          if [ "$ran" -eq 0 ]; then
+            echo "::error::No mod test suite was found."
+            exit 1
+          fi
+          exit "$status"
+
+      # Runs even when a mod suite failed, so one run names every broken part.
+      - name: Helper script tests
+        if: ${{ !cancelled() && steps.mods.outputs.present == 'true' }}
+        run: |
+          shopt -s nullglob
+          specs=(_core/global-template/mods/*/test-helper/*.spec.cjs)
+          if [ "${#specs[@]}" -eq 0 ]; then
+            echo "::error::No helper script test was found."
+            exit 1
+          fi
+          node --test "${specs[@]}"
+
+  # A red weekly run has no PR to show it, so it opens an issue, or comments on
+  # the one still open. A run that hits its time limit ends cancelled, not
+  # failed, so anything short of success reports, and the issue names the
+  # result instead of assuming the CLI broke.
+  report:
+    name: Report a weekly failure
+    needs: test
+    if: always() && github.event_name == 'schedule' && needs.test.result != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.test.result }}
+        run: |
+          title="Scheduled mod tests did not pass"
+          body="The weekly mod tests on the newest CLI release ended with result: $RESULT. Run: $RUN_URL"
+          number=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" \
+            --json number,title --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+          fi
