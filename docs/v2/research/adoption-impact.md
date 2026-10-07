@@ -2,29 +2,29 @@
 
 Each source project's session compared its live setup with `_core/project-template` on `develop` (9d7ea94) and `docs/v2/PLAN.md`, read-only. Phase 2 (gate v2) and Phase 2b (plugin lifecycle) were judged from the plan.
 
-## Stockra
+## BusinessApp
 
-**Verdict:** adopting v2 as-is would degrade Stockra. Stay on its own setup, cherry-pick pieces, keep feeding learnings back. Re-evaluate the single-check gate once it has run on real PRs and covers the extension points below.
+**Verdict:** adopting v2 as-is would degrade BusinessApp. Stay on its own setup, cherry-pick pieces, keep feeding learnings back. Re-evaluate the single-check gate once it has run on real PRs and covers the extension points below.
 
 ### Would lose
-- **Board integration** (largest): org project queue (Row IDs, Queue Order, Blocked By), issue-body contract hook, `board_check.py --fix` at close, `board_link_pr.py`, slice sub-issues at the 10-link cap, per-session status update, milestone done-checks. v2 session-start/close are `ROADMAP.md`-driven; Stockra archived its ROADMAPs.
+- **Board integration** (largest): org project queue (Row IDs, Queue Order, Blocked By), issue-body contract hook, `board_check.py --fix` at close, `board_link_pr.py`, slice sub-issues at the 10-link cap, per-session status update, milestone done-checks. v2 session-start/close are `ROADMAP.md`-driven; BusinessApp archived its ROADMAPs.
 - **Stack rules and skills** with no v2 equivalent (path-scoped Dart/SQL rules, six `review-*.md` files, business-rules/i18n/sandbox skills) and CLAUDE.md non-negotiables (int-cents money, dependency direction, RLS on every table, ARB keys, `business_id` filter, 4-file SQL sync). Setup's CLAUDE.md merge must keep these verbatim.
 - **Review gate depth:** Flutter-specific pre-screen (analyze per package, size check with baseline and exceptions ledgers, sandbox scan, ARB parity, path/regex auto-escalation), domain escalation list, subagent ban, usage-limit and plan-cap detection, routine-tier fallback model, `--max-turns 120`, reviewer `git diff/log/show` access (`gh pr diff` fails past 300 files), calibration and model A/B tooling built on two tiers.
 - **Deny list:** about 75 committed denies vs v2's 8 in a local-only file (e.g. `--no-verify`, `commit --amend`, interactive rebase, direct pushes, `gh api` PUT/DELETE, secrets, publishing, `rm`, `sudo`, `curl|sh`, global git config, `filter-branch`).
-- **Mechanical size enforcement** in CI (v2 is reviewer judgment only; v2's 1.5x test-file allowance is looser than Stockra's).
+- **Mechanical size enforcement** in CI (v2 is reviewer judgment only; v2's 1.5x test-file allowance is looser than BusinessApp's).
 - **Stack-specific testing and visual detail** (manual fakes, logger/store recipe, named mutant kill tests, viewport tests and goldens, "run go" hand-off).
 - **Token-efficiency extras:** model-seat table, rule-corpus audit cadence, MCP enable/disable rules, usage-window signals.
 
 ### Would gain
-- `research-adherence.py` (Stockra cites an adherence metric nothing computes).
-- Repo-committed guard hooks (Stockra's live only in `~/.claude`, so cloud sessions run without them).
+- `research-adherence.py` (BusinessApp cites an adherence metric nothing computes).
+- Repo-committed guard hooks (BusinessApp's live only in `~/.claude`, so cloud sessions run without them).
 - `/bindwright:update` three-way merge and `/bindwright:audit`.
 - Single "Review gate" check with a testable shared parser (once it has the features above).
 - code-size complexity and closure rows; testing seeded sweeps and flaky quarantine; visual build ladder and reuse-first; check-branch-before-edit; Monitor fallback; one task per PR with `addBlockedBy`.
 
 ### Conflicts
-- **Admin bypass:** v2 tells the agent to use admin rights in `review-tiers.md`, the `token-efficiency.md` fast path and the `git.md` hotfix caveat. Stockra has no bypass actors by design; its rule is "release first". (Confirmed in templates 2026-09-24.)
-- **Force-push:** v2's deny `Bash(git push --force:*)` is a prefix match that also blocks `--force-with-lease`, which v2's own stacked-branch recipe needs. Stockra denies `git push --force` and `git push --force *` and allows `--force-with-lease`. (Confirmed 2026-09-24.) **Correction, 2026-09-24:** the permission docs say a trailing `:*` equals a trailing ` *`, which needs a space, so the old rule never blocked `--force-with-lease`. The real gap was the other way: it missed `--force` after other arguments and `-f` inside a flag bundle (`-fu`, `-qf`). #158 fixes that with position-independent deny rules and a global push guard.
+- **Admin bypass:** v2 tells the agent to use admin rights in `review-tiers.md`, the `token-efficiency.md` fast path and the `git.md` hotfix caveat. BusinessApp has no bypass actors by design; its rule is "release first". (Confirmed in templates 2026-09-24.)
+- **Force-push:** v2's deny `Bash(git push --force:*)` is a prefix match that also blocks `--force-with-lease`, which v2's own stacked-branch recipe needs. BusinessApp denies `git push --force` and `git push --force *` and allows `--force-with-lease`. (Confirmed 2026-09-24.) **Correction, 2026-09-24:** the permission docs say a trailing `:*` equals a trailing ` *`, which needs a space, so the old rule never blocked `--force-with-lease`. The real gap was the other way: it missed `--force` after other arguments and `-f` inside a flag bundle (`-fu`, `-qf`). #158 fixes that with position-independent deny rules and a global push guard.
 - Tracking (ROADMAP vs board), review check names (one vs two), per-package scope table and "feature complete" bar, commit title target (50 vs 72), same-named files with different content, context-file branch policy (own PR vs rides the active branch).
 
 ### Options v2 must add

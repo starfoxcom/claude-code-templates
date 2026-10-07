@@ -13,31 +13,31 @@
     {
       "date": "2026-03-26",
       "rule": "code-review.md",
-      "project": "stockra",
+      "project": "businessapp",
       "one_line_impact": "Pre-commit checklists + binary verdict review pipeline"
     },
     {
       "date": "2026-03-26",
       "rule": "git.md",
-      "project": "stockra",
+      "project": "businessapp",
       "one_line_impact": "Atomic commits + Gitflow + binary verdict (red/green) review \u2014 made the merge gate real"
     },
     {
       "date": "2026-03-26",
       "rule": "CLAUDE.md",
-      "project": "stockra",
+      "project": "businessapp",
       "one_line_impact": "Project-level entry rules: session-start ritual, DoD verification, tokensave-first directive"
     },
     {
       "date": "2026-03-29",
       "rule": "token-efficiency.md",
-      "project": "stockra",
+      "project": "businessapp",
       "one_line_impact": "Polling loops + read-before-write + paths-ignore auto-merge \u2014 cut CI cost and wasted re-reads"
     },
     {
       "date": "2026-04-07",
       "rule": "review-process.md",
-      "project": "stockra",
+      "project": "businessapp",
       "one_line_impact": "Path-triggered review rules \u2014 review depth scales to the diff shape"
     },
     {
@@ -173,7 +173,7 @@
     {
       "rule": "review-process.md",
       "landed": "2026-04-07",
-      "project": "stockra",
+      "project": "businessapp",
       "window_days": 21,
       "sample_before": 1,
       "sample_after": 45,
@@ -324,9 +324,9 @@
     "total_output_tokens_lifetime": 18724289,
     "total_input_tokens_lifetime": 282033,
     "rules_in_place_now_gameproject": 17,
-    "rules_in_place_now_stockra": 15,
+    "rules_in_place_now_businessapp": 15,
     "memory_files_gameproject": 93,
-    "memory_files_stockra": 24,
+    "memory_files_businessapp": 24,
     "skills_invokable_now": 11,
     "most_dramatic_efficiency_gain": "-18.4% change in tool-errors-per-session after modding.md landed (2026-04-25) \u2014 measured on 12 sessions before vs 131 after.",
     "tokensave_calls_per_session_now_vs_before": {
@@ -340,7 +340,7 @@
   "methodology_notes": [
     "Data source: per-session telemetry at ~/.claude/usage-data/session-meta/ (143 files) and ~/.claude/usage-data/facets/ (88 files).",
     "Earliest session: 2026-04-06; latest: 2026-05-12; span: 36 days.",
-    "Project names (GameProject / Stockra) are kept because they are already in public-positioned use; no other identifying info is included.",
+    "Project names are stand-ins (GameProject, BusinessApp); the real projects are not named.",
     "Pro-vs-Max boundary detected as the first date where a single session output_tokens exceeded 250k \u2014 was 2026-04-25. Pre-boundary max single-session output was 149,532.",
     "Rule-delta comparisons are 21-day before/after windows. Token-volume deltas are CONFOUNDED by project scope growth over time (M1 -> M2 work intensified) and should be read as directional. tool_errors_per_session is a cleaner signal because scope-growth raises both before AND after, cancelling the bias.",
     "All Pro-projection numbers are ESTIMATES \u2014 annotated with \"estimate\": true. The Pro plan cap mechanic is approximate; treat numbers as directional."
