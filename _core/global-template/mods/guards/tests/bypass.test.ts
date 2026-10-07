@@ -125,3 +125,13 @@ test('a PowerShell splat built at run time is unread; a typed one is checked as 
   expect(inspect(fromFile, true).unread).toEqual(['the PR text'])
   expect(inspect("$p = @{ Title = 'feat: x' }; gh pr create @p", true).unread).toEqual([])
 })
+
+test('an escaped dollar in an unquoted here-doc is literal; a bare one is unread', () => {
+  const body = (line: string) => `git commit -F - <<EOF\n${line}\nEOF`
+  expect(inspect(body(String.raw`fix: escape \$HOME in the script`), false).unread).toEqual([])
+  expect(inspect(body('fix: use $HOME'), false).unread).toEqual(['the commit message'])
+})
+
+test('a spaced --config-env still leaves the commit as a write', () => {
+  expect(inspect('git --config-env core.editor=ED commit -m msg', false).isWrite).toBe(true)
+})

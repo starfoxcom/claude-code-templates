@@ -387,10 +387,10 @@ function write(plan: Plan, st: Statement, where: string): string {
 
 // A statement's here-doc bodies as message text. A body the shell fills in at run time is checked as
 // written and also named unread: its expanded text cannot be known. A line joined by a trailing `\`
-// hides nothing, so only a `$` or a backtick counts.
+// hides nothing, so only a `$` or a backtick counts, and one the body escapes (`\$HOME`) is literal.
 function pushBodies(plan: Plan, st: Statement, where: string) {
   for (const body of st.heredocs) plan.texts.push({ where, text: body })
-  const isExpanded = st.heredocs.some(body => /\$[A-Za-z_{(]|`/.test(body))
+  const isExpanded = st.heredocs.some(body => /\$[A-Za-z_{(]|`/.test(body.replace(/\\[\s\S]/g, '')))
   if (st.hasDynamicBody && isExpanded && where && !plan.unread.includes(where)) plan.unread.push(where)
 }
 
@@ -411,7 +411,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
       if (!plan.cwd && !plan.isCwdUnknown) setCwd(plan, args[k + 1])
       r.statementDir = args[k + 1]
       k += 2
-    } else if (t === '-c' || t === '--git-dir' || t === '--work-tree' || t === '--namespace') k += 2
+    } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env)$/.test(t)) k += 2
     else if (t.startsWith('-')) k++
     else break
   }

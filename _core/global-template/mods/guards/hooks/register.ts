@@ -124,8 +124,9 @@ async function checkFiles($: Engine, plan: Plan, cwd: string, rules: TextRules, 
       }
       // A Bash /tmp path on Windows is mapped by a guess (Git Bash's mount of TEMP): a miss cannot be read.
       const isTmpGuess = isBash && live.isWindows && /^\/tmp(?:\/|$)/.test(path.replace(/\\/g, '/'))
+      // The refusal names the way out: the file may exist where Git Bash put it, under another folder.
       if (isTmpGuess) {
-        plan.unread.push(where)
+        plan.unread.push(`${where} (Git Bash's /tmp did not map to a folder the guard reads: give its Windows path)`)
         continue
       }
       return `could not read the body file ${full} for ${where}. Write the file first, or check the path.`
