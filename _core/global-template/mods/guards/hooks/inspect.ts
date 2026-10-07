@@ -6,14 +6,16 @@
 // people and agents really write: git and gh behind `if`/`then`/`do`/`{`/`(`, `sudo`, `env`, `timeout`,
 // `xargs`, inside `$(...)`, `bash -c` and `powershell -Command`; messages from variables set earlier in
 // the command, here-docs, pipes and files the command writes itself. Where a message exists but its text
-// is made by something the reading cannot follow, the message is named in `unread` (logged, never
-// silently passed). What it cannot see at all (also listed in mods/README.md):
+// is made by something the reading cannot follow, the message is named in `unread`, and the call is
+// refused, as the shipped attribution hook refuses text it cannot read. What it cannot see at all (also
+// listed in mods/README.md):
 // - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`,
 //   `ssh host ...`, or any other program that writes to GitHub on its own (a Python script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
 //   file does not exist yet, so it reports that it could not read it (unread when inline script code wrote it);
 // - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
 //   unread, its text never checked;
+// Both are refused like any other unread message.
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
 import { bypassReason } from './bypass'
@@ -54,6 +56,8 @@ export type Plan = {
   diff: 'cached' | 'all' | null
   /** Messages whose text is built in a way the guard cannot read ($VAR from outside, another program's output). */
   unread: string[]
+  /** What was left unjudged without risk to history (the PR-body format, a diff cut short): logged, never refused. */
+  notes: string[]
   /** `gh --repo owner/name` when given. */
   repo?: string
   /** Where relative paths resolve: a leading `cd` or `git -C`. */
@@ -103,6 +107,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     branches: [],
     diff: null,
     unread: [],
+    notes: [],
     isWrite: false,
     prs: [],
     ghCalls: 0,
@@ -121,12 +126,16 @@ export function inspect(command: string, powershell: boolean): Plan {
   read(statements, r)
   // The routes around the check the shipped hook refuses outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassReason(command, powershell)
-  // A body file this same command writes is read from the statement that writes it.
+  // A body file this same command writes is read from the statement that writes it. What another
+  // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
+  // so that is noted, not refused.
   for (const f of [...plan.files]) {
     const writer = r.writers.get(norm(f.path))
     if (!writer) continue
     f.written = true
+    const before = plan.unread.length
     feed(writer.st, { ...r, ps: writer.ps }, `${f.where} (file ${f.path})`)
+    plan.notes.push(...plan.unread.splice(before))
   }
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
   // for credit lines, so a spelling the reading does not model still cannot carry one into history. The
@@ -241,14 +250,15 @@ function readScript(name: string, args: Word[], r: Reading): boolean {
   return true
 }
 
-// PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed.
+// PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed; one
+// from outside the command cannot be read.
 function readSplats(args: Word[], r: Reading, where: string) {
   for (const a of args) {
     const splat = r.ps ? /^@(\w+)$/.exec(a.text) : null
     if (!splat) continue
     const v = r.vars.get((splat[1] ?? '').toLowerCase())
     if (v) r.plan.texts.push({ where, text: v.text, creditOnly: true })
-    r.plan.unread.push(where)
+    else r.plan.unread.push(where)
   }
 }
 
@@ -367,10 +377,12 @@ function write(plan: Plan, st: Statement, where: string): string {
 }
 
 // A statement's here-doc bodies as message text. A body the shell fills in at run time is checked as
-// written and also named unread: its expanded text cannot be known.
+// written and also named unread: its expanded text cannot be known. A line joined by a trailing `\`
+// hides nothing, so only a `$` or a backtick counts, as in the shipped hook.
 function pushBodies(plan: Plan, st: Statement, where: string) {
   for (const body of st.heredocs) plan.texts.push({ where, text: body })
-  if (st.hasDynamicBody && where && !plan.unread.includes(where)) plan.unread.push(where)
+  const isExpanded = st.heredocs.some(body => /\$[A-Za-z_{(]|`/.test(body))
+  if (st.hasDynamicBody && isExpanded && where && !plan.unread.includes(where)) plan.unread.push(where)
 }
 
 // `git branch` flags that list, delete or configure instead of creating a branch.

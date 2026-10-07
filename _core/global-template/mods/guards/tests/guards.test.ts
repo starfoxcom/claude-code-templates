@@ -392,10 +392,12 @@ test('text piped in, set in a variable, or written to a file earlier in the comm
   // A message made by something the reading cannot follow is named, never dropped.
   expect(plan('git log -1 --format=%B | git commit -F -').unread).toEqual(['the commit message'])
   expect(plan('git commit -F -').unread).toEqual(['the commit message'])
-  expect(plan('gh pr view 5 --json body --jq .body > b.md; gh pr edit 5 --body-file b.md').unread).toEqual([
+  // A file the command writes itself is noted, not refused, even when another program fills it.
+  expect(plan('gh pr view 5 --json body --jq .body > b.md; gh pr edit 5 --body-file b.md').notes).toEqual([
     'the PR edit (file b.md)',
   ])
-  expect(plan(`$p = @{ title = 't' }; gh pr create @p`, true).unread).toEqual(['the PR text'])
+  expect(plan(`$p = @{ title = 't' }; gh pr create @p`, true).unread).toEqual([])
+  expect(plan('gh pr create @p', true).unread).toEqual(['the PR text'])
   expect(plan('bash -c "git commit -m \\"$MSG\\""').unread).toContain('a bash script built at run time')
   expect(plan('MSG=fixed; git commit -m "$MSG"').unread).toEqual([])
 })
