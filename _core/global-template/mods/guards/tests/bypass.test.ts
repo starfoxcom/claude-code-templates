@@ -433,3 +433,83 @@ test('listing tags or notes writes nothing; making one does', () => {
     expect([command, inspect(command, false).isWrite]).toEqual([command, true])
   }
 })
+
+// A git long option shortened to a start of its name that names no other option, as git reads it, and
+// the other routes found with it: a note or a fixup that takes another object's message, a tag trailer.
+const SHORTENED_REFUSED: [string, string, boolean?][] = [
+  ["git commit --no-verif -m 'fix: x'", 'skipping git hooks'],
+  ["git commit --no-veri -m 'fix: x'", 'skipping git hooks'],
+  ['git push --no-verif origin main', 'skipping git hooks'],
+  ['git rebase --no-verif main', 'skipping git hooks'],
+  ["git commit --trail 'Reviewed-by: a' -m x", '--trailer'],
+  ['git commit --reu HEAD', "reusing another commit's message"],
+  ['git commit --reedit=HEAD', "reusing another commit's message"],
+  ['git commit --fixup=amend:HEAD', "reusing another commit's message"],
+  ['git commit --fixup reword:HEAD', "reusing another commit's message"],
+  ['git notes add -C 1a2b3c HEAD', "reusing another commit's message"],
+  ['git notes add -c 1a2b3c', "reusing another commit's message"],
+  ['git notes append --reuse=1a2b3c', "reusing another commit's message"],
+  ["git tag -a v1 -m 'v1' --trai 'Reviewed-by: a'", '--trailer'],
+  ['git config --rem core', 'skipping git hooks'],
+  ['git config --rena core old', 'skipping git hooks'],
+  ['git config --unset-a core.hooksPath', 'skipping git hooks'],
+  ['git config --ad core.hooksPath /x', 'skipping git hooks'],
+  ['git config unset --a core.hooksPath', 'skipping git hooks'],
+  // A program named by a variable the command set is read as that program.
+  ["GIT=git; $GIT commit --no-verify -m 'fix: x'", 'skipping git hooks'],
+  ["$g = 'git'; & $g commit --no-verify -m x", 'skipping git hooks', true],
+]
+
+for (const [command, reason, ps] of SHORTENED_REFUSED) {
+  test(`refused: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, ps ?? false).block).toContain(reason)
+  })
+}
+
+test('a shortened option is read as the option git reads', () => {
+  const read = (c: string) => inspect(c, false)
+  const messages = (c: string) => read(c).texts.filter(t => !t.creditOnly && t.where === 'the commit message')
+  expect(messages("git commit --mess 'fix: x'").map(t => t.text)).toEqual(['fix: x'])
+  expect(messages("git commit --messa='fix: x'").map(t => t.text)).toEqual(['fix: x'])
+  expect(read('git commit --fi m.txt').files).toEqual([])
+  expect(read('git commit --fil m.txt').files.map(f => f.path)).toEqual(['m.txt'])
+  expect(read('git commit --al').diff).toBe('cached')
+  expect(read("git commit --all -m 'fix: x'").diff).toBe('all')
+  expect(read('git branch --mo old new').branches).toEqual(['new'])
+  expect(read('git branch --del old').branches).toEqual([])
+  expect(read('git checkout --orph fresh').branches).toEqual(['fresh'])
+  expect(read('git switch --cr fresh').branches).toEqual(['fresh'])
+  expect(read('git tag --del v1').isWrite).toBe(false)
+})
+
+test('a shortened name that is no such option, or names two, is left as written', () => {
+  for (const command of [
+    // `--no-ver` names both `--no-verify` and `--no-verbose`: git refuses it.
+    "git commit --no-ver -m 'fix: x'",
+    "git commit --verify -m 'fix: x'",
+    'git commit --fixup HEAD',
+    'git commit --squash=HEAD -m x',
+    "git commit -m 'fix: x' --amend --no-edit",
+    'git notes add -m x',
+    'git config --get core.hooksPath',
+    'git config --get-a core.hooksPath',
+    'git push --verbose',
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+})
+
+test('a program named at run time with a write for arguments is unread', () => {
+  const read = (c: string, ps = false) => inspect(c, ps)
+  const messages = (c: string) => read(c).texts.filter(t => !t.creditOnly && t.where === 'the commit message')
+  expect(messages("GIT=git; $GIT commit -m 'fix: x'").map(t => t.text)).toEqual(['fix: x'])
+  expect(messages("G='git -C repo'; $G commit -m 'fix: x'").map(t => t.text)).toEqual(['fix: x'])
+  for (const command of ['$G commit -m x', '"$(which git)" commit -m x', '$GH pr create -t t -b x']) {
+    expect([command, read(command).unread]).toEqual([command, ['a program named at run time']])
+  }
+  // Another program, or a read-only call, is no write.
+  for (const command of ['"$HOME/bin/tool" --version', '$G log -1', 'X=$(date)']) {
+    expect([command, read(command).unread]).toEqual([command, []])
+  }
+  expect(read("$p = @{ Title = 't' }; $p.Add('Body', 'x')", true).unread).toEqual([])
+})

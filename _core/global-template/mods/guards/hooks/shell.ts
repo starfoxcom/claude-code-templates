@@ -36,6 +36,8 @@ export type Statement = {
   scope?: string
   /** For a statement inside a `$(...)` or backticks: which one, numbered within its parse. */
   group?: number
+  /** PowerShell: run through the call operator (`& $git commit`). */
+  isCall?: boolean
 }
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
@@ -388,6 +390,7 @@ class Reader {
     }
     // PowerShell's call operator `& "path"` and a redirect's `>&` are not separators.
     if (c === '&' && this.powershell && !this.word && this.st.words.length === 0) {
+      this.st.isCall = true
       this.i++
       return true
     }
