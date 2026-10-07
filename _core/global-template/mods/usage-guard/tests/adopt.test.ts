@@ -172,12 +172,15 @@ async function wakeAfterClaimTaken($: Engine, seen: World, savedCopy: string): P
   return String(((await $.command.run({ command: 'usage-guard', args: '' } as never)) as { text?: string }).text)
 }
 
-test('an armed session whose arm another session adopted stands down at its wake', async ($, on) => {
+test('an armed session whose arm another session adopted stands down at its wake', LONG, async ($, on) => {
   const seen = world(on)
   expect(await wakeAfterClaimTaken($, seen, 'null')).not.toContain('Armed to resume')
 })
 
-test('a claim taken while the saved arm stands (a reloaded instance) keeps the arm here', async ($, on) => {
+test(
+  'a claim taken while the saved arm stands (a reloaded instance) keeps the arm here',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   const saved = JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE, session: 'sess-a' })
   expect(await wakeAfterClaimTaken($, seen, saved)).toContain('Armed to resume')

@@ -34,7 +34,7 @@ test('below the line nothing happens', async ($, on) => {
   expect(seen.commands).toEqual([])
 })
 
-test('crossing the line wraps up, stops background work and resumes after the reset', async ($, on) => {
+test('crossing the line wraps up, stops background work and resumes after the reset', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await doWork($)
@@ -174,7 +174,10 @@ test('a pause another session wrote for a later reset is kept, and this session 
   expect(seen.commands.filter(c => c.command === 'session-close')).toHaveLength(1)
 })
 
-test('a session opened during a pause only waits; at the reset it is told, not set to work', async ($, on) => {
+test(
+  'a session opened during a pause only waits; at the reset it is told, not set to work',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   const pause: Pause = {
     status: 'active',
@@ -225,7 +228,10 @@ test('cancel stops the automatic resume', async ($, on) => {
   expect(resumes(seen)).toEqual([])
 })
 
-test('a session that changed nothing only waits near the limit, and is not set to work after', async ($, on) => {
+test(
+  'a session that changed nothing only waits near the limit, and is not set to work after',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   await start($)
   // Reading counts as no work.
