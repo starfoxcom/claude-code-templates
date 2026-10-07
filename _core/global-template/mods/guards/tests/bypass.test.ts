@@ -3,12 +3,13 @@ import { expect, test } from 'claude-code/testing'
 import { bypassReason, maskQuoted } from '../hooks/bypass'
 import { inspect } from '../hooks/inspect'
 
-// Each route around the check, refused as the shipped attribution hook refuses it.
+// Each route around the check, refused.
 const REFUSED: [string, string][] = [
   ['git filter-repo --version', 'history rewriting'],
   ['git filter-branch --tree-filter x HEAD', 'history rewriting'],
   ["git commit --no-verify -m 'fix: x'", 'hook bypass'],
   ["git commit -n -m 'fix: x'", 'hook bypass'],
+  ["git commit -m '\u{1F41B}\u{1F527} fix' -n", 'hook bypass'],
   ["git -c core.hooksPath=/dev/null commit -m 'fix: x'", 'hook bypass'],
   ["LEFTHOOK=0 git commit -m 'fix: x'", 'hook bypass'],
   ["git commit -m 'fix: x' --trailer 'Reviewed-by: a'", '--trailer'],
@@ -33,8 +34,14 @@ const PASSED = [
   'git commit -F - <<\'EOF\'\ndocs: never run git filter-repo here\nEOF',
   "gh pr create --title 'docs: eval is refused' --body 'x'",
   'git tag -n',
-  // A push writes no message, so the hook reads none: its `-n` (a dry run) passes.
+  // `-n` skips hooks only on a commit: a dry-run push and a merge without its diffstat pass.
   'git push -n origin main',
+  'git merge --no-ff -n origin/develop',
+  // An emoji in a message never shifts the mask onto the flags after it.
+  "git commit -m '\u{1F41B}\u{1F527} fix: x' --no-edit",
+  // A delimiter with a dot or a dash, and a body the command never closes, are both blanked.
+  "git commit -F - <<'END.MSG'\ndocs: explain --no-verify\nEND.MSG",
+  "git commit -F - <<'EOF'\ndocs: explain --trailer",
   // Quoted, the eval's command is text: only what is typed as arguments counts.
   'eval "git commit -m x"',
   'git cherry-pick -n abc123',
