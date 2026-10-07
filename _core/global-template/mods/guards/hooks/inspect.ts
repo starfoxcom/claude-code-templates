@@ -180,8 +180,10 @@ function read(statements: Statement[], r: Reading) {
 function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
   const { plan } = r
   read(st.inner, r)
-  plan.written.push(...st.writes)
-  for (const path of st.writes) r.writers.set(norm(path), { st, ps: r.ps })
+  // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
+  const writes = st.writes.map(path => knownPath(path, r) ?? path)
+  plan.written.push(...writes)
+  for (const path of writes) r.writers.set(norm(path), { st, ps: r.ps })
   const { name, args } = programOf(st)
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
@@ -642,14 +644,29 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       if (eq === -1 && value.dynamic) return void (where && plan.unread.push(where))
       const v = eq === -1 ? '' : value.text.slice(eq + 1)
       if (v === '@-') return void r.stdin++
-      if (v.startsWith('@')) return void plan.files.push({ where, path: v.slice(1) })
+      if (v.startsWith('@')) return filePath(v.slice(1), r, where)
       return message({ ...value, text: v }, r, where)
     }
     case 'data':
       if (value.text === '@-') return void r.stdin++
-      if (value.text.startsWith('@')) return void plan.files.push({ where, path: value.text.slice(1) })
+      if (value.text.startsWith('@')) return filePath(value.text.slice(1), r, where)
       return message(value, r, where)
   }
+}
+
+// A path as the command will use it: variables set earlier filled in; undefined when part of it is built
+// at run time in a way the reading does not know.
+function knownPath(path: string, r: Reading): string | undefined {
+  if (!/[$`]/.test(path)) return path
+  const e = expand(path, r)
+  return e.unresolved ? undefined : e.text
+}
+
+// A body file named after `@` in a field (`-F query=@$q`): read from its full path, or named unread.
+function filePath(path: string, r: Reading, where: string) {
+  const full = knownPath(path, r)
+  if (full === undefined) return void r.plan.unread.push(where)
+  r.plan.files.push({ where, path: full })
 }
 
 const SUBSTITUTION = /\$\((?:[^()]|\([^()]*\))*\)/g
