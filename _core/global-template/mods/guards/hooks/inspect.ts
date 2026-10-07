@@ -16,6 +16,7 @@
 //   unread, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
+import { bypassReason } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
@@ -118,6 +119,8 @@ export function inspect(command: string, powershell: boolean): Plan {
   const statements = parse(command, powershell)
   r.alone = aloneOf(statements)
   read(statements, r)
+  // The routes around the check the shipped hook refuses outright: history rewrites, skipped hooks and the like.
+  plan.block ??= bypassReason(command, powershell)
   // A body file this same command writes is read from the statement that writes it.
   for (const f of [...plan.files]) {
     const writer = r.writers.get(norm(f.path))
