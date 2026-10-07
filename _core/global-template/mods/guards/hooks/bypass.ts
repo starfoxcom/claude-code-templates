@@ -22,7 +22,7 @@ const HOOKED = new Set(['commit', 'merge', 'push', 'am', 'rebase', 'cherry-pick'
 const HOOKS_KEY = /^(core\.hookspath|hooks\.)/i
 const CONFIG_WRITES = /^--(unset|unset-all|replace-all|add)$/
 // `git config` flags whose next word is their value, and the subcommand words of git 2.46+ (`config set`).
-const CONFIG_VALUE_FLAGS = /^(-f|--file|--blob|--type|--default|--comment|--value)$/
+const CONFIG_VALUE_FLAGS = /^(-f|--file|--blob|-t|--type|--default|--comment|--value)$/
 const CONFIG_VERBS = /^(set|unset|unset-all|replace-all|add)$/
 // A hooks setting passed through the environment: `GIT_CONFIG_PARAMETERS`, or `GIT_CONFIG_KEY_<n>`.
 const ENV_HOOKS = /^(GIT_CONFIG_PARAMETERS=.*(core\.hookspath|hooks\.)|GIT_CONFIG_KEY_\d+=(core\.hookspath|hooks\.))/i
@@ -43,6 +43,9 @@ function gitParts(args: Word[]): { sub: string; rest: Word[]; settings: string[]
     } else if (t.startsWith('--config-env=')) {
       settings.push(t.slice('--config-env='.length))
       k++
+    } else if (t === '--config-env') {
+      settings.push(args[k + 1]?.text ?? '')
+      k += 2
     } else if (t.startsWith('-')) k++
     else break
   }

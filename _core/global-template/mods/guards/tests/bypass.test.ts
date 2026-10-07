@@ -89,6 +89,8 @@ const MORE_REFUSED: [string, string, boolean?][] = [
   ['git config -f .git/config core.hooksPath /x', 'skipping git hooks'],
   ['git config --global core.hooksPath /x', 'skipping git hooks'],
   ['git --config-env=core.hooksPath=HP commit -m x', 'skipping git hooks'],
+  ['git --config-env core.hooksPath=HP commit -m x', 'skipping git hooks'],
+  ['git config -t path core.hooksPath /x', 'skipping git hooks'],
   ["GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x", 'skipping git hooks'],
   ['GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/x git commit -m x', 'skipping git hooks'],
   ['LEFTHOOK=false git commit -m x', 'disabling lefthook'],
@@ -119,5 +121,7 @@ test('reading a hooks setting, a file named like one, or a message naming a flag
 
 test('a PowerShell splat built at run time is unread; a typed one is checked as typed', () => {
   expect(inspect('$p = @{ Title = "$env:T" }; gh pr create @p', true).unread).toEqual(['the PR text'])
+  const fromFile = "$p = @{ Title = 't'; Body = (Get-Content b.md -Raw) }; gh pr create @p"
+  expect(inspect(fromFile, true).unread).toEqual(['the PR text'])
   expect(inspect("$p = @{ Title = 'feat: x' }; gh pr create @p", true).unread).toEqual([])
 })
