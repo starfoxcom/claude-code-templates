@@ -263,7 +263,8 @@ function readSplats(args: Word[], r: Reading, where: string) {
     if (!splat) continue
     const v = r.vars.get((splat[1] ?? '').toLowerCase())
     if (v) r.plan.texts.push({ where, text: v.text, creditOnly: true })
-    else r.plan.unread.push(where)
+    // A hashtable built at run time (`@{ Title = "$env:T" }`) cannot be read either.
+    if (!v || v.text.includes('$')) r.plan.unread.push(where)
   }
 }
 
