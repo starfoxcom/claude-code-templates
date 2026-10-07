@@ -569,7 +569,7 @@ test('inline script code (-c, -e) marks a later body file too', { options: { mod
   expect(seen.ran).toHaveLength(2)
 })
 
-// From the second shadow trial: the shapes where the mod and the shipped scripts disagreed.
+// From the second shadow trial: the shapes where the mod and the guard scripts beside it disagreed.
 test('a GitHub API call whose text uses a variable from outside the command is refused', {
   options: { mode: 'enforce' },
 }, async ($, on) => {

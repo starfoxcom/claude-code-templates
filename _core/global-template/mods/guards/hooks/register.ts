@@ -242,8 +242,7 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
     // A diff past the output cap was read only in part: the rest is noted, never passed as clean.
     if (diff.isCut) plan.notes.push('the lines the commit adds past the first part of its diff')
   }
-  // A message the reading could not follow is refused, as the shipped attribution hook refuses text it
-  // cannot read: what reaches history unread is never passed.
+  // A message the reading could not follow is refused: what reaches history unread is never passed.
   const [unread] = plan.unread
   if (unread) return unreadReason(unread)
   // Last: a credit anywhere outranks the PR format.

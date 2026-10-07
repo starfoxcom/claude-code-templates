@@ -7,8 +7,8 @@
 // `xargs`, inside `$(...)`, `bash -c` and `powershell -Command`; messages from variables set earlier in
 // the command, here-docs, pipes and files the command writes itself. Where a message exists but its text
 // is made by something the reading cannot follow, the message is named in `unread`, and the call is
-// refused, as the shipped attribution hook refuses text it cannot read. What it cannot see at all (also
-// listed in mods/README.md):
+// refused: what reaches history unread is never passed. What it cannot see at all (also listed in
+// mods/README.md):
 // - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`,
 //   `ssh host ...`, or any other program that writes to GitHub on its own (a Python script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
@@ -124,7 +124,7 @@ export function inspect(command: string, powershell: boolean): Plan {
   const statements = parse(command, powershell)
   r.alone = aloneOf(statements)
   read(statements, r)
-  // The routes around the check the shipped hook refuses outright: history rewrites, skipped hooks and the like.
+  // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassReason(command, powershell)
   // A body file this same command writes is read from the statement that writes it. What another
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
@@ -378,7 +378,7 @@ function write(plan: Plan, st: Statement, where: string): string {
 
 // A statement's here-doc bodies as message text. A body the shell fills in at run time is checked as
 // written and also named unread: its expanded text cannot be known. A line joined by a trailing `\`
-// hides nothing, so only a `$` or a backtick counts, as in the shipped hook.
+// hides nothing, so only a `$` or a backtick counts.
 function pushBodies(plan: Plan, st: Statement, where: string) {
   for (const body of st.heredocs) plan.texts.push({ where, text: body })
   const isExpanded = st.heredocs.some(body => /\$[A-Za-z_{(]|`/.test(body))

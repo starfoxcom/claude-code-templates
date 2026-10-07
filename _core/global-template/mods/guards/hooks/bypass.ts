@@ -1,11 +1,13 @@
-// The routes around the attribution check that the shipped attribution hook refuses outright
-// (`_core/global-template/hooks/no-ai-attribution.py`), ported pattern for pattern so the mod can replace
-// it: history rewrites, skipped git hooks, `--trailer`, a reused commit message, `eval`, and lefthook
-// switched off. Like the hook, they are matched on the command's arguments only: quoted text, here-doc
-// bodies and here-strings are blanked first, so a message that names a flag never trips them. Pure.
+// The routes around the attribution check, refused outright whatever the message says: history rewrites,
+// skipped git hooks, `--trailer`, a reused commit message, `eval`, and lefthook switched off. Each one
+// rewrites, hides or skips the text the check reads. They are matched on the command's arguments only:
+// quoted text, here-doc bodies and here-strings are blanked first, so a message that names a flag never
+// trips them. A command-wide match errs toward refusing (`git config --get core.hooksPath && git commit`
+// is refused): a false refusal costs a rewrite of the command, a false pass a skipped check. Pure.
 
 // Here-docs (`<<'EOF'` literal, `<<EOF` expanding) and PowerShell here-strings (`@'...'@`, `@"..."@`).
-const HEREDOC = /<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\1[^\n]*\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g
+// Delimiters as the command reading takes them (`[\w.-]`); a body with no closing line runs to the end.
+const HEREDOC = /<<-?[ \t]*(['"]?)([A-Za-z_][\w.-]*)\1[^\n]*\n[\s\S]*?(?:\n[ \t]*\2[ \t]*(?=\n|$)|$(?![\s\S]))/g
 const HERESTRING = /@(['"])[ \t]*\n[\s\S]*?\n\1@/g
 
 const HOOK_BYPASS = new RegExp(
@@ -13,8 +15,8 @@ const HOOK_BYPASS = new RegExp(
     String.raw`--no-hooks\b|hooks\.\w+\s*=|git\s+config[^|;&\n]*hooks`,
   'i',
 )
-// `-n` means `--no-verify` only on these; `git tag -n` and `cherry-pick -n` differ.
-const NO_VERIFY_N = /\bgit\b[^|;&\n]*?\b(?:commit|merge|push)\b[^|;&\n]*?(?<=\s)-n(?=\s|$)/i
+// `-n` means `--no-verify` only on a commit: on a merge it is `--no-stat`, on a push `--dry-run`.
+const NO_VERIFY_N = /\bgit\b[^|;&\n]*?\bcommit\b[^|;&\n]*?(?<=\s)-n(?=\s|$)/i
 const TRAILER = /--trailer\b/i
 const REUSE = /\bcommit\b[^|;&\n]*?(?:--reuse-message\b|--reedit-message\b|\s-[Cc]\s+\S)/i
 const EVAL = /\beval\b/i
@@ -61,9 +63,10 @@ export function textSpans(command: string, esc: string): [number, number][] {
   return spans
 }
 
-/** The command with every quoted span blanked, line breaks kept: its arguments only. */
+/** The command with every quoted span blanked, line breaks kept: its arguments only. Spans and cells are
+ * both UTF-16 units, so an emoji in a message never shifts the mask onto the flags after it. */
 export function maskQuoted(command: string, powershell: boolean): string {
-  const chars = [...command]
+  const chars = command.split('')
   for (const [s, e] of textSpans(command, powershell ? '`' : '\\'))
     for (let k = s; k < Math.min(e, chars.length); k++) if (chars[k] !== '\n') chars[k] = ' '
   return chars.join('')
@@ -80,7 +83,7 @@ export function bypassReason(command: string, powershell: boolean): string | und
   if (FILTER_REPO.test(args))
     return 'history rewriting tools (git filter-repo, git filter-branch) are not allowed from a session.'
   if (isGit && (HOOK_BYPASS.test(args) || NO_VERIFY_N.test(args)))
-    return 'git hook bypass (--no-verify / -n / hooksPath) is not allowed.'
+    return 'git hook bypass (--no-verify, commit -n, hooksPath) is not allowed.'
   if (isGit && TRAILER.test(args)) return '--trailer is not allowed; write the message body directly.'
   if (isGit && REUSE.test(args)) return "reusing another commit's message (-C / -c / --reuse-message) cannot be read."
   if (EVAL.test(args)) return 'eval builds the command at run time, so the message cannot be read.'
