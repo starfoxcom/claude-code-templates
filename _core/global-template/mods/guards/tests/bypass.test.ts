@@ -513,3 +513,17 @@ test('a program named at run time with a write for arguments is unread', () => {
   }
   expect(read("$p = @{ Title = 't' }; $p.Add('Body', 'x')", true).unread).toEqual([])
 })
+
+test('a tag or merge message that reads like a flag is a message', () => {
+  for (const command of [
+    "git tag -a v1 -m '--trailer is refused'",
+    "git merge -m '--no-verify is refused' feature",
+    "git tag -a v1 -u '--trailer' -m x",
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+  // `--no-verif` names `--no-verify-signatures` too on a merge: git refuses it, so it is left as written.
+  expect(inspect("git merge --no-verif -m 'x' feature", false).block).toBeUndefined()
+  expect(inspect("git merge -m 'x' --no-verify feature", false).block).toContain('skipping git hooks')
+  expect(inspect("git tag -a v1 -m x --trailer 'R: a'", false).block).toContain('--trailer')
+})
