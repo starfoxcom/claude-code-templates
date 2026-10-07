@@ -5,6 +5,8 @@ import { ARM_FILE, endTurn, NOW, quietWakes, RESET, resumes, start, TASKS_DIR, t
 
 // Arms set for a time of day, the quoted reason a wake hands on, and the arm tool. NOW is Fri 10:00 in Phoenix.
 
+// For tests that run the fake clock to a wake: past the 5 s default on a slower machine.
+const LONG = { timeoutMs: 15_000 }
 const HALF_HOUR = 30 * 60_000
 const REASON_LINE = 'The reason this wake was set with: "check the build".'
 
@@ -49,7 +51,7 @@ test('a clock arm without a reason and nothing pending only says so at its wake'
   expect(quietWakes(seen)[0]).toContain('at the time you set')
 })
 
-test('a reset arm hands its reason on at the reset', async ($, on) => {
+test('a reset arm hands its reason on at the reset', LONG, async ($, on) => {
   const seen = world(on)
   seen.limits = [{ kind: 'five_hour', percentUsed: 40, resetsAt: RESET }]
   nothingPending(seen)
