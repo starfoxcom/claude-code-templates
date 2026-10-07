@@ -103,16 +103,21 @@ function cacheNotice(b: Budgets, now: number): string | undefined {
 
 /**
  * Quiet while the cache is warm. Near the end of its lifetime it counts down and names the cold
- * start: what the next request writes to the cache again if it expires. For a quarter hour after a
- * confirmed miss it says what happened and what it cost.
+ * start: what the next request writes to the cache again if it expires. A conversation big enough
+ * for Claude Code's idle compaction names that instead, uncolored, until its time passes with no
+ * compaction. For a quarter hour after a confirmed miss it says what happened and what it cost.
  */
 export function cacheChip(b: Budgets, now: number): Chip | undefined {
   if (b.cacheExpiresAt === undefined || b.tokens === undefined) return undefined
   const notice = cacheNotice(b, now)
   const minutes = Math.floor((b.cacheExpiresAt - now) / 60_000)
+  const lead = notice ? `${notice} · ` : 'cache '
+  if (minutes <= b.cacheWarnMinutes && b.idleCompactAt !== undefined && now < b.idleCompactAt) {
+    return { text: `${lead}${minutes}m left · idle compact ~${shortLocal(b.idleCompactAt, b.offsetMinutes).slice(4)}` }
+  }
   if (minutes <= b.cacheWarnMinutes) {
     const left = minutes <= 0 ? 'likely expired' : `${minutes}m left`
-    const text = `${notice ? `${notice} · ` : 'cache '}${left} · cold start ${thousands(b.tokens)}`
+    const text = `${lead}${left} · cold start ${thousands(b.tokens)}`
     return { text, color: minutes <= 0 ? 'red' : 'yellow' }
   }
   if (!notice) return undefined
