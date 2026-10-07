@@ -252,12 +252,14 @@ test('/session-info phone gives the row as text, ending with the help hint', asy
   expect(lines.at(-1)).toBe('/session-info help for more')
 })
 
-test('/session-info phone that lands while a reloaded start still reads git waits for the row', async ($, on) => {
+// The slower Windows CI runner can take past half a second to reach the first git call: up to 10 s here.
+const LONG = { timeoutMs: 15_000 }
+test('/session-info phone that lands while a reloaded start still reads git waits for the row', LONG, async ($, on) => {
   const seen = world(on)
   let open = () => undefined as void
   seen.gate = new Promise(resolve => (open = resolve))
   const started = start($, 'terminal')
-  for (let i = 0; i < 50 && seen.gitCalls === 0; i++) await moment(10)
+  for (let i = 0; i < 1000 && seen.gitCalls === 0; i++) await moment(10)
   expect(seen.gitCalls).toBeGreaterThan(0)
   // The command lands mid-start: git is answered once the command is, or a moment if it waits for the start.
   const phone = $.command.run({ command: 'session-info', args: 'phone' } as never) as Promise<{ text: string }>
