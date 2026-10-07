@@ -104,8 +104,15 @@ for (const [command, reason, ps] of MORE_REFUSED) {
   })
 }
 
-test('reading a hooks setting, or a file named like one, passes', () => {
-  for (const command of ['git config get core.hooksPath', 'git config --file core.hooksPath --list']) {
+test('reading a hooks setting, a file named like one, or a message naming a flag passes', () => {
+  for (const command of [
+    'git config get core.hooksPath',
+    'git config --file core.hooksPath --list',
+    'git config --get core.hooksPath /x',
+    'git config --get-all core.hooksPath pattern',
+    "git commit -m '--no-verify'",
+    "git commit --author '--no-verify' -m x",
+  ]) {
     expect([command, inspect(command, false).block]).toEqual([command, undefined])
   }
 })

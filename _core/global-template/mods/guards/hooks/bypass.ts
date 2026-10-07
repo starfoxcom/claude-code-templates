@@ -56,6 +56,7 @@ function commitReason(rest: Word[]): string | undefined {
   for (let i = 0; i < rest.length; i++) {
     const text = rest[i]?.text ?? ''
     if (text === '--') break
+    if (text === '--no-verify') return HOOK_SKIP
     if (text === '--trailer' || text.startsWith('--trailer=')) return TRAILER
     if (/^--(reuse|reedit)-message(=|$)/.test(text)) return REUSE
     if (text.startsWith('--')) {
@@ -80,6 +81,8 @@ function commitReason(rest: Word[]): string | undefined {
 
 // `git config core.hooksPath x` (or `--unset`): a setting that moves or drops the hooks. Reading it passes.
 function configReason(rest: Word[]): string | undefined {
+  // `--get core.hooksPath <pattern>` reads, whatever follows the key.
+  if (rest.some(w => /^--get(-all|-regexp)?$/.test(w.text))) return undefined
   const keys: string[] = []
   let isWrite = false
   for (let i = 0; i < rest.length; i++) {
@@ -103,8 +106,9 @@ function gitReason(args: Word[]): string | undefined {
   if (sub === 'config') return configReason(rest)
   if (!HOOKED.has(sub)) return undefined
   if (settings.some(s => HOOKS_KEY.test(s))) return HOOK_SKIP
-  if (rest.some(w => w.text === '--no-verify')) return HOOK_SKIP
-  return sub === 'commit' ? commitReason(rest) : undefined
+  // A commit's flags are walked past their values (`-m '--no-verify'` is a message); the rest take none.
+  if (sub === 'commit') return commitReason(rest)
+  return rest.some(w => w.text === '--no-verify') ? HOOK_SKIP : undefined
 }
 
 // What the shell applies to a command or exports (`LEFTHOOK=0 git ...`, `export LEFTHOOK=false`,
