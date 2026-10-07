@@ -124,3 +124,15 @@ export const GH_WRITES: Record<string, string[]> = {
   gist: ['create', 'edit'],
   repo: ['create', 'edit'],
 }
+
+// A hashtable typed in full: each key a name or a quoted string, each value a quoted string with nothing
+// to fill in, a number, or `$true`, `$false` or `$null`. Any other value runs at run time.
+// A double-quoted string may escape with a backtick (`` `n ``, `` `$ ``) or double its quote; a here-string
+// starts its text on the next line.
+const DOUBLE = String.raw`"(?:[^"$\x60]|\x60[\s\S]|"")*"`
+const HERE = String.raw`@'[ \t]*\r?\n[\s\S]*?\n'@|@"[ \t]*\r?\n(?:[^$\x60]|\x60[\s\S])*?\n"@`
+const TYPED_KEY = String.raw`(?:\w+|'[^']*'|${DOUBLE})`
+const TYPED_VALUE = String.raw`(?:'(?:[^']|'')*'|${DOUBLE}|${HERE}|-?\d+(?:\.\d+)?|\$(?:true|false|null))`
+const TYPED_ENTRY = String.raw`${TYPED_KEY}\s*=\s*${TYPED_VALUE}`
+const TYPED_ENTRIES = String.raw`(?:${TYPED_ENTRY}(?:\s*[;\n]\s*${TYPED_ENTRY})*)?`
+export const TYPED_TABLE = new RegExp(String.raw`^@\{\s*${TYPED_ENTRIES}\s*;?\s*\}$`, 'i')

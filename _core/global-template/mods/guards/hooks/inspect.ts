@@ -25,7 +25,7 @@ import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
 import { parse, programOf, runsInlineCode } from './shell'
-import { expand, expandBody, lookup, setVar, store, within } from './vars'
+import { CAT_FILE, expand, expandBody, lookup, setVar, store, within } from './vars'
 import type { VarState } from './vars'
 import {
   COMMIT,
@@ -40,6 +40,7 @@ import {
   GH_WRITES,
   MESSAGE,
   PS_WEB,
+  TYPED_TABLE,
 } from './specs'
 import type { Kind, Spec } from './specs'
 import type { Statement, Word } from './shell'
@@ -132,8 +133,8 @@ export function inspect(command: string, powershell: boolean): Plan {
   r.alone = aloneOf(statements)
   read(statements, r)
   // `eval` and `Invoke-Expression` build their command at run time: refused in a command that writes
-  // history anywhere.
-  if (r.hasEval && (plan.isWrite || RAW_WRITES.some(re => re.test(command)))) plan.block ??= EVAL
+  // history anywhere, as the reading finds it.
+  if (r.hasEval && plan.isWrite) plan.block ??= EVAL
   // A body file this same command writes is read from the statement that writes it. What another
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
   // so that is noted, not refused.
@@ -198,8 +199,13 @@ function read(statements: Statement[], r: Reading, outer?: string) {
 function readStatement(st: Statement, prev: Statement | undefined, r: Reading, outer?: string) {
   const { plan } = r
   const scope = outer === undefined ? (st.scope ?? '') : within(outer, st.scope)
-  // A Bash `$(...)` or backtick runs in a subshell of its own; PowerShell's `$(...)` runs in place.
-  read(st.inner, r, r.ps ? scope : within(scope, `s${++r.opened}`))
+  // Each Bash `$(...)` or backtick runs in a subshell of its own; PowerShell's `$(...)` runs in place.
+  const subshells = new Map<number | undefined, string>()
+  const placeOf = (group?: number) => {
+    if (!subshells.has(group)) subshells.set(group, within(scope, `s${++r.opened}`))
+    return subshells.get(group) as string
+  }
+  st.inner.forEach((inner, i) => readStatement(inner, st.inner[i - 1], r, r.ps ? scope : placeOf(inner.group)))
   r.scope = scope
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
@@ -208,7 +214,7 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading, o
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
-  if (/^(eval|invoke-expression|iex)$/.test(name)) r.hasEval = true
+  if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(args, r)
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
     const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
@@ -252,6 +258,17 @@ function moveFolder(folder: Folder, target: Word | undefined): Folder {
   return { path: `${folder.path.replace(/\/$/, '')}/${dir}`, isUnknown: false }
 }
 
+// `eval` and `Invoke-Expression` run their words as a command in this same shell: read here, with the
+// variables set earlier filled in. Words built in a way the reading cannot follow hide the command, so
+// they are refused when their text names a history write.
+function readEval(args: Word[], r: Reading) {
+  r.hasEval = true
+  const text = args.map(a => a.text).join(' ')
+  const e = args.some(a => a.dynamic) ? expand(text, r) : { text, unresolved: false }
+  if (!e.unresolved) return read(parse(e.text, r.ps), r, r.scope)
+  if (RAW_WRITES.some(re => re.test(text))) r.plan.block ??= EVAL
+}
+
 // `bash -c '...'` and the like: the script is read as commands of its own, run in a child shell that
 // sees only exported variables. True when it was one.
 function readScript(st: Statement, name: string, args: Word[], r: Reading): boolean {
@@ -271,13 +288,6 @@ function readScript(st: Statement, name: string, args: Word[], r: Reading): bool
   if (inner.dynamic && !isKnown && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
   return true
 }
-
-// A hashtable typed in full: each key a name or a quoted string, each value a quoted string with nothing
-// to fill in, a number, or `$true`, `$false` or `$null`. Any other value runs at run time.
-const TYPED_KEY = String.raw`(?:\w+|'[^']*'|"[^"$\x60]*")`
-const TYPED_VALUE = String.raw`(?:'(?:[^']|'')*'|"[^"$\x60]*"|-?\d+(?:\.\d+)?|\$(?:true|false|null))`
-const TYPED_ENTRY = String.raw`${TYPED_KEY}\s*=\s*${TYPED_VALUE}`
-const TYPED_TABLE = new RegExp(String.raw`^@\{\s*(?:${TYPED_ENTRY}(?:\s*[;\n]\s*${TYPED_ENTRY})*)?\s*;?\s*\}$`, 'i')
 
 // PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed; one
 // from outside the command cannot be read.
@@ -441,6 +451,9 @@ function pushBodies(r: Reading, st: Statement, where: string) {
   }
 }
 
+// `git tag` flags that list, verify or delete instead of creating a tag.
+const TAG_READS = /^-[ldv]$|^-n\d*$|^--(list|delete|verify|contains|no-contains|points-at|merged|no-merged)(=|$)/
+
 // `git branch` flags that list, delete or configure instead of creating a branch.
 const BRANCH_NOT_CREATE = new RegExp(
   '^-[dDlarvu]|^--(' +
@@ -505,11 +518,15 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
     case 'tag':
     case 'merge':
     case 'commit-tree': {
+      // Listing, verifying or deleting tags, or no arguments at all, writes no message.
+      if (sub === 'tag' && (rest.length === 0 || rest.some(a => TAG_READS.test(a.text)))) return undefined
       const where = write(r, st, `the ${sub} message`)
       walk(rest, MESSAGE, r, where)
       return where
     }
     case 'notes': {
+      // Listing, showing or removing notes writes no message.
+      if (/^(list|show|get-ref|prune|remove)$/.test(rest[0]?.text ?? '')) return undefined
       const where = write(r, st, 'the git note')
       walk(rest.slice(1), MESSAGE, r, where)
       return where
@@ -748,14 +765,13 @@ function message(value: Word, r: Reading, where: string) {
   plan.texts.push({ where, text: value.text, creditOnly: true })
   const e = expand(value.text, r)
   plan.texts.push({ where, text: e.text })
-  if (e.unresolved) fileOrUnread(value, plan, where)
+  // Variables that hold a file's text (`BODY=$(cat b.md)`): the file is read instead.
+  if (e.isFilesOnly) for (const path of e.files) plan.files.push({ where, path })
+  else if (e.unresolved) fileOrUnread(value, plan, where)
 }
 
 function fileOrUnread(value: Word, plan: Plan, where: string) {
-  const cat =
-    /(?:\$|^)\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$]+))(?:\s+-Raw)?\s*\)/i.exec(
-      value.text,
-    )
+  const cat = CAT_FILE.exec(value.text)
   if (cat) return void plan.files.push({ where, path: (cat[1] ?? cat[2] ?? cat[3]) as string })
   if (value.bodies.length > 0) return
   plan.unread.push(where)

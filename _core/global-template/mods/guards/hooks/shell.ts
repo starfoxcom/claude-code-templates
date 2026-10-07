@@ -34,6 +34,8 @@ export type Statement = {
   /** The Bash subshells it runs in, outermost first (`1/3`); none at the top. A variable set in one is
    * known inside it and gone once it closes. A PowerShell `{ }` block keeps its variables, so has none. */
   scope?: string
+  /** For a statement inside a `$(...)` or backticks: which one, numbered within its parse. */
+  group?: number
 }
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
@@ -66,6 +68,8 @@ class Reader {
   // The Bash subshells open now, each with its own number.
   private scopes: number[] = []
   private opened = 0
+  // `$(...)` and backtick substitutions read so far.
+  private groups = 0
 
   constructor(
     private readonly command: string,
@@ -172,8 +176,7 @@ class Reader {
     w.text += raw
     w.dynamic = true
     const open = raw.indexOf(braces ? '{' : '(')
-    if (!braces && open !== -1 && raw.endsWith(')'))
-      this.st.inner.push(...parse(raw.slice(open + 1, -1), this.powershell))
+    if (!braces && open !== -1 && raw.endsWith(')')) this.pushInner(parse(raw.slice(open + 1, -1), this.powershell))
   }
 
   // A Bash backtick substitution at `i`, kept raw like `$(...)`; the commands inside, with the backslash
@@ -189,8 +192,15 @@ class Reader {
     }
     w.text += this.command.slice(this.i, Math.min(j + 1, this.n))
     w.dynamic = true
-    this.st.inner.push(...parse(inner, false))
+    this.pushInner(parse(inner, false))
     this.i = j + 1
+  }
+
+  // The statements of one substitution, marked as one group: each runs in a subshell of its own.
+  private pushInner(statements: Statement[]) {
+    const group = ++this.groups
+    for (const st of statements) st.group = group
+    this.st.inner.push(...statements)
   }
 
   // Moves `i` past the closing bracket of the substitution at `i`, reading its here-doc bodies into `w`.
