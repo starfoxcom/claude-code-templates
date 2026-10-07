@@ -135,3 +135,79 @@ test('an escaped dollar in an unquoted here-doc is literal; a bare one is unread
 test('a spaced --config-env still leaves the commit as a write', () => {
   expect(inspect('git --config-env core.editor=ED commit -m msg', false).isWrite).toBe(true)
 })
+
+// Lefthook switched off behind a wrapper's flags or a keyword, a hooks section dropped, and
+// `Invoke-Expression`, PowerShell's `eval`.
+const WRAPPED_REFUSED: [string, string, boolean?][] = [
+  ['env -i LEFTHOOK=0 git commit -m x', 'disabling lefthook'],
+  ['sudo -E LEFTHOOK=0 git commit -m x', 'disabling lefthook'],
+  ['declare -x LEFTHOOK=0', 'disabling lefthook'],
+  ['if LEFTHOOK=0 git commit -m x; then :; fi', 'disabling lefthook'],
+  ['for b in a; do LEFTHOOK=0 git commit -m x; done', 'disabling lefthook'],
+  ['git config --remove-section core', 'skipping git hooks'],
+  ['git config --rename-section core old', 'skipping git hooks'],
+  ['git config --rename-section staged hooks', 'skipping git hooks'],
+  ['git config remove-section core', 'skipping git hooks'],
+  ['Invoke-Expression "git commit --no-verify -m x"', 'eval', true],
+  ["iex 'git commit -m x'", 'eval', true],
+  // A script held in a variable the command sets is read with its value.
+  ['CMD="git commit --no-verify -m x"; bash -c "$CMD"', 'skipping git hooks'],
+]
+
+for (const [command, reason, ps] of WRAPPED_REFUSED) {
+  test(`refused: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, ps ?? false).block).toContain(reason)
+  })
+}
+
+test('dropping another config section, or a lefthook setting named as an argument, passes', () => {
+  for (const command of [
+    'git config --remove-section alias',
+    'git config --rename-section alias.a alias.b',
+    'echo LEFTHOOK=0',
+    "git commit -m 'LEFTHOOK=0 is refused'",
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+})
+
+test('a hashtable with a value that runs, or changed after it was typed, is unread', () => {
+  const unread = (c: string) => inspect(c, true).unread
+  expect(unread("$p = @{ Title = 't'; Body = Get-Content b.md -Raw }; gh pr create @p")).toEqual(['the PR text'])
+  expect(unread("$p = @{ Title = 't' }; $p.Body = (Get-Content b.md); gh pr create @p")).toEqual(['the PR text'])
+  expect(unread("$p = @{ Title = 't' }; $p['Body'] = 'x'; gh pr create @p")).toEqual(['the PR text'])
+  const typed = "$p = @{\n  Title = 'feat: x'; Draft = $true\n  Base = \"develop\"\n}; gh pr create @p"
+  expect(unread(typed)).toEqual([])
+})
+
+test('a body names a variable the command set: read with its value', () => {
+  const plan = (c: string, ps = false) => inspect(c, ps)
+  const hereString = plan(`MSG='fix: x'; git commit -F - <<< "$MSG"`)
+  expect(hereString.unread).toEqual([])
+  expect(hereString.texts.map(t => t.text)).toContain('fix: x')
+  const heredoc = plan("MSG='fix: x'\ngit commit -F - <<EOF\n$MSG\n\nBody.\nEOF")
+  expect(heredoc.unread).toEqual([])
+  expect(heredoc.texts.map(t => t.text)).toContain('fix: x\n\nBody.')
+  // From outside the command, or another program's output, it stays unread.
+  expect(plan('git commit -F - <<< "$MSG"').unread).toEqual(['the commit message'])
+  expect(plan('git commit -F - <<EOF\n$(git log -1 --format=%B)\nEOF').unread).toEqual(['the commit message'])
+  const fromRead = "read -r -d '' BODY <<EOF\n$OUT\nEOF\ngit commit -m \"$BODY\""
+  expect(plan(fromRead).unread).toEqual(['the commit message'])
+})
+
+test('a variable is known inside the block that set it', () => {
+  const plan = (c: string, ps = false) => inspect(c, ps)
+  expect(plan("if ($ok) { $m = 'fix: x'; git commit -m $m }", true).unread).toEqual([])
+  const sub = plan('(cd sub && F=b.md && gh pr create -t t -F "$F")')
+  expect(sub.unread).toEqual([])
+  expect(sub.files.map(f => f.path)).toEqual(['b.md'])
+  expect(plan('(F=/x/b.md; (gh pr create -t t -F "$F"))').files.map(f => f.path)).toEqual(['/x/b.md'])
+  // Another subshell, or after it closed: gone.
+  expect(plan('(F=b.md); (gh pr create -t t -F "$F")').unread).toEqual(['the PR text'])
+})
+
+test('a command held in a variable from outside is out of reach', () => {
+  // Listed in the README: nothing in the command says what it runs.
+  expect(inspect('eval "$CMD"', false).block).toBeUndefined()
+  expect(inspect('bash -c "$CMD"', false).isWrite).toBe(false)
+})

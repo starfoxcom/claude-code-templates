@@ -31,6 +31,9 @@ export type Statement = {
   hasDynamicBody?: boolean
   /** Inside a `( )` subshell or a PowerShell `{ }` block: a `cd` there may not move what follows. */
   isNested?: boolean
+  /** The Bash subshells it runs in, outermost first (`1/3`); none at the top. A variable set in one is
+   * known inside it and gone once it closes. A PowerShell `{ }` block keeps its variables, so has none. */
+  scope?: string
 }
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
@@ -60,6 +63,9 @@ class Reader {
   private i = 0
   // How many `( )` subshells or PowerShell `{ }` blocks the reading is inside.
   private depth = 0
+  // The Bash subshells open now, each with its own number.
+  private scopes: number[] = []
+  private opened = 0
 
   constructor(
     private readonly command: string,
@@ -117,6 +123,7 @@ class Reader {
     if (this.st.words.length > 0 || this.st.heredocs.length > 0) this.out.push(this.st)
     this.st = fresh(pipeNext)
     if (this.depth > 0) this.st.isNested = true
+    if (this.scopes.length > 0) this.st.scope = this.scopes.join('/')
   }
 
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
@@ -270,6 +277,8 @@ class Reader {
     if (c !== '(' && c !== ')') return false
     this.i++
     this.depth = Math.max(0, this.depth + (c === '(' ? 1 : -1))
+    if (c === '(') this.scopes.push(++this.opened)
+    else this.scopes.pop()
     this.endStatement()
     return true
   }

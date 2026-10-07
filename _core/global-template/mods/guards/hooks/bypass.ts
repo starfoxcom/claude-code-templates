@@ -21,6 +21,9 @@ const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--na
 const HOOKED = new Set(['commit', 'merge', 'push', 'am', 'rebase', 'cherry-pick', 'revert', 'tag', 'notes'])
 const HOOKS_KEY = /^(core\.hookspath|hooks\.)/i
 const CONFIG_WRITES = /^--(unset|unset-all|replace-all|add)$/
+// Dropping or renaming a whole section takes its hooks setting with it (`--remove-section core`).
+const SECTION_DROPS = /^(--)?(remove|rename)-section$/
+const HOOKS_SECTION = /^(core|hooks)(\.|$)/i
 // `git config` flags whose next word is their value, and the subcommand words of git 2.46+ (`config set`).
 const CONFIG_VALUE_FLAGS = /^(-f|--file|--blob|-t|--type|--default|--comment|--value)$/
 const CONFIG_VERBS = /^(set|unset|unset-all|replace-all|add)$/
@@ -28,8 +31,8 @@ const CONFIG_VERBS = /^(set|unset|unset-all|replace-all|add)$/
 const ENV_HOOKS = /^(GIT_CONFIG_PARAMETERS=.*(core\.hookspath|hooks\.)|GIT_CONFIG_KEY_\d+=(core\.hookspath|hooks\.))/i
 // Lefthook skips every hook with `LEFTHOOK=0` or `false`, and named ones with `LEFTHOOK_EXCLUDE`.
 const LEFTHOOK_OFF = /^(LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE=.*)$/i
-// Words that may stand before an assignment the shell applies to the command (`env LEFTHOOK=0 git ...`).
-const ASSIGN_LEAD = /^[A-Za-z_]\w*=|^(env|export|sudo|declare|local|typeset|readonly)$/
+// Builtins whose arguments are the assignments themselves (`export LEFTHOOK=0`, `declare -x LEFTHOOK=0`).
+const ASSIGNS = /^(export|declare|local|typeset|readonly)$/
 
 /** git's subcommand and the global `-c key=value` settings before it. */
 function gitParts(args: Word[]): { sub: string; rest: Word[]; settings: string[] } {
@@ -88,12 +91,21 @@ function configReason(rest: Word[]): string | undefined {
   if (rest.some(w => /^--get(-all|-regexp)?$/.test(w.text))) return undefined
   const keys: string[] = []
   let isWrite = false
+  let dropsSection = false
   for (let i = 0; i < rest.length; i++) {
     const text = rest[i]?.text ?? ''
     if (CONFIG_VALUE_FLAGS.test(text)) i++
     else if (CONFIG_WRITES.test(text)) isWrite = true
+    else if (SECTION_DROPS.test(text)) dropsSection = true
     else if (!text.startsWith('-')) keys.push(text)
   }
+  // `git config remove-section core`, the git 2.46+ spelling.
+  if (SECTION_DROPS.test(keys[0] ?? '')) {
+    dropsSection = true
+    keys.shift()
+  }
+  // A rename moves the section away or brings one in under its name: either side counts.
+  if (dropsSection) return keys.slice(0, 2).some(k => HOOKS_SECTION.test(k)) ? HOOK_SKIP : undefined
   // `git config set|unset <key> ...`: the verb writes, the key follows it.
   if (CONFIG_VERBS.test(keys[0] ?? '')) {
     isWrite = true
@@ -114,18 +126,20 @@ function gitReason(args: Word[]): string | undefined {
   return rest.some(w => w.text === '--no-verify') ? HOOK_SKIP : undefined
 }
 
-// What the shell applies to a command or exports (`LEFTHOOK=0 git ...`, `export LEFTHOOK=false`,
-// `$env:LEFTHOOK = 0`): lefthook switched off, or a hooks setting passed through git's environment.
-// `lefthook uninstall` too.
+// What the shell applies to a command or exports (`LEFTHOOK=0 git ...`, `env -i LEFTHOOK=0 git ...`,
+// `export LEFTHOOK=false`, `$env:LEFTHOOK = 0`): lefthook switched off, or a hooks setting passed through
+// git's environment. Every word before the program counts, past keywords and wrappers. `lefthook
+// uninstall` too.
 function envReason(st: Statement, name: string, args: Word[]): string | undefined {
   if (name === 'lefthook' && args[0]?.text === 'uninstall') return LEFTHOOK
   const words = st.words.map(w => w.text)
   const ps = /^\$env:(\w+)(?:=(.*))?$/i.exec(words[0] ?? '')
   const assigned = ps ? `${ps[1]}=${ps[2] ?? (words[1] === '=' ? (words[2] ?? '') : '')}` : undefined
-  for (const text of assigned === undefined ? words : [assigned]) {
+  const lead = words.slice(0, words.length - args.length - (name ? 1 : 0))
+  const applied = ASSIGNS.test(name) ? [...lead, ...args.map(a => a.text)] : lead
+  for (const text of assigned === undefined ? applied : [assigned]) {
     if (LEFTHOOK_OFF.test(text)) return LEFTHOOK
     if (ENV_HOOKS.test(text)) return HOOK_SKIP
-    if (!ASSIGN_LEAD.test(text)) break
   }
   return undefined
 }

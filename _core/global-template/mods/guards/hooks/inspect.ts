@@ -10,12 +10,13 @@
 // refused: what reaches history unread is never passed. What it cannot see at all (also listed in
 // mods/README.md):
 // - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`),
-//   `ssh host ...`, or any other program that writes to GitHub on its own (a Python script, an SDK);
+//   `ssh host ...`, a command held in a variable from outside it (`eval "$CMD"`, `bash -c "$CMD"`), or
+//   any other program that writes to GitHub on its own (a Python script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
-//   file does not exist yet, so it reports that it could not read it (unread when inline script code wrote it);
+//   file does not exist yet, so it reports that it could not read it; one that inline script code in the
+//   command may write is noted instead, and passes;
 // - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
-//   unread, its text never checked;
-// Both are refused like any other unread message.
+//   unread and refused, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
 import { bypassOf, EVAL } from './bypass'
@@ -83,8 +84,10 @@ type Reading = {
   /** A `git -C <dir>` on the statement being read: its folder, for this statement only. */
   statementDir?: Word
   ps: boolean
-  /** Variables set earlier in the command, by lower-cased name; `literal` when their value is known. */
-  vars: Map<string, { text: string; literal: boolean }>
+  /** Variables set earlier in the command, by lower-cased name. */
+  vars: Map<string, Var>
+  /** The Bash subshell of the statement being read (`Statement.scope`); empty at the top. */
+  scope: string
   /** The statement that writes each file (`> file`), by normalized path. */
   writers: Map<string, { st: Statement; ps: boolean }>
   /** Message routes read from stdin so far (`-F -`, `--body-file -`, `--input -`, `body=@-`). */
@@ -96,9 +99,12 @@ type Reading = {
   alone?: Statement
   /** An earlier statement ran script code written in the command, which may write any file. */
   ranScript?: boolean
-  /** A statement runs `eval`. */
+  /** A statement runs `eval` or `Invoke-Expression`. */
   hasEval?: boolean
 }
+
+/** A variable's value; `literal` when it is known, `scope` the Bash subshell that set it. */
+type Var = { text: string; literal: boolean; scope: string }
 
 
 export function inspect(command: string, powershell: boolean): Plan {
@@ -119,6 +125,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     folder: { isUnknown: false },
     ps: powershell,
     vars: new Map(),
+    scope: '',
     writers: new Map(),
     stdin: 0,
     writes: 0,
@@ -126,7 +133,8 @@ export function inspect(command: string, powershell: boolean): Plan {
   const statements = parse(command, powershell)
   r.alone = aloneOf(statements)
   read(statements, r)
-  // `eval` builds its command at run time: refused in a command that writes history anywhere.
+  // `eval` and `Invoke-Expression` build their command at run time: refused in a command that writes
+  // history anywhere.
   if (r.hasEval && (plan.isWrite || RAW_WRITES.some(re => re.test(command)))) plan.block ??= EVAL
   // A body file this same command writes is read from the statement that writes it. What another
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
@@ -184,13 +192,16 @@ function aloneOf(statements: Statement[]): Statement | undefined {
   return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
 }
 
-function read(statements: Statement[], r: Reading) {
-  statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r))
+// `scope`: the subshell commands from a `$(...)` or a `bash -c` script run in, the one of their statement.
+function read(statements: Statement[], r: Reading, scope?: string) {
+  statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r, scope))
 }
 
-function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
+function readStatement(st: Statement, prev: Statement | undefined, r: Reading, outer?: string) {
   const { plan } = r
-  read(st.inner, r)
+  const scope = outer ?? st.scope ?? ''
+  read(st.inner, r, scope)
+  r.scope = scope
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
   plan.written.push(...writes)
@@ -198,7 +209,7 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
-  if (name === 'eval') r.hasEval = true
+  if (/^(eval|invoke-expression|iex)$/.test(name)) r.hasEval = true
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
     const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
@@ -246,14 +257,24 @@ function moveFolder(folder: Folder, target: Word | undefined): Folder {
 function readScript(name: string, args: Word[], r: Reading): boolean {
   const inner = script(name, args)
   if (!inner) return false
+  // A script held in a variable set earlier in the command is read with its value.
+  const e = inner.dynamic && inner.text !== undefined ? expand(inner.text, r) : undefined
+  const isKnown = e !== undefined && !e.unresolved
   const ps = r.ps
   const writes = r.writes
   r.ps = inner.ps
-  read(inner.statements, r)
+  read(isKnown ? parse(e.text, inner.ps) : inner.statements, r, r.scope)
   r.ps = ps
-  if (inner.dynamic && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
+  if (inner.dynamic && !isKnown && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
   return true
 }
+
+// A hashtable typed in full: each key a name or a quoted string, each value a quoted string with nothing
+// to fill in, a number, or `$true`, `$false` or `$null`. Any other value runs at run time.
+const TYPED_KEY = String.raw`(?:\w+|'[^']*'|"[^"$\x60]*")`
+const TYPED_VALUE = String.raw`(?:'(?:[^']|'')*'|"[^"$\x60]*"|-?\d+(?:\.\d+)?|\$(?:true|false|null))`
+const TYPED_ENTRY = String.raw`${TYPED_KEY}\s*=\s*${TYPED_VALUE}`
+const TYPED_TABLE = new RegExp(String.raw`^@\{\s*(?:${TYPED_ENTRY}(?:\s*[;\n]\s*${TYPED_ENTRY})*)?\s*;?\s*\}$`, 'i')
 
 // PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed; one
 // from outside the command cannot be read.
@@ -261,11 +282,11 @@ function readSplats(args: Word[], r: Reading, where: string) {
   for (const a of args) {
     const splat = r.ps ? /^@(\w+)$/.exec(a.text) : null
     if (!splat) continue
-    const v = r.vars.get((splat[1] ?? '').toLowerCase())
+    const v = lookup(r, splat[1] ?? '')
     if (v) r.plan.texts.push({ where, text: v.text, creditOnly: true })
-    // A hashtable built at run time (`@{ Title = "$env:T" }`, `Body = (Get-Content b.md)`, an `&` call)
-    // cannot be read either.
-    if (!v || /[$(&`]/.test(v.text)) r.plan.unread.push(where)
+    // A hashtable built at run time (`@{ Title = "$env:T" }`, `Body = Get-Content b.md`, changed after
+    // it was typed) cannot be read either.
+    if (!v || !TYPED_TABLE.test(v.text)) r.plan.unread.push(where)
   }
 }
 
@@ -278,7 +299,7 @@ function readStdin(st: Statement, prev: Statement | undefined, r: Reading, where
 // What a statement prints, read as message text for `where`: the input of a pipe, or a file it writes.
 function feed(st: Statement, r: Reading, where: string) {
   const { plan } = r
-  pushBodies(plan, st, where)
+  pushBodies(r, st, where)
   const { name, args } = programOf(st)
   if (/^(cat|type|get-content|gc)$/.test(name)) {
     const paths = args.filter(a => !a.text.startsWith('-'))
@@ -305,46 +326,64 @@ function assign(st: Statement, name: string, args: Word[], r: Reading): boolean 
   if (r.ps) {
     const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
     if (spaced && w[1]?.text === '=') {
-      set(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined, st.isNested)
+      set(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined)
       return true
     }
+    // `$p.Body = ...`, `$p['Body'] = ...`, `$p.Add(...)`: a hashtable changed after it was typed.
+    const member = /^\$(\w+)[.[]/.exec(w[0]?.text ?? '')
+    const changed = member ? r.vars.get((member[1] ?? '').toLowerCase()) : undefined
+    if (changed) changed.text += `\n${w.map(x => x.text).join(' ')}`
     const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
-    if (joined) set(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' }, st.isNested)
+    if (joined) set(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
     return Boolean(joined)
   }
   const pairs = name === '' ? w : /^(export|declare|local|readonly|typeset)$/.test(name) ? args : null
   if (pairs) {
     for (const a of pairs) {
       const m = /^([A-Za-z_]\w*)=/.exec(a.text)
-      if (m) set(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) }, st.isNested)
+      if (m) set(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) })
     }
     return true
   }
   if (name === 'read' && st.heredocs.length > 0) {
     const v = [...args].reverse().find(a => /^[A-Za-z_]\w*$/.test(a.text))
-    if (v) r.vars.set(v.text.toLowerCase(), { text: st.heredocs[0] ?? '', literal: true })
+    const body = st.heredocs[0] ?? ''
+    const e = st.hasDynamicBody ? expandBody(body, r) : { text: body, unresolved: false }
+    const value = { text: e.unresolved ? body : e.text, literal: !e.unresolved, scope: r.scope }
+    if (v) r.vars.set(v.text.toLowerCase(), value)
     return true
   }
   return false
 }
 
-// A variable set inside a subshell (`(S=/x); gh ... "$S/b.md"`) is gone after it: its value is unknown.
-function set(r: Reading, name: string, value: Word | undefined, isNested = false) {
+// A variable the statement being read sets, kept with its Bash subshell.
+function set(r: Reading, name: string, value: Word | undefined) {
   const key = name.toLowerCase()
+  const scope = r.scope
   if (!value) return void r.vars.delete(key)
-  if (isNested) return void r.vars.set(key, { text: value.text, literal: false })
-  if (!value.dynamic) return void r.vars.set(key, { text: value.text, literal: true })
+  if (!value.dynamic) return void r.vars.set(key, { text: value.text, literal: true, scope })
   const e = expand(value.text, r)
-  r.vars.set(key, { text: e.unresolved ? value.text : e.text, literal: !e.unresolved })
+  r.vars.set(key, { text: e.unresolved ? value.text : e.text, literal: !e.unresolved, scope })
 }
 
+// A variable as the statement being read sees it. One set inside a Bash subshell is known in that
+// subshell and the ones it opens, and gone once it closes (`(S=/x); gh ... "$S/b.md"`).
+function lookup(r: Reading, name: string): Var | undefined {
+  const v = r.vars.get(name.toLowerCase())
+  if (!v || v.scope === '' || r.scope === v.scope || r.scope.startsWith(`${v.scope}/`)) return v
+  return undefined
+}
+
+type Script = { statements: Statement[]; ps: boolean; dynamic: boolean; text?: string }
+
 // `bash -c '...'`, `powershell -Command "..."`, `cmd /c ...`: the script is read as a command of its own.
-function script(name: string, args: Word[]): { statements: Statement[]; ps: boolean; dynamic: boolean } | undefined {
+// `text`: the script as typed, when it is one command line.
+function script(name: string, args: Word[]): Script | undefined {
   const of = (i: number, ps: boolean) => {
     const rest = args.slice(i + 1)
     if (i === -1 || rest.length === 0) return undefined
     const text = rest.length === 1 ? (rest[0]?.text ?? '') : rest.map(a => a.text).join(' ')
-    return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic) }
+    return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic), text }
   }
   if (/^(bash|sh|zsh|dash|ksh)$/.test(name))
     return of(
@@ -362,8 +401,10 @@ function script(name: string, args: Word[]): { statements: Statement[]; ps: bool
     if (i === -1) return undefined
     const words = args.slice(i + 1)
     // `cmd /c "git commit -m \"...\""`: the command as one quoted word is read as a command line.
-    if (words.length === 1)
-      return { statements: parse(words[0]?.text ?? '', false), ps: false, dynamic: words[0]?.dynamic ?? false }
+    if (words.length === 1) {
+      const text = words[0]?.text ?? ''
+      return { statements: parse(text, false), ps: false, dynamic: words[0]?.dynamic ?? false, text }
+    }
     return {
       statements: [{ words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }],
       ps: false,
@@ -379,19 +420,41 @@ function setCwd(plan: Plan, word: Word | undefined) {
 }
 
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
-function write(plan: Plan, st: Statement, where: string): string {
-  plan.isWrite = true
-  pushBodies(plan, st, where)
+function write(r: Reading, st: Statement, where: string): string {
+  r.plan.isWrite = true
+  pushBodies(r, st, where)
   return where
 }
 
-// A statement's here-doc bodies as message text. A body the shell fills in at run time is checked as
-// written and also named unread: its expanded text cannot be known. A line joined by a trailing `\`
-// hides nothing, so only a `$` or a backtick counts, and one the body escapes (`\$HOME`) is literal.
-function pushBodies(plan: Plan, st: Statement, where: string) {
-  for (const body of st.heredocs) plan.texts.push({ where, text: body })
-  const isExpanded = st.heredocs.some(body => /\$[A-Za-z_{(]|`/.test(body.replace(/\\[\s\S]/g, '')))
-  if (st.hasDynamicBody && isExpanded && where && !plan.unread.includes(where)) plan.unread.push(where)
+// A statement's here-doc bodies as message text, as typed and as the shell fills them in. A body with a
+// part the reading cannot fill in (a variable from outside the command, a `$(...)`) is named unread.
+function pushBodies(r: Reading, st: Statement, where: string) {
+  const { plan } = r
+  for (const body of st.heredocs) {
+    plan.texts.push({ where, text: body })
+    if (!st.hasDynamicBody) continue
+    const e = expandBody(body, r)
+    if (e.text !== body) plan.texts.push({ where, text: e.text })
+    if (e.unresolved && where && !plan.unread.includes(where)) plan.unread.push(where)
+  }
+}
+
+// An unquoted here-doc or here-string body as the shell fills it in. A backslash before `$`, a backtick
+// or a backslash keeps that character literal, before a line break joins the lines, and before anything
+// else stays as typed. A variable set earlier takes its value; any other expansion is unresolved.
+const BODY_PARTS = /\\([\s\S])|\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)|\$[{(]|`/g
+
+function expandBody(body: string, r: Reading): { text: string; unresolved: boolean } {
+  let unresolved = false
+  const text = body.replace(BODY_PARTS, (part, esc?: string, braced?: string, bare?: string) => {
+    if (esc !== undefined) return '$`\\'.includes(esc) ? esc : esc === '\n' ? '' : part
+    const name = braced ?? bare
+    const v = name === undefined ? undefined : lookup(r, name)
+    if (v?.literal) return v.text
+    unresolved = true
+    return part
+  })
+  return { text, unresolved }
 }
 
 // `git branch` flags that list, delete or configure instead of creating a branch.
@@ -440,7 +503,7 @@ function isCommitAll(text: string): boolean {
 
 function gitCommit(st: Statement, rest: Word[], r: Reading): string {
   const { plan } = r
-  const where = write(plan, st, 'the commit message')
+  const where = write(r, st, 'the commit message')
   const positional = walk(rest, COMMIT, r, where)
   const all = rest.some(a => isCommitAll(a.text))
   plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
@@ -458,12 +521,12 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
     case 'tag':
     case 'merge':
     case 'commit-tree': {
-      const where = write(plan, st, `the ${sub} message`)
+      const where = write(r, st, `the ${sub} message`)
       walk(rest, MESSAGE, r, where)
       return where
     }
     case 'notes': {
-      const where = write(plan, st, 'the git note')
+      const where = write(r, st, 'the git note')
       walk(rest.slice(1), MESSAGE, r, where)
       return where
     }
@@ -508,7 +571,7 @@ function ghApi(st: Statement, args: Word[], r: Reading): string | undefined {
   walk(args, GH_API, r, 'the GitHub API call')
   const hasFields = plan.files.length + plan.texts.length + r.stdin > before
   if (r.method === 'GET' || (!hasFields && !/^(POST|PATCH|PUT)$/.test(r.method ?? ''))) return undefined
-  return write(plan, st, 'the GitHub API call')
+  return write(r, st, 'the GitHub API call')
 }
 
 function ghSpec(group: string, action: string): Spec {
@@ -543,7 +606,7 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     walk(rest, { '-R': 'repo', '--repo': 'repo' }, r, '')
     return undefined
   }
-  const where = write(plan, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
+  const where = write(r, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
   const before = plan.files.length
   walk(rest, ghSpec(group, action), r, where)
   if (group === 'pr' && (action === 'create' || action === 'edit')) {
@@ -564,12 +627,12 @@ function web(name: string, st: Statement, args: Word[], r: Reading): string | un
   if (!args.some(a => a.text.includes('api.github.com'))) return undefined
   const where = 'the GitHub API call'
   if (name === 'curl') {
-    write(r.plan, st, where)
+    write(r, st, where)
     walk(args, CURL, r, where)
     return where
   }
   if (/^(invoke-restmethod|invoke-webrequest|irm|iwr)$/.test(name)) {
-    write(r.plan, st, where)
+    write(r, st, where)
     walk(
       args.map(a => ({ ...a, text: a.text.startsWith('-') ? a.text.toLowerCase() : a.text })),
       PS_WEB,
@@ -697,7 +760,7 @@ const SUBSTITUTION = /\$\((?:[^()]|\([^()]*\))*\)/g
 function expand(text: string, r: Reading): { text: string; unresolved: boolean } {
   let unresolved = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`'))
   const out = text.replace(SUBSTITUTION, ' ').replace(/\$\{?([A-Za-z_]\w*)\}?/g, (_, name: string) => {
-    const v = r.vars.get(name.toLowerCase())
+    const v = lookup(r, name)
     if (v?.literal) return v.text
     unresolved = true
     return ' '
