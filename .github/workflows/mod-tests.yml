@@ -39,8 +39,10 @@ defaults:
 
 env:
   # The release the mods were last verified on. Like every workflow change, a
-  # raise lands on main first as a hotfix and then cascades to develop, ahead
-  # of the PR that brings the mods up to that release.
+  # raise lands on main first as a hotfix and then cascades to develop. When
+  # the new release breaks a mod, the mod fix (still passing on this pin)
+  # merges into develop first and the raise follows; when the mods only want
+  # to adopt something new, the raise goes first.
   PINNED_VERSION: "2.1.292"
   DISABLE_AUTOUPDATER: "1"
   DISABLE_TELEMETRY: "1"
