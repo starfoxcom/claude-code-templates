@@ -5,7 +5,7 @@
 // unescapes or a here-doc body never trips them, and a word like `commit` counts only as git's
 // subcommand. Pure.
 
-import { COMMIT } from './specs'
+import { COMMIT, gitLong, NOTES } from './specs'
 import type { Statement, Word } from './shell'
 
 const HISTORY_REWRITE = 'history rewriting tools (git filter-repo, git filter-branch) are not allowed from a session.'
@@ -59,27 +59,33 @@ function gitParts(args: Word[]): { sub: string; rest: Word[]; settings: string[]
   return { sub: args[k]?.text ?? '', rest: args.slice(k + 1), settings }
 }
 
-// A `git commit` flag: `-n` alone or in a bundle before the first letter that takes a value, `--trailer`,
-// or a message taken from another commit.
-// A flag's value is skipped, so a message that starts with a dash (`-m "-n is fine"`) is never a flag.
-function commitReason(rest: Word[]): string | undefined {
+// A `git commit` or `git notes` flag that hides or reuses the message: on a commit `-n` alone or in a
+// bundle before the first letter that takes a value, `--no-verify`, `--trailer`; on both a message taken
+// from another object (`-C`, `-c`, `--reuse-message`, a commit's `--fixup=amend:`). Long options count as
+// git reads them, shortened too. A flag's value is skipped, so a message that starts with a dash
+// (`-m "-n is fine"`) is never a flag.
+function messageReason(sub: 'commit' | 'notes', rest: Word[]): string | undefined {
+  const spec = sub === 'commit' ? COMMIT : NOTES
   for (let i = 0; i < rest.length; i++) {
-    const text = rest[i]?.text ?? ''
+    const text = gitLong(sub, rest[i]?.text ?? '')
     if (text === '--') break
-    if (text === '--no-verify') return HOOK_SKIP
+    if (text === '--no-verify' && sub === 'commit') return HOOK_SKIP
     if (text === '--trailer' || text.startsWith('--trailer=')) return TRAILER
     if (/^--(reuse|reedit)-message(=|$)/.test(text)) return REUSE
+    // `--fixup=amend:<commit>` and `reword:` take that commit's whole message.
+    const fixup = text === '--fixup' ? rest[i + 1]?.text : /^--fixup=(.*)$/.exec(text)?.[1]
+    if (sub === 'commit' && /^(amend|reword):/.test(fixup ?? '')) return REUSE
     if (text.startsWith('--')) {
-      const kind = COMMIT[text]
-      if (kind && kind !== 'attached') i++
+      const kind = spec[text.split('=')[0] ?? '']
+      if (kind && kind !== 'attached' && !text.includes('=')) i++
       continue
     }
     if (!/^-[A-Za-z]/.test(text)) continue
     for (let j = 1; j < text.length; j++) {
       const letter = text[j] as string
-      if (letter === 'n') return HOOK_SKIP
+      if (letter === 'n' && sub === 'commit') return HOOK_SKIP
       if (letter === 'C' || letter === 'c') return REUSE
-      const kind = COMMIT[`-${letter}`]
+      const kind = spec[`-${letter}`]
       if (!kind) continue
       // A letter that takes a value takes the rest of the word, or the next word when it is last.
       if (kind !== 'attached' && j === text.length - 1) i++
@@ -91,13 +97,16 @@ function commitReason(rest: Word[]): string | undefined {
 
 // `git config core.hooksPath x` (or `--unset`): a setting that moves or drops the hooks. Reading it passes.
 function configReason(rest: Word[]): string | undefined {
+  // Long options as git reads them, shortened too (`--rem core`): the verb of git 2.46+ has its own.
+  const verb = /^(set|unset)$/.test(rest[0]?.text ?? '') ? `config ${rest[0]?.text}` : 'config'
+  const words = rest.map(w => gitLong(verb, w.text))
   // `--get core.hooksPath <pattern>` reads, whatever follows the key.
-  if (rest.some(w => /^--get(-all|-regexp)?$/.test(w.text))) return undefined
+  if (words.some(w => /^--get(-all|-regexp)?$/.test(w))) return undefined
   const keys: string[] = []
   let isWrite = false
   let dropsSection = false
-  for (let i = 0; i < rest.length; i++) {
-    const text = rest[i]?.text ?? ''
+  for (let i = 0; i < words.length; i++) {
+    const text = words[i] ?? ''
     if (CONFIG_VALUE_FLAGS.test(text)) i++
     else if (CONFIG_WRITES.test(text)) isWrite = true
     else if (SECTION_DROPS.test(text)) dropsSection = true
@@ -125,10 +134,13 @@ function gitReason(args: Word[]): string | undefined {
   if (sub === 'config') return configReason(rest)
   if (!HOOKED.has(sub)) return undefined
   if (settings.some(s => HOOKS_KEY.test(s))) return HOOK_SKIP
-  // A commit's flags are walked past their values (`-m '--no-verify'` is a message); on the rest only a
-  // word that is exactly `--no-verify` counts, and no real message or path is.
-  if (sub === 'commit') return commitReason(rest)
-  return rest.some(w => w.text === '--no-verify') ? HOOK_SKIP : undefined
+  // A commit's and a note's flags are walked past their values (`-m '--no-verify'` is a message); on the
+  // rest only a word git reads as `--no-verify` counts (and on a tag, `--trailer`), and no real message
+  // or path is.
+  if (sub === 'commit' || sub === 'notes') return messageReason(sub, rest)
+  const flags = rest.map(w => gitLong(sub, w.text))
+  if (sub === 'tag' && flags.some(t => /^--trailer(=|$)/.test(t))) return TRAILER
+  return flags.includes('--no-verify') ? HOOK_SKIP : undefined
 }
 
 // What the shell applies to a command or exports (`LEFTHOOK=0 git ...`, `env -i LEFTHOOK=0 git ...`,

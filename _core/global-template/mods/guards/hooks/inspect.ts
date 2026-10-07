@@ -2,12 +2,13 @@
 // to history, the body files it hands over, the branches it creates, and whether a commit's added
 // lines need a look. Pure, no engine access.
 //
-// guards is a safety net for commands written the ordinary way, not a sandbox. It follows the shapes
-// people and agents really write: git and gh behind `if`/`then`/`do`/`{`/`(`, `sudo`, `env`, `timeout`,
-// `xargs`, inside `$(...)` and backticks, `bash -c`, a here-doc fed to `bash` and `powershell -Command`;
-// messages from variables set earlier in the command, here-docs, pipes and files the command writes
-// itself. Where a message exists but its text is made by something the reading cannot follow, the
-// message is named in `unread`, and the call is refused: what reaches history unread is never passed.
+// The command is read as the shell will run it: git and gh behind `if`/`then`/`do`/`{`/`(`, `case` arms,
+// `sudo`, `env`, `timeout`, `xargs`, inside `$(...)` and backticks, `eval`, `bash -c`, a here-doc fed to
+// `bash` and `powershell -Command`, named through a variable the command sets, with git's long options
+// shortened as git accepts them; messages from variables set earlier in the command (each where the shell
+// keeps it), here-docs, `$(cat ...)`, pipes and files the command writes itself. Where a message exists
+// but its text is made by something the reading cannot follow, the message is named in `unread`, and the
+// call is refused: what reaches history unread is never passed.
 // What it cannot see at all (also listed in mods/README.md):
 // - commands run from a script file or fed to a shell from a file or a pipe, an alias or shell function,
 //   a git alias (`git ci -m ...`), `ssh host ...`, a command held in a variable from outside it
@@ -39,8 +40,12 @@ import {
   GH_RELEASE,
   GH_REVIEW,
   GH_WRITES,
+  gitLong,
   MESSAGE,
+  NOTES,
   PS_WEB,
+  RAW_WRITES,
+  SWITCH,
   TYPED_TABLE,
 } from './specs'
 import type { Kind, Spec } from './specs'
@@ -157,25 +162,6 @@ export function inspect(command: string, powershell: boolean): Plan {
   return plan
 }
 
-// The shipped no-ai-attribution hook's write patterns (`_core/global-template/hooks/no-ai-attribution.py`),
-// matched on the raw command text, plus the history rewrites. A `gh api` call counts only with a writing
-// method or fields: a read reaches no history. `REST`: the rest of the same command, up to a separator or
-// a line end.
-const REST = String.raw`[^|;&\n]*?`
-const GIT_WRITES = 'commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace'
-const GH_NOUNS = 'pr|issue|release|gist|repo'
-const GH_VERBS = 'create|edit|comment|review|merge|close|reopen'
-// A writing method, or a field: a field flag counts spaced (`-f body=x`) or attached (`-fbody=x`), as gh
-// reads both.
-const API_METHOD = String.raw`(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)`
-const API_WRITE = String.raw`${API_METHOD}|(?<=\s)-[fF](?:\s|\S*=)|--field|--raw-field|--input`
-const RAW_WRITES = [
-  String.raw`\bgit\b${REST}\b(?:${GIT_WRITES})\b`,
-  String.raw`\bgh\b${REST}\b(?:${GH_NOUNS})\b${REST}\b(?:${GH_VERBS})\b`,
-  String.raw`\bgh\b${REST}\bapi\b(?=${REST}(?:${API_WRITE}))`,
-  String.raw`\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b${REST}api\.github\.com`,
-].map(source => new RegExp(source, 'i'))
-
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
 
 const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'sl'])
@@ -197,17 +183,19 @@ function read(statements: Statement[], r: Reading, outer?: string) {
   statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r, outer))
 }
 
-function readStatement(st: Statement, prev: Statement | undefined, r: Reading, outer?: string) {
+function readStatement(typed: Statement, prev: Statement | undefined, r: Reading, outer?: string) {
   const { plan } = r
-  const scope = outer === undefined ? (st.scope ?? '') : within(outer, st.scope)
+  const scope = outer === undefined ? (typed.scope ?? '') : within(outer, typed.scope)
   // Each Bash `$(...)` or backtick runs in a subshell of its own; PowerShell's `$(...)` runs in place.
   const subshells = new Map<number | undefined, string>()
   const placeOf = (group?: number) => {
     if (!subshells.has(group)) subshells.set(group, within(scope, `s${++r.opened}`))
     return subshells.get(group) as string
   }
-  st.inner.forEach((inner, i) => readStatement(inner, st.inner[i - 1], r, r.ps ? scope : placeOf(inner.group)))
+  const inner = typed.inner
+  inner.forEach((st, i) => readStatement(st, inner[i - 1], r, r.ps ? scope : placeOf(st.group)))
   r.scope = scope
+  const st = withProgram(typed, r)
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
   plan.written.push(...writes)
@@ -236,6 +224,28 @@ function readStatement(st: Statement, prev: Statement | undefined, r: Reading, o
     f.folder ??= folder
     if (r.ranScript) f.scripted = true
   }
+}
+
+// A program named through a variable (`GIT=git; $GIT commit ...`): read as the value the command set.
+// One built at run time otherwise (from outside the command, `$(which git)`), with arguments that would
+// write history as git's or gh's, is unread.
+function withProgram(st: Statement, r: Reading): Statement {
+  const { name, args } = programOf(st)
+  const k = st.words.length - args.length - 1
+  const head = st.words[k]
+  // PowerShell runs a program named by a variable only through `&` (`& $git commit`).
+  if (!name || !head?.dynamic || (r.ps && !st.isCall)) return st
+  const e = expand(head.text, r)
+  if (!e.unresolved) {
+    const words = e.text.split(/\s+/).filter(Boolean).map(text => ({ text, dynamic: false, bodies: [] }))
+    return { ...st, words: [...st.words.slice(0, k), ...words, ...st.words.slice(k + 1)] }
+  }
+  const rest = args.map(a => a.text).join(' ')
+  if (RAW_WRITES.some(re => re.test(`git ${rest}`) || re.test(`gh ${rest}`))) {
+    r.plan.isWrite = true
+    r.plan.unread.push('a program named at run time')
+  }
+  return st
 }
 
 function readWrite(st: Statement, prev: Statement | undefined, name: string, args: Word[], r: Reading) {
@@ -465,7 +475,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
 
 // `git branch <name>` creates one (a rename or copy names the new one last); listing flags create none.
 function gitBranch(rest: Word[], plan: Plan) {
-  const flags = rest.filter(a => a.text.startsWith('-')).map(a => a.text)
+  const flags = rest.filter(a => a.text.startsWith('-')).map(a => gitLong('branch', a.text))
   const names = rest.filter(a => !a.text.startsWith('-')).map(a => a.text)
   if (flags.some(f => /^-(m|M|c|C)$|^--(move|copy)$/.test(f))) plan.branches.push(...names.slice(-1))
   else if (!flags.some(f => BRANCH_NOT_CREATE.test(f))) plan.branches.push(...names.slice(0, 1))
@@ -474,7 +484,7 @@ function gitBranch(rest: Word[], plan: Plan) {
 // `-a` in a bundle counts only before the first letter that takes a value: in `-Sabc` or `-uall` it is
 // part of that value, read the same way `walk` reads the bundle.
 function isCommitAll(text: string): boolean {
-  if (text === '--all') return true
+  if (gitLong('commit', text) === '--all') return true
   if (!/^-[A-Za-z]/.test(text)) return false
   for (const letter of text.slice(1)) {
     if (letter === 'a') return true
@@ -486,7 +496,7 @@ function isCommitAll(text: string): boolean {
 function gitCommit(st: Statement, rest: Word[], r: Reading): string {
   const { plan } = r
   const where = write(r, st, 'the commit message')
-  const positional = walk(rest, COMMIT, r, where)
+  const positional = walk(rest, COMMIT, r, where, 'commit')
   const all = rest.some(a => isCommitAll(a.text))
   plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
   return where
@@ -504,23 +514,24 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
     case 'merge':
     case 'commit-tree': {
       // Listing, verifying or deleting tags, or no arguments at all, writes no message.
-      if (sub === 'tag' && (rest.length === 0 || rest.some(a => TAG_READS.test(a.text)))) return undefined
+      const isRead = (a: Word) => TAG_READS.test(gitLong('tag', a.text))
+      if (sub === 'tag' && (rest.length === 0 || rest.some(isRead))) return undefined
       const where = write(r, st, `the ${sub} message`)
-      walk(rest, MESSAGE, r, where)
+      walk(rest, MESSAGE, r, where, sub)
       return where
     }
     case 'notes': {
       // Listing, showing or removing notes writes no message.
       if (/^(list|show|get-ref|prune|remove)$/.test(rest[0]?.text ?? '')) return undefined
       const where = write(r, st, 'the git note')
-      walk(rest.slice(1), MESSAGE, r, where)
+      walk(rest.slice(1), NOTES, r, where, 'notes')
       return where
     }
     case 'checkout':
-      walk(rest, { '-b': 'branch', '-B': 'branch' }, r, '')
+      walk(rest, { '-b': 'branch', '-B': 'branch', '--orphan': 'branch' }, r, '', 'checkout')
       return undefined
     case 'switch':
-      walk(rest, { '-c': 'branch', '-C': 'branch', '--create': 'branch', '--force-create': 'branch' }, r, '')
+      walk(rest, SWITCH, r, '', 'switch')
       return undefined
     case 'worktree':
       if (rest[0]?.text === 'add') walk(rest.slice(1), { '-b': 'branch', '-B': 'branch' }, r, '')
@@ -631,8 +642,9 @@ function web(name: string, st: Statement, args: Word[], r: Reading): string | un
 }
 
 // Reads options by the spec; returns the positional words. Short flags may be bundled (`-am "msg"`)
-// or carry their value attached (`-m"msg"`, `-Fbody.md`, `-XPOST`); long ones may use `=`.
-function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
+// or carry their value attached (`-m"msg"`, `-Fbody.md`, `-XPOST`); long ones may use `=`, and a git
+// subcommand's (`sub`) may be shortened as git reads them (`--mess`).
+function walk(args: Word[], spec: Spec, r: Reading, where: string, sub?: string): Word[] {
   const positional: Word[] = []
   for (let i = 0; i < args.length; i++) {
     const w = args[i] as Word
@@ -642,11 +654,11 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
       break
     }
     if (t.startsWith('--')) {
-      const eq = t.indexOf('=')
-      const flag = eq === -1 ? t : t.slice(0, eq)
-      const kind = spec[flag]
+      const full = sub ? gitLong(sub, t) : t
+      const eq = full.indexOf('=')
+      const kind = spec[eq === -1 ? full : full.slice(0, eq)]
       if (!kind || kind === 'attached') continue
-      const value = eq === -1 ? args[++i] : { ...w, text: t.slice(eq + 1) }
+      const value = eq === -1 ? args[++i] : { ...w, text: full.slice(eq + 1) }
       if (value) take(kind, value, r, where)
       else missing(kind, r, where)
       continue
