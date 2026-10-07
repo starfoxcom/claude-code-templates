@@ -618,7 +618,7 @@ test('history rewriting is refused even when it only asks for the version', {
   expect(seen.ran).toEqual([])
 })
 
-test('a message the command cannot show is refused in enforce mode', { options: { mode: 'enforce' } }, async ($, on) => {
+test('a message the command hides is refused in enforce mode', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on)
   for (const command of [
     'git commit -F -',
