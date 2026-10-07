@@ -28,6 +28,8 @@ export type Budgets = {
   limits: PlanWindow[]
   /** When the prompt cache goes cold: the last response plus the cache lifetime. */
   cacheExpiresAt?: number
+  /** When Claude Code should compact the idle conversation before the cache goes cold; absent when it would not. */
+  idleCompactAt?: number
   /** The last prompt's cache check. */
   cacheCheck?: CacheCheck
   /** Set while usage-guard holds the session until a plan reset. */

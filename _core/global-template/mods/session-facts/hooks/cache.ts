@@ -37,6 +37,35 @@ export function checkCache(usage: ModelUsage, c: CacheContext): CacheCheck {
 
 const LONG_LIFETIME_MS = 60 * 60_000
 
+// Claude Code compacts an idle conversation before a one-hour cache goes cold: nine tenths into the
+// lifetime, once the context holds at least the minimum (200k by default; its
+// `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS` raises or lowers it, never under 100k).
+const IDLE_COMPACT_FRACTION = 0.9
+export const IDLE_COMPACT_MIN_TOKENS = 200_000
+const IDLE_COMPACT_FLOOR = 100_000
+
+/** The context size Claude Code's idle compaction starts at, from its environment variable. */
+export function idleCompactMin(raw: string | undefined): number {
+  const tokens = Number(raw)
+  if (!raw || !Number.isFinite(tokens) || tokens <= 0) return IDLE_COMPACT_MIN_TOKENS
+  return Math.max(IDLE_COMPACT_FLOOR, tokens)
+}
+
+/**
+ * When Claude Code should compact the idle conversation instead of letting the cache go cold:
+ * only on the one-hour lifetime and at the minimum size. Its own clock may run a little apart from
+ * the last response, so the row calls the time approximate.
+ */
+export function idleCompactAt(
+  lastResponseAt: number,
+  lifetimeMs: number,
+  tokens: number | undefined,
+  minTokens: number,
+): number | undefined {
+  if (lifetimeMs !== LONG_LIFETIME_MS || tokens === undefined || tokens < minTokens) return undefined
+  return lastResponseAt + lifetimeMs * IDLE_COMPACT_FRACTION
+}
+
 /**
  * Prints the transcript's last lines that carry cache counts. The engine hands mods only the total a
  * request wrote to the cache; the transcript keeps the API's split by lifetime.

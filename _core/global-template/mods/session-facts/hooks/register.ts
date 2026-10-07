@@ -3,7 +3,17 @@ import type { EngineInterface, Register, TurnUsage } from 'claude-code'
 
 import type { Budgets, CacheCheck } from '../types'
 import { compactedMark, contextText, phoneText, registerBudgetsView } from './budgets'
-import { checkCache, nextLifetime, parseMemory, PREPARE_DIR, READ_CACHE_LINES, writtenLifetime } from './cache'
+import {
+  checkCache,
+  IDLE_COMPACT_MIN_TOKENS,
+  idleCompactAt,
+  idleCompactMin,
+  nextLifetime,
+  parseMemory,
+  PREPARE_DIR,
+  READ_CACHE_LINES,
+  writtenLifetime,
+} from './cache'
 import type { SharedPlan } from './plan'
 import { parseSharedPlan, planPart, SHARED_PLAN_FILE, sharedPlanText } from './plan'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
@@ -137,6 +147,8 @@ const live: {
   // The lifetime came from the transcript: the guess from misses no longer moves it.
   isLifetimeRead: boolean
   cacheCheck?: CacheCheck
+  // The context size Claude Code's idle compaction starts at.
+  idleCompactMinTokens: number
   // The model of the last response and whether a compaction ran since: either starts the cache over.
   lastModel?: string
   isWindowFresh: boolean
@@ -152,6 +164,7 @@ const live: {
   cacheTtlMs: 60 * 60_000,
   cacheLifetimeMs: 60 * 60_000,
   isLifetimeRead: false,
+  idleCompactMinTokens: IDLE_COMPACT_MIN_TOKENS,
   hasReplied: false,
   isWindowFresh: false,
 }
@@ -178,6 +191,17 @@ async function readPausedUntil($: EngineInterface): Promise<number | undefined> 
   }
 }
 
+// The countdown runs from the last response. A compaction since then starts the cache over by design,
+// so the countdown waits for the next response.
+function cacheTimes(tokens: number | undefined): Pick<Budgets, 'cacheExpiresAt' | 'idleCompactAt'> {
+  if (live.lastResponseAt === undefined || live.isWindowFresh) return {}
+  const { lastResponseAt, cacheLifetimeMs } = live
+  return {
+    cacheExpiresAt: lastResponseAt + cacheLifetimeMs,
+    idleCompactAt: idleCompactAt(lastResponseAt, cacheLifetimeMs, tokens, live.idleCompactMinTokens),
+  }
+}
+
 async function refreshBudgets($: EngineInterface): Promise<void> {
   try {
     const [{ context, rateLimits }, wrapUpAt, pausedUntil] = await Promise.all([
@@ -195,7 +219,7 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
         percentUsed: limit.percentUsed,
         resetsAt: limit.resetsAt ? Date.parse(limit.resetsAt) : undefined,
       })),
-      cacheExpiresAt: live.lastResponseAt === undefined ? undefined : live.lastResponseAt + live.cacheLifetimeMs,
+      ...cacheTimes(context.tokens),
       cacheCheck: live.cacheCheck,
       pausedUntil,
       offsetMinutes: live.zone.offsetMinutes,
@@ -287,6 +311,8 @@ async function setUp($: EngineInterface): Promise<void> {
   await readSettings($).catch(() => undefined)
   live.zone = await readZone($)
   live.window = await readWindow($)
+  const idleMin = await $.env.get('CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS').catch(() => undefined)
+  live.idleCompactMinTokens = idleCompactMin(idleMin)
   await prepareMemory($)
   await restoreMemory($)
   await refreshBudgets($)
