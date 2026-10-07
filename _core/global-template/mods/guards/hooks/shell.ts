@@ -176,6 +176,23 @@ class Reader {
       this.st.inner.push(...parse(raw.slice(open + 1, -1), this.powershell))
   }
 
+  // A Bash backtick substitution at `i`, kept raw like `$(...)`; the commands inside, with the backslash
+  // before a backtick, `$` or backslash dropped, are read as statements of their own.
+  private backtick(w: Word) {
+    let j = this.i + 1
+    let inner = ''
+    while (j < this.n && this.command[j] !== '`') {
+      const nx = this.command[j + 1] ?? ''
+      const isEscape = this.command[j] === '\\' && nx !== '' && '`$\\'.includes(nx)
+      inner += isEscape ? nx : this.command[j]
+      j += isEscape ? 2 : 1
+    }
+    w.text += this.command.slice(this.i, Math.min(j + 1, this.n))
+    w.dynamic = true
+    this.st.inner.push(...parse(inner, false))
+    this.i = j + 1
+  }
+
   // Moves `i` past the closing bracket of the substitution at `i`, reading its here-doc bodies into `w`.
   private skipSubstitution(w: Word, braces: boolean) {
     let depth = 0
@@ -330,7 +347,7 @@ class Reader {
     if (c === '"') return this.doubleQuoted(w)
     if (c === '$' && this.at(1) === '(') return this.substitution(w)
     if (c === '$' && /[A-Za-z_{]/.test(this.at(1))) w.dynamic = true
-    if (c === '`' && !this.powershell) w.dynamic = true
+    if (c === '`' && !this.powershell) return this.backtick(w)
     if (c === this.esc && this.i + 1 < this.n) {
       w.text += this.at(1)
       this.i += 2
@@ -361,9 +378,9 @@ class Reader {
       const d = this.command[this.i] ?? ''
       if (d === this.esc && this.i + 1 < this.n) this.escapeInDouble(w, d)
       else if (d === '$' && this.at(1) === '(') this.substitution(w)
+      else if (d === '`' && !this.powershell) this.backtick(w)
       else {
         if (d === '$' && /[A-Za-z_{]/.test(this.at(1))) w.dynamic = true
-        if (d === '`' && !this.powershell) w.dynamic = true
         w.text += d
         this.i++
       }
