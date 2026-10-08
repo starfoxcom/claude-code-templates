@@ -42,6 +42,11 @@ export type Seen = {
   refusals?: number
   /** Each slash command registered, with its argument hint. */
   commands: { name: string; argumentHint?: string }[]
+  /** The check state of each of the PR's commits, oldest first (`c0`, `c1`, ...), as GitHub's GraphQL
+   * reports them; `null` for a commit with no checks. */
+  rollups: (string | null)[]
+  /** Every gh call's words. */
+  ghCalls: string[]
 }
 
 export function world(on: On) {
@@ -56,6 +61,8 @@ export function world(on: On) {
     commands: [],
     checksRead: 0,
     statusReads: 0,
+    rollups: [],
+    ghCalls: [],
   }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
@@ -92,6 +99,14 @@ export function world(on: On) {
       seen.statusReads++
       await seen.duringStatus?.()
       const stdout = seen.status ?? ''
+      return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (e.argv[0] === 'gh') seen.ghCalls.push(args)
+    if (args.includes('api graphql')) {
+      const nodes = seen.rollups.map((state, i) => ({
+        commit: { oid: `c${i}`, statusCheckRollup: state === null ? null : { state } },
+      }))
+      const stdout = JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes } } } } })
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (args.includes('pr checks')) seen.checksRead++

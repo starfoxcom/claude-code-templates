@@ -6,9 +6,8 @@
 const GIT_OPTS = String.raw`(?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*`
 const GH_OPTS = String.raw`(?:\s+(?:-R\s+\S+|--repo[=\s]\S+))*`
 const AT_START = String.raw`(?:^|[\s;&|({])`
-const PUSH_OR_PR = new RegExp(
-  `${AT_START}git${GIT_OPTS}\\s+push\\b|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`,
-)
+const PUSH = `${AT_START}git${GIT_OPTS}\\s+push\\b`
+const PUSH_OR_PR = new RegExp(`${PUSH}|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`)
 const PR_MERGE = new RegExp(`${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+merge\\b([^|;&\\n]*)`)
 
 // The command with quoted strings emptied and here-doc bodies dropped, so message text never reads as
@@ -63,6 +62,11 @@ function maskedCommand(command: string, isPowerShell: boolean): string {
 
 export function isPushOrPr(command: string, isPowerShell = false): boolean {
   return PUSH_OR_PR.test(commandWords(command, isPowerShell))
+}
+
+// A push alone, not `gh pr create`: the fix-round limit refuses it on a PR past the limit.
+export function isPush(command: string, isPowerShell = false): boolean {
+  return new RegExp(PUSH).test(commandWords(command, isPowerShell))
 }
 
 // A merged PR's watch is noise: the chat already says it merged. Returns the
