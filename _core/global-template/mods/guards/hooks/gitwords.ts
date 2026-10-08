@@ -2,9 +2,10 @@
 // list instead of creating, a commit that takes the working tree, a `-c` setting that may move the hooks,
 // and words built at run time that may become flags. Pure.
 
-import { programOf } from './shell'
+import { programOf } from './programs'
 import type { Statement, Word } from './shell'
 import { COMMIT, GH_WRITES, gitLong, RAW_WRITES } from './specs'
+import { setsEnvAtRunTime } from './vars'
 
 // A `-c` setting built at run time that may move the hooks or run commands: its key is, or it is a hooks
 // path, an alias or an include whose value is. `user.name=$N` changes no such thing.
@@ -192,4 +193,32 @@ export function cmdWrites(line: string): boolean {
       return name !== undefined && writesHistory(name, words.slice(i + 1), false)
     })
   })
+}
+
+/** What the reading carries from statement to statement for `builtReasons`. */
+export type BuiltState = { ps: boolean; isConfigMoved?: boolean; isEnvUnknown?: boolean }
+
+/** The words of a git or gh call that the shell builds at run time, and the git settings and environment
+ * names the command changes: why the call is unread, if it is. Updates `state` for the statements after. */
+export function builtReasons(st: Statement, name: string, args: Word[], state: BuiltState): string[] {
+  const reasons: string[] = []
+  // In a git or gh call that writes, a word the shell splits at run time may become any options at all
+  // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read. Whether it
+  // writes is told from its subcommand, never from a write word inside a `$(...)` or a path.
+  // After a literal `--` every word is a path, whatever it splits into.
+  const ends = args.findIndex(a => !a.dynamic && a.text === '--')
+  const flags = ends === -1 ? args : args.slice(0, ends)
+  // PowerShell's `--%` passes the rest of the line raw, with `%NAME%` filled in from the environment.
+  const isRaw = state.ps && args.some(a => a.text === '--%')
+  // Raw mode hides even the subcommand (`git --% %S% -m x`), so any git or gh call in it is unread.
+  if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && writesHistory(name, args, state.ps))))
+    reasons.push('a word built at run time')
+  // Once the command sets a git alias, include or config file, any git call may be a write the reading
+  // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
+  state.isConfigMoved ||= setsGitConfig(st, name, args, state.ps)
+  if (state.isConfigMoved && name === 'git') reasons.push('a git setting built at run time')
+  // An environment variable named at run time may be any (`LEFTHOOK`, `GIT_DIR`): later git and gh calls.
+  state.isEnvUnknown ||= !state.ps && setsEnvAtRunTime(name, args)
+  if (state.isEnvUnknown && /^(git|gh)$/.test(name)) reasons.push('an environment variable named at run time')
+  return reasons
 }

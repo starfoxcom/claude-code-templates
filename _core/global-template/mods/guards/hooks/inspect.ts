@@ -41,22 +41,23 @@ import {
 import type { Folder, Here, Place, Target } from './folders'
 import {
   branchesOf,
+  builtReasons,
   isCommitAll,
   isSplat,
   cmdWrites,
   evalWrites,
   isUnknownSetting,
   mayBeFlag,
-  setsGitConfig,
   splitsAt,
   TAG_READS,
   writesAsAny,
   writesHistory,
 } from './gitwords'
 import { script } from './scripts'
-import { parse, programOf, runsInlineCode } from './shell'
+import { programOf, runsInlineCode } from './programs'
+import { parse } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
-import { psAssignedCommand, setsEnvAtRunTime, withWords } from './vars'
+import { assignPsTargets, forgetOutVars, psAssignment, withWords } from './vars'
 import type { Var, VarState } from './vars'
 import {
   COMMIT,
@@ -221,8 +222,10 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   inner.forEach((st, i) => readStatement(st, inner[i - 1], r, r.ps ? scope : placeOf(st.group)))
   r.scope = scope
   const filled = withProgram(withWords(typed, r), r)
-  // PowerShell's `env:` drive and .NET spellings are read as `$env:X = v`.
-  const env = r.ps ? psEnvSet(filled) : undefined
+  const assignment = r.ps ? psAssignment(filled) : undefined
+  if (r.ps) forgetOutVars(filled, r)
+  // PowerShell's `$env:X = v`, `env:` drive and .NET spellings are read as `$env:X = v`.
+  const env = r.ps ? psEnvSet(filled, assignment) : undefined
   const st = env?.statement ?? filled
   if (env && env.name === undefined) r.isEnvUnknown = true
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
@@ -234,14 +237,14 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
-  checkBuilt(st, name, args, r)
+  for (const what of builtReasons(st, name, args, r)) unreadCall(r, what)
   const moves = repoMoves(st, name, args)
   r.isRepoMoved ||= moves.movesLater
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
   if (!r.ps && name === 'trap') return readTrap(args, r)
-  // A PowerShell variable set from a command's output (`$r = git push`): the command is read in turn.
-  const assigned = r.ps ? psAssignedCommand(st, r) : undefined
-  if (assigned) return void (assigned.command && readStatement(assigned.command, prev, r, outer))
+  // A PowerShell assignment sets its variables; a command after its operator (`$r = git push`) is read in turn.
+  if (assignment) assignPsTargets(st, assignment, r)
+  if (assignment) return void (assignment.command && readStatement(assignment.command, prev, r, outer))
   if (assign(st, name, args, r)) return
   if (moveTo(name, args, r)) return
   if (readScript(st, name, args, r)) return
@@ -261,29 +264,6 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
   // The repo rules and the diff scan follow each write to where it runs, never to the first `cd`.
   if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
-}
-
-// The words of a git or gh call that the shell builds at run time, and the git settings the command
-// changes: what makes the call unread.
-function checkBuilt(st: Statement, name: string, args: Word[], r: Reading) {
-  // In a git or gh call that writes, a word the shell splits at run time may become any options at all
-  // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read. Whether it
-  // writes is told from its subcommand, never from a write word inside a `$(...)` or a path.
-  // After a literal `--` every word is a path, whatever it splits into.
-  const ends = args.findIndex(a => !a.dynamic && a.text === '--')
-  const flags = ends === -1 ? args : args.slice(0, ends)
-  // PowerShell's `--%` passes the rest of the line raw, with `%NAME%` filled in from the environment.
-  const isRaw = r.ps && args.some(a => a.text === '--%')
-  // Raw mode hides even the subcommand (`git --% %S% -m x`), so any git or gh call in it is unread.
-  if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && writesHistory(name, args, r.ps))))
-    unreadCall(r, 'a word built at run time')
-  // Once the command sets a git alias, include or config file, any git call may be a write the reading
-  // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
-  r.isConfigMoved ||= setsGitConfig(st, name, args, r.ps)
-  if (r.isConfigMoved && name === 'git') unreadCall(r, 'a git setting built at run time')
-  // An environment variable named at run time may be any (`LEFTHOOK`, `GIT_DIR`): later git and gh calls.
-  r.isEnvUnknown ||= !r.ps && setsEnvAtRunTime(name, args)
-  if (r.isEnvUnknown && /^(git|gh)$/.test(name)) unreadCall(r, 'an environment variable named at run time')
 }
 
 // A program named through a variable the command did not set (from outside it, `$(which git)`), with

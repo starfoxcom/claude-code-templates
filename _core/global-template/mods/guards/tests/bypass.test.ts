@@ -1087,4 +1087,89 @@ test('an environment variable named at run time unreads only later git and gh ca
   const named = 'an environment variable named at run time'
   expect(inspect('Set-Item "env:$k" 0; git commit -m x', true).unread).toContain(named)
   expect(inspect('export "$k=0"; git commit -m x', false).unread).toContain(named)
+  // `declare -p`, `-f` and `-F` only print.
+  for (const command of ['declare -p "$x"; git status', 'typeset -p "$x"; git status', 'declare -F "$f"; git status']) {
+    expect([command, inspect(command, false).unread]).toEqual([command, []])
+  }
+})
+
+// Every spelling of a PowerShell assignment target: joined or spaced operator, member, index, list, cast.
+test('a PowerShell command assigned to any target is read', () => {
+  for (const command of [
+    '$r=git commit --no-verify -m x',
+    '$r= git commit --no-verify -m x',
+    '$r =git commit --no-verify -m x',
+    '$r+=git commit --no-verify -m x',
+    '$p.Body = git commit --no-verify -m x',
+    '$a[0] = git commit --no-verify -m x',
+    '$a, $b = git commit --no-verify -m x',
+    '[string] $r = git commit --no-verify -m x',
+    '[System.Collections.Generic.List[string]]$r = git commit --no-verify -m x',
+    '[ValidateNotNull()][string]$r = git commit --no-verify -m x',
+    '[System.Collections.Generic.Dictionary[string,int]]$d = git commit --no-verify -m x',
+    '${r} = git commit --no-verify -m x',
+    '$script:r = git commit --no-verify -m x',
+    '$env:R = git commit --no-verify -m x',
+    '$a = $r = git commit --no-verify -m x',
+  ]) {
+    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+  }
+  expect(inspect('$r=git commit -F msg.md', true).files.map(f => f.path)).toEqual(['msg.md'])
+  expect(inspect('$env:R = gh pr create -t t --body-file b.md', true).files.map(f => f.path)).toEqual(['b.md'])
+  expect(inspect('$r=git commit -m $outside', true).unread).toContain('the commit message')
+})
+
+// `$env:X = <command>` is set at run time: lefthook and git's hook settings cannot be read from it.
+test('a PowerShell environment variable set from a command is set at run time', () => {
+  for (const command of [
+    '$env:LEFTHOOK = Write-Output 0; git commit -m x',
+    '$env:LEFTHOOK=echo false; git commit -m x',
+    "$env:LEFTHOOK = 'a' + 'b'; git commit -m x",
+    '$env:LEFTHOOK += 0; git commit -m x',
+  ]) {
+    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('lefthook')])
+  }
+  const config = `$env:GIT_CONFIG_PARAMETERS = echo "'core.hooksPath=/dev/null'"; git commit -m x`
+  expect(inspect(config, true).block).toContain('skipping git hooks')
+  // A literal value is read as typed; $null removes it, which leaves lefthook on.
+  for (const command of ["$env:LEFTHOOK='1'; git commit -m x", '$env:LEFTHOOK = $null; git commit -m x']) {
+    expect([command, inspect(command, true).block]).toEqual([command, undefined])
+  }
+  expect(inspect("$env:LEFTHOOK='0'; git commit -m x", true).block).toContain('lefthook')
+})
+
+// A reassignment in any spelling leaves the variable unknown: git gets the new value, not the old text.
+test('a PowerShell reassignment the reading cannot know leaves the variable unknown', () => {
+  for (const change of [
+    '$m =$outside',
+    '$m= $outside',
+    '$m=$outside',
+    '[string] $m = $outside',
+    '$a, $m = $outside',
+    '[System.Collections.Generic.List[string]]$m = $outside',
+    '$m=Get-Clipboard',
+    '$m=hostname',
+    'Set-Location sub -PassThru -OutVariable m',
+    'Invoke-Expression $c -OutVariable m',
+    '$a = $m = $outside',
+    '$a=$m=$outside',
+  ]) {
+    const command = `$m = 'fix: x'; ${change}; git commit -m $m`
+    expect([command, inspect(command, true).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+  }
+  expect(inspect('$a=Get-Clipboard; git push origin main $a', true).unread).toContain('a word built at run time')
+})
+
+// Plain values keep their reading: a joined string, a list beside it, a splat, a here-string.
+test('PowerShell plain values keep their reading in every spelling', () => {
+  expect(inspect("$m='fix: x'; git commit -m $m", true).texts.map(t => t.text)).toContain('fix: x')
+  expect(inspect("$m='x'; git commit -m $m", true).unread).toEqual([])
+  const list = "$docs = 'fix: x'; $labels = 'bug', 'docs'; git commit -m $docs"
+  expect(inspect(list, true).unread).toEqual([])
+  expect(inspect(list, true).texts.map(t => t.text)).toContain('fix: x')
+  // gh gets a splat as `-key:value` words: it stays unread, entry by entry as before.
+  expect(inspect("$p = @{ Title = 't'; Body = 'b' }; gh pr create @p", true).unread).toEqual(['the PR text'])
+  expect(inspect("$m = 'a' + 'b'; git commit -m $m", true).unread).toContain('the commit message')
+  // A comparison or a bracketed `=` is no assignment.
+  expect(inspect('[Parameter(Mandatory=$true)]$x = 1; git status', true).unread).toEqual([])
 })
