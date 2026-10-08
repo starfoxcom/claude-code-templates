@@ -4,6 +4,17 @@ import { expect, mock, test } from 'claude-code/testing'
 
 const AI_TRAILER = 'Co-' + 'Authored-By: Cla' + 'ude <noreply@anthro' + 'pic.com>'
 const LOG = 'C:/Users/me/.claude/mods-data/guards/decisions.jsonl'
+const UNSCANNED = 'the lines the commit adds (in a folder or repo built at run time)'
+
+// The repo a folder is in (`git -C <folder> rev-parse --show-toplevel`): each folder under C:/Repos is one.
+function topOf(folder: string) {
+  const parts: string[] = []
+  for (const part of folder.replaceAll('\\', '/').split('/')) {
+    if (part === '..') parts.pop()
+    else if (part !== '.') parts.push(part)
+  }
+  return parts.slice(0, 3).join('/')
+}
 
 // `isDiffCut`: the diff went past the engine's output cap. A call named in `seen.broken` throws.
 function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Windows_NT', isDiffCut = false) {
@@ -36,7 +47,7 @@ function world(on: On, files: Record<string, string> = {}, diff = '', os = 'Wind
   on('process.run', ($, e) => {
     seen.runs.push([...e.argv])
     const isDiff = e.argv.includes('diff')
-    const out = e.argv.includes('--show-toplevel') ? 'C:/Repos/my-game\n' : isDiff ? diff : ''
+    const out = e.argv.includes('--show-toplevel') ? `${topOf(e.argv[2] ?? '')}\n` : isDiff ? diff : ''
     const isStdoutTruncated = isDiff && isDiffCut
     return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated, isStderrTruncated: false } }
   })
@@ -133,11 +144,12 @@ test(
       expect((result as { deny?: string }).deny).toBeUndefined()
     }
     expect(seen.ran).toHaveLength(2)
-    // A `popd` with no `pushd` before it leaves the folder unknown: the file is named unread and refused.
+    // A `popd` with no `pushd` before it leaves the folder unknown: the file and the lines the commit adds
+    // are named unread and refused.
     const popped = await bash($, 'popd; git commit -F m.txt')
     expect(String((popped as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-    expect(entry.unread?.length).toBe(1)
+    expect(entry.unread).toEqual(['the commit message', UNSCANNED])
   },
 )
 
@@ -168,7 +180,7 @@ test('a relative body file under a folder built at run time is named unread and 
     await bash($, command)
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
     expect(entry.mod).toContain('cannot read')
-    expect(entry.unread?.length).toBe(1)
+    expect(entry.unread?.length).toBe(command.startsWith('git') ? 2 : 1)
   }
   // A file of the same name in the session folder is a different file: still named unread, never read.
   seen.files.set('C:/Repos/my-game/body.md', '## What\n- clean\n')
@@ -187,6 +199,43 @@ test('a commit looks at the lines it adds', async ($, on) => {
   await bash($, "git commit -m 'feat: x'")
   expect(seen.runs.some(argv => argv.includes('--cached'))).toBe(true)
   expect(seen.files.get(LOG)).toContain('added to src/a.ts')
+})
+
+test('each commit is scanned in the folder it runs in, never the first one the command moved to', async ($, on) => {
+  const seen = world(on)
+  const routes: [string, string[]][] = [
+    ["pushd ../lib && npm run build && popd && git commit -am 'fix: x'", ['C:/Repos/my-game']],
+    ["git -C ../other fetch && git commit -m 'fix: x'", ['C:/Repos/my-game']],
+    ["(cd ../site && make); git commit -m 'fix: x'", ['C:/Repos/my-game']],
+    ["git commit -m 'fix: x' && git -C ../lib commit -m 'fix: y'", ['C:/Repos/my-game', 'C:/Repos/my-game/../lib']],
+  ]
+  for (const [command, folders] of routes) {
+    seen.runs.length = 0
+    await bash($, command)
+    const scans = seen.runs.filter(argv => argv.includes('diff')).map(argv => (argv[2] ?? '').replaceAll('\\', '/'))
+    expect([command, scans]).toEqual([command, folders])
+  }
+})
+
+test('a commit in a folder or repo built at run time is refused', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  for (const command of ['cd "$R" && git commit -m "fix: x"', 'GIT_DIR=../x/.git git commit -m "fix: x"']) {
+    const deny = ((await bash($, command)) as { deny?: string }).deny
+    expect([command, deny]).toEqual([command, expect.stringContaining(UNSCANNED)])
+  }
+  expect(seen.ran).toEqual([])
+})
+
+test("a repo's banned names apply where its commits run", { options: { mode: 'enforce' } }, async ($, on) => {
+  const names = JSON.stringify({ repos: { lib: { names: ['Oldkeep'] } } })
+  world(on, { 'C:/Users/me/.claude/mods-data/guards/names.json': names })
+  const deny = async (command: string) => ((await bash($, command)) as { deny?: string }).deny
+  expect(await deny("git -C ../lib commit -m 'fix: Oldkeep port'")).toContain('"Oldkeep" named in')
+  expect(await deny("git commit -m 'fix: a' && git -C ../lib commit -m 'fix: Oldkeep port'")).toContain('Oldkeep')
+  // The commit runs back in the session's repo, which keeps no such list.
+  expect(await deny("pushd ../lib && popd && git commit -m 'fix: the Oldkeep loader'")).toBeUndefined()
+  // Where the commit lands is unknown: every repo's list applies.
+  expect(await deny('cd "$R" && git commit -m "fix: Oldkeep port"')).toContain('Oldkeep')
 })
 
 test('a diff past the output cap names the rest of the added lines unread', async ($, on) => {
@@ -494,7 +543,8 @@ test('a crash after the command ran keeps its result and never runs it twice', a
 
 // From the shadow trial: GameProject opens every PR as `cd "<repo>" && gh pr create ...`.
 test('a PR call after a cd to a literal folder is judged there', { options: { mode: 'enforce' } }, async ($, on) => {
-  world(on, { [RULES]: ROW_RULE, 'C:/Repos/other/b.md': NO_ROW })
+  // The rule is the repo's the PR call runs in, not the session's.
+  world(on, { [RULES]: ROW_RULE.replace('my-game', 'other'), 'C:/Repos/other/b.md': NO_ROW })
   const result = await bash($, 'cd "C:/Repos/other" && gh pr create --title "feat: x" --body-file b.md')
   expect(String((result as { deny?: string }).deny)).toContain('PR-body contract')
   const full = await bash($, 'cd C:/Repos/other && cd sub && gh pr create --title "feat: x" --body-file ../b.md')

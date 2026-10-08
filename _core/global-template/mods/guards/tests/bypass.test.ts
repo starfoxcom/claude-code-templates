@@ -473,8 +473,8 @@ test('a shortened option is read as the option git reads', () => {
   expect(messages("git commit --messa='fix: x'").map(t => t.text)).toEqual(['fix: x'])
   expect(read('git commit --fi m.txt').files).toEqual([])
   expect(read('git commit --fil m.txt').files.map(f => f.path)).toEqual(['m.txt'])
-  expect(read('git commit --al').diff).toBe('cached')
-  expect(read("git commit --all -m 'fix: x'").diff).toBe('all')
+  expect(read('git commit --al').targets[0]?.diff).toBe('cached')
+  expect(read("git commit --all -m 'fix: x'").targets[0]?.diff).toBe('all')
   expect(read('git branch --mo old new').branches).toEqual(['new'])
   expect(read('git branch --del old').branches).toEqual([])
   expect(read('git checkout --orph fresh').branches).toEqual(['fresh'])
@@ -675,4 +675,32 @@ test('a folder moved by a stack option, or inside a subshell, is read as the she
   expect(folder('pushd -n docs; git commit -F msg.txt')).toEqual({ isUnknown: true })
   expect(folder('pushd docs; (popd; make); git commit -F msg.txt')).toEqual({ path: 'docs', isUnknown: false })
   expect(folder('(cd sub && make); git commit -F m.txt')).toEqual({ isUnknown: false })
+})
+
+// A word that splits anywhere in a git or gh write, a git 2.46 section verb with a run-time section, a
+// PowerShell command in value position, and a body file rewritten after it was read.
+test('a split word anywhere in a write is unread; after a literal -- it is a path', () => {
+  const split = ['git --git-dir=$G commit -m x', 'git commit -S$K -m x', 'git push $X', 'git commit --verbos $V -m x']
+  for (const command of split) {
+    expect(inspect(command, false).unread).toContain('a word built at run time')
+  }
+  expect(inspect("git commit -m 'fix: x' -- $FILES", false).unread).toEqual([])
+  expect(inspect('git log $RANGE', false).unread).toEqual([])
+})
+
+test('a run-time section after a git 2.46 verb is refused', () => {
+  for (const command of ['git config remove-section $S', 'git config rename-section $A b']) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('built at run time')])
+  }
+})
+
+test('a PowerShell command in value position is unknown, a quoted string is text', () => {
+  expect(inspect('$m = Get-Date; git commit -m $m', true).unread).toEqual(['the commit message'])
+  expect(inspect("$m = 'fix: x'; git commit -m $m", true).unread).toEqual([])
+})
+
+test('a body file read before the command writes it again is the file as it was', () => {
+  const twice = "cat > m.txt <<'EOF'\nfix: first\nEOF\ngit commit -F m.txt\ncat > m.txt <<'EOF'\nsecond\nEOF"
+  const plan = inspect(twice, false)
+  expect(plan.texts.filter(t => t.where.startsWith('the commit message')).map(t => t.text)).toContain('fix: first')
 })

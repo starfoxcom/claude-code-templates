@@ -472,7 +472,8 @@ class Reader {
     if (c === '"') return this.doubleQuoted(w)
     // `$NAME`, `${...}`, `$(...)` and Bash's special parameters (`$@`, `$1`, `$?`) outside quotes.
     const isExpansion = c === '$' && this.expands(this.at(1))
-    if (isExpansion || (c === '`' && !this.powershell)) w.splits = true
+    // PowerShell passes a variable as one argument; only Bash splits it.
+    if (!this.powershell && (isExpansion || c === '`')) w.splits = true
     if (c === '$' && this.at(1) === '(') return this.substitution(w)
     if (isExpansion) w.dynamic = true
     if (c === '`' && !this.powershell) return this.backtick(w)

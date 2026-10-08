@@ -25,8 +25,8 @@ import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
-import { moveFolder, movePlace, placeHere } from './folders'
-import type { Folder, Place } from './folders'
+import { moveFolder, movePlace, placeHere, repoMoves, targetOf } from './folders'
+import type { Folder, Here, Place, Target } from './folders'
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, setVar, within, withWords } from './vars'
@@ -57,7 +57,7 @@ export type Plan = {
   /** Message text with where it goes ("the commit message", "the PR body"). `creditOnly`: command text
    * around a message (a `$(...)` as typed), checked for AI credit but not for the product name. */
   texts: { where: string; text: string; creditOnly?: boolean }[]
-  /** Body files the command hands to git or gh, as written (relative to `cwd` when not absolute).
+  /** Body files the command hands to git or gh, as written (relative to `folder` when not absolute).
    * `written`: this same command writes the file, and what it writes was read from the command text. */
   /** `folder`: where a relative path resolves, as the command stands where the file is named.
    * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading. */
@@ -65,18 +65,12 @@ export type Plan = {
   /** Files the command itself writes (`> file`). */
   written: string[]
   branches: string[]
-  /** A commit runs: `cached` checks the staged lines, `all` the working tree's too (`-a`, pathspecs). */
-  diff: 'cached' | 'all' | null
+  /** Each write statement's folder, repo and commit lines, for the repo rules and the diff scan. */
+  targets: Target[]
   /** Messages whose text is built in a way the guard cannot read ($VAR from outside, another program's output). */
   unread: string[]
   /** What was left unjudged without risk to history (the PR-body format, a diff cut short): logged, never refused. */
   notes: string[]
-  /** `gh --repo owner/name` when given. */
-  repo?: string
-  /** Where relative paths resolve: a leading `cd` or `git -C`. */
-  cwd?: string
-  /** The `cd` or `-C` folder is built at run time (`cd "$REPO"`): relative paths cannot be found. */
-  isCwdUnknown?: boolean
   block?: string
   isWrite: boolean
   /** Each `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
@@ -85,7 +79,7 @@ export type Plan = {
   ghCalls: number
 }
 
-export type { Folder } from './folders'
+export type { Folder, Target } from './folders'
 
 // The statement that writes a file, where it runs, and the values of the variables its path names there.
 type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[] }
@@ -97,8 +91,10 @@ type Reading = VarState & {
   places: Map<string, Place>
   /** Body files matched to the statement that wrote them under the same spelling. */
   matched: Map<object, Writer>
-  /** A `git -C <dir>` on the statement being read: its folder, for this statement only. */
-  statementDir?: Word
+  /** What the statement being read sets for itself: its `git -C` folder, `gh --repo`, its commit's lines. */
+  at: Here
+  /** An earlier statement pointed git at another repo for what follows (`export GIT_DIR=x`). */
+  isRepoMoved?: boolean
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
   opened: number
   /** The statement that writes each file (`> file`), by normalized path, with where it runs. */
@@ -123,7 +119,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     files: [],
     written: [],
     branches: [],
-    diff: null,
+    targets: [],
     unread: [],
     notes: [],
     isWrite: false,
@@ -134,6 +130,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     plan,
     places: new Map([['', { folder: { isUnknown: false }, folders: [] }]]),
     matched: new Map(),
+    at: {},
     ps: powershell,
     vars: new Map(),
     scope: '',
@@ -152,7 +149,8 @@ export function inspect(command: string, powershell: boolean): Plan {
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
   // so that is noted, not refused.
   for (const f of [...plan.files]) {
-    const writer = r.matched.get(f) ?? r.writers.get(norm(f.path))
+    // The writer it had where it was named: one after it writes over a file the command already read.
+    const writer = r.matched.get(f)
     if (!writer) continue
     f.written = true
     const before = plan.unread.length
@@ -211,11 +209,20 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
+  // In a git or gh call that writes, a word the shell splits at run time may become any options at all
+  // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read.
+  const line = `${name} ${args.map(a => a.text).join(' ')}`
+  // After a literal `--` every word is a path, whatever it splits into.
+  const ends = args.findIndex(a => !a.dynamic && a.text === '--')
+  const flags = ends === -1 ? args : args.slice(0, ends)
+  if (/^(git|gh)$/.test(name) && flags.some(splitsAt) && RAW_WRITES.some(re => re.test(line)))
+    unreadCall(r, 'a word built at run time')
+  const moves = repoMoves(st, name, args)
+  r.isRepoMoved ||= moves.movesLater
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
     const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
-    if (!plan.cwd && !plan.isCwdUnknown && target) setCwd(plan, target)
     const place = movePlace(r)
     // `pushd -n`, `popd +1`: an option or a stack place the reading does not follow leaves it unknown.
     const isStack = PUSH_NAMES.has(name) || POP_NAMES.has(name)
@@ -234,15 +241,18 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   // text is under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
   if (runsInlineCode(st)) r.ranScript = true
   const before = plan.files.length
-  r.statementDir = undefined
+  const count = r.writes
+  r.at = {}
   readWrite(st, prev, name, args, r)
   // Each body file keeps the folder in effect where it is named: `cd a && ... && cd b` moves it on.
   const here = placeHere(r).folder
-  const folder = r.statementDir ? moveFolder(here, r.statementDir) : here
+  const folder = r.at.dir ? moveFolder(here, r.at.dir) : here
   for (const f of plan.files.slice(before)) {
     f.folder ??= folder
     if (r.ranScript) f.scripted = true
   }
+  // The repo rules and the diff scan follow each write to where it runs, never to the first `cd`.
+  if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
 }
 
 // A program named through a variable the command did not set (from outside it, `$(which git)`), with
@@ -340,7 +350,7 @@ function readSplats(args: Word[], r: Reading, where: string) {
 }
 
 function readStdin(st: Statement, prev: Statement | undefined, r: Reading, where: string) {
-  if (st.reads.length > 0) for (const path of st.reads) r.plan.files.push({ where, path })
+  if (st.reads.length > 0) for (const path of st.reads) pushFile(r, where, path)
   else if (st.pipeIn && prev) feed(prev, r, where)
   else r.plan.unread.push(where)
 }
@@ -353,7 +363,7 @@ function feed(st: Statement, r: Reading, where: string) {
   if (/^(cat|type|get-content|gc)$/.test(name)) {
     const paths = args.filter(a => !a.text.startsWith('-'))
     for (const p of paths) take('file', p, r, where)
-    for (const path of st.reads) plan.files.push({ where, path })
+    for (const path of st.reads) pushFile(r, where, path)
     if (paths.length + st.reads.length + st.heredocs.length === 0) plan.unread.push(where)
     return
   }
@@ -381,6 +391,14 @@ function varsIn(path: string, r: Reading): (Var | undefined)[] {
   return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
 }
 
+// A body file named here, matched to the statement that wrote it so far, if any.
+function pushFile(r: Reading, where: string, path: string) {
+  const entry = { where, path }
+  const writer = r.writers.get(norm(path))
+  if (writer) r.matched.set(entry, writer)
+  r.plan.files.push(entry)
+}
+
 // A word the shell splits into more words at run time, which may carry options.
 const splitsAt = (w: Word | undefined) => Boolean(w?.dynamic && w.splits)
 
@@ -393,11 +411,6 @@ function unreadCall(r: Reading, what: string) {
 // A word built at run time that the program may read as a flag: split by the shell, or starting with an
 // expansion or a dash.
 const mayBeFlag = (w: Word) => w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text))
-
-function setCwd(plan: Plan, word: Word | undefined) {
-  if (word?.dynamic) plan.isCwdUnknown = true
-  else plan.cwd = word?.text
-}
 
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
 function write(r: Reading, st: Statement, where: string): string {
@@ -437,8 +450,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
     const t = args[k]?.text ?? ''
     if (t === '-C') {
       if (splitsAt(args[k + 1])) unreadCall(r, 'a git option built at run time')
-      if (!plan.cwd && !plan.isCwdUnknown) setCwd(plan, args[k + 1])
-      r.statementDir = args[k + 1]
+      r.at.dir = args[k + 1]
       k += 2
     } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env)$/.test(t)) {
       // A setting built at run time may name a hook path or an alias: what git then runs is unknown.
@@ -478,7 +490,7 @@ function gitCommit(st: Statement, rest: Word[], r: Reading): string {
   const where = write(r, st, 'the commit message')
   const positional = walk(rest, COMMIT, r, where, 'commit')
   const all = rest.some(a => isCommitAll(a.text))
-  plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
+  r.at.diff = all || positional.length > 0 ? 'all' : 'cached'
   return where
 }
 
@@ -695,9 +707,9 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       return message(value, r, where)
     case 'file': {
       if (value.text === '-') return void r.stdin++
-      if (!value.dynamic) return void plan.files.push({ where, path: value.text })
+      if (!value.dynamic) return void pushFile(r, where, value.text)
       const e = expand(value.text, r)
-      if (!e.unresolved) return void plan.files.push({ where, path: e.text })
+      if (!e.unresolved) return void pushFile(r, where, e.text)
       // A file this command writes under the same spelling (`F=$(mktemp); cat > "$F"`), with every
       // variable in it unchanged since: the same file.
       const writer = r.writers.get(norm(value.text))
@@ -714,7 +726,7 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       return
     }
     case 'repo':
-      plan.repo = value.text.split('/').pop()
+      r.at.repo = value
       return
     case 'method':
       r.method = value.text.toUpperCase()
@@ -751,7 +763,7 @@ function knownPath(path: string, r: Reading): string | undefined {
 function filePath(path: string, r: Reading, where: string) {
   const full = knownPath(path, r)
   if (full === undefined) return void r.plan.unread.push(where)
-  r.plan.files.push({ where, path: full })
+  pushFile(r, where, full)
 }
 
 // A message value: literal text is checked; text built at run time is read where the reading can (a
@@ -767,7 +779,7 @@ function message(value: Word, r: Reading, where: string) {
   const e = expand(value.text, r)
   plan.texts.push({ where, text: e.text })
   // Variables that hold a file's text (`BODY=$(cat b.md)`): the file is read instead.
-  if (e.isFilesOnly) for (const path of e.files) plan.files.push({ where, path })
+  if (e.isFilesOnly) for (const path of e.files) pushFile(r, where, path)
   else if (e.unresolved) plan.unread.push(where)
 }
 
@@ -776,7 +788,7 @@ function message(value: Word, r: Reading, where: string) {
 function held(value: Word, r: Reading, where: string, opener: '$' | '<' = '$'): boolean {
   const v = catValue(value, r, opener)
   if (!v) return false
-  if (v.file) r.plan.files.push({ where, path: v.file })
+  if (v.file) pushFile(r, where, v.file)
   else r.plan.texts.push({ where, text: v.text })
   if (!v.file && !v.literal) r.plan.unread.push(where)
   return true

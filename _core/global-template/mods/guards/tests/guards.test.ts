@@ -145,8 +145,9 @@ test('body files are found in every spelling, and text built at run time is name
     'git commit -sm"$MSG"',
   ]) {
     const plan = inspect(attached, false)
-    expect(plan.unread.length).toBe(1)
-    expect(plan.diff).toBe(attached.includes('-am') ? 'all' : 'cached')
+    // Unquoted, the value also splits into words that may be options: the call itself is unread too.
+    expect([attached, plan.unread.length]).toEqual([attached, attached.includes('"') ? 1 : 2])
+    expect(plan.targets[0]?.diff).toBe(attached.includes('-am') ? 'all' : 'cached')
   }
   expect(inspect('gh pr comment 5 -b"$BODY"', false).unread.length).toBe(1)
   // A whole gh api field built at run time.
@@ -246,14 +247,14 @@ test('a commit checks the lines it adds for credit lines, not quoted rules', () 
   expect(checkAddedLines(diff(AI_TRAILER))).toBeDefined()
   expect(checkAddedLines(diff(`- \`${AI_TRAILER}\` (or any AI email)`))).toBeUndefined()
   expect(checkAddedLines(diff(`const AI_TRAILER = 'Co-' + 'Authored-By: x'`))).toBeUndefined()
-  expect(inspect("git commit -am 'x'", false).diff).toBe('all')
-  expect(inspect("git commit -m 'x'", false).diff).toBe('cached')
+  expect(inspect("git commit -am 'x'", false).targets[0]?.diff).toBe('all')
+  expect(inspect("git commit -m 'x'", false).targets[0]?.diff).toBe('cached')
   // An `a` inside a signing key or an untracked-files mode is that flag's value, not `-a`.
   for (const flag of ['-Sabc', '-S0xA1a', '-unormal', '-uall']) {
-    expect(inspect(`git commit ${flag} -m 'x'`, false).diff).toBe('cached')
+    expect(inspect(`git commit ${flag} -m 'x'`, false).targets[0]?.diff).toBe('cached')
   }
-  expect(inspect("git commit -sam 'x'", false).diff).toBe('all')
-  expect(inspect("git commit --all -m 'x'", false).diff).toBe('all')
+  expect(inspect("git commit -sam 'x'", false).targets[0]?.diff).toBe('all')
+  expect(inspect("git commit --all -m 'x'", false).targets[0]?.diff).toBe('all')
 })
 
 test('the shell reading keeps quoted separators and here-docs in their statement', () => {
@@ -342,7 +343,7 @@ test('a global repo flag before the gh subcommand is skipped with its value', ()
   ]) {
     expect(verdict(command, true)).toBe('credit')
   }
-  expect(inspect('gh -R o/r pr comment 5 -b x', false).repo).toBe('r')
+  expect(inspect('gh -R o/r pr comment 5 -b x', false).targets[0]?.repo).toBe('r')
   expect(inspect('gh -R o/r pr view 5', false).isWrite).toBe(false)
 })
 
@@ -400,4 +401,35 @@ test('text piped in, set in a variable, or written to a file earlier in the comm
   expect(plan('gh pr create @p', true).unread).toEqual(['the PR text'])
   expect(plan('bash -c "git commit -m \\"$MSG\\""').unread).toContain('a bash script built at run time')
   expect(plan('MSG=fixed; git commit -m "$MSG"').unread).toEqual([])
+})
+
+// Where each write lands, for the repo rules and the diff scan: the folder it runs in, never the first one
+// the command moved to; unknown when git is pointed at another repo or the folder is built at run time.
+test('each write lands in the folder it runs in', () => {
+  const at = (command: string, ps = false) => inspect(command, ps).targets.map(t => t.folder)
+  const home = [{ isUnknown: false }]
+  expect(at("pushd ../lib && npm run build && popd && git commit -am 'fix: x'")).toEqual(home)
+  expect(at("git -C ../other fetch && git commit -m 'fix: x'")).toEqual(home)
+  expect(at("(cd ../site && make); git commit -m 'fix: x'")).toEqual(home)
+  expect(at("cd ../lib && git commit -m 'fix: x'")).toEqual([{ path: '../lib', isUnknown: false }])
+  expect(at("git -C ../lib commit -m 'fix: x'")).toEqual([{ path: '../lib', isUnknown: false }])
+  expect(at("git commit -m 'fix: x' && git -C ../lib commit -m 'fix: y'")).toEqual([
+    { isUnknown: false },
+    { path: '../lib', isUnknown: false },
+  ])
+  const elsewhere = [
+    'cd "$R" && git commit -m x',
+    'GIT_DIR=../x/.git git commit -m x',
+    'env GIT_WORK_TREE=../w git commit -am x',
+    'git --git-dir=../x/.git commit -m x',
+    'git --work-tree ../w commit -am x',
+    'git -c core.worktree=../w commit -am x',
+    'export GIT_DIR=../x/.git; git commit -m x',
+    'git config core.worktree ../w; git commit -am x',
+    'GH_REPO=o/r; export GH_REPO; gh pr comment 5 -b x',
+    'gh pr comment 5 -R "o/$R" -b x',
+  ]
+  for (const command of elsewhere) expect([command, at(command).at(-1)]).toEqual([command, { isUnknown: true }])
+  expect(at("$env:GIT_DIR = 'x'; git commit -m x", true)).toEqual([{ isUnknown: true }])
+  expect(inspect('git commit -am x; git commit -m y', false).targets.map(t => t.diff)).toEqual(['all', 'cached'])
 })
