@@ -591,3 +591,42 @@ test('ordinary words built at run time that cannot turn into a flag pass', () =>
   expect(read('$env:LEFTHOOK=1; git commit -m x', true).block).toBeUndefined()
   expect(read('$env:LEFTHOOK = $v; git commit -m x', true).block).toContain('disabling lefthook')
 })
+
+// A here-doc quoted with a backslash, the classic `git config` read past its key, git-filter-repo on its
+// own, and an eval whose text ends in a subshell or whose prefix appends.
+const ROUND_12_REFUSED: [string, string][] = [
+  ["cat <<\\EOF > m.txt\nfix: don't skip it\nEOF\ngit commit --no-verify -F m.txt", 'skipping git hooks'],
+  ['git config core.hooksPath -x', 'skipping git hooks'],
+  ['git config core.hooksPath --get', 'skipping git hooks'],
+  ['git-filter-repo --force', 'history rewriting'],
+]
+
+for (const [command, reason] of ROUND_12_REFUSED) {
+  test(`refused: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, false).block).toContain(reason)
+  })
+}
+
+test('an eval leaves its prefix unknown where the command goes on', () => {
+  for (const command of [`M=x eval '(true)'; git commit -m "$M"`, `M=a; M+=" $OUT" eval 'git commit -m "$M"'`]) {
+    expect([command, inspect(command, false).unread]).toEqual([command, ['the commit message']])
+  }
+})
+
+test('a backslash here-doc, a mktemp body file, a plain setting and pushd/popd pass', () => {
+  const read = (c: string) => inspect(c, false)
+  const doc = read("git commit -F - <<\\EOF\nfix: it's read\nEOF")
+  expect([doc.unread, doc.files, doc.block]).toEqual([[], [], undefined])
+  expect(doc.texts.map(t => t.text)).toContain("fix: it's read")
+  const temp = read("F=$(mktemp); cat > \"$F\" <<'EOF'\nfix: x\nEOF\ngit commit -F \"$F\"")
+  expect([temp.unread, temp.files.map(f => f.written)]).toEqual([[], [true]])
+  // Set again in between, the name holds another file.
+  expect(read("F=$(mktemp); cat > \"$F\" <<'EOF'\nx\nEOF\nF=$OUT; git commit -F \"$F\"").unread).toEqual([
+    'the commit message',
+  ])
+  expect(read("git -c \"user.name=$N\" commit -m 'fix: x'").unread).toEqual([])
+  expect(read('git -c "alias.ci=$A" ci').unread).toEqual(['a git setting built at run time'])
+  const popped = read('pushd sub && popd && git commit -F m.txt')
+  expect([popped.unread, popped.files[0]?.folder]).toEqual([[], { isUnknown: false }])
+  expect(read('git config --get core.hooksPath').block).toBeUndefined()
+})

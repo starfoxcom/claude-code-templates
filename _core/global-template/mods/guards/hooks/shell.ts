@@ -45,7 +45,8 @@ export type Statement = {
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
 const REDIRECT_ATTACHED = /^\d*(>>?|<)(?!&)(.+)$/
 
-const HEREDOC = /^<<(-?)[ \t]*(["']?)([A-Za-z_][\w.-]*)\2/
+// `<<EOF`, `<<'EOF'`, `<<"EOF"` and `<<\EOF` (quoted with a backslash), each with an optional `-`.
+const HEREDOC = /^<<(-?)[ \t]*(\\?)(["']?)([A-Za-z_][\w.-]*)\3/
 
 // A here-doc queued on the current line. `owner`: the statement that opened it; a line can go on past
 // it (`<<'EOF' && git push`). `isQuoted`: its delimiter was quoted, so the body is literal.
@@ -245,7 +246,8 @@ class Reader {
     const m = HEREDOC.exec(this.command.slice(this.i))
     if (!m) return false
     this.endWord()
-    this.pending.push({ delim: m[3] ?? '', strip: m[1] === '-', owner: this.st, isQuoted: m[2] !== '' })
+    const isQuoted = m[2] !== '' || m[3] !== ''
+    this.pending.push({ delim: m[4] ?? '', strip: m[1] === '-', owner: this.st, isQuoted })
     this.i += m[0].length
     return true
   }

@@ -39,7 +39,7 @@ export function setVar(r: VarState, name: string, value: Word | undefined, expor
  * `(Get-Content b.md -Raw)`; its path is in the first group that matched. */
 const CAT_FILE =
   /^[$<]?\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$`]+))(?:\s+-Raw)?\s*\)$/i
-const CAT_HEREDOC = /^[$<]\(\s*cat\s+<<(-?)[ \t]*(['"]?)([A-Za-z_][\w.-]*)\2[ \t]*\r?\n/
+const CAT_HEREDOC = /^[$<]\(\s*cat\s+<<(-?)[ \t]*(\\?)(['"]?)([A-Za-z_][\w.-]*)\3[ \t]*\r?\n/
 
 /** What a value that is wholly one `$(cat ...)` holds: a here-doc's text (filled in when its delimiter is
  * bare, `literal` false when a part stays unknown), or the file it prints. `opener`: `$` for a
@@ -52,9 +52,9 @@ export function catValue(value: Word, r: VarState, opener: '$' | '<' = '$'): Hel
   if (!isOpen) return undefined
   const doc = r.ps ? null : CAT_HEREDOC.exec(t)
   if (doc) {
-    const body = heredocBody(t.slice(doc[0].length), doc[3] ?? '', doc[1] === '-')
+    const body = heredocBody(t.slice(doc[0].length), doc[4] ?? '', doc[1] === '-')
     if (body === undefined) return undefined
-    const e = doc[2] ? { text: body, unresolved: false } : expandBody(body, r)
+    const e = doc[2] || doc[3] ? { text: body, unresolved: false } : expandBody(body, r)
     return { text: e.unresolved ? body : e.text, literal: !e.unresolved }
   }
   const file = CAT_FILE.exec(t)
