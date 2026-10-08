@@ -94,6 +94,8 @@ type Reading = VarState & {
   matched: Map<object, Writer>
   /** What the statement being read sets for itself: its `git -C` folder, `gh --repo`, its commit's lines. */
   at: Here
+  /** While a writer's statement is fed in after the walk: the folder it ran in. */
+  feedFolder?: Folder
   /** An earlier statement pointed git at another repo for what follows (`export GIT_DIR=x`). */
   isRepoMoved?: boolean
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
@@ -155,7 +157,11 @@ export function inspect(command: string, powershell: boolean): Plan {
     if (!writer) continue
     f.written = true
     const before = plan.unread.length
-    feed(writer.st, { ...r, ps: writer.ps, scope: writer.scope }, `${f.where} (file ${f.path})`)
+    const named = plan.files.length
+    const at = { ...r, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
+    feed(writer.st, at, `${f.where} (file ${f.path})`)
+    // A file the writer reads (`cat CHANGES.md > b.md`) is where the writer ran.
+    for (const g of plan.files.slice(named)) g.folder ??= writer.folder
     plan.notes.push(...plan.unread.splice(before))
   }
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
@@ -213,7 +219,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   plan.block ??= bypassOf(st, name, args)
   // In a git or gh call that writes, a word the shell splits at run time may become any options at all
   // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read.
-  const line = `${name} ${args.map(a => a.text).join(' ')}`
+  const line = lineOf(name, args)
   // After a literal `--` every word is a path, whatever it splits into.
   const ends = args.findIndex(a => !a.dynamic && a.text === '--')
   const flags = ends === -1 ? args : args.slice(0, ends)
@@ -264,8 +270,7 @@ function withProgram(st: Statement, r: Reading): Statement {
   const head = st.words[k]
   // PowerShell runs a program named by a variable only through `&` (`& $git commit`).
   if (!name || !head?.dynamic || (r.ps && !st.isCall)) return st
-  const rest = args.map(a => a.text).join(' ')
-  if (RAW_WRITES.some(re => re.test(`git ${rest}`) || re.test(`gh ${rest}`))) {
+  if (RAW_WRITES.some(re => re.test(lineOf('git', args)) || re.test(lineOf('gh', args)))) {
     r.plan.isWrite = true
     r.plan.unread.push('a program named at run time')
   }
@@ -384,16 +389,22 @@ function varsIn(path: string, r: Reading): (Var | undefined)[] {
   return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
 }
 
+const MKTEMP = /^\$\(\s*mktemp(\s+(-[dqu]+|-t\s+[\w.]+|--suffix=[\w.]+))*\s*\)$/
+
 // A relative path names the written file only where both are named in the same known folder: a `cd`
 // between them, or one built at run time, makes it another file.
 function isSameFolder(path: string, writer: Writer, r: Reading): boolean {
   if (/^([a-zA-Z]:)?[\\/]|^~/.test(path)) return true
+  // `$(mktemp)` prints a full path (in the temp folder) unless given a template or folder of its own.
+  const lead = /^\$\{?([A-Za-z_]\w*)\}?/.exec(path)
+  if (lead && MKTEMP.test(lookup(r, lead[1] ?? '')?.text ?? '')) return true
   const here = folderNow(r)
   return !here.isUnknown && !writer.folder.isUnknown && here.path === writer.folder.path
 }
 
 // The folder the statement being read runs in, moved by its own `git -C`.
 function folderNow(r: Reading): Folder {
+  if (r.feedFolder) return r.feedFolder
   const here = placeHere(r).folder
   return r.at.dir ? moveFolder(here, r.at.dir) : here
 }
@@ -407,7 +418,11 @@ function pushFile(r: Reading, where: string, path: string) {
 }
 
 // A word the shell splits into more words at run time, which may carry options.
-const splitsAt = (w: Word | undefined) => Boolean((w?.dynamic && w.splits) || w?.list)
+const splitsAt = (w: Word | undefined) => Boolean((w?.dynamic && w.splits) || w?.list || w?.expr)
+
+// A call as the write patterns read it. A `;`, `&`, `|` or line break inside a quoted word is text there,
+// never the end of the call (`git -c 'x=!f() { a; }; f' push`).
+const lineOf = (name: string, args: Word[]) => [name, ...args.map(a => a.text.replace(/[|;&\n]/g, ' '))].join(' ')
 
 // A call whose own words are built at run time: a write, since what it does cannot be read.
 function unreadCall(r: Reading, what: string) {
@@ -417,7 +432,8 @@ function unreadCall(r: Reading, what: string) {
 
 // A word built at run time that the program may read as a flag: split by the shell, or starting with an
 // expansion or a dash.
-const mayBeFlag = (w: Word) => w.list === true || (w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text)))
+const mayBeFlag = (w: Word) =>
+  w.list === true || w.expr === true || (w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text)))
 
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
 function write(r: Reading, st: Statement, where: string): string {
@@ -480,9 +496,10 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
   // A write whose flags are not walked (push, rebase, am): any word built at run time may be one, even
   // after a `--` (`push -o -- $REF` gives `-o` the `--`, and push reads flags after its refspecs).
   const isWalked = /^(commit|tag|merge|commit-tree|notes)$/.test(sub)
-  const line = `git ${args.map(a => a.text).join(' ')}`
-  const isUnwalkedWrite = !isWalked && RAW_WRITES.some(re => re.test(line))
-  if (isUnwalkedWrite && rest.some(mayBeFlag)) unreadCall(r, 'a word built at run time')
+  const isUnwalkedWrite = !isWalked && RAW_WRITES.some(re => re.test(lineOf('git', args)))
+  // A PowerShell splat (`@a`) hands over the items of a list the reading does not walk.
+  const isSplat = (w: Word) => r.ps && /^@\w/.test(w.text)
+  if (isUnwalkedWrite && rest.some(w => mayBeFlag(w) || isSplat(w))) unreadCall(r, 'a word built at run time')
   switch (sub) {
     case 'commit':
       return gitCommit(st, rest, r)
