@@ -1036,3 +1036,55 @@ test('a git branch listing option takes its value, never names a new branch', ()
     expect([command, plan.unread, plan.branches]).toEqual([command, [], []])
   }
 })
+
+// A PowerShell variable set from a command: the command runs, and is read like any other.
+test('a PowerShell assignment of a command reads the command', () => {
+  for (const command of [
+    '$r = git commit --no-verify -m x',
+    '$r += git commit --no-verify -m x',
+    '[string]$r = git commit --no-verify -m x',
+    '$r = . git commit --no-verify -m x',
+  ]) {
+    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+  }
+  expect(inspect('$out = git commit -m $outside', true).unread).toContain('the commit message')
+  expect(inspect('$r = gh pr create -t t --body-file b.md', true).files.map(f => f.path)).toEqual(['b.md'])
+})
+
+// The variable: drive, a typed assignment and -OutVariable all change a variable: its value is unknown after.
+test('every PowerShell spelling that sets a variable leaves it unknown', () => {
+  for (const command of [
+    "$m = 'ok'; Set-Item variable:m $outside; git commit -m $m",
+    "$m = 'ok'; New-Item variable:m -Value $outside -Force; git commit -m $m",
+    "$m = 'ok'; Set-Content variable:m $outside; git commit -m $m",
+    "$m = 'ok'; $variable:m = $outside; git commit -m $m",
+    "$m = 'ok'; ${variable:m} = $outside; git commit -m $m",
+    "$m = 'ok'; Write-Output $outside -ov m; git commit -m $m",
+    "$m = 'ok'; [string]$m = $outside; git commit -m $m",
+  ]) {
+    expect([command, inspect(command, true).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+  }
+  expect(inspect('Set-Content env:LEFTHOOK 0; git commit -m x', true).block).toContain('lefthook')
+})
+
+// .NET takes the value as typed: a quoted literal or a number is known, so lefthook on passes and off is refused.
+test('a literal .NET environment value is read as typed', () => {
+  expect(inspect("[Environment]::SetEnvironmentVariable('LEFTHOOK', '1'); git commit -m x", true).block).toBeUndefined()
+  expect(inspect("[Environment]::SetEnvironmentVariable('LEFTHOOK', '0'); git commit -m x", true).block).toContain(
+    'lefthook',
+  )
+})
+
+// An env name built at run time may be any, so it unreads the git and gh calls after it, and nothing else.
+test('an environment variable named at run time unreads only later git and gh calls', () => {
+  for (const [command, ps] of [
+    ['foreach ($k in $cfg.Keys) { Set-Item "env:$k" $cfg[$k] }; npm test', true],
+    ['[Environment]::SetEnvironmentVariable($n, $v); npm test', true],
+    ['export "$k=$v"; npm test', false],
+  ] as const) {
+    expect([command, inspect(command, ps).unread]).toEqual([command, []])
+  }
+  const named = 'an environment variable named at run time'
+  expect(inspect('Set-Item "env:$k" 0; git commit -m x', true).unread).toContain(named)
+  expect(inspect('export "$k=0"; git commit -m x', false).unread).toContain(named)
+})

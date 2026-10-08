@@ -6,6 +6,9 @@ import type { Statement, Word } from './shell'
 import { branchBase, lookup } from './vars'
 import type { VarState } from './vars'
 
+/** A path as the readers compare it: forward slashes, no leading `./`, lower case. */
+export const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
+
 /** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
 export type Folder = { path?: string; isUnknown: boolean }
 
