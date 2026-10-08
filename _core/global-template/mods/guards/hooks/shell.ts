@@ -13,8 +13,10 @@ export type Word = {
   dynamic: boolean
   /** Here-doc bodies written inside a `$(...)` of this word: `-m "$(cat <<'EOF' ... EOF)"`. */
   bodies: string[]
-  /** Its first character came from quotes or an escape, so a leading `<` or `>` is text, not a redirect. */
+  /** Its first character came from quotes or an escape, so a leading `<` or `>` is text, not a redirect;
+   * `quotedStart` when from quotes (`'`, `"`, a here-string, `$'`), so it is a value, never a command. */
   literalStart?: boolean
+  quotedStart?: boolean
   /** Holds an expansion outside quotes, which the shell splits into words at blanks (`$F`, not `"$F"`). */
   splits?: boolean
   /** PowerShell: holds a comma outside quotes, so it is a list, passed to a program as several arguments. */
@@ -89,18 +91,10 @@ const FN_PARENS = /^[(][ \t]*[)]/
 
 // A block the reader is inside: a Bash subshell, a branch (`cond`), a `case` arm, a `{ }` group or a body
 // that runs later (`fn`). `at`: where its scopes end; `chain`, `list`: see `Reader.levels`; `isOr`: the
-// list's last operator was `||`.
-type Level = {
-  kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'
-  at: number
-  chain?: number
-  isOr?: boolean
-  list: number
-  /** The index in `out` of the block's first statement. */
-  from: number
-  /** A subshell a `{` opened, as a pipeline part (`echo | { read M; }`). */
-  isBrace?: boolean
-}
+// list's last operator was `||`; `from`: the index in `out` of its first statement; `isBrace`: a subshell a
+// `{` opened, as a pipeline part (`echo | { read M; }`).
+type Level = { kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'; at: number; chain?: number; isOr?: boolean }
+  & { list: number; from: number; isBrace?: boolean }
 
 const joined = (outer: string | undefined, inner: string) => [outer, inner].filter(Boolean).join('/')
 
@@ -670,7 +664,7 @@ class Reader {
     const end = close === -1 ? this.n : close
     const body = this.command.slice(this.i + open[0].length, end).replace(/\r$/, '')
     const w = this.startWord()
-    if (w.text === '') w.literalStart = true
+    if (w.text === '') w.literalStart = w.quotedStart = true
     if (q === "'") plain(w, body)
     // In `@"..."@` a backtick escapes the character after it, as in `"..."`.
     else for (let k = 0; k < body.length; k++) {
@@ -712,12 +706,13 @@ class Reader {
       w.dynamic = true
     }
     if ((c === "'" || c === '"' || c === this.esc) && w.text === '') w.literalStart = true
+    if ((c === "'" || c === '"') && w.text === '') w.quotedStart = true
     if (c === "'" || c === '"') w.quoted = true
     if (c === "'") return this.singleQuoted(w)
     if (c === '"') return this.doubleQuoted(w)
     // Bash's `$'...'`: a quoted string with backslash escapes, no expansion.
     if (c === '$' && !this.powershell && this.at(1) === "'") {
-      if (w.text === '') w.literalStart = true
+      if (w.text === '') w.literalStart = w.quotedStart = true
       w.quoted = true
       const body = ansiBody(this.command.slice(this.i + 2))
       plain(w, body.text)

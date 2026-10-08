@@ -54,6 +54,11 @@ const GIT_ENV_NAME = /^GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\+?=/i
 const RUNNERS = /^(npx|pnpx|bunx|pnpm|yarn|bun|npm|pipx|uvx|uv)$/
 const MANAGER_TOOL = /^((@evilmartians\/)?lefthook|husky|pre-commit|pre_commit)(@\S*)?$/
 
+/** What the reading keeps between statements: a hook manager's switch was set (`export HUSKY=0`). */
+export type HookState = { hooksOff?: boolean }
+// Shells and `eval`, whose commands the reading reads (`HUSKY=0 bash -c '...'`).
+const CHILDREN = /^(bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval)$/
+
 // Builtins whose arguments are the assignments themselves (`export LEFTHOOK=0`, `declare -x LEFTHOOK=0`).
 const ASSIGNS = /^(export|declare|local|typeset|readonly)$/
 
@@ -200,10 +205,11 @@ function gitReason(args: Word[]): string | undefined {
 }
 
 // What the shell applies to a command or exports (`LEFTHOOK=0 git ...`, `env -i LEFTHOOK=0 git ...`,
-// `export LEFTHOOK=false`, `$env:LEFTHOOK = 0`): lefthook switched off, or a hooks setting passed through
-// git's environment. Every word before the program counts, past keywords and wrappers. `lefthook
-// uninstall` too.
-function envReason(st: Statement, name: string, args: Word[]): string | undefined {
+// `export LEFTHOOK=false`, `$env:LEFTHOOK = 0`): a hook manager switched off, or a hooks setting passed
+// through git's environment. Every word before the program counts, past keywords and wrappers. A manager's
+// switch counts only where it reaches a git call that runs hooks: in front of it, or set earlier in the
+// command (`HUSKY=0 npm ci` skips no gate). A manager's `uninstall` is refused outright.
+function envReason(st: Statement, name: string, args: Word[], state: HookState): string | undefined {
   // A manager run by name, through a package runner, or as `python -m pre_commit`, told to uninstall.
   const isRunner = RUNNERS.test(name) || (/^(python3?|py)$/.test(name) && args[0]?.text === '-m')
   const tool = isRunner ? args.findIndex(a => MANAGER_TOOL.test(a.text)) : -1
@@ -219,16 +225,21 @@ function envReason(st: Statement, name: string, args: Word[]): string | undefine
   }
   const lead = words.slice(0, words.length - args.length - (name ? 1 : 0))
   const applied = ASSIGNS.test(name) ? [...lead, ...args] : lead
+  const isHooked = name === 'git' && HOOKED.has(gitParts(args).sub)
+  // A prefix reaches only its program, unless that program is a shell that runs more of them.
+  const isSet = Boolean(assigned) || ASSIGNS.test(name) || !name || CHILDREN.test(name)
   for (const { text, dynamic } of assigned ? [assigned] : applied) {
-    if (HOOKS_OFF_SET.test(text) || (dynamic && HOOKS_OFF_NAME.test(text))) return HOOKS_OFF
+    const isOff = HOOKS_OFF_SET.test(text) || (dynamic && HOOKS_OFF_NAME.test(text))
+    if (isOff && isSet) state.hooksOff = true
+    if (isOff && isHooked) return HOOKS_OFF
     if (ENV_HOOKS.test(text) || (dynamic && GIT_ENV_NAME.test(text))) return HOOK_SKIP
   }
-  return undefined
+  return state.hooksOff && isHooked ? HOOKS_OFF : undefined
 }
 
 /** The reason to refuse one statement as a route around the check, or undefined. */
-export function bypassOf(st: Statement, name: string, args: Word[]): string | undefined {
+export function bypassOf(st: Statement, name: string, args: Word[], state: HookState = {}): string | undefined {
   // `git-filter-repo` and `git-filter-branch` run on their own, as installed on the path.
   if (/^git-filter-(repo|branch)$/.test(name)) return HISTORY_REWRITE
-  return envReason(st, name, args) ?? (name === 'git' ? gitReason(args) : undefined)
+  return envReason(st, name, args, state) ?? (name === 'git' ? gitReason(args) : undefined)
 }

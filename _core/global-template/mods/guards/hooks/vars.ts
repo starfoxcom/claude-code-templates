@@ -30,6 +30,10 @@ export type VarState = {
   isSourced?: boolean
   /** The command names Bash's `IFS` somewhere, so where an unquoted expansion splits is not known. */
   isIfsSet?: boolean
+  /** How many times the command sets each name (`setCounts`), and whether a deferred statement is being
+   * read: there a name set more than once is unknown. */
+  sets?: Map<string, number>
+  isDeferredRead?: boolean
 }
 
 // Reads one statement, marking what it sets as unknown from then on when it may run at any later point.
@@ -127,6 +131,7 @@ function put(r: VarState, key: string, v: Var, exported = false) {
 /** The variable as the statement being read sees it, or undefined. */
 export function lookup(r: VarState, name: string): Var | undefined {
   if (r.isSourced || r.volatile?.has(keyOf(r, name))) return undefined
+  if (r.isDeferredRead && (r.sets?.get(keyOf(r, name)) ?? 0) > 1) return undefined
   const stack = r.vars.get(keyOf(r, name)) ?? []
   for (let i = stack.length - 1; i >= 0; i--) {
     const v = stack[i] as Var
@@ -499,4 +504,46 @@ export function knownPath(path: string | Word, r: VarState): string | undefined 
   if (typeof path === 'string' || !path.dynamic) return typeof path === 'string' ? path : path.text
   const e = expand(path.text, r, path.literals)
   return e.unresolved ? undefined : e.text
+}
+
+const IDENT = /[A-Za-z_]\w*/g
+// Where a command sets a variable, by its text: `NAME=`, `for NAME`, `printf -v NAME`, the names after
+// `read`, `local`, `unset` and the like; in PowerShell `$name =`, `foreach ($name`, `-OutVariable name`
+// and `Set-Variable`. A name it counts but does not set only makes the reading stricter.
+const BASH_SETS = [
+  /(?:^|[^\w$-])([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=/g,
+  /\bfor\s+([A-Za-z_]\w*)/g,
+  /-v\s+['"]?([A-Za-z_]\w*)/g,
+]
+const BASH_SETTERS = /\b(?:read|mapfile|readarray|unset|export|declare|typeset|local|readonly)\b([^;&|\n]*)/g
+const PS_SETS = [
+  /\$(?:(?:script|global|local|private|variable):)?([A-Za-z_]\w*)\s*(?:[-+*/%]|\?\?)?=(?!=)/gi,
+  new RegExp(String.raw`-(?:outvariable|ov|errorvariable|ev|warningvariable|wv|informationvariable|iv|` +
+    String.raw`pipelinevariable|pv)[:\s]+\+?([A-Za-z_]\w*)`, 'gi'),
+  /\bforeach\s*\(\s*\$([A-Za-z_]\w*)/gi,
+]
+const PS_SETTERS = /\b(?:set|new)-variable\b([^;|\n]*)/gi
+
+/** How many times the command sets each name, by its text (lower-cased in PowerShell). A deferred statement
+ * (a trap action, a function body) reads a variable when it runs: one set more than once may hold another
+ * value by then. */
+export function setCounts(command: string, ps: boolean): Map<string, number> {
+  const counts = new Map<string, number>()
+  const add = (name: string) => {
+    const key = ps ? name.toLowerCase() : name
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  for (const re of ps ? PS_SETS : BASH_SETS) for (const m of command.matchAll(re)) add(m[1] ?? '')
+  for (const m of command.matchAll(ps ? PS_SETTERS : BASH_SETTERS))
+    for (const name of (m[1] ?? '').match(IDENT) ?? []) add(name)
+  return counts
+}
+
+/** A Bash builtin that sets a variable whose name is built at run time (`printf -v "$v"`, `read -r "$v"`,
+ * `local "$v=x"`, `unset "$v"`): it may set any variable, `IFS` included. */
+export function setsNameAtRunTime(name: string, args: Word[]): boolean {
+  const v = args.findIndex(a => a.text === '-v')
+  if (name === 'printf') return v !== -1 && Boolean(args[v + 1]?.dynamic)
+  if (!/^(read|mapfile|readarray|unset|local|readonly|declare|typeset|export)$/.test(name)) return false
+  return args.some(a => a.dynamic && !a.text.startsWith('-') && !/^[A-Za-z_]\w*\+?=/.test(a.text))
 }

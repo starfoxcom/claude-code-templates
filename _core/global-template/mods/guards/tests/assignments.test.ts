@@ -549,3 +549,52 @@ test('piped groups, IFS, trap actions and hook-manager values are read as the sh
     expect([command, read(command, true).files.map(f => f.named)]).toEqual([command, [undefined]])
   }
 })
+
+// A hook manager's switch counts only where it reaches a git call that runs hooks; `Invoke-Expression` reads
+// its `-Command` and its pipe; an `EXIT` trap in a subshell runs before what follows; a deferred statement
+// reads a variable set again later as unknown; a name set at run time may be any; `` `make `` is a command.
+test('switches reach git calls, iex reads its input, and deferred or run-time names stay unknown', () => {
+  const read = (command: string, ps = false) => inspect(command, ps)
+  for (const command of [
+    'HUSKY=0 npm ci',
+    'export HUSKY=0; npm install',
+    'SKIP=eslint pre-commit run --all-files',
+    'SKIP=1 make test',
+    'skip=0; ls',
+  ]) {
+    expect([command, read(command).block]).toEqual([command, undefined])
+  }
+  for (const command of [
+    'SKIP=x git commit -m y',
+    'export HUSKY=0; git commit -m y',
+    'LEFTHOOK=0 git push',
+    "HUSKY=0 bash -c 'git commit -m y'",
+  ]) {
+    expect([command, read(command).block]).toEqual([command, expect.stringContaining('git hooks off')])
+  }
+  for (const command of [
+    "Invoke-Expression -Command 'git commit --no-verify -m x'",
+    "iex -C 'git commit --no-verify -m x'",
+    "iex -Command:'git commit --no-verify -m x'",
+    "'git commit --no-verify -m x' | iex",
+    "$c = 'git commit --no-verify -m x'; $c | Invoke-Expression",
+  ]) {
+    expect([command, read(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+  }
+  const named = (before: string, ps = false) =>
+    read(`${before}; gh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
+  expect(named("'cp other.md b.md' | Invoke-Expression", true)).toBe(true)
+  expect(named('`make', true)).toBe(true)
+  expect(named('(trap "$X" EXIT)')).toBe(true)
+  expect(named('X=$(trap "$Y" EXIT; echo)')).toBe(true)
+  expect(named('trap "$X" EXIT')).toBeUndefined()
+  for (const command of [
+    "M='fix: x'; trap 'git commit -m \"$M\"' EXIT; M=$OUT",
+    "M='fix: x'; f() { git commit -m \"$M\"; }; M=$OUT; f",
+    "M=a; for v in M; do printf -v \"$v\" '%s' \"$OUT\"; done; git commit -m \"$M\"",
+    'M=a; read -r "$V" <<< "$OUT"; git commit -m "$M"',
+  ]) {
+    expect([command, read(command).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+  }
+  expect(read("M='fix: x'; trap 'git commit -m \"$M\"' EXIT").unread).toEqual([])
+})
