@@ -1,5 +1,7 @@
 import type { SessionRateLimit } from 'claude-code'
 
+import { shortLocal } from './budgets'
+
 // Plan usage belongs to the account, so every session sees the same figures. A fresh session has none
 // of its own until its first response; meanwhile it borrows the newest figures another session
 // recorded, while they are recent. Kept free of the engine so it tests alone.
@@ -56,4 +58,16 @@ export function planPart(
   if (hasReplied) return { text: '', isOwn: true }
   if (!shared) return { text: ' | plan used: unknown until the first response', isOwn: false }
   return { text: ` | plan used: ${usageList(shared.limits)} (another session's, at ${borrowedAt})`, isOwn: false }
+}
+
+/** usage-guard's scheduled wakes, for the State line: the phone draws no row, so the line is where the
+ * person reads them. The shared pause and this session's own arm, each only while still ahead; an arm at
+ * the pause's own time is the pause's wake and is not named twice. */
+export function wakePart(now: number, offsetMinutes: number, pausedUntil?: number, armAt?: number): string {
+  const paused = pausedUntil !== undefined && pausedUntil > now
+  const armed = armAt !== undefined && armAt > now && !(paused && armAt === pausedUntil)
+  return (
+    (paused ? ` | paused until ${shortLocal(pausedUntil, offsetMinutes)}` : '') +
+    (armed ? ` | armed: resumes ${shortLocal(armAt, offsetMinutes)}` : '')
+  )
 }
