@@ -76,10 +76,23 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push origin HEAD:heads/feature/x',
     'git push origin heads/feature/x',
     'git push --recurse-submodules on-demand origin',
+    // An option git knows, with its value after `=`, keeps the rest readable.
+    'git push --force-with-lease=feature/x:abc origin feature/x',
+    // An option outside git's list (or `--`, or an abbreviation) cannot be read for sure.
+    'git push -4o origin feature/other',
+    'git push --frobnicate origin feature/other',
+    'git push -- origin feature/other',
+    'git push --forc origin feature/other',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, true])
   }
-  for (const command of ['git push origin 2>$null', 'git push origin *>&1 | Out-Null', 'git push origin $b']) {
+  // In PowerShell a comma makes several arguments of one word.
+  for (const command of [
+    'git push origin 2>$null',
+    'git push origin *>&1 | Out-Null',
+    'git push origin $b',
+    'git push origin x,feature/x',
+  ]) {
     expect([command, pushesBranch(command, 'feature/x', true)]).toEqual([command, true])
   }
   for (const command of [
@@ -97,6 +110,8 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push -fd origin feature/x',
     'git push git@github.com:o/r.git --tags',
     'git push ssh://git@github.com/o/r.git feature/other',
+    'git push -4 -v --atomic origin feature/other',
+    'git push -6o ci.skip origin feature/other',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, false])
   }
@@ -220,3 +235,4 @@ test('each settled watch of a pushed head adds a round; an unreadable count file
   for (let i = 0; i < 6; i++) await clock.advance(30_000)
   expect(JSON.parse(seen.files.get(path) ?? '{}')['o/r#7']).toEqual({ rounds: [{ sha: 'a1', red: true }] })
 })
+
