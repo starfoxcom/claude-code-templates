@@ -32,6 +32,21 @@ const REFUSED: [string, string, boolean?][] = [
   ["git commit -F - <<'EOF'\r\nfix: x\r\nEOF\r\ngit commit --amend --no-verify", 'skipping git hooks'],
   ["git commit -m 'docs: explain cat <<EOF usage'\ngit commit --amend --no-verify", 'skipping git hooks'],
   ["git commit -m 'it''s' --no-verify", 'skipping git hooks', true],
+  // A git or gh call that runs a command string of its own: the string is never read.
+  ["gh alias set --shell ci 'git commit --no-verify -m \"fix: x\"'; gh ci", 'runs a command of its own'],
+  ["gh alias set pc 'pr create -t t --body-file b.md'; gh pc", 'runs a command of its own'],
+  ['gh -R o/r alias import aliases.yml', 'runs a command of its own'],
+  ["gh alias set pc 'pr create -t t --body-file b.md'", 'runs a command of its own', true],
+  ["git rebase -x 'git commit --amend --no-verify --no-edit -F msg.md' HEAD~1", 'runs a command of its own'],
+  ["git rebase --exec 'git commit --amend --no-edit' main", 'runs a command of its own'],
+  ["git rebase --exe='make test' main", 'runs a command of its own'],
+  ["git rebase -ix 'make' main", 'runs a command of its own'],
+  ["git submodule foreach 'git commit -am x --no-verify'", 'runs a command of its own'],
+  ["git submodule --quiet foreach 'git commit -am x'", 'runs a command of its own'],
+  ["git bisect run sh -c 'git commit -am x'", 'runs a command of its own'],
+  ["git difftool --extcmd 'sh -c x' HEAD", 'runs a command of its own'],
+  ["git difftool --ext='sh -c x' HEAD", 'runs a command of its own'],
+  ["git difftool -x 'sh -c x' HEAD", 'runs a command of its own', true],
 ]
 
 for (const [command, reason, ps] of REFUSED) {
@@ -119,6 +134,21 @@ for (const [command, reason, ps] of MORE_REFUSED) {
     expect(readCommand(command, ps ?? false).block).toContain(reason)
   })
 }
+
+test('a rebase, submodule, bisect, difftool or gh alias call that runs no command string passes', () => {
+  for (const command of [
+    'git rebase -i main',
+    'git rebase --onto main topic',
+    'git rebase -X theirs main',
+    'git submodule update --init',
+    'git bisect start HEAD v1.0',
+    'git difftool --tool=meld HEAD',
+    'gh alias list',
+    'gh alias delete pc',
+  ]) {
+    expect([command, readCommand(command, false).block]).toEqual([command, undefined])
+  }
+})
 
 test('reading a hooks setting, a file named like one, or a message naming a flag passes', () => {
   for (const command of [
