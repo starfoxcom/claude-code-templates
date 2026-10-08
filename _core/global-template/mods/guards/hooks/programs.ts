@@ -51,6 +51,8 @@ export function programOf(st: Statement): { name: string; args: Word[] } {
     }
     // `timeout 60 git push`: the duration comes first.
     if (head.text === 'timeout') k++
+    // `coproc NAME { ... }`: the name comes before the group.
+    if (head.text === 'coproc' && words[k + 1]?.text === '{') k++
   }
   const first = words[k]?.text ?? ''
   const name = (first.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
