@@ -786,3 +786,17 @@ test('a rewritable body file in an unknown folder is refused', { options: { mode
     'cp other.md "$F"; gh pr create -t t --body-file "$F"'
   expect(String((await bash($, command) as { deny?: string }).deny)).toContain('cannot read')
 })
+
+// Wrapper shells and assignments write no file: a clean body file on disk beside them is read as it is.
+test('a body file beside a wrapper shell, an export or set passes', { options: { mode: 'enforce' } }, async ($, on) => {
+  world(on, { 'C:/Repos/my-game/b.md': '## What\n- clean\n' })
+  for (const command of [
+    "bash -c 'gh pr create -t t -F b.md'",
+    'powershell -Command "gh pr create -t t -F b.md"',
+    'cmd //c "gh pr create -t t -F b.md"',
+    "export S=$(mktemp -d); cat > \"$S/c.md\" <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t -F \"$S/c.md\"",
+    "set -euo pipefail; cat > c.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t -F c.md",
+  ]) {
+    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
+  }
+})

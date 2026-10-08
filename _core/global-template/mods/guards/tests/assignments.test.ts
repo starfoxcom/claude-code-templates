@@ -269,3 +269,39 @@ test('every hidden program run makes the body file rewritable', () => {
   }
   expect(inspect("$t = $s.Trim(); git commit -m 'fix: x'", true).unread).toEqual([])
 })
+
+// The round's last spellings: a FileInfo.Replace, gh's action past -R and its short flags, variables that
+// make git run a program, a script file's own -c, a split cmd line, and a script built at run time.
+test('the remaining spellings make the body file rewritable, and searches do not', () => {
+  const named = (before: string, ps: boolean) =>
+    inspect(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
+  for (const [before, ps] of [
+    ["$f = Get-Item other.md; $null = $f.Replace('b.md', $null)", true],
+    ["$f = Get-Item other.md; $f.Replace('b.md', $null)", true],
+    ['gh pr -R o/r checkout 12', false],
+    ['gh pr --repo o/r merge 5 -d', false],
+    ['gh issue develop 7 -c', false],
+    ['gh pr merge 5 --delete-branch=true', false],
+    ['gh pr merge 5 -md', false],
+    ["GIT_EXTERNAL_DIFF='sh x.sh' git diff", false],
+    ['GIT_SSH_COMMAND=./x git fetch', false],
+    ['export GIT_SSH=./x; git fetch', false],
+    ["$env:GIT_EXTERNAL_DIFF = 'sh x.sh'; git diff", true],
+    ['bash gen.sh -c x', false],
+    ['pwsh -File gen.ps1 -Command x', true],
+    ["cmd //c type x '&' copy other.md b.md", false],
+    ['cmd //c type $F', false],
+    ['bash -c "cat $F"', false],
+    ["env -vS 'cp other.md b.md'", false],
+  ] as const) {
+    expect([before, named(before, ps)]).toEqual([before, true])
+  }
+  for (const [before, ps] of [
+    ['git log -S env', false],
+    ['rg -S env', false],
+    ["git commit -m 'GIT_SSH=x'", false],
+    ['gh pr merge 5 --merge', false],
+  ] as const) {
+    expect([before, named(before, ps)]).toEqual([before, undefined])
+  }
+})
