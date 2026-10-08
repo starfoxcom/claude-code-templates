@@ -79,11 +79,12 @@ export function contextChip(b: Budgets, now: number): Chip {
 }
 
 /** One chip per plan window; the reset time shows once a window passes the warning level. */
-export function planChip(limit: PlanWindow, b: Budgets): Chip {
+/** `isPaused`: the pause chip beside it already says when work resumes, so no reset time. */
+export function planChip(limit: PlanWindow, b: Budgets, isPaused = false): Chip {
   const name = PLAN_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')
   const used = Math.round(limit.percentUsed)
   if (used < b.planWarnAt) return { text: `${name} ${used}%` }
-  const reset = limit.resetsAt ? ` → resets ${shortLocal(limit.resetsAt, b.offsetMinutes)}` : ''
+  const reset = limit.resetsAt && !isPaused ? ` → resets ${shortLocal(limit.resetsAt, b.offsetMinutes)}` : ''
   return { text: `${name} ${used}%${reset}`, color: used >= b.wrapUpAt ? 'red' : 'yellow' }
 }
 
@@ -133,7 +134,7 @@ export function pauseChip(b: Budgets, now: number): Chip | undefined {
 // A pause keeps the plan chips beside it: the person judges from them whether one last step fits.
 export function chipsOf(b: Budgets, now: number): Chip[] {
   const pause = pauseChip(b, now)
-  const plan = [...(pause ? [pause] : []), ...b.limits.map(limit => planChip(limit, b))]
+  const plan = [...(pause ? [pause] : []), ...b.limits.map(limit => planChip(limit, b, pause !== undefined))]
   const cache = cacheChip(b, now)
   return [contextChip(b, now), ...plan, ...(cache ? [cache] : [])]
 }
@@ -141,13 +142,13 @@ export function chipsOf(b: Budgets, now: number): Chip[] {
 const PHONE_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'week' }
 
 // A plan window as ten squares in its chip's tone, with the reset time the row shows only past the warning.
-function phonePlanLine(limit: PlanWindow, b: Budgets): string {
+function phonePlanLine(limit: PlanWindow, b: Budgets, isPaused: boolean): string {
   const name = PHONE_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')
   const used = Math.round(limit.percentUsed)
   const tone = planChip(limit, b).color ?? 'green'
   const filled = Math.min(BAR_CELLS, Math.max(0, Math.round(used / 10)))
   const bar = SQUARES[tone].repeat(filled) + '⬜'.repeat(BAR_CELLS - filled)
-  const reset = limit.resetsAt ? ` · resets ${shortLocal(limit.resetsAt, b.offsetMinutes)}` : ''
+  const reset = limit.resetsAt && !isPaused ? ` · resets ${shortLocal(limit.resetsAt, b.offsetMinutes)}` : ''
   return `${name} ${bar} ${used}%${reset}`
 }
 
@@ -164,8 +165,9 @@ function phoneCacheLine(b: Budgets, now: number): string {
  */
 export function phoneText(b: Budgets, now: number): string {
   const context = contextText(b.tokens, b.size, b.compactsAt, true) + compactedMark(b.compactedAt, b.offsetMinutes, now)
-  const plans = b.limits.length > 0 ? b.limits.map(limit => phonePlanLine(limit, b)) : ['5-hour --', 'week --']
   const until = pauseChip(b, now) && b.pausedUntil !== undefined ? shortLocal(b.pausedUntil, b.offsetMinutes) : ''
+  const plan = (limit: PlanWindow) => phonePlanLine(limit, b, until !== '')
+  const plans = b.limits.length > 0 ? b.limits.map(plan) : ['5-hour --', 'week --']
   const lines = [`📊 Budgets · ${shortLocal(now, b.offsetMinutes).slice(4)}`, context]
   return [...lines, ...(until ? [`🟥 PAUSED until ${until}`] : []), ...plans, phoneCacheLine(b, now)].join('\n')
 }

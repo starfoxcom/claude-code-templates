@@ -248,6 +248,15 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: /PAUSED → Fri 10:00/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /5h 80%/ })).toBeDefined()
+    // The pause already names when work resumes: no second time beside it.
+    expect(await ui.find({ type: 'Text', text: /resets/ })).toBeUndefined()
+  })
+
+  test(`${surface}: a plan window past the warning names its reset when no pause is on`, async ($, on) => {
+    world(on)
+    await start($, surface)
+    const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
+    expect(await ui.find({ type: 'Text', text: /5h 80% → resets/ })).toBeDefined()
   })
 
   test(`${surface}: a compaction is named on the row for a quarter hour`, async ($, on) => {
@@ -291,7 +300,7 @@ test('the phone text says -- for what is unknown, and the pause above the plan l
   const paused = { ...B, limits, pausedUntil: NOW + 180 * MINUTE, cacheExpiresAt: NOW + 5 * MINUTE }
   expect(phoneText(paused, NOW).split('\n').slice(2)).toEqual([
     '🟥 PAUSED until Fri 12:00',
-    'week 🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥 95% · resets Fri 12:00',
+    'week 🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥 95%',
     '🟨 cache 5m left · cold start 250k',
   ])
 })
