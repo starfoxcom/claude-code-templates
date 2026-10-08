@@ -2,13 +2,13 @@
 // to history, the body files it hands over, the branches it creates, and whether a commit's added
 // lines need a look. Pure, no engine access.
 //
-// The command is read as the shell will run it: git and gh behind `if`/`then`/`do`/`{`/`(`, `case` arms,
-// `sudo`, `env`, `timeout`, `xargs`, inside `$(...)` and backticks, `eval`, `bash -c`, a here-doc fed to
-// `bash` and `powershell -Command`, named through a variable the command sets, with git's long options
-// shortened as git accepts them; messages from variables set earlier in the command (each where the shell
-// keeps it), here-docs, `$(cat ...)`, pipes and files the command writes itself. Where a message exists
-// but its text is made by something the reading cannot follow, the message is named in `unread`, and the
-// call is refused: what reaches history unread is never passed.
+// A command that names a git or GitHub write, a hook switch, a git or hook config file, or a program built
+// at run time is first held to the plain rule (plain.ts): one that is not plain is refused outright, so
+// the reading below only ever sees plain git, gh and read-only calls. The reading (`readCommand`) follows
+// what the shell runs: messages from `-m`, `-F` files, here-docs and the `$(cat <<'EOF' ...)` form, and
+// body files the command writes itself. Where a message exists but its text is made by something the
+// reading cannot follow, the message is named in `unread`, and the call is refused: what reaches history
+// unread is never passed.
 // What it cannot see at all (also listed in mods/README.md):
 // - commands run from a script file or fed to a shell from a file or a pipe, an alias or shell function,
 //   a git alias (`git ci -m ...`), `ssh host ...`, a command held in a variable from outside it
@@ -130,7 +130,7 @@ type Reading = VarState & {
 
 export function inspect(command: string, powershell: boolean): Plan {
   // A command naming a history write is read only when it is plain: anything else is refused (plain.ts).
-  const why = namesWrite(command) ? notPlain(command, powershell) : undefined
+  const why = namesWrite(command, powershell) ? notPlain(command, powershell) : undefined
   if (why) return { ...emptyPlan(), isWrite: true, block: `${NOT_PLAIN} Not plain here: ${why}.` }
   return readCommand(command, powershell)
 }
