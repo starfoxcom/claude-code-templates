@@ -18,7 +18,15 @@ export const EVAL = 'eval builds the command at run time, so its message cannot 
 const LEFTHOOK = 'disabling lefthook removes the commit-msg attribution check.'
 
 // git's global options that take the next word as their value; the subcommand comes after them.
-const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace'])
+const GIT_VALUE_OPTIONS = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--attr-source',
+  '--super-prefix',
+])
 // Subcommands that run git's hooks or write history: a hooks setting passed to one of them skips them.
 const HOOKED = new Set(['commit', 'merge', 'push', 'am', 'rebase', 'cherry-pick', 'revert', 'tag', 'notes'])
 const HOOKS_KEY = /^(core\.hookspath|hooks\.)/i

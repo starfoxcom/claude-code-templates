@@ -232,7 +232,8 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const flags = ends === -1 ? args : args.slice(0, ends)
   // PowerShell's `--%` passes the rest of the line raw, with `%NAME%` filled in from the environment.
   const isRaw = r.ps && args.some(a => a.text === '--%')
-  if (/^(git|gh)$/.test(name) && (flags.some(splitsAt) || isRaw) && RAW_WRITES.some(re => re.test(line)))
+  // Raw mode hides even the subcommand (`git --% %S% -m x`), so any git or gh call in it is unread.
+  if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && RAW_WRITES.some(re => re.test(line)))))
     unreadCall(r, 'a word built at run time')
   const moves = repoMoves(st, name, args)
   r.isRepoMoved ||= moves.movesLater
@@ -462,7 +463,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
       if (splitsAt(args[k + 1]) || isSplat(args[k + 1], r.ps)) unreadCall(r, 'a git option built at run time')
       r.at.dir = args[k + 1]
       k += 2
-    } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env)$/.test(t)) {
+    } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source|--super-prefix)$/.test(t)) {
       // A setting built at run time may name a hook path or an alias: what git then runs is unknown.
       if ((t === '-c' || t === '--config-env') && isUnknownSetting(args[k + 1])) {
         unreadCall(r, 'a git setting built at run time')
@@ -572,7 +573,7 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   plan.ghCalls++
   const { gi, ai } = ghWords(args, r)
   // A splat up to the action word may hand over the subcommand or global options.
-  if (args.slice(0, (ai === -1 ? gi : ai) + 1).some(w => isSplat(w, r.ps)))
+  if ((ai === -1 ? args : args.slice(0, ai + 1)).some(w => isSplat(w, r.ps)))
     return void unreadCall(r, 'a gh subcommand built at run time')
   // The subcommand, or a `gh api` endpoint that may turn into a flag, built at run time.
   const isApi = args[gi]?.text === 'api'
@@ -699,7 +700,8 @@ function missing(kind: Kind, r: Reading, where: string) {
 function take(kind: Kind, value: Word, r: Reading, where: string) {
   const { plan } = r
   // A value the shell splits at run time may carry more options (`--base $B` with `B='main -F x'`).
-  if (splitsAt(value) && /^(skip|repo|method)$/.test(kind)) unreadCall(r, where || 'a flag value built at run time')
+  const isMany = splitsAt(value) || isSplat(value, r.ps)
+  if (isMany && /^(skip|repo|method)$/.test(kind)) unreadCall(r, where || 'a flag value built at run time')
   // A PowerShell list hands a write its first item as the value and the rest as more words.
   if (value.list && (where || kind === 'branch')) unreadCall(r, 'a flag value built at run time')
   switch (kind) {

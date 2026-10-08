@@ -262,7 +262,8 @@ test('a hashtable added to after it was typed is unread', () => {
   const unread = (c: string) => inspect(c, true).unread
   expect(unread("$p = @{ Title = 't' }; $p += @{ Body = $env:B }; gh pr create @p")).toEqual(['the PR text'])
   expect(unread("$p = @{ Title = 't' }; $p.Add('Body', $b); gh pr create @p")).toEqual(['the PR text'])
-  expect(unread("$m = 'fix: x'; $m += $env:T; git commit -m $m")).toEqual(['the commit message'])
+  // An unknown PowerShell variable may also hold a list: several words.
+  expect(unread("$m = 'fix: x'; $m += $env:T; git commit -m $m")).toContain('the commit message')
 })
 
 // `eval` runs its words in this shell: read there, so a route inside it is refused by its own rule, and an
@@ -664,9 +665,9 @@ test('each body file is read from the writer it was named after', () => {
   expect(plan("set -- a.md b.md; cat > \"$1\" <<'EOF'\nx\nEOF\nshift; git commit -F \"$1\"").unread).toEqual([
     'the commit message',
   ])
-  expect(plan("$f = 'b.md'; 'fix: x' > $f; $f += '.2'; gh pr create -t t --body-file $f", true).unread).toEqual([
+  expect(plan("$f = 'b.md'; 'fix: x' > $f; $f += '.2'; gh pr create -t t --body-file $f", true).unread).toContain(
     'the PR text',
-  ])
+  )
 })
 
 test('a folder moved by a stack option, or inside a subshell, is read as the shell moves it', () => {
@@ -695,7 +696,7 @@ test('a run-time section after a git 2.46 verb is refused', () => {
 })
 
 test('a PowerShell command in value position is unknown, a quoted string is text', () => {
-  expect(inspect('$m = Get-Date; git commit -m $m', true).unread).toEqual(['the commit message'])
+  expect(inspect('$m = Get-Date; git commit -m $m', true).unread).toContain('the commit message')
   expect(inspect("$m = 'fix: x'; git commit -m $m", true).unread).toEqual([])
 })
 
@@ -822,4 +823,27 @@ test('a file a fed writer reads is fed in turn, wherever the command runs', () =
   expect(inspect(`cd sub && ${command}`, false).files.find(f => f.path === 'a.md')?.written).toBe(true)
   // A writer that reads its own file is fed once.
   expect(inspect('cat m.md >> m.md; git commit -F m.md', false).files.length).toBeLessThan(5)
+})
+
+// A bare PowerShell variable may hold a list, a splat any words, and `--%` passes the rest raw.
+test('a list, splat or raw mode in a value or subcommand spot makes a write unread', () => {
+  const unread = [
+    'gh pr -R @a',
+    'gh -R @a',
+    "$d = '.','-c','core.hooksPath=/dev/null'; git -C $d push origin main",
+    "$d = 'now','--no-verify'; git commit --date $d -m 'fix: x'",
+    "$b = 'main','--body-file','o.md'; gh pr create -t t --body-file b.md --base $b",
+    "$r = 'o/r','create','--body-file','b.md'; gh pr -R $r",
+    'git --% %S% -m x %NV%',
+    'gh --% %G% create --body-file b.md',
+    'git --% --namespace ; commit --no-verify -m x',
+  ]
+  for (const command of unread) expect([command, inspect(command, true).unread]).not.toEqual([command, []])
+  expect(inspect("$d = '.'; git -C $d push origin main", true).unread).toEqual([])
+})
+
+test('git options that take a separate value are skipped with it', () => {
+  for (const command of ['git --attr-source HEAD commit --no-verify -m x', 'git --attr-source HEAD push --no-verify']) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('hook')])
+  }
 })
