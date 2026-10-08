@@ -235,3 +235,37 @@ test('every write spelling names the body file it may rewrite', () => {
     expect([before, named(before, ps).at(-1)]).toEqual([before, undefined])
   }
 })
+
+// The last ways a program could run unseen: an eval of unknown text, a method call, a checkout, `env -S`,
+// options that run a program. And `-o` that is no output file.
+test('every hidden program run makes the body file rewritable', () => {
+  const named = (before: string, ps: boolean) =>
+    inspect(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
+  for (const [before, ps] of [
+    ["cat > b.md <<'EOF'\nclean\nEOF\neval \"$CMD\"", false],
+    ['Invoke-Expression $cmd', true],
+    ["$null = $xml.Save('b.md')", true],
+    ['gh pr checkout 12', false],
+    ['gh issue develop 7 --checkout', false],
+    ['gh pr merge 5 --merge --delete-branch', false],
+    ["env -S 'cp other.md b.md'", false],
+    ['rg --pre ./x foo', false],
+    ['git fetch --upload-pack=./x origin', false],
+    ['git push --receive-pack=./x origin main', false],
+  ] as const) {
+    expect([before, named(before, ps)]).toEqual([before, true])
+  }
+  for (const [before, ps] of [
+    ['git push -o ci.skip origin main', false],
+    ['git commit -o f.ts -m x', false],
+    ['git merge-base HEAD origin/develop', false],
+    ['gh pr merge 5 --merge', false],
+    ['gh pr create -t checkout -F x.md', false],
+    ['$t = $s.Trim()', true],
+    ["$p = [IO.Path]::Combine($d, 'b.md')", true],
+    ['$n = [math]::Max(1, 2)', true],
+  ] as const) {
+    expect([before, named(before, ps)]).toEqual([before, undefined])
+  }
+  expect(inspect("$t = $s.Trim(); git commit -m 'fix: x'", true).unread).toEqual([])
+})

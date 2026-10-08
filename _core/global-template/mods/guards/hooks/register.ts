@@ -109,7 +109,7 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
   for (const { where, path, written: fromCommand, folder, scripted, named } of plan.files) {
     const full = fileAt(path, folder, session, isBash)
     if (isUnplaced(path, folder)) {
-      if (!fromCommand) plan.unread.push(where)
+      if (!fromCommand || named) plan.unread.push(where)
       continue
     }
     let text: string

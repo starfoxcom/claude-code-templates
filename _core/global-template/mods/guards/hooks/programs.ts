@@ -97,13 +97,34 @@ const READERS = new Set(
     'fi', 'esac', 'function', 'return', 'exit', 'break', 'continue', 'test', '[', '[[', 'true', 'false', ':',
     'cd', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location', 'pwd', 'get-location',
     'sleep', 'start-sleep', '',
+    // These make, stamp or remove files and folders, or only print: none changes an existing file's text.
+    'mktemp', 'mkdir', 'rm', 'rmdir', 'touch', 'date', 'basename', 'dirname', 'realpath', 'whoami', 'hostname',
+    'uname',
   ],
 )
 // git subcommands that leave the work tree as it is, unless an output file is named (`git log --output=x`).
-const GIT_READS = /^(add|diff|status|log|show|commit|push|ls-files|rev-parse|branch|fetch|remote)$/
+const GIT_READS = new RegExp(
+  '^(add|diff|status|log|show|commit|push|ls-files|rev-parse|branch|fetch|remote|merge-base|describe|' +
+    'rev-list|symbolic-ref|show-ref|for-each-ref|cat-file|ls-remote)$',
+)
+// .NET calls that only compute a value: string, path and math methods, and the static types made of them.
+const PURE_CALL = new RegExp(
+  String.raw`^(\[(system\.)?(math|string|io\.path|datetime|guid|convert|regex|text\.encoding|char|int|int32|` +
+    String.raw`int64|double|bool|timespan|uri)\]::\w+|\$[\w:]+(\.\w+)*\.(trim|trimstart|trimend|tolower|` +
+    String.raw`toupper|replace|split|substring|contains|startswith|endswith|indexof|tostring|padleft|padright|` +
+    String.raw`join|format|equals|getbytes|getstring))\(`,
+  'i',
+)
+// Options that make a reader run another program (`rg --pre`, `git fetch --upload-pack`): it may write.
+const RUNS = /^--(pre|upload-pack|receive-pack|exec)(=|$)/
 // gh groups that only read files or send them: every other group (`release download`, `run download`,
-// `codespace cp`, `repo clone`, an extension) may write one.
+// `codespace cp`, `repo clone`, an extension) may write one. Within them, a checkout or a merge that deletes
+// the branch switches the work tree.
 const GH_READS = /^(pr|issue|api|search|label|browse|status|auth|workflow|secret|variable|ruleset|cache)$/
+const GH_SWITCHES = (words: string[], args: Word[]) =>
+  words[1] === 'checkout' ||
+  args.some(a => a.text === '--checkout') ||
+  (words[1] === 'merge' && args.some(a => /^(-d|--delete-branch)$/.test(a.text)))
 
 /** Whether a statement may write files beyond its own `>`: any program not known to write none (`Set-Content`,
  * `cp`, `tee`, `npm`, a .NET call, a function, `xargs cp`), git outside its read subcommands or with an
@@ -111,7 +132,13 @@ const GH_READS = /^(pr|issue|api|search|label|browse|status|auth|workflow|secret
 export function mayWriteFiles(st: Statement): boolean {
   const { name, args } = programOf(st)
   const words = args.filter(a => !a.text.startsWith('-')).map(a => a.text)
-  const isOutput = args.some(a => /^(--output|-o)(=|$)/.test(a.text))
+  // `-o` names an output file only on `diff`, `log` and `show`: on `push` it is a push option.
+  const isLogLike = /^(diff|log|show)$/.test(words[0] ?? '')
+  const isOutput = args.some(a => /^--output(=|$)/.test(a.text) || (a.text === '-o' && isLogLike))
+  // `env -S 'cp x b.md'` runs the program in its string.
+  const isSplit = st.words.some(w => w.text === 'env') && st.words.some(w => /^(-S|--split-string)/.test(w.text))
+  if (isSplit || args.some(a => RUNS.test(a.text))) return true
+  if (PURE_CALL.test(st.words[0]?.text ?? '')) return false
   if (READERS.has(name) || (name === 'git' && GIT_READS.test(words[0] ?? '') && !isOutput)) return false
-  return !(name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download'))
+  return !(name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download') && !GH_SWITCHES(words, args))
 }
