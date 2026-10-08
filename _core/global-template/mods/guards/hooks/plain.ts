@@ -262,14 +262,47 @@ function bashTokens(command: string): Scan {
   return docs.length > 0 ? { reason: 'a here-doc with no body' } : { tokens }
 }
 
+// What makes a whole PowerShell command not plain before its words are read.
+function psCommandFlaw(command: string): string | undefined {
+  if (/\r(?!\n)/.test(command)) return 'a carriage return'
+  if (SMART_QUOTES.test(command)) return 'a curly quote, which Windows PowerShell reads as a quote mark'
+  if (/&&|\|\|/.test(command.replace(/'(?:[^']|'')*'|"(?:[^"]|"")*"/g, '')))
+    return 'Windows PowerShell has no && or ||: run each git or gh call as its own tool call'
+  return undefined
+}
+
+// A word Windows PowerShell hands a native program changed: empty, holding `"`, blank and ending in `\`, or
+// unquoted, starting with `-` and holding a dot, which it splits there (`--no-verify.` reaches git as
+// `--no-verify .`).
+function psWordFlaw(word: string, quoted: boolean): string | undefined {
+  if (word === '' || word.includes('"') || (/\s/.test(word) && word.endsWith('\\')))
+    return 'a word Windows PowerShell passes on changed (empty, holding ", or ending in \\)'
+  if (!quoted && word.startsWith('-') && word.includes('.'))
+    return 'a word that starts with - and holds a dot, which Windows PowerShell splits at the dot (quote it)'
+  return undefined
+}
+
+// A here-string, or a quoted string, at the start of `rest`: its text and length, or why it is not plain.
+// `atStart`: no word is open, so a here-string may start here.
+function psQuoted(rest: string, atStart: boolean): { text: string; length: number; isHere: boolean } | string {
+  const here = atStart ? /^@(['"])\n([\s\S]*?)\n\1@/.exec(rest) : null
+  if (here) {
+    if (here[1] === '"' && /[$`]/.test(here[2] as string)) return 'a @" here-string with $ or a backtick'
+    return { text: here[2] as string, length: here[0].length, isHere: true }
+  }
+  const c = rest[0]
+  const m = (c === "'" ? /^'((?:[^']|'')*)'/ : /^"((?:[^"]|"")*)"/).exec(rest)
+  if (!m) return 'an unclosed quote'
+  if (c === '"' && /[$`]/.test(m[1] as string)) return '$ or a backtick inside double quotes'
+  return { text: (m[1] as string).replace(c === "'" ? /''/g : /""/g, c as string), length: m[0].length, isHere: false }
+}
+
 // PowerShell's words and operators, or why the command is not plain. Windows PowerShell hands a native
 // program a word holding `"` (or blank and ending in `\`) re-quoted wrongly, and drops an empty one: what
 // git receives is then not what was typed, so those are not plain either.
 function psTokens(command: string): Scan {
-  if (/\r(?!\n)/.test(command)) return { reason: 'a carriage return' }
-  if (SMART_QUOTES.test(command)) return { reason: 'a curly quote, which Windows PowerShell reads as a quote mark' }
-  if (/&&|\|\|/.test(command.replace(/'(?:[^']|'')*'|"(?:[^"]|"")*"/g, '')))
-    return { reason: 'Windows PowerShell has no && or ||: run each git or gh call as its own tool call' }
+  const flaw = psCommandFlaw(command)
+  if (flaw) return { reason: flaw }
   const s = command.replace(/\r\n/g, '\n')
   const tokens: Token[] = []
   let word: string | undefined
@@ -277,12 +310,7 @@ function psTokens(command: string): Scan {
   let bad: string | undefined
   const end = () => {
     if (word === undefined) return
-    if (word === '' || word.includes('"') || (/\s/.test(word) && word.endsWith('\\')))
-      bad ??= 'a word Windows PowerShell passes on changed (empty, holding ", or ending in \\)'
-    // Windows PowerShell splits an unquoted word that starts with `-` at its first `.` (`--no-verify.` reaches
-    // git as `--no-verify .`).
-    if (!quoted && word.startsWith('-') && word.includes('.'))
-      bad ??= 'a word that starts with - and holds a dot, which Windows PowerShell splits at the dot (quote it)'
+    bad ??= psWordFlaw(word, quoted)
     tokens.push({ word, quoted })
     word = undefined
     quoted = false
@@ -290,19 +318,17 @@ function psTokens(command: string): Scan {
   for (let i = 0; i < s.length; i++) {
     const c = s[i] as string
     const rest = s.slice(i)
-    const here = word === undefined ? /^@(['"])\n([\s\S]*?)\n\1@/.exec(rest) : null
     const redirect = word === undefined ? PS_REDIRECT.exec(rest)?.[0] : undefined
-    if (here) {
-      if (here[1] === '"' && /[$`]/.test(here[2] as string)) return { reason: 'a @" here-string with $ or a backtick' }
-      tokens.push({ word: here[2] as string, quoted: true })
-      i += here[0].length - 1
-    } else if (c === "'" || c === '"') {
-      const m = (c === "'" ? /^'((?:[^']|'')*)'/ : /^"((?:[^"]|"")*)"/).exec(rest)
-      if (!m) return { reason: 'an unclosed quote' }
-      if (c === '"' && /[$`]/.test(m[1] as string)) return { reason: '$ or a backtick inside double quotes' }
-      quoted ||= word === undefined
-      word = (word ?? '') + (m[1] as string).replace(c === "'" ? /''/g : /""/g, c)
-      i += m[0].length - 1
+    const isHere = word === undefined && /^@['"]\n/.test(rest)
+    if (isHere || c === "'" || c === '"') {
+      const q = psQuoted(rest, word === undefined)
+      if (typeof q === 'string') return { reason: q }
+      if (q.isHere) tokens.push({ word: q.text, quoted: true })
+      else {
+        quoted ||= word === undefined
+        word = (word ?? '') + q.text
+      }
+      i += q.length - 1
     } else if (c === ' ' || c === '\t') end()
     else if (c === '\n' || c === ';' || c === '|') {
       end()
