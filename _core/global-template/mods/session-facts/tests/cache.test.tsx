@@ -7,7 +7,6 @@ import {
   idleCompactAt,
   idleCompactMin,
   isIdleCompactDue,
-  isSwept,
   nextLifetime,
   parseMemory,
   SHORT_LIFETIME_MS,
@@ -83,8 +82,10 @@ function world(on: On, env: Record<string, string> = {}) {
   mock.env(on, { USERPROFILE: 'C:/Users/me', ...env })
   // The zone probe, or the transcript's cache lines when the command names the transcript.
   const transcript = { lines: '', reads: [] as string[] }
+  const runs: string[][] = []
   on('process.run', ($, e) => {
-    const path = e.argv.length === 4 ? e.argv[3] : undefined
+    runs.push([...e.argv])
+    const path = e.argv.length === 4 && e.argv[1] === '-e' ? e.argv[3] : undefined
     if (path) transcript.reads.push(path)
     const stdout = path ? transcript.lines : '420 America/Phoenix\n'
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -98,7 +99,7 @@ function world(on: On, env: Record<string, string> = {}) {
   // The merged settings; a test adds keys (`autoCompactEnabled`).
   const settings: Record<string, unknown> = {}
   on('settings.read', () => ({ value: { pluginConfigs: {}, ...settings } }) as never)
-  // The data folder, keyed with forward slashes; the pause file is never there.
+  // The data folder, keyed with forward slashes; usage-guard's pause file only when a test puts it there.
   // The engine's global config, which it writes at first start.
   const files = new Map<string, string>([['C:/Users/me/.claude.json', '{}']])
   on('session.id', () => ({ value: 's1' }))
@@ -133,7 +134,7 @@ function world(on: On, env: Record<string, string> = {}) {
   on('turn.complete', () => ({ text: '' }))
   on('classic.Stop', () => ({}) as never)
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { clock, reply, transcript, files, compactions, hold, usage, settings }
+  return { clock, reply, transcript, files, compactions, hold, usage, settings, runs }
 }
 
 // A streaming event runs only as it is read.
@@ -255,6 +256,7 @@ test('an unreadable transcript keeps the setting', async ($, on) => {
 
 const MEMORY = 'C:/Users/me/.claude/mods-data/session-facts/s1.json'
 const MARKER = MEMORY.replace('.json', '.compact.json')
+const PAUSE = 'C:/Users/me/.claude/mods-data/usage-guard/pause.json'
 
 test('parseMemory: the saved facts, or nothing for a torn or foreign file', () => {
   const check = { at: NOW, resent: 9, miss: 'early' }
@@ -585,17 +587,35 @@ test('a compaction another module started since the reply keeps this one out', a
   expect(compactions).toEqual([])
 })
 
-// The sweep takes only other sessions' own files: the settings and the shared plan figures stay.
-test("isSwept: another session's memory and marker, never the settings or the plan", () => {
-  const id = '0f8c2b3a-1d4e-4f5a-9b6c-7d8e9f0a1b2c'
-  const other = '11111111-2222-4333-8444-555555555555'
-  expect(['settings.json', 'plan.json', `${id}.json`, `${id}.compact.json`].map(n => isSwept(n, id))).toEqual([
-    false,
-    false,
-    false,
-    false,
-  ])
-  expect([`${other}.json`, `${other}.compact.json`, 'notes.txt'].map(n => isSwept(n, id))).toEqual([true, true, false])
+// The sweep is the mod's own script, given the data folder and this session (test-helper/sweep.spec.cjs
+// runs it on real files).
+test('set-up runs the sweep script on the data folder for this session', async ($, on) => {
+  const { runs } = world(on)
+  await start($)
+  const sweep = runs.find(argv => argv[1]?.endsWith('/scripts/sweep.cjs'))
+  expect(sweep?.slice(2)).toEqual(['C:/Users/me/.claude/mods-data/session-facts', 's1'])
+  expect(sweep?.[0]).toBe('node')
+})
+
+// A usage-guard pause owns compaction until its wake: it skips one on purpose when the wake is near.
+test('a usage-guard pause since the reply keeps the mod from compacting on idle', async ($, on) => {
+  const { clock, compactions, files } = world(on)
+  files.set(PAUSE, JSON.stringify({ status: 'active', wakeAt: NOW + 57 * MINUTE }))
+  await start($)
+  await turn($)
+  await clock.advance(55 * MINUTE + 30_000)
+  expect(compactions).toEqual([])
+  await clock.advance(4 * MINUTE)
+  expect(compactions).toEqual([])
+})
+
+test('a pause that woke before the reply leaves the idle compaction on', async ($, on) => {
+  const { clock, compactions, files } = world(on)
+  files.set(PAUSE, JSON.stringify({ status: 'active', wakeAt: NOW - HOUR }))
+  await start($)
+  await turn($)
+  await clock.advance(55 * MINUTE + 30_000)
+  expect(compactions).toHaveLength(1)
 })
 
 // With prompt caching off a reply reads and writes no cache: there is none to keep warm, so nothing to save.

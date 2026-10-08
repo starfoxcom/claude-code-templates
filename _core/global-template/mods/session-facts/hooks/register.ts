@@ -11,8 +11,7 @@ import {
   isIdleCompactDue,
   nextLifetime,
   parseMemory,
-  PREPARE_DIR,
-  SESSION_FILE,
+  SWEEP_SCRIPT,
   READ_CACHE_LINES,
   writtenLifetime,
 } from './cache'
@@ -260,6 +259,10 @@ async function idleCompact($: EngineInterface): Promise<void> {
   // the whole conversation again.
   if (live.lastWarmAt === undefined || now >= live.lastWarmAt + live.cacheLifetimeMs) return
   if (!(await isAutoCompactOn($))) return
+  // A usage-guard pause since the reply: usage-guard decides whether to compact for it, and the next reply
+  // after the wake starts the count over.
+  const wakeAt = await readPausedUntil($)
+  if (wakeAt !== undefined && wakeAt > (live.lastResponseAt ?? 0)) return
   // A hot reload leaves this module's timer running beside the new one's: go on only while the session's
   // memory file still holds this reply, which every newer reply rewrites.
   const saved = memoryFile ? parseMemory(String(await $.fs.read(memoryFile).catch(() => ''))) : undefined
@@ -355,7 +358,8 @@ async function prepareMemory($: EngineInterface): Promise<void> {
     const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
     const dir = `${configured ?? `${home}/.claude`}/mods-data/session-facts`.replaceAll('\\', '/')
     const id = await $.session.id()
-    const { exitCode } = await $.process.run([...PREPARE_DIR, dir, id, SESSION_FILE.source], { timeoutMs: 10_000 })
+    const sweep = ['node', `${$.plugin.root}/${SWEEP_SCRIPT}`, dir, id]
+    const { exitCode } = await $.process.run(sweep, { timeoutMs: 10_000 })
     if (exitCode !== 0) return
     dataDir = dir
     memoryFile = `${dir}/${id}.json`
