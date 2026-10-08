@@ -6,6 +6,7 @@ import {
   checkCache,
   idleCompactAt,
   idleCompactMin,
+  isIdleCompactDue,
   nextLifetime,
   parseMemory,
   SHORT_LIFETIME_MS,
@@ -107,10 +108,12 @@ function world(on: On, env: Record<string, string> = {}) {
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
-  on(
-    'session.compact',
-    () => ({ messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }], tokensAfter: 40_000 }) as never,
-  )
+  // Each compaction the engine runs, by its trigger.
+  const compactions: string[] = []
+  on('session.compact', ($, e) => {
+    compactions.push(String(e.trigger))
+    return { messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }], tokensAfter: 40_000 } as never
+  })
   // turn.step streams: the stand-in for the model answers with no chunks, at the usage the test set.
   const reply = { usage: WARM as object | null, model: 'claude-opus-5-5', thinkMs: 0 }
   on('turn.step', async function* ($, e) {
@@ -121,7 +124,7 @@ function world(on: On, env: Record<string, string> = {}) {
   on('turn.complete', () => ({ text: '' }))
   on('classic.Stop', () => ({}) as never)
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { clock, reply, transcript, files }
+  return { clock, reply, transcript, files, compactions }
 }
 
 // A streaming event runs only as it is read.
@@ -416,4 +419,40 @@ test('a resumed plan session still says plan usage is unknown until its first re
   await start($)
   await $.prompt.submit({ text: 'hello again' } as never)
   expect(seen.join('\n')).toContain('plan used: unknown until the first response')
+})
+
+test('isIdleCompactDue: a minute past the idle time, before the cache goes cold, once per reply', () => {
+  const idleAt = NOW + 54 * MINUTE
+  const expiresAt = NOW + HOUR
+  const due = (now: number, triedFor?: number) => isIdleCompactDue(now, idleAt, expiresAt, NOW, triedFor)
+  expect(due(idleAt + MINUTE - 1)).toBe(false)
+  expect(due(idleAt + MINUTE)).toBe(true)
+  expect(due(expiresAt - 1)).toBe(true)
+  expect(due(expiresAt)).toBe(false)
+  expect(due(idleAt + MINUTE, NOW)).toBe(false)
+  expect(due(idleAt + MINUTE, NOW - HOUR)).toBe(true)
+  // No idle time (a small conversation, a short lifetime, a compaction since the reply) or no reply yet.
+  expect(isIdleCompactDue(idleAt + MINUTE, undefined, expiresAt, NOW, undefined)).toBe(false)
+  expect(isIdleCompactDue(idleAt + MINUTE, idleAt, expiresAt, undefined, undefined)).toBe(false)
+})
+
+// Claude Code 2.1.293 stopped compacting idle conversations itself: the mod steps in.
+test('an idle big conversation is compacted by the mod a minute past the idle time, once', async ($, on) => {
+  const { clock, compactions } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(54 * MINUTE + 30_000)
+  expect(compactions).toEqual([])
+  await clock.advance(MINUTE)
+  expect(compactions).toHaveLength(1)
+  await clock.advance(3 * MINUTE)
+  expect(compactions).toHaveLength(1)
+})
+
+test('a conversation under the minimum is never compacted on idle', async ($, on) => {
+  const { clock, compactions } = world(on, { CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS: '300000' })
+  await start($)
+  await turn($)
+  await clock.advance(70 * MINUTE)
+  expect(compactions).toEqual([])
 })
