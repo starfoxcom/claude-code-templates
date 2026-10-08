@@ -64,7 +64,7 @@ export const hooksOffReason = (state: HookState) => (state.hooksOff && state.isH
 
 /** The functions a command defines (`f() {`, `function f`), by its text. */
 export const functionsOf = (command: string) =>
-  new Set([...command.matchAll(/(?:^|[\s;&|{(])(?:function\s+([\w-]+)|([A-Za-z_][\w-]*)\s*\(\s*\))/g)]
+  new Set([...command.matchAll(/(?:^|[\s;&|{(])(?:function\s+([^\s(){};&|<>]+)|([^\s(){};&|<>$'"=\x60]+)\s*\(\s*\))/g)]
     .map(m => (m[1] ?? m[2] ?? '').toLowerCase()))
 // Shells and `eval`, whose commands the reading reads (`HUSKY=0 bash -c '...'`).
 const CHILDREN = /^(bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval)$/

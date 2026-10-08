@@ -278,6 +278,8 @@ function assignNow(st: Statement, name: string, args: Word[], r: VarState): bool
     const isExport = name === 'export' ? !/n/.test(flags) : /x/.test(flags)
     // `declare -n` (a reference), `-i`, `-l`, `-u` (the value changed), `-a`/`-A` (an array): unknown.
     const changes = name !== 'export' && /[nilauA]/.test(flags)
+    // A nameref (`declare -n R=M`): a write through it changes another variable, unseen.
+    if (name !== 'export' && /n/.test(flags)) r.isSourced = true
     for (const a of pairs) {
       const m = /^([A-Za-z_]\w*)(\+?)=/.exec(a.text)
       if (m) setPair(r, m[1] ?? '', sliceWord(a, m[0].length), Boolean(m[2]), isExport, changes)
