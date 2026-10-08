@@ -198,7 +198,7 @@ const PRINTS = /^(git|gh|echo|cat|type|get-content|gc|write-output|write-host)$/
  * `printf -v M`, `unset M`, `mapfile M`): every name it spells as a word is unknown after it. */
 export function forget(st: Statement, name: string, r: VarState) {
   if (PRINTS.test(name)) return
-  if (name === 'source' || name === '.') r.isSourced = true
+  if (name === 'source' || name === '.' || st.isSourced) r.isSourced = true
   unsure(st, r, () => {
     for (const w of st.words) {
       const m = (r.ps ? /^\$?([A-Za-z_]\w*)$/ : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
@@ -310,4 +310,40 @@ function assignPs(w: Word[], r: VarState): boolean {
   if (joined && w[0]?.expr) setVar(r, joined[1] ?? '', undefined)
   else if (joined) setVar(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
   return Boolean(joined) || isCompound
+}
+
+// PowerShell sets an environment variable in three spellings: `$env:X = v`, the `env:` drive
+// (`Set-Item env:X v`, `New-Item -Path Env:\X -Value v`) and .NET (`[Environment]::SetEnvironmentVariable('X', v)`).
+const ENV_ITEM = /^(set-item|si|new-item|ni)$/i
+const ENV_PATH = /^env:[\\/]?(\w+)$/i
+const DOTNET_ENV = new RegExp(
+  String.raw`^\[(?:system\.)?environment\]::setenvironmentvariable\(` +
+    String.raw`\s*(['"]?)([^'",]*)\1\s*,\s*([\s\S]*?)\s*(?:,[^)]*)?\)$`,
+  'i',
+)
+
+/** A PowerShell statement that sets an environment variable through the `env:` drive or .NET, as the
+ * `$env:X = v` statement the readers know: `name` undefined when the name is built at run time. */
+export function psEnvSet(st: Statement): { name?: string; statement: Statement } | undefined {
+  const words = st.words
+  const head = words[0]?.text ?? ''
+  let name: string | undefined
+  let value: Word | undefined
+  const dotnet = DOTNET_ENV.exec(words.map(w => w.text).join(' '))
+  if (dotnet) {
+    name = /^\w+$/.test(dotnet[2] ?? '') ? dotnet[2] : undefined
+    const raw = dotnet[3] ?? ''
+    const quoted = /^'([^']*)'$/.exec(raw)
+    value = { text: quoted ? (quoted[1] ?? '') : raw, dynamic: !quoted, bodies: [] }
+  } else if (ENV_ITEM.test(head)) {
+    const at = words.findIndex(w => /^env:/i.test(w.text) || (w.dynamic && /env:/i.test(w.text)))
+    if (at === -1) return undefined
+    const path = words[at] as Word
+    name = path.dynamic ? undefined : ENV_PATH.exec(path.text)?.[1]
+    const flag = words.findIndex(w => /^-value$/i.test(w.text))
+    value = flag !== -1 ? words[flag + 1] : words.slice(at + 1).find(w => !w.text.startsWith('-'))
+  } else return undefined
+  const set = value ?? { text: '', dynamic: true, bodies: [] }
+  const literal = (text: string): Word => ({ text, dynamic: false, bodies: [] })
+  return { name, statement: { ...st, words: [literal(`$env:${name ?? 'UNKNOWN'}`), literal('='), set] } }
 }
