@@ -372,3 +372,32 @@ test('bundles and prefixes keep the wrapped script read, and harmless settings r
     expect([b, before(b)]).toEqual([b, true])
   }
 })
+
+// A statement of assignments only, a bare export, git's exec path, more pwsh spellings and `bash -s` arguments.
+test('assignments alone, exec paths, pwsh spellings and bash -s arguments are read', () => {
+  const before = (b: string) =>
+    inspect(`${b}\ngh pr create -t t --body-file b.md`, false).files.map(f => f.named).at(-1)
+  for (const b of [
+    'PATH="$PWD/bin:$PATH"',
+    'HOME=/tmp/h',
+    "GIT_SSH_COMMAND='sh x.sh'",
+    'X=1 PATH=./bin:$PATH',
+    "GIT_SSH_COMMAND='sh x.sh'; export GIT_SSH_COMMAND; git fetch",
+    'git --exec-path=./bin fetch',
+  ]) {
+    expect([b, before(b)]).toEqual([b, true])
+  }
+  for (const command of [
+    'pwsh -EncodedArguments X -c "git commit --no-verify -m x"',
+    'pwsh -encodeda X -c "git commit --no-verify -m x"',
+    'pwsh -cwa "git commit --no-verify -m x"',
+    'pwsh --command "git commit --no-verify -m x"',
+    "bash -s -- \"$x\" <<'EOF'\ngit commit --no-verify -m x\nEOF",
+    "bash -s arg <<'EOF'\ngit commit --no-verify -m x\nEOF",
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+  }
+  for (const command of ['HOME=/tmp/h git commit -m x', 'export XDG_CONFIG_HOME=/tmp/x; git commit -m x']) {
+    expect([command, inspect(command, false).unread]).toEqual([command, expect.arrayContaining([expect.anything()])])
+  }
+})

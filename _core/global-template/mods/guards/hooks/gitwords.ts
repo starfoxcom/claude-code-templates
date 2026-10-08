@@ -68,7 +68,9 @@ export const mayBeFlag = (w: Word) =>
 // Read only where git reads a setting: a `-c` or `--config-env` value, a `git config` key, and an assignment
 // to a config variable (in front of the program, or through `export`).
 const CONFIG_KEY = /^(alias|include|includeif)\./i
-const CONFIG_ENV = /^GIT_CONFIG(_GLOBAL|_SYSTEM|_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+)?(\+?=|$)/i
+// `HOME` and `XDG_CONFIG_HOME` move git's global config file as `GIT_CONFIG_GLOBAL` does.
+const CONFIG_ENV =
+  /^(GIT_CONFIG(_GLOBAL|_SYSTEM|_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+)?|HOME|XDG_CONFIG_HOME)(\+?=|$)/i
 const CONFIG_READS =
   /^(--(get|get-all|get-regexp|get-urlmatch|get-color|get-colorbool|list|show-origin|show-scope)|-l|get|list)$/
 
