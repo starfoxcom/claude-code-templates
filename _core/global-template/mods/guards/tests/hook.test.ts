@@ -133,8 +133,8 @@ test(
       expect((result as { deny?: string }).deny).toBeUndefined()
     }
     expect(seen.ran).toHaveLength(2)
-    // After `popd` the folder is not known: the file is named unread and refused.
-    const popped = await bash($, 'pushd x; popd; git commit -F m.txt')
+    // A `popd` with no `pushd` before it leaves the folder unknown: the file is named unread and refused.
+    const popped = await bash($, 'popd; git commit -F m.txt')
     expect(String((popped as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
     expect(entry.unread?.length).toBe(1)

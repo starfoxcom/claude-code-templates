@@ -113,9 +113,13 @@ function messageReason(sub: string, rest: Word[]): string | undefined {
 function configReason(rest: Word[]): string | undefined {
   // Long options as git reads them, shortened too (`--rem core`): the verb of git 2.46+ has its own.
   const verb = /^(set|unset)$/.test(rest[0]?.text ?? '') ? `config ${rest[0]?.text}` : 'config'
-  const words = rest.map(w => gitLong(verb, w.text))
+  const all = rest.map(w => gitLong(verb, w.text))
+  // The classic form stops reading options at the key: every word after it is a value
+  // (`git config core.hooksPath -x` sets the path to `-x`).
+  const keyAt = verb === 'config' ? optionsEnd(all) : all.length
+  const words = [...all.slice(0, keyAt), ...all.slice(keyAt).map(w => (w.startsWith('-') ? `=${w}` : w))]
   // `--get core.hooksPath <pattern>` reads, whatever follows the key.
-  if (words.some(w => /^--get(-all|-regexp)?$/.test(w))) return undefined
+  if (all.slice(0, keyAt).some(w => /^--get(-all|-regexp)?$/.test(w))) return undefined
   const keys: string[] = []
   let isWrite = false
   let dropsSection = false
@@ -140,6 +144,16 @@ function configReason(rest: Word[]): string | undefined {
   }
   isWrite ||= keys.length >= 2
   return isWrite && HOOKS_KEY.test(keys[0] ?? '') ? HOOK_SKIP : undefined
+}
+
+// Where the classic `git config` options end: the first word that is no option or an option's value.
+function optionsEnd(words: string[]): number {
+  for (let i = 0; i < words.length; i++) {
+    const t = words[i] ?? ''
+    if (!t.startsWith('-')) return i
+    if (CONFIG_VALUE_FLAGS.test(t)) i++
+  }
+  return words.length
 }
 
 function gitReason(args: Word[]): string | undefined {
@@ -181,5 +195,7 @@ function envReason(st: Statement, name: string, args: Word[]): string | undefine
 
 /** The reason to refuse one statement as a route around the check, or undefined. */
 export function bypassOf(st: Statement, name: string, args: Word[]): string | undefined {
+  // `git-filter-repo` and `git-filter-branch` run on their own, as installed on the path.
+  if (/^git-filter-(repo|branch)$/.test(name)) return HISTORY_REWRITE
   return envReason(st, name, args) ?? (name === 'git' ? gitReason(args) : undefined)
 }
