@@ -68,6 +68,8 @@ export function refusalText(pr: string, red: number): string {
     'where each fix exposes the next finding and it never converges. Step back and look for another direction: ' +
     'a design that removes the whole class of findings (an allow-list, refusing whatever cannot be read for ' +
     'sure, a smaller scope), or ask the user. Explain the new direction to the user; once they agree, they ' +
-    `reset the count by typing \`/ci-watch rounds reset ${pr.split('#')[1]}\` (only they can).`
+    `reset the count by typing \`/ci-watch rounds reset ${pr.split('#')[1]}\` (only they can). ` +
+    "A push with no `cd` or `git -C` in it is judged by the session folder's branch; if this one is for " +
+    "another folder's branch, name that folder: `git -C <path> push ...`."
   )
 }
