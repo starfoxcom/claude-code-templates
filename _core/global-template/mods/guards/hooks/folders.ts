@@ -2,6 +2,8 @@
 // each subshell, `$(...)` and child shell, as the shell keeps it. Pure.
 
 import type { Statement, Word } from './shell'
+import { lookup } from './vars'
+import type { VarState } from './vars'
 
 /** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
 export type Folder = { path?: string; isUnknown: boolean }
@@ -71,4 +73,28 @@ export function moveFolder(folder: Folder, target: Word | undefined): Folder {
   const dir = target.text.replace(/\\/g, '/')
   if (/^([a-zA-Z]:)?\/|^~/.test(dir) || folder.path === undefined) return { path: dir, isUnknown: false }
   return { path: `${folder.path.replace(/\/$/, '')}/${dir}`, isUnknown: false }
+}
+
+/** What the folder of the statement being read depends on: its place, its own `git -C`, and while a
+ * writer is fed in after the walk, the folder that writer ran in. */
+export type FolderReading = Places & VarState & { at: Here; feedFolder?: Folder }
+
+const MKTEMP = /^\$\(\s*mktemp(\s+(-[dqu]+|-t\s+[\w.]+|--suffix=[\w.]+))*\s*\)$/
+
+// A relative path names the written file only where both are named in the same known folder: a `cd`
+// between them, or one built at run time, makes it another file.
+export function isSameFolder(path: string, written: Folder, r: FolderReading): boolean {
+  if (/^([a-zA-Z]:)?[\\/]|^~/.test(path)) return true
+  // `$(mktemp)` prints a full path (in the temp folder) unless given a template or folder of its own.
+  const lead = /^\$\{?([A-Za-z_]\w*)\}?/.exec(path)
+  if (lead && MKTEMP.test(lookup(r, lead[1] ?? '')?.text ?? '')) return true
+  const here = folderNow(r)
+  return !here.isUnknown && !written.isUnknown && here.path === written.path
+}
+
+// The folder the statement being read runs in, moved by its own `git -C`.
+export function folderNow(r: FolderReading): Folder {
+  if (r.feedFolder) return r.feedFolder
+  const here = placeHere(r).folder
+  return r.at.dir ? moveFolder(here, r.at.dir) : here
 }
