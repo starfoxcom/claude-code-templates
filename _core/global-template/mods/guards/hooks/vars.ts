@@ -244,10 +244,10 @@ function assignPs(w: Word[], r: VarState): boolean {
   const isCompound = spaced !== null && /^([-+*/%]|\?\?)=$/.test(w[1]?.text ?? '')
   const member = isCompound ? spaced : /^\$(\w+)[.[]/.exec(w[0]?.text ?? '')
   const changed = member ? lookup(r, member[1] ?? '') : undefined
-  if (changed) {
-    changed.text += `\n${w.map(x => x.text).join(' ')}`
-    changed.literal = false
-  } else if (isCompound) setVar(r, spaced?.[1] ?? '', undefined)
+  // A fresh value, so a statement that kept the old one sees the change.
+  const text = `${changed?.text ?? ''}\n${w.map(x => x.text).join(' ')}`
+  if (changed) store(r, member?.[1] ?? '', { ...changed, text, literal: false })
+  else if (isCompound) setVar(r, spaced?.[1] ?? '', undefined)
   const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
   if (joined) setVar(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
   return Boolean(joined) || isCompound

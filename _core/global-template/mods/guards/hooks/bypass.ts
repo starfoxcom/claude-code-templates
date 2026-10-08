@@ -13,6 +13,7 @@ const HISTORY_REWRITE = 'history rewriting tools (git filter-repo, git filter-br
 const HOOK_SKIP = 'skipping git hooks (--no-verify, commit -n, a hooks setting) is not allowed.'
 const TRAILER = '--trailer is not allowed; write the message body directly.'
 const REUSE = "reusing another commit's message (-C, -c, --reuse-message, --reedit-message) cannot be read."
+const CONFIG_UNREAD = 'a git config setting built at run time cannot be read.'
 export const EVAL = 'eval builds the command at run time, so its message cannot be read.'
 const LEFTHOOK = 'disabling lefthook removes the commit-msg attribution check.'
 
@@ -120,6 +121,10 @@ function configReason(rest: Word[]): string | undefined {
   const words = [...all.slice(0, keyAt), ...all.slice(keyAt).map(w => (w.startsWith('-') ? `=${w}` : w))]
   // `--get core.hooksPath <pattern>` reads, whatever follows the key.
   if (all.slice(0, keyAt).some(w => /^--get(-all|-regexp)?$/.test(w))) return undefined
+  // A word built at run time where the key or a verb is read, or beside a hooks key: the setting is unknown.
+  const isDynamic = rest.map(w => w.dynamic)
+  const nearHooks = all.some(w => HOOKS_KEY.test(w) || HOOKS_SECTION.test(w)) && isDynamic.some(Boolean)
+  if (isDynamic.slice(0, keyAt + 1).some(Boolean) || nearHooks) return CONFIG_UNREAD
   const keys: string[] = []
   let isWrite = false
   let dropsSection = false
