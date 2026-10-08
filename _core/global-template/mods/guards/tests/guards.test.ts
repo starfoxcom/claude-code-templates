@@ -151,8 +151,10 @@ test('body files are found in every spelling, and text built at run time is name
   }
   expect(inspect('gh pr comment 5 -b"$BODY"', false).unread.length).toBe(1)
   // A whole gh api field built at run time.
+  // Unquoted, it also splits into words that may be options: the call itself is unread too.
   for (const field of ['-f "$KV"', '--field "$KV"', '-f$KV']) {
-    expect(inspect(`gh api repos/o/r/issues/1/comments ${field}`, false).unread.length).toBe(1)
+    const unread = inspect(`gh api repos/o/r/issues/1/comments ${field}`, false).unread
+    expect([field, unread.length]).toEqual([field, field.includes('"') ? 1 : 2])
   }
   // A positional built at run time is not taken for a flag.
   expect(inspect('git commit -m "fix: x" -- -$FILES', false).unread).toEqual([])

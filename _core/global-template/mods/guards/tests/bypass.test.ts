@@ -862,3 +862,60 @@ test('a git or gh call in a cmd script with cmd syntax is unread', () => {
   expect(inspect("$p = @{ nm = 'x' }; git commit @p", true).unread).not.toEqual([])
   expect(inspect('$n = 42; gh pr merge $n --merge', true).unread).toEqual([])
 })
+
+// A git alias, include or config file the command sets may turn a call into a write that skips the hooks.
+test('a git alias, include or config file set in the command makes its git calls unread', () => {
+  const unread = [
+    'git -c alias.ci="commit --no-verify" ci -m x',
+    "git -c alias.ci='!git commit --no-verify' ci -m x",
+    'git -c alias.c=commit c -m x',
+    'git config alias.ci "commit --no-verify"; git ci -m x',
+    'A="commit --no-verify" git --config-env=alias.ci=A ci -m x',
+    'git -c include.path=/tmp/h.cfg commit -m x',
+    'git config --global include.path /tmp/h.cfg; git commit -m x',
+    'GIT_CONFIG_GLOBAL=/tmp/h.cfg git commit -m x',
+  ]
+  const setting = expect.arrayContaining(['a git setting built at run time'])
+  for (const command of unread) expect([command, inspect(command, false).unread]).toEqual([command, setting])
+  expect(inspect("git -c user.name=me commit -m 'fix: x'", false).unread).toEqual([])
+})
+
+// Whether a call writes is told from its subcommand as parsed: a write word inside a `$(...)` or a path is no
+// write, so a read-only call with a word built at run time is read as it is.
+test('a read-only git or gh call with a word built at run time is never unread', () => {
+  const reads = [
+    'git diff $(git merge-base origin/develop HEAD)',
+    'git log --oneline $(git merge-base HEAD origin/develop)..HEAD',
+    'git rev-list --count $(git merge-base HEAD origin/develop)..HEAD',
+    'git log $(git rev-parse HEAD~3)..HEAD -- docs/commit-format.md',
+    'git add $(git diff --name-only | grep commit)',
+    'git stash push -m "$(date)"',
+    'cmd //c "git log --oneline | findstr fix"',
+    'gh pr view $(gh pr list --json number --jq ".[0].number")',
+    'G=git; $G diff $(git merge-base a b)',
+    'eval "git diff $(git merge-base a b) $X"',
+  ]
+  for (const command of reads) {
+    const plan = inspect(command, false)
+    expect([command, plan.unread, plan.block]).toEqual([command, [], undefined])
+  }
+  // The same shapes on a write, or with the subcommand itself built at run time, stay unread or refused.
+  const writes = [
+    'git push $(git rev-parse --abbrev-ref HEAD) $OPTS',
+    'git commit -m x $(echo --no-verify)',
+    'git $(echo commit) -m x',
+    'git -C $D commit -m x',
+    'gh pr comment 5 $ARGS',
+    'gh -R $R pr view 5',
+    'cmd //c "git log | git push --no-verify"',
+    'cmd //c "git log & git !S! -m x"',
+    'cmd //c "(git log) ^& (git push)"',
+    '$G push $(git rev-parse HEAD) $OPTS',
+  ]
+  for (const command of writes) {
+    const plan = inspect(command, false)
+    expect([command, plan.unread.length > 0 || plan.block !== undefined]).toEqual([command, true])
+  }
+  expect(inspect('eval "git $(cat sub) -m x"', false).block).toContain('eval')
+  expect(inspect('eval "bash -c \'git push $X\'"', false).block).toContain('eval')
+})

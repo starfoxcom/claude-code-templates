@@ -25,9 +25,22 @@ import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
-import { moveFolder, movePlace, placeHere, repoMoves, targetOf } from './folders'
+import { folderNow, isSameFolder, moveFolder, movePlace, placeHere, repoMoves, targetOf } from './folders'
 import type { Folder, Here, Place, Target } from './folders'
-import { branchesOf, isCommitAll, isSplat, isUnknownSetting, lineOf, mayBeFlag, splitsAt, TAG_READS } from './gitwords'
+import {
+  branchesOf,
+  isCommitAll,
+  isSplat,
+  cmdWrites,
+  evalWrites,
+  isUnknownSetting,
+  mayBeFlag,
+  setsGitConfig,
+  splitsAt,
+  TAG_READS,
+  writesAsAny,
+  writesHistory,
+} from './gitwords'
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, setVar, within, withWords } from './vars'
@@ -95,6 +108,8 @@ type Reading = VarState & {
   at: Here
   /** While a writer's statement is fed in after the walk: the folder it ran in. */
   feedFolder?: Folder
+  /** A statement so far set a git alias, include or config file (`-c alias.x=`, `GIT_CONFIG_GLOBAL=`). */
+  isConfigMoved?: boolean
   /** An earlier statement pointed git at another repo for what follows (`export GIT_DIR=x`). */
   isRepoMoved?: boolean
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
@@ -224,18 +239,22 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
   // In a git or gh call that writes, a word the shell splits at run time may become any options at all
-  // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read.
-  const line = lineOf(name, args)
+  // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read. Whether it
+  // writes is told from its subcommand, never from a write word inside a `$(...)` or a path.
   // After a literal `--` every word is a path, whatever it splits into.
   const ends = args.findIndex(a => !a.dynamic && a.text === '--')
   const flags = ends === -1 ? args : args.slice(0, ends)
   // PowerShell's `--%` passes the rest of the line raw, with `%NAME%` filled in from the environment.
   const isRaw = r.ps && args.some(a => a.text === '--%')
   // Raw mode hides even the subcommand (`git --% %S% -m x`), so any git or gh call in it is unread.
-  if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && RAW_WRITES.some(re => re.test(line)))))
+  if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && writesHistory(name, args, r.ps))))
     unreadCall(r, 'a word built at run time')
   const moves = repoMoves(st, name, args)
   r.isRepoMoved ||= moves.movesLater
+  // Once the command sets a git alias, include or config file, any git call may be a write the reading
+  // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
+  r.isConfigMoved ||= setsGitConfig(st.words, name === 'git')
+  if (r.isConfigMoved && name === 'git') unreadCall(r, 'a git setting built at run time')
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
@@ -279,7 +298,7 @@ function withProgram(st: Statement, r: Reading): Statement {
   const head = st.words[k]
   // PowerShell runs a program named by a variable only through `&` (`& $git commit`).
   if (!name || !head?.dynamic || (r.ps && !st.isCall)) return st
-  if (RAW_WRITES.some(re => re.test(lineOf('git', args)) || re.test(lineOf('gh', args)))) {
+  if (writesAsAny(args, r.ps)) {
     r.plan.isWrite = true
     r.plan.unread.push('a program named at run time')
   }
@@ -306,7 +325,7 @@ function readEval(st: Statement, args: Word[], r: Reading) {
   const text = args.map(a => a.text).join(' ')
   const e = args.some(a => a.dynamic) ? expand(text, r) : { text, unresolved: false }
   if (e.unresolved) {
-    if (RAW_WRITES.some(re => re.test(text))) r.plan.block ??= EVAL
+    if (evalWrites(parse(text, r.ps), r.ps)) r.plan.block ??= EVAL
     return
   }
   // `M=x eval '...'`: the words see `M=x`; whether the shell keeps it afterwards depends on its mode, so
@@ -349,8 +368,7 @@ function readScript(st: Statement, name: string, args: Word[], r: Reading): bool
   if (inner.dynamic && !isKnown && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
   // cmd fills in `%NAME%`, drops `^` and runs each part of a line split at `&` or `|`: unlike the shell.
   const line = inner.text ?? args.map(a => a.text).join(' ')
-  const isCmdSyntax = name === 'cmd' && /[%^&|]/.test(line)
-  if (isCmdSyntax && /\b(git|gh)\b/.test(line)) unreadCall(r, 'a cmd script built at run time')
+  if (name === 'cmd' && /[%^&|]/.test(line) && cmdWrites(line)) unreadCall(r, 'a cmd script built at run time')
   return true
 }
 
@@ -401,31 +419,11 @@ function varsIn(path: string, r: Reading): (Var | undefined)[] {
   return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
 }
 
-const MKTEMP = /^\$\(\s*mktemp(\s+(-[dqu]+|-t\s+[\w.]+|--suffix=[\w.]+))*\s*\)$/
-
-// A relative path names the written file only where both are named in the same known folder: a `cd`
-// between them, or one built at run time, makes it another file.
-function isSameFolder(path: string, writer: Writer, r: Reading): boolean {
-  if (/^([a-zA-Z]:)?[\\/]|^~/.test(path)) return true
-  // `$(mktemp)` prints a full path (in the temp folder) unless given a template or folder of its own.
-  const lead = /^\$\{?([A-Za-z_]\w*)\}?/.exec(path)
-  if (lead && MKTEMP.test(lookup(r, lead[1] ?? '')?.text ?? '')) return true
-  const here = folderNow(r)
-  return !here.isUnknown && !writer.folder.isUnknown && here.path === writer.folder.path
-}
-
-// The folder the statement being read runs in, moved by its own `git -C`.
-function folderNow(r: Reading): Folder {
-  if (r.feedFolder) return r.feedFolder
-  const here = placeHere(r).folder
-  return r.at.dir ? moveFolder(here, r.at.dir) : here
-}
-
 // A body file named here, matched to the statement that wrote it so far, if any.
 function pushFile(r: Reading, where: string, path: string) {
   const entry = { where, path }
   const writer = r.writers.get(norm(path))
-  if (writer && isSameFolder(path, writer, r)) r.matched.set(entry, writer)
+  if (writer && isSameFolder(path, writer.folder, r)) r.matched.set(entry, writer)
   r.plan.files.push(entry)
 }
 
@@ -496,7 +494,7 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
   // A write whose flags are not walked (push, rebase, am): any word built at run time may be one, even
   // after a `--` (`push -o -- $REF` gives `-o` the `--`, and push reads flags after its refspecs).
   const isWalked = /^(commit|tag|merge|commit-tree|notes)$/.test(sub)
-  const isUnwalkedWrite = !isWalked && RAW_WRITES.some(re => re.test(lineOf('git', args)))
+  const isUnwalkedWrite = !isWalked && writesHistory('git', args, r.ps)
   if (isUnwalkedWrite && rest.some(w => mayBeFlag(w) || isSplat(w, r.ps))) unreadCall(r, 'a word built at run time')
   switch (sub) {
     case 'commit':
@@ -719,7 +717,7 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       const writer = r.writers.get(norm(value.text))
       const now = varsIn(value.text, r)
       const isTracked = now.length > 0 && now.every(Boolean) && !/\$[({@*#?$!0-9-]|`|\$env:/i.test(value.text)
-      const isSame = writer && isTracked && isSameFolder(value.text, writer, r)
+      const isSame = writer && isTracked && isSameFolder(value.text, writer.folder, r)
       if (writer && isSame && writer.vars.length === now.length && writer.vars.every((v, i) => v === now[i])) {
         const entry = { where, path: value.text }
         r.matched.set(entry, writer)
