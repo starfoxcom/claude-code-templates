@@ -5,6 +5,7 @@ import type { Watch } from '../types'
 import { isPush, isPushOrPr, mergedNumber, pushesBranch, targetFolder } from './command'
 import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
 import { redRounds, refusalText, ROUND_LIMIT, roundNodes, ROUNDS_FILE, ROUNDS_QUERY, TOUCHES_ROUNDS } from './rounds'
+import type { Reset } from './rounds'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
 
@@ -316,10 +317,10 @@ async function roundsPath($: EngineInterface): Promise<string> {
   return `${path.slice(0, path.lastIndexOf('/'))}/${ROUNDS_FILE}`
 }
 
-async function readResets($: EngineInterface): Promise<Record<string, string>> {
+async function readResets($: EngineInterface): Promise<Record<string, Reset>> {
   try {
     const resets = JSON.parse(String(await $.fs.read(await roundsPath($))))
-    return resets && typeof resets === 'object' ? (resets as Record<string, string>) : {}
+    return resets && typeof resets === 'object' ? (resets as Record<string, Reset>) : {}
   } catch {
     return {}
   }
@@ -361,7 +362,8 @@ async function roundsCommand($: EngineInterface, args: string, origin: { kind: s
   if (origin.kind !== 'composer' && origin.kind !== 'bridge') return 'Only the user resets the fix-round count.'
   const path = await roundsPath($)
   await ensureDir($, path.slice(0, path.lastIndexOf('/')))
-  await $.fs.write(path, JSON.stringify({ ...(await readResets($)), [key]: pr.headSha }))
+  const reset: Reset = { sha: pr.headSha, at: await $.clock.now() }
+  await $.fs.write(path, JSON.stringify({ ...(await readResets($)), [key]: reset }))
   return `Reset the fix-round count of ${key}: rounds after ${pr.headSha.slice(0, 7)} count from zero.`
 }
 
@@ -708,12 +710,14 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const command = String((e as { command?: unknown }).command ?? '')
     const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
-    // Held by every instance, retired or not: the limit never waits on which one polls.
+    // Held by every instance, retired or not: no instance lets the count's file be written.
     if (TOUCHES_ROUNDS.test(command)) return { deny: ROUNDS_OWN }
-    const refusal = isPush(command, isPowerShell) ? await roundRefusal($, command, isPowerShell) : undefined
-    if (refusal) return { deny: refusal }
     await startPolling($)
     if (await isRetired($)) return next(e)
+    // Only the live instance judges a push, with the newest code: an older one left by a hot reload never
+    // refuses what the update fixed. With no owner on record, no instance is retired and each one judges.
+    const refusal = isPush(command, isPowerShell) ? await roundRefusal($, command, isPowerShell) : undefined
+    if (refusal) return { deny: refusal }
     const answered = await next(e)
     // A finished watch rides on this result; a subagent's call or a refused one carries none.
     const notes = e.agentId !== undefined || 'deny' in answered ? [] : await takeNotes($)

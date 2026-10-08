@@ -71,21 +71,55 @@ export function isPush(command: string, isPowerShell = false): boolean {
 
 // Push options that take the next word as their value.
 const PUSH_VALUES = /^(-o|--push-option|--repo|--receive-pack|--exec)$/
+// Where a push's statement ends: `;`, a pipe, a line break, or an `&` that is no part of a redirect (`2>&1`,
+// `&>log`).
+const STATEMENT_END = /[;|\n]|(?<![<>])&(?!>)/
+// A redirect word (`2>&1`, `>log`, `*>$null`), and one that names its target in the next word (`> log`).
+const REDIRECT = /^[\d*&]?(?:>>?|<)/
+const REDIRECT_ALONE = /^[\d*&]?(?:>>?|<)$/
+// A word read for sure: a plain name, with nothing the shell fills in when it runs (quotes, `$`, `@`, `(`).
+const LITERAL = /^[\w./:+^~,=-]+$/
+
+/** Each push's words, to the end of its statement, without redirects or a trailing comment; `isUnread` when
+ * one of them is no plain name, so where it pushes cannot be read for sure. */
+function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnread: boolean }[] {
+  const words = commandWords(command, isPowerShell)
+  return [...words.matchAll(new RegExp(PUSH, 'g'))].map(push => {
+    const rest = words.slice((push.index ?? 0) + push[0].length)
+    const end = rest.search(STATEMENT_END)
+    const tokens = (end < 0 ? rest : rest.slice(0, end)).split(/\s+/).filter(Boolean)
+    const args: string[] = []
+    let isUnread = false
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i] ?? ''
+      if (token.startsWith('#')) break
+      if (REDIRECT.test(token)) {
+        if (REDIRECT_ALONE.test(token)) i++
+        continue
+      }
+      isUnread ||= !LITERAL.test(token)
+      args.push(token)
+    }
+    return { args, isUnread }
+  })
+}
 
 /** Whether a push in the command updates `branch`, the folder's checked-out one: with no refspec (the
- * branch itself, or every branch with `--all`/`--mirror`), or a refspec to `HEAD` or to that branch. A tag
- * push, `--tags` alone, a `--delete` or a refspec to another branch adds no round to its PR. */
+ * branch itself, or every branch with `--all`/`--mirror`), a refspec to `HEAD` or to that branch, `:` (every
+ * matching branch), or any word that cannot be read for sure. Only a tag push, `--tags` alone, a delete
+ * (`--delete`, `-d`, `:<branch>`) or a plain refspec to another branch adds no round to its PR. */
 export function pushesBranch(command: string, branch: string, isPowerShell = false): boolean {
-  const words = commandWords(command, isPowerShell)
-  for (const push of words.matchAll(new RegExp(`${PUSH}([^;&|\\n]*)`, 'g'))) {
-    const args = (push[1] ?? '').split(/\s+/).filter(Boolean)
+  for (const { args, isUnread } of pushes(command, isPowerShell)) {
     if (args.some(a => a === '--delete' || a === '-d')) continue
+    if (isUnread) return true
     const plain = args.filter((a, i) => !a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
-    const refs = plain.slice(1)
+    const refs = plain.slice(1).map(ref => ref.replace(/^\+/, ''))
     const isEvery = args.includes('--all') || args.includes('--mirror')
     if (refs.length === 0 && (isEvery || !args.includes('--tags'))) return true
     const isOurs = (ref: string) => {
-      const dst = ref.replace(/^\+/, '').split(':').pop() ?? ''
+      if (ref === ':') return true
+      if (ref.startsWith(':')) return false
+      const dst = ref.split(':').pop() ?? ''
       return dst === 'HEAD' || dst === branch || dst === `refs/heads/${branch}`
     }
     if (refs.some(isOurs)) return true

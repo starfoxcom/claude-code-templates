@@ -5,16 +5,28 @@
 
 export const ROUND_LIMIT = 6
 
-/** A PR's latest commits, each with the overall state of its checks and each check's own result. */
+/** A PR's latest commits, each with the overall state of its checks and each check's own result and start. */
 export const ROUNDS_QUERY =
   'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number)' +
   '{commits(last:100){nodes{commit{oid statusCheckRollup{state contexts(last:100){nodes{' +
-  '... on CheckRun{conclusion} ... on StatusContext{state}}}}}}}}}}'
+  '... on CheckRun{conclusion startedAt} ... on StatusContext{state createdAt}}}}}}}}}}'
 
-type Context = { conclusion?: string | null; state?: string | null }
+type Context = {
+  conclusion?: string | null
+  state?: string | null
+  startedAt?: string | null
+  createdAt?: string | null
+}
 export type RoundNode = {
   commit?: { oid?: string; statusCheckRollup?: { state?: string; contexts?: { nodes?: Context[] } } | null }
 }
+
+/** The user's reset: the PR's head commit then, and when (ms since the epoch). */
+export type Reset = { sha?: string; at?: number }
+
+// When GitHub first ran a commit's checks (ms since the epoch), set by GitHub, not by the commit's author.
+const firstRun = (contexts: readonly Context[]) =>
+  Math.min(...contexts.map(c => Date.parse(c.startedAt ?? c.createdAt ?? '')).filter(t => !Number.isNaN(t)))
 
 // A check that really failed. A run cancelled by a newer push (`concurrency: cancel-in-progress`), skipped or
 // neutral is no failure, though GitHub's overall state turns red for it.
@@ -32,23 +44,27 @@ export function roundNodes(answer: string): RoundNode[] {
   }
 }
 
-/** The pushed rounds in a row, newest first, where a check really failed, back to `resetAt` (the commit the
- * user reset the count on, itself not counted) or the last round that passed. A commit with no checks
- * (pushed together with later ones), with checks still running (the round in flight) or with no check that
- * failed (its runs cancelled by a newer push) is no round. */
-export function redRounds(nodes: readonly RoundNode[], resetAt?: string): number {
+/** The pushed rounds in a row, newest first, where a check really failed, back to the user's reset or the last
+ * round that passed. The reset ends the walk at its commit (itself not counted) or at the first commit whose
+ * checks ran before it: a rewritten history (`reset --hard`, `--amend`) drops the reset's commit from the PR,
+ * and the older rounds still on it are from before the reset. A commit with no checks (pushed together with
+ * later ones), with checks still running (the round in flight) or with no check that failed (its runs
+ * cancelled by a newer push) is no round. */
+export function redRounds(nodes: readonly RoundNode[], reset: Reset = {}): number {
   let red = 0
   for (const node of [...nodes].reverse()) {
-    if (resetAt !== undefined && node.commit?.oid === resetAt) break
+    if (reset.sha !== undefined && node.commit?.oid === reset.sha) break
     const rollup = node.commit?.statusCheckRollup
+    const contexts = rollup?.contexts?.nodes ?? []
+    if (reset.at !== undefined && firstRun(contexts) < reset.at) break
     if (rollup?.state === 'SUCCESS') break
-    if (hasFailed(rollup?.contexts?.nodes ?? [])) red++
+    if (hasFailed(contexts)) red++
   }
   return red
 }
 
-/** The count's file, `{ "<owner/name>#<number>": "<head commit at the reset>" }`: written only by the user's
- * own `/ci-watch rounds reset`, and spared by the sweep (it is named by no session). */
+/** The count's file, `{ "<owner/name>#<number>": Reset }`: written only by the user's own
+ * `/ci-watch rounds reset`, and spared by the sweep (it is named by no session). */
 export const ROUNDS_FILE = 'rounds.json'
 
 /** A tool call that would write the count's file: refused, so only the user resets it. */
