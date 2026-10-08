@@ -98,7 +98,8 @@ function world(on: On, env: Record<string, string> = {}) {
   const settings: Record<string, unknown> = {}
   on('settings.read', () => ({ value: { pluginConfigs: {}, ...settings } }) as never)
   // The data folder, keyed with forward slashes; the pause file is never there.
-  const files = new Map<string, string>()
+  // The engine's global config, which it writes at first start.
+  const files = new Map<string, string>([['C:/Users/me/.claude.json', '{}']])
   on('session.id', () => ({ value: 's1' }))
   on('fs.read', ($, e) => {
     const path = e.path.replaceAll('\\', '/')
@@ -500,6 +501,9 @@ const OFF_SWITCHES: [string, (w: ReturnType<typeof world>) => void, Record<strin
   ['DISABLE_COMPACT set', () => {}, { DISABLE_COMPACT: 'true' }],
   ['auto-compact off in the settings', w => void (w.settings.autoCompactEnabled = false)],
   ['auto-compact off in /config', w => w.files.set('C:/Users/me/.claude.json', '{"autoCompactEnabled":false}')],
+  // Read while another session rewrites it, or missing: the off switch may be in it.
+  ['the global config torn', w => w.files.set('C:/Users/me/.claude.json', '{"autoCompactEnabled":fal')],
+  ['the global config unreadable', w => void w.files.delete('C:/Users/me/.claude.json')],
 ]
 for (const [name, set, env] of OFF_SWITCHES) {
   test(`with ${name}, an idle conversation is never compacted`, async ($, on) => {
@@ -544,6 +548,18 @@ test("a fresh reply counts even while the row's reading is stale", async ($, on)
   usage.isDown = true
   await turn($)
   await clock.advance(5 * MINUTE + 30_000)
+  expect(compactions).toEqual([])
+})
+
+// A turn that failed before any request reached the API left the cache as it was: cold an hour after the reply.
+test('a turn that ended with no request never stretches the idle window past the cold cache', async ($, on) => {
+  const { clock, compactions, reply } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(30 * MINUTE)
+  reply.usage = null
+  await turn($)
+  await clock.advance(55 * MINUTE + 30_000)
   expect(compactions).toEqual([])
 })
 

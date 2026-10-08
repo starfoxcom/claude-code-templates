@@ -154,6 +154,9 @@ const live: {
   idleTriedFor?: number
   // The setting that lets the mod compact an idle conversation itself.
   isIdleCompactOn: boolean
+  // When a main request last reached the API, so the prompt cache was surely warm: a turn that failed before
+  // any request (overloaded, a usage limit) completes without touching it.
+  lastWarmAt?: number
   // The model of the last response and whether a compaction ran since: either starts the cache over.
   lastModel?: string
   isWindowFresh: boolean
@@ -252,6 +255,9 @@ async function idleCompact($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   const { idleCompactAt: idleAt, cacheExpiresAt: expiresAt } = cacheTimes(shown.tokens)
   if (!isIdleCompactDue(now, idleAt, expiresAt, live.lastResponseAt, live.idleTriedFor)) return
+  // Only while the cache is still warm from a request that reached the API: compacting a cold one pays for
+  // the whole conversation again.
+  if (live.lastWarmAt === undefined || now >= live.lastWarmAt + live.cacheLifetimeMs) return
   if (!(await isAutoCompactOn($))) return
   // A hot reload leaves this module's timer running beside the new one's: go on only while the session's
   // memory file still holds this reply, which every newer reply rewrites.
@@ -275,12 +281,13 @@ async function isAutoCompactOn($: EngineInterface): Promise<boolean> {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
   const file = configured ? `${configured}/.claude.json` : `${home}/.claude.json`
+  // The engine writes its global config at first start: one that cannot be read or parsed (another session
+  // rewriting it, a lock) may hold the off switch, so the mod stays out.
   try {
     const config = JSON.parse(String(await $.fs.read(file.replace(/\\/g, '/')))) as { autoCompactEnabled?: unknown }
     return config.autoCompactEnabled !== false
   } catch {
-    // No global config to read: auto-compact is on, as the engine starts it.
-    return true
+    return false
   }
 }
 
@@ -465,6 +472,7 @@ export const register: Register = (on, options) => {
     const sentAt = await $.clock.now()
     const result = yield* next(e)
     if (e.agentId === undefined && e.index === 0 && result.usage) noteCache(result.usage, sentAt)
+    if (e.agentId === undefined && result.usage) live.lastWarmAt = sentAt
     return result
   })
 
