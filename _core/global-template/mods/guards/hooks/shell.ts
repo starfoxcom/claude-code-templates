@@ -15,6 +15,8 @@ export type Word = {
   literalStart?: boolean
   /** Holds an expansion outside quotes, which the shell splits into words at blanks (`$F`, not `"$F"`). */
   splits?: boolean
+  /** PowerShell: holds a comma outside quotes, so it is a list, passed to a program as several arguments. */
+  list?: boolean
 }
 
 export type Statement = {
@@ -474,6 +476,7 @@ class Reader {
     const isExpansion = c === '$' && this.expands(this.at(1))
     // PowerShell passes a variable as one argument; only Bash splits it.
     if (!this.powershell && (isExpansion || c === '`')) w.splits = true
+    if (this.powershell && c === ',') w.list = true
     if (c === '$' && this.at(1) === '(') return this.substitution(w)
     if (isExpansion) w.dynamic = true
     if (c === '`' && !this.powershell) return this.backtick(w)

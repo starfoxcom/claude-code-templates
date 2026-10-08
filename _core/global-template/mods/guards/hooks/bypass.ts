@@ -124,8 +124,11 @@ function configReason(rest: Word[]): string | undefined {
   // A word built at run time where the key or a verb is read, or beside a hooks key: the setting is unknown.
   const isDynamic = rest.map(w => w.dynamic)
   const nearHooks = all.some(w => HOOKS_KEY.test(w) || HOOKS_SECTION.test(w)) && isDynamic.some(Boolean)
-  // `remove-section` and `rename-section` (git 2.46+) name their sections after the verb.
-  const keyEnd = keyAt + (SECTION_DROPS.test(all[keyAt] ?? '') ? 3 : 1)
+  // `remove-section` and `rename-section` (git 2.46+) name their sections after the verb; the classic
+  // `--rename-section old new` names its second one after the key.
+  const isVerbDrop = SECTION_DROPS.test(all[keyAt] ?? '')
+  const isFlagDrop = all.slice(0, keyAt).some(w => SECTION_DROPS.test(w))
+  const keyEnd = keyAt + (isVerbDrop ? 3 : isFlagDrop ? 2 : 1)
   if (isDynamic.slice(0, keyEnd).some(Boolean) || nearHooks) return CONFIG_UNREAD
   const keys: string[] = []
   let isWrite = false

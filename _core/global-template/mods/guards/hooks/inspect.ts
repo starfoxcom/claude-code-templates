@@ -27,6 +27,7 @@ import { readPr } from './prbody'
 import type { PrCall } from './prbody'
 import { moveFolder, movePlace, placeHere, repoMoves, targetOf } from './folders'
 import type { Folder, Here, Place, Target } from './folders'
+import { branchesOf, isCommitAll, isUnknownSetting, TAG_READS } from './gitwords'
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, setVar, within, withWords } from './vars'
@@ -82,7 +83,7 @@ export type Plan = {
 export type { Folder, Target } from './folders'
 
 // The statement that writes a file, where it runs, and the values of the variables its path names there.
-type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[] }
+type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[]; folder: Folder }
 
 // The reading's working state while it walks one command.
 type Reading = VarState & {
@@ -205,7 +206,8 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
   plan.written.push(...writes)
-  for (const path of writes) r.writers.set(norm(path), { st, ps: r.ps, scope, vars: varsIn(path, r) })
+  const at = placeHere(r).folder
+  for (const path of writes) r.writers.set(norm(path), { st, ps: r.ps, scope, vars: varsIn(path, r), folder: at })
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
@@ -245,8 +247,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   r.at = {}
   readWrite(st, prev, name, args, r)
   // Each body file keeps the folder in effect where it is named: `cd a && ... && cd b` moves it on.
-  const here = placeHere(r).folder
-  const folder = r.at.dir ? moveFolder(here, r.at.dir) : here
+  const folder = folderNow(r)
   for (const f of plan.files.slice(before)) {
     f.folder ??= folder
     if (r.ranScript) f.scripted = true
@@ -378,29 +379,35 @@ function feed(st: Statement, r: Reading, where: string) {
   plan.unread.push(where)
 }
 
-// A `-c` setting built at run time that may move the hooks or run commands: its key is, or it is a hooks
-// path, an alias or an include whose value is. `user.name=$N` changes no such thing.
-function isUnknownSetting(w: Word | undefined): boolean {
-  if (!w?.dynamic) return false
-  const key = w.text.split('=')[0] ?? ''
-  return /[$`(]/.test(key) || /^(core\.hookspath|hooks\.|alias\.|include)/i.test(key)
-}
-
 // The values of the variables a path names, as they stand where the path is written.
 function varsIn(path: string, r: Reading): (Var | undefined)[] {
   return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
+}
+
+// A relative path names the written file only where both are named in the same known folder: a `cd`
+// between them, or one built at run time, makes it another file.
+function isSameFolder(path: string, writer: Writer, r: Reading): boolean {
+  if (/^([a-zA-Z]:)?[\\/]|^~/.test(path)) return true
+  const here = folderNow(r)
+  return !here.isUnknown && !writer.folder.isUnknown && here.path === writer.folder.path
+}
+
+// The folder the statement being read runs in, moved by its own `git -C`.
+function folderNow(r: Reading): Folder {
+  const here = placeHere(r).folder
+  return r.at.dir ? moveFolder(here, r.at.dir) : here
 }
 
 // A body file named here, matched to the statement that wrote it so far, if any.
 function pushFile(r: Reading, where: string, path: string) {
   const entry = { where, path }
   const writer = r.writers.get(norm(path))
-  if (writer) r.matched.set(entry, writer)
+  if (writer && isSameFolder(path, writer, r)) r.matched.set(entry, writer)
   r.plan.files.push(entry)
 }
 
 // A word the shell splits into more words at run time, which may carry options.
-const splitsAt = (w: Word | undefined) => Boolean(w?.dynamic && w.splits)
+const splitsAt = (w: Word | undefined) => Boolean((w?.dynamic && w.splits) || w?.list)
 
 // A call whose own words are built at run time: a write, since what it does cannot be read.
 function unreadCall(r: Reading, what: string) {
@@ -410,7 +417,7 @@ function unreadCall(r: Reading, what: string) {
 
 // A word built at run time that the program may read as a flag: split by the shell, or starting with an
 // expansion or a dash.
-const mayBeFlag = (w: Word) => w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text))
+const mayBeFlag = (w: Word) => w.list === true || (w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text)))
 
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
 function write(r: Reading, st: Statement, where: string): string {
@@ -431,16 +438,6 @@ function pushBodies(r: Reading, st: Statement, where: string) {
     if (e.unresolved && where && !plan.unread.includes(where)) plan.unread.push(where)
   }
 }
-
-// `git tag` flags that list, verify or delete instead of creating a tag.
-const TAG_READS = /^-[ldv]$|^-n\d*$|^--(list|delete|verify|contains|no-contains|points-at|merged|no-merged)(=|$)/
-
-// `git branch` flags that list, delete or configure instead of creating a branch.
-const BRANCH_NOT_CREATE = new RegExp(
-  '^-[dDlarvu]|^--(' +
-    'delete|list|all|remotes|show-current|contains|merged|no-merged|set-upstream|unset-upstream|edit-description' +
-    ')',
-)
 
 // The index of git's subcommand, past its global options; `-C <dir>` sets the folder.
 function gitSubcommand(args: Word[], r: Reading): number {
@@ -465,26 +462,6 @@ function gitSubcommand(args: Word[], r: Reading): number {
   return k
 }
 
-// `git branch <name>` creates one (a rename or copy names the new one last); listing flags create none.
-function gitBranch(rest: Word[], plan: Plan) {
-  const flags = rest.filter(a => a.text.startsWith('-')).map(a => gitLong('branch', a.text))
-  const names = rest.filter(a => !a.text.startsWith('-')).map(a => a.text)
-  if (flags.some(f => /^-(m|M|c|C)$|^--(move|copy)$/.test(f))) plan.branches.push(...names.slice(-1))
-  else if (!flags.some(f => BRANCH_NOT_CREATE.test(f))) plan.branches.push(...names.slice(0, 1))
-}
-
-// `-a` in a bundle counts only before the first letter that takes a value: in `-Sabc` or `-uall` it is
-// part of that value, read the same way `walk` reads the bundle.
-function isCommitAll(text: string): boolean {
-  if (gitLong('commit', text) === '--all') return true
-  if (!/^-[A-Za-z]/.test(text)) return false
-  for (const letter of text.slice(1)) {
-    if (letter === 'a') return true
-    if (!/[A-Za-z]/.test(letter) || COMMIT[`-${letter}`]) return false
-  }
-  return false
-}
-
 function gitCommit(st: Statement, rest: Word[], r: Reading): string {
   const { plan } = r
   const where = write(r, st, 'the commit message')
@@ -500,6 +477,12 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
   if (args[k]?.dynamic) return void unreadCall(r, 'a git subcommand built at run time')
   const sub = args[k]?.text ?? ''
   const rest = args.slice(k + 1)
+  // A write whose flags are not walked (push, rebase, am): any word built at run time may be one, even
+  // after a `--` (`push -o -- $REF` gives `-o` the `--`, and push reads flags after its refspecs).
+  const isWalked = /^(commit|tag|merge|commit-tree|notes)$/.test(sub)
+  const line = `git ${args.map(a => a.text).join(' ')}`
+  const isUnwalkedWrite = !isWalked && RAW_WRITES.some(re => re.test(line))
+  if (isUnwalkedWrite && rest.some(mayBeFlag)) unreadCall(r, 'a word built at run time')
   switch (sub) {
     case 'commit':
       return gitCommit(st, rest, r)
@@ -530,7 +513,7 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
       if (rest[0]?.text === 'add') walk(rest.slice(1), { '-b': 'branch', '-B': 'branch' }, r, '')
       return undefined
     case 'branch':
-      gitBranch(rest, plan)
+      plan.branches.push(...branchesOf(rest))
       return undefined
   }
   return undefined
@@ -702,6 +685,8 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
   const { plan } = r
   // A value the shell splits at run time may carry more options (`--base $B` with `B='main -F x'`).
   if (splitsAt(value) && /^(skip|repo|method)$/.test(kind)) unreadCall(r, where || 'a flag value built at run time')
+  // A PowerShell list hands a write its first item as the value and the rest as more words.
+  if (value.list && (where || kind === 'branch')) unreadCall(r, 'a flag value built at run time')
   switch (kind) {
     case 'text':
       return message(value, r, where)
@@ -715,7 +700,8 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       const writer = r.writers.get(norm(value.text))
       const now = varsIn(value.text, r)
       const isTracked = now.length > 0 && now.every(Boolean) && !/\$[({@*#?$!0-9-]|`|\$env:/i.test(value.text)
-      if (writer && isTracked && writer.vars.length === now.length && writer.vars.every((v, i) => v === now[i])) {
+      const isSame = writer && isTracked && isSameFolder(value.text, writer, r)
+      if (writer && isSame && writer.vars.length === now.length && writer.vars.every((v, i) => v === now[i])) {
         const entry = { where, path: value.text }
         r.matched.set(entry, writer)
         return void plan.files.push(entry)

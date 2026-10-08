@@ -239,9 +239,11 @@ function assignPs(w: Word[], r: VarState): boolean {
   const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
   if (spaced && w[1]?.text === '=') {
     // A bare word there is a command that runs (`$m = Get-Date`), not text; a quoted one or a number is.
+    // A list (`'a','b'`, `@(...)`) is several values, never one text.
     const value = w.length === 3 ? w[2] : undefined
     const isCommand = value && !value.dynamic && !value.literalStart && /^[A-Za-z][\w.-]*$/.test(value.text)
-    setVar(r, spaced[1] ?? '', isCommand ? undefined : value)
+    const isList = value?.list || /^@\(/.test(value?.text ?? '')
+    setVar(r, spaced[1] ?? '', isCommand || isList ? undefined : value)
     return true
   }
   const isCompound = spaced !== null && /^([-+*/%]|\?\?)=$/.test(w[1]?.text ?? '')
