@@ -86,7 +86,7 @@ export type { Folder, Target } from './folders'
 
 // The statement that writes a file, where it runs, and the values of the variables its path names there.
 type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[]; folder: Folder; path: string }
-  & { seen: Seen; isLater: boolean }
+  & { seen: Seen; isLater: boolean; index: number }
 
 // The reading's working state while it walks one command.
 type Reading = VarState & {
@@ -97,8 +97,10 @@ type Reading = VarState & {
   matched: Map<object, Writer[]>
   /** What the statement being read sets for itself: its `git -C` folder, `gh --repo`, its commit's lines. */
   at: Here
-  /** While a writer's statement is fed in after the walk: the folder it ran in. */
+  /** While a writer's statement is fed in after the walk: the folder it ran in, and how many writers ran
+   * before it (a file it reads was written by one of those, never by a later one). */
   feedFolder?: Folder
+  writersBefore?: number
   /** A statement so far set a git alias, include or config file (`-c alias.x=`, `GIT_CONFIG_GLOBAL=`). */
   isConfigMoved?: boolean
   /** An environment variable named at run time was set: any later git or gh call may run under it. */
@@ -180,6 +182,7 @@ export function readCommand(command: string, powershell: boolean): Plan {
       // action, a loop) sees each name's last value, so a name set more than once is unknown there.
       const vars = writer.isLater ? {} : seenOf(writer.seen)
       const at = { ...r, ...vars, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
+      at.writersBefore = writer.index
       at.isDeferredRead = writer.isLater
       feed(writer.st, at, `${f.where} (file ${f.path})`)
       // A file the writer reads (`cat CHANGES.md > b.md`) is where the writer ran.
@@ -237,7 +240,8 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const isLater = Boolean(r.isDeferredRead)
   for (const path of writes) {
     const vars = varsIn(path, r)
-    r.writers.push({ st, ps: r.ps, scope, vars, folder: at, path: norm(path), seen: seen as Seen, isLater })
+    const index = r.writers.length
+    r.writers.push({ st, ps: r.ps, scope, vars, folder: at, path: norm(path), seen: seen as Seen, isLater, index })
   }
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
@@ -438,7 +442,7 @@ function pushFile(r: Reading, where: string, path: string) {
 // The file's writers, back to one that surely ran before it is read. With none sure, the file on disk is
 // read too: the writers may not have run.
 function matchFile(r: Reading, entry: Plan['files'][number], isIt: (w: Writer) => boolean): boolean {
-  const found = writersOf(r.writers, r.scope, isIt)
+  const found = writersOf(r.writers.slice(0, r.writersBefore ?? r.writers.length), r.scope, isIt)
   if (found.length === 0) return false
   r.matched.set(entry, found)
   if (ranBefore(found.at(-1)?.scope ?? '', r.scope)) entry.written = true

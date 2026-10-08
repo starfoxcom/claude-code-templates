@@ -54,6 +54,15 @@ test('a command naming a history write that is not plain is refused outright', (
     "echo 'commit-msg:' > lefthook-local.yml; git commit -m 'fix: x'",
     "echo 'repos: []' > .pre-commit-config.yaml; git commit -m 'fix: x'",
     "echo 'hooksPath = /dev/null' >> ~/.gitconfig",
+    // A program name Bash builds from a brace expansion or a glob.
+    "{gi,commi}t -n -m 'x'",
+    "/usr/bin/g[i]t commit -n -m 'x'",
+    "/mingw64/bin/g?t commit -n -m 'x'",
+    // Launchers that run their quoted argument as shell text.
+    "flock /tmp/l -c 'git commit --no-verify -m x'",
+    "watch 'git commit --no-verify -m x'",
+    "parallel 'git commit --no-verify -m x' ::: 1",
+    "script -c 'git commit --no-verify -m x' /dev/null",
   ]) {
     expect([command, refused(command)]).toEqual([command, expect.stringContaining('not plain')])
   }
@@ -78,6 +87,8 @@ test('a PowerShell command naming a history write that is not plain is refused o
     "Remove-Item '.git\\hooks\\commit-msg'; & 'git' commit -m 'fix: x'",
     "cd .git/hooks; 'exit 0' > commit-msg; cd ..\\..; git commit -m 'fix: x'",
     'git push origin x && gh pr create --title t --body-file b.md',
+    "& (gcm g?t) commit -n -m 'x'",
+    ". (Get-Command g*t) commit -n -m 'x'",
   ]) {
     expect([command, refused(command, true)]).toEqual([command, expect.stringContaining('not plain')])
   }
@@ -91,6 +102,15 @@ test('the refusal names what is not plain', () => {
   const chained = refused('git push origin x && gh pr create --title t --body-file b.md', true)
   expect(chained).toContain('Windows PowerShell has no && or ||')
   expect(chained).toContain('In PowerShell, run each git or gh call as its own tool call')
+})
+
+// A file a writer copies holds what was written before that writer ran, never what a later one writes.
+test('a copied file is read as it stood when it was copied', () => {
+  const body = "cat > a.md <<'EOF'\n## What\n- add banned-x\nEOF\n"
+  const command = `${body}cat a.md > b.md\necho clean > a.md\ngh pr create -t t -F b.md`
+  expect(notPlain(command, false)).toBeUndefined()
+  const read = inspect(command, false).texts.filter(t => !t.creditOnly)
+  expect(read.map(t => t.text).join('\n')).toContain('banned-x')
 })
 
 // Plain commands go on to the reading, which judges what they write.
