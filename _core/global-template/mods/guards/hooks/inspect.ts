@@ -127,8 +127,9 @@ type Reading = VarState & {
   isRepoMoved?: boolean
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
   opened: number
-  /** File names earlier statements may write, past `>` (`Set-Content b.md`, `cp x b.md`): see `namedFiles`. */
-  named: Set<string>
+  /** File names earlier statements may write, past `>` (`Set-Content b.md`, `cp x b.md`), each with how many
+   * `>` writers there were when it was last named: see `namedFiles`. */
+  named: Map<string, number>
   /** The statements that write files (`> file`), in order, each with its normalized path and where it runs. */
   writers: Writer[]
   /** Message routes read from stdin so far (`-F -`, `--body-file -`, `--input -`, `body=@-`). */
@@ -167,7 +168,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     scope: '',
     opened: 0,
     writers: [],
-    named: new Set(),
+    named: new Map(),
     stdin: 0,
     writes: 0,
   }
@@ -269,7 +270,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
   // The repo rules and the diff scan follow each write to where it runs, never to the first `cd`.
   if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
-  for (const file of namedFiles(st)) r.named.add(file)
+  for (const file of namedFiles(st)) r.named.set(file, r.writers.length)
 }
 
 // A program named through a variable the command did not set (from outside it, `$(which git)`), with
@@ -421,8 +422,13 @@ function pushFile(r: Reading, where: string, path: string) {
   const entry: Plan['files'][number] = { where, path }
   matchFile(r, entry, landsAt(path, r))
   r.plan.files.push(entry)
-  // A file an earlier program of the command may write (`Set-Content b.md`, `cp x b.md`).
-  if (!entry.written && (r.named.has(baseName(path)) || r.named.has('*'))) entry.named = true
+  // A file an earlier program of the command may write (`Set-Content b.md`, `cp x b.md`), after the last `>`
+  // that wrote it: the text the call sends is not one the reading has.
+  const isIt = landsAt(path, r)
+  let last = -1
+  r.writers.forEach((w, i) => isIt(w) && (last = i))
+  const at = Math.max(r.named.get(baseName(path)) ?? -1, r.named.get('*') ?? -1)
+  if (at > last) entry.named = true
 }
 
 // The file's writers, back to one that surely ran before it is read. With none sure, the file on disk is
