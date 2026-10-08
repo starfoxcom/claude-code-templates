@@ -15,6 +15,9 @@ const TRAILER = '--trailer is not allowed; write the message body directly.'
 const REUSE = "reusing another commit's message (-C, -c, --reuse-message, --reedit-message) cannot be read."
 const CONFIG_UNREAD = 'a git config setting built at run time cannot be read.'
 export const EVAL = 'eval builds the command at run time, so its message cannot be read.'
+const RUNS_COMMAND =
+  'a git or gh call that runs a command of its own (rebase --exec, submodule foreach, bisect run, difftool ' +
+  '--extcmd, a gh alias) cannot be read. Run that command directly, as its own git or gh call.'
 const HOOKS_OFF =
   "switching the repo's git hooks off (lefthook, husky, pre-commit or simple-git-hooks) is not allowed: they " +
   'hold its commit gates.'
@@ -202,10 +205,35 @@ function optionsEnd(words: string[]): number {
   return words.length
 }
 
+// git calls that run a command string of their own (`rebase --exec`, `submodule foreach`, `bisect run`,
+// `difftool --extcmd`): what that string runs is never read. A short bundle holding an `x` counts as `-x`.
+function runsCommand(sub: string, rest: Word[]): boolean {
+  const words = rest.map(w => gitLong(sub, w.text))
+  const first = words.find(w => !w.startsWith('-'))
+  const hasX = words.some(w => /^-[A-Za-z]*x/.test(w))
+  if (sub === 'rebase') return hasX || words.some(w => /^--exec(=|$)/.test(w))
+  // difftool's only long option that starts with `--e` is `--extcmd`, so every shortening of it counts.
+  if (sub === 'difftool') return hasX || words.some(w => /^--e[a-z]*(=|$)/.test(w))
+  return (sub === 'submodule' && first === 'foreach') || (sub === 'bisect' && first === 'run')
+}
+
+// gh calls that define a command of their own: an alias (`gh alias set ci '...'`, with `--shell` any shell
+// command) runs whatever it names later, in any session, out of the reading's reach.
+function ghReason(args: Word[]): string | undefined {
+  const words: string[] = []
+  for (let i = 0; i < args.length && words.length < 2; i++) {
+    const t = args[i]?.text ?? ''
+    if (t === '-R' || t === '--repo') i++
+    else if (!t.startsWith('-')) words.push(t)
+  }
+  return words[0] === 'alias' && /^(set|import)$/.test(words[1] ?? '') ? RUNS_COMMAND : undefined
+}
+
 function gitReason(args: Word[]): string | undefined {
   const { sub, rest, settings } = gitParts(args)
   if (sub === 'filter-repo' || sub === 'filter-branch') return HISTORY_REWRITE
   if (sub === 'config') return configReason(rest)
+  if (runsCommand(sub, rest)) return RUNS_COMMAND
   if (!HOOKED.has(sub)) return undefined
   if (settings.some(s => HOOKS_KEY.test(s))) return HOOK_SKIP
   // A message writer's flags are walked past their values (`-m '--no-verify'` is a message); on the rest
@@ -252,5 +280,6 @@ function envReason(st: Statement, name: string, args: Word[], state: HookState):
 export function bypassOf(st: Statement, name: string, args: Word[], state: HookState = {}): string | undefined {
   // `git-filter-repo` and `git-filter-branch` run on their own, as installed on the path.
   if (/^git-filter-(repo|branch)$/.test(name)) return HISTORY_REWRITE
-  return envReason(st, name, args, state) ?? (name === 'git' ? gitReason(args) : undefined)
+  const own = name === 'git' ? gitReason(args) : name === 'gh' ? ghReason(args) : undefined
+  return envReason(st, name, args, state) ?? own
 }
