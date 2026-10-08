@@ -25,7 +25,6 @@
 import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
-import type { PrCall } from './prbody'
 import {
   aloneOf,
   folderNow,
@@ -39,7 +38,7 @@ import {
   targetOf,
   writersOf,
 } from './folders'
-import type { Folder, Here, Place, Target } from './folders'
+import type { Folder, Here, Place } from './folders'
 import {
   branchesOf,
   builtReasons,
@@ -75,34 +74,10 @@ import {
   SWITCH,
 } from './specs'
 import type { Kind, Spec } from './specs'
+import type { Plan } from './plan'
 import type { Statement, Word } from './shell'
 
-export type Plan = {
-  /** Message text with where it goes ("the commit message", "the PR body"). `creditOnly`: command text
-   * around a message (a `$(...)` as typed), checked for AI credit but not for the product name. */
-  texts: { where: string; text: string; creditOnly?: boolean }[]
-  /** Body files the command hands to git or gh, as written (relative to `folder` when not absolute).
-   * `written`: this same command writes the file, and what it writes was read from the command text. */
-  /** `folder`: where a relative path resolves, as the command stands where the file is named.
-   * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading.
-   * `named`: another program of the command may rewrite it (`Set-Content b.md`, `cp x b.md`, `npm run x`). */
-  files: { where: string; path: string; written?: boolean; folder?: Folder; scripted?: boolean; named?: boolean }[]
-  /** Files the command itself writes (`> file`). */
-  written: { path: string; folder: Folder }[]
-  branches: string[]
-  /** Each write statement's folder, repo and commit lines, for the repo rules and the diff scan. */
-  targets: Target[]
-  /** Messages whose text is built in a way the guard cannot read ($VAR from outside, another program's output). */
-  unread: string[]
-  /** What was left unjudged without risk to history (the PR-body format, a diff cut short): logged, never refused. */
-  notes: string[]
-  block?: string
-  isWrite: boolean
-  /** Each `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
-  prs: PrCall[]
-  /** Every `gh` statement in the command: the PR-body contract judges only a command with one. */
-  ghCalls: number
-}
+export type { Plan } from './plan'
 
 export type { Folder, Target } from './folders'
 
@@ -165,6 +140,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     at: {},
     ps: powershell,
     vars: new Map(),
+    isIfsSet: /\bIFS\b/.test(command),
     scope: '',
     opened: 0,
     writers: [],
@@ -258,7 +234,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   if (moveTo(name, args, r)) return
   if (readScript(st, name, args, r)) return
   // A wrapper shell (`bash -c`) is read above, its statements in turn; an assignment sets no file.
-  r.mayRewrite ||= mayWriteFiles(st)
+  r.mayRewrite ||= mayWriteFiles(st, r.ps)
   forget(st, name, r)
   // Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its
   // text is under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
@@ -329,14 +305,22 @@ function readEval(st: Statement, args: Word[], r: Reading) {
   for (const name of names) setVar(r, name, undefined)
 }
 
+const TRAP = 'a trap action built at run time hides the command it runs, so its message cannot be read.'
+
 // `trap 'ACTION' SIGNAL...`: the action runs in this shell later (`DEBUG` before every command), so what it
-// sets may change anything read after it. One built at run time cannot be read.
+// sets may change anything read after it. One that cannot be filled in is refused when it names a write.
 function readTrap(args: Word[], r: Reading) {
   const k = args.findIndex(a => !/^(-[lp]+|--)$/.test(a.text))
   const action = args[k]
   if (!action || args.length - k < 2 || action.text === '-') return
-  if (action.dynamic) return void r.plan.unread.push('a trap action built at run time')
-  readInPlace(parse(action.text, false), r, 'c', true)
+  // The action is filled in when the trap is set (`trap "rm -f $T" EXIT`), and read as an `eval` is.
+  const e = action.dynamic ? expand(action.text, r, action.literals) : { text: action.text, unresolved: false }
+  if (!e.unresolved) return readInPlace(parse(e.text, false), r, 'c', true)
+  if (evalWrites(parse(action.text, false), false)) r.plan.block ??= TRAP
+  // An `EXIT` trap runs once every command is done; any other may run before any of them and set anything.
+  if (args.slice(k + 1).every(a => !a.dynamic && /^(EXIT|SIGEXIT|0)$/i.test(a.text))) return
+  r.mayRewrite = true
+  r.isSourced = true
 }
 
 // Commands an `eval` or a `trap` runs in this same shell: their subshells numbered apart from the command's.

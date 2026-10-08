@@ -163,7 +163,11 @@ export function setsRunner(st: Statement): boolean {
 /** Whether a statement may write files beyond its own `>`: any program not known to write none (`Set-Content`,
  * `cp`, `tee`, `npm`, a .NET call, a function, `xargs cp`), git outside its read subcommands or with an
  * output file (`git log --output=x`), and gh outside its read and send groups (`gh release download`). */
-export function mayWriteFiles(st: Statement): boolean {
+export function mayWriteFiles(st: Statement, ps = false): boolean {
+  // PowerShell: a statement that is one value (`'## What' > b.md`, a here-string, `$body > b.md`) only prints.
+  const [only] = st.words
+  const isValue = (w: Word) => w.literalStart || /^-?\d+(\.\d+)?$|^\$\w+$/.test(w.text)
+  if (ps && !st.isCall && st.words.length === 1 && only && !only.expr && !only.list && isValue(only)) return false
   const { name, args } = programOf(st)
   if (args.some(a => RUNS.test(a.text))) return true
   if (PURE_CALL.test(st.words[0]?.text ?? '')) return false

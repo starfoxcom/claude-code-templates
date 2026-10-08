@@ -15,10 +15,10 @@ const REFUSED: [string, string, boolean?][] = [
   ["git -c core.hooksPath=/dev/null commit -m 'fix: x'", 'skipping git hooks'],
   ['git config core.hooksPath /dev/null', 'skipping git hooks'],
   ['git config --unset core.hooksPath', 'skipping git hooks'],
-  ["LEFTHOOK=0 git commit -m 'fix: x'", 'disabling lefthook'],
-  ['export LEFTHOOK=0', 'disabling lefthook'],
-  ['lefthook uninstall', 'disabling lefthook'],
-  ['$env:LEFTHOOK = 0', 'disabling lefthook', true],
+  ["LEFTHOOK=0 git commit -m 'fix: x'", 'git hooks off'],
+  ['export LEFTHOOK=0', 'git hooks off'],
+  ['lefthook uninstall', 'git hooks off'],
+  ['$env:LEFTHOOK = 0', 'git hooks off', true],
   ["git commit -m 'fix: x' --trailer 'Reviewed-by: a'", '--trailer'],
   ['git commit --trailer=Reviewed-by:a -m x', '--trailer'],
   ['git commit -C HEAD~1', "reusing another commit's message"],
@@ -93,11 +93,25 @@ const MORE_REFUSED: [string, string, boolean?][] = [
   ['git config -t path core.hooksPath /x', 'skipping git hooks'],
   ["GIT_CONFIG_PARAMETERS='core.hooksPath=/x' git commit -m x", 'skipping git hooks'],
   ['GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/x git commit -m x', 'skipping git hooks'],
-  ['LEFTHOOK=false git commit -m x', 'disabling lefthook'],
-  ['export LEFTHOOK=false', 'disabling lefthook'],
-  ['LEFTHOOK_EXCLUDE=commit-msg git commit -m x', 'disabling lefthook'],
-  ["$env:LEFTHOOK = 'false'", 'disabling lefthook', true],
-  ['$env:LEFTHOOK_EXCLUDE="commit-msg"', 'disabling lefthook', true],
+  ['LEFTHOOK=false git commit -m x', 'git hooks off'],
+  ['export LEFTHOOK=false', 'git hooks off'],
+  ['LEFTHOOK_EXCLUDE=commit-msg git commit -m x', 'git hooks off'],
+  ["$env:LEFTHOOK = 'false'", 'git hooks off', true],
+  ['$env:LEFTHOOK_EXCLUDE="commit-msg"', 'git hooks off', true],
+  // The other hook managers the bundles ship: husky, pre-commit and simple-git-hooks.
+  ['HUSKY=0 git commit -m x', 'git hooks off'],
+  ['export HUSKY=0; git commit -m x', 'git hooks off'],
+  ['HUSKY_SKIP_HOOKS=1 git commit -m x', 'git hooks off'],
+  ['SKIP=conventional-commit git commit -m x', 'git hooks off'],
+  ['export SKIP=conventional-commit', 'git hooks off'],
+  ['SKIP_SIMPLE_GIT_HOOKS=1 git commit -m x', 'git hooks off'],
+  ['HUSKY=$H git commit -m x', 'git hooks off'],
+  ['$env:HUSKY = 0', 'git hooks off', true],
+  ["$env:SKIP = 'conventional-commit'", 'git hooks off', true],
+  ['pre-commit uninstall', 'git hooks off'],
+  ['uvx pre-commit uninstall', 'git hooks off'],
+  ['python -m pre_commit uninstall', 'git hooks off'],
+  ['npx husky uninstall', 'git hooks off'],
 ]
 
 for (const [command, reason, ps] of MORE_REFUSED) {
@@ -139,11 +153,11 @@ test('a spaced --config-env still leaves the commit as a write', () => {
 // Lefthook switched off behind a wrapper's flags or a keyword, a hooks section dropped, and
 // `Invoke-Expression`, PowerShell's `eval`.
 const WRAPPED_REFUSED: [string, string, boolean?][] = [
-  ['env -i LEFTHOOK=0 git commit -m x', 'disabling lefthook'],
-  ['sudo -E LEFTHOOK=0 git commit -m x', 'disabling lefthook'],
-  ['declare -x LEFTHOOK=0', 'disabling lefthook'],
-  ['if LEFTHOOK=0 git commit -m x; then :; fi', 'disabling lefthook'],
-  ['for b in a; do LEFTHOOK=0 git commit -m x; done', 'disabling lefthook'],
+  ['env -i LEFTHOOK=0 git commit -m x', 'git hooks off'],
+  ['sudo -E LEFTHOOK=0 git commit -m x', 'git hooks off'],
+  ['declare -x LEFTHOOK=0', 'git hooks off'],
+  ['if LEFTHOOK=0 git commit -m x; then :; fi', 'git hooks off'],
+  ['for b in a; do LEFTHOOK=0 git commit -m x; done', 'git hooks off'],
   ['git config --remove-section core', 'skipping git hooks'],
   ['git config --rename-section core old', 'skipping git hooks'],
   ['git config --rename-section staged hooks', 'skipping git hooks'],
@@ -215,11 +229,11 @@ test('a command held in a variable from outside is out of reach', () => {
 
 // Lefthook through a package runner, commands in backticks, and a script a shell reads from a here-doc.
 const HIDDEN_REFUSED: [string, string][] = [
-  ['npx lefthook uninstall', 'disabling lefthook'],
-  ['npx --yes lefthook uninstall', 'disabling lefthook'],
-  ['pnpm exec lefthook uninstall', 'disabling lefthook'],
-  ['yarn lefthook uninstall', 'disabling lefthook'],
-  ['bunx @evilmartians/lefthook uninstall', 'disabling lefthook'],
+  ['npx lefthook uninstall', 'git hooks off'],
+  ['npx --yes lefthook uninstall', 'git hooks off'],
+  ['pnpm exec lefthook uninstall', 'git hooks off'],
+  ['yarn lefthook uninstall', 'git hooks off'],
+  ['bunx @evilmartians/lefthook uninstall', 'git hooks off'],
   ['OUT=`git commit --no-verify -m x`', 'skipping git hooks'],
   ['echo "`git commit -n -m x`"', 'skipping git hooks'],
   ["bash <<'EOF'\ngit commit -n -m x\nEOF", 'skipping git hooks'],
@@ -271,8 +285,8 @@ test('a hashtable added to after it was typed is unread', () => {
 // `eval` beside a read-only git command passes.
 const EVAL_REFUSED: [string, string][] = [
   ['eval "git config core.hooksPath /x"', 'skipping git hooks'],
-  ["eval 'export LEFTHOOK=0'", 'disabling lefthook'],
-  ['eval "lefthook uninstall"', 'disabling lefthook'],
+  ["eval 'export LEFTHOOK=0'", 'git hooks off'],
+  ['eval "lefthook uninstall"', 'git hooks off'],
   ["eval 'git commit -m x'", 'eval'],
   ['C="git commit -m x"; eval "$C"', 'eval'],
   ['eval "$(ssh-agent -s)"; git commit -m x', 'eval'],
@@ -566,9 +580,9 @@ const FILLED_REFUSED: [string, string][] = [
   ["NV=--no-verify; git commit -m 'fix: x' $NV", 'skipping git hooks'],
   ["C=commit; git $C -m 'fix: x' --no-verify", 'skipping git hooks'],
   ['K=core.hooksPath=/x; git -c "$K" commit -m x', 'skipping git hooks'],
-  ['V=0; LEFTHOOK=$V git commit -m x', 'disabling lefthook'],
-  ['LEFTHOOK=$V git commit -m x', 'disabling lefthook'],
-  ['LEFTHOOK+=0 git commit -m x', 'disabling lefthook'],
+  ['V=0; LEFTHOOK=$V git commit -m x', 'git hooks off'],
+  ['LEFTHOOK=$V git commit -m x', 'git hooks off'],
+  ['LEFTHOOK+=0 git commit -m x', 'git hooks off'],
   ['case $x in $(git commit --no-verify -m x)) ;; esac', 'skipping git hooks'],
 ]
 
@@ -593,7 +607,7 @@ test('ordinary words built at run time that cannot turn into a flag pass', () =>
     expect([command, read(command).unread, read(command).block]).toEqual([command, [], undefined])
   }
   expect(read('$env:LEFTHOOK=1; git commit -m x', true).block).toBeUndefined()
-  expect(read('$env:LEFTHOOK = $v; git commit -m x', true).block).toContain('disabling lefthook')
+  expect(read('$env:LEFTHOOK = $v; git commit -m x', true).block).toContain('git hooks off')
 })
 
 // A here-doc quoted with a backslash, the classic `git config` read past its key, git-filter-repo on its

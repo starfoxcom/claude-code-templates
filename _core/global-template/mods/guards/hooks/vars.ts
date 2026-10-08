@@ -28,6 +28,8 @@ export type VarState = {
   /** A file was sourced (`source x`, `. x`): it may set any variable, at once or through a trap or a
    * function, so every variable is unknown from then on. */
   isSourced?: boolean
+  /** The command names Bash's `IFS` somewhere, so where an unquoted expansion splits is not known. */
+  isIfsSet?: boolean
 }
 
 // Reads one statement, marking what it sets as unknown from then on when it may run at any later point.
@@ -205,6 +207,7 @@ export function withWords(st: Statement, r: VarState): Statement {
     if (!w.dynamic || w.expr || i < targets) return [w]
     const e = expand(w.text, r, w.literals)
     const splits = !r.ps && w.splits === true
+    if (splits && r.isIfsSet) return [w]
     if (e.unresolved || (splits && /[*?[]/.test(e.text))) return [w]
     changed = true
     if (!splits) return [{ ...w, text: e.text, dynamic: false }]

@@ -816,3 +816,17 @@ test('refusals for run-time names, folders and cmd lines name their own way out'
   )
   expect(await deny('cmd //c "git add -A & git commit -m x"')).toContain('Give `cmd /c` one plain command')
 })
+
+// PowerShell's plain way to write a body file, a value sent to it with `>`, passes once it is clean.
+test('a PowerShell value written to a body file with > passes', { options: { mode: 'enforce' } }, async ($, on) => {
+  world(on)
+  on('tool.call', { tool: 'PowerShell' }, () => ({ result: {} as never }))
+  await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
+  for (const command of [
+    "'## What' > b.md; gh pr create -t t -F b.md",
+    "@'\n## What\n- x\n'@ > b.md; gh pr create -t t -F b.md",
+  ]) {
+    const result = await $.tool.call({ tool: 'PowerShell', command } as never)
+    expect([command, (result as { deny?: string }).deny]).toEqual([command, undefined])
+  }
+})

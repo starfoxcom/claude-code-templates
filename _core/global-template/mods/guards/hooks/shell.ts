@@ -4,7 +4,7 @@
 // It is a safety net for commands written the ordinary way, not a shell: text the shell builds at run
 // time is marked `dynamic` and named as unread, never guessed at.
 
-import { ansiBody, plain, PS_ESCAPES, sliceWord } from './quoting'
+import { ansiBody, isBalanced, isCasts, isExpression, plain, PS_ESCAPES, sliceWord } from './quoting'
 
 export type Word = {
   /** The word as the program receives it: quotes removed, escapes applied. */
@@ -90,7 +90,17 @@ const FN_PARENS = /^[(][ \t]*[)]/
 // A block the reader is inside: a Bash subshell, a branch (`cond`), a `case` arm, a `{ }` group or a body
 // that runs later (`fn`). `at`: where its scopes end; `chain`, `list`: see `Reader.levels`; `isOr`: the
 // list's last operator was `||`.
-type Level = { kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'; at: number; chain?: number; isOr?: boolean; list: number }
+type Level = {
+  kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'
+  at: number
+  chain?: number
+  isOr?: boolean
+  list: number
+  /** The index in `out` of the block's first statement. */
+  from: number
+  /** A subshell a `{` opened, as a pipeline part (`echo | { read M; }`). */
+  isBrace?: boolean
+}
 
 const joined = (outer: string | undefined, inner: string) => [outer, inner].filter(Boolean).join('/')
 
@@ -122,7 +132,9 @@ class Reader {
   // The blocks open now, innermost last, each with where its own scopes end in `scopes`. `chain`: where the
   // `&&`/`||` list read at that level started there, once it has one; `list`: the index in `out` of that
   // list's first statement.
-  private levels: Level[] = [{ kind: 'group', at: 0, list: 0 }]
+  private levels: Level[] = [{ kind: 'group', at: 0, list: 0, from: 0 }]
+  // The `{ }` group whose `}` the statement being read is, by where its statements start in `out`.
+  private closedGroup?: number
   // The line goes on past its end: it stopped at a `|`, `&&` or `||`.
   private continues = false
   // A function's name was just read (`f()`, `function f`): the block that follows is its body.
@@ -274,11 +286,15 @@ class Reader {
     this.endWord()
     this.redirectNext = null
     const st = this.st
+    const group = this.closedGroup
+    this.closedGroup = undefined
     if (st.words.length > 0 || st.heredocs.length > 0 || st.inner.length > 0) {
       // Each part of a Bash pipeline runs in a subshell of its own.
       if (!this.powershell && (pipeNext || st.pipeIn)) st.scope = joined(st.scope, String(++this.opened))
       if (this.levels.some(l => l.kind === 'fn')) st.isDeferred = true
       this.out.push(st)
+      // A `{ }` group piped on (`{ cd x; } | tail`) runs in a subshell of its own, all of it.
+      if (!this.powershell && pipeNext && group !== undefined) this.retag(group, this.scopes.join('/'))
     }
     this.st = fresh(pipeNext)
     if (this.depth > 0) this.st.isNested = true
@@ -295,9 +311,9 @@ class Reader {
   }
 
   // Opens a block for the statements after this point; all but a `{ }` group get a scope of their own.
-  private open(kind: Level['kind']) {
+  private open(kind: Level['kind'], isBrace?: boolean) {
     if (kind !== 'group') this.scopes.push(kind === 'sub' ? String(++this.opened) : `c${++this.opened}`)
-    this.levels.push({ kind, at: this.scopes.length, list: this.out.length })
+    this.levels.push({ kind, at: this.scopes.length, list: this.out.length, from: this.out.length, isBrace })
     this.rescope()
   }
 
@@ -330,17 +346,19 @@ class Reader {
   private endList(isBackground = false) {
     const lv = this.level
     const start = lv.chain ?? this.scopes.length
-    if (isBackground && !this.powershell) {
-      const base = this.scopes.slice(0, start).join('/')
-      const tag = String(++this.opened)
-      for (const st of this.out.slice(lv.list))
-        st.scope = joined(joined(base, tag), (st.scope ?? '').slice(base.length).replace(/^[/]/, ''))
-    }
+    if (isBackground && !this.powershell) this.retag(lv.list, this.scopes.slice(0, start).join('/'))
     this.scopes.length = start
     lv.chain = undefined
     lv.isOr = undefined
     lv.list = this.out.length
     this.rescope()
+  }
+
+  // The statements of `out` from `from` on, moved into a subshell of their own inside `base`.
+  private retag(from: number, base: string) {
+    const tag = String(++this.opened)
+    for (const st of this.out.slice(from))
+      st.scope = joined(joined(base, tag), (st.scope ?? '').slice(base.length).replace(/^[/]/, ''))
   }
 
   // The blocks a statement's leading keywords open after it (`if`, `while`, `until`, `for`, `select`), and
@@ -363,8 +381,20 @@ class Reader {
       this.closeTo(['cond'])
       this.open('cond')
     } else if (text === 'fi' || text === 'done') this.closeTo(['cond'])
-    else if (text === '}') this.closeTo(['group', 'fn'])
-    else if (text === '{') this.open(isFn ? 'fn' : 'group')
+    else if (text === '}') this.closeBrace()
+    // After a `|` the group is a pipeline part: a subshell.
+    else if (text === '{') this.open(isFn ? 'fn' : this.st.pipeIn ? 'sub' : 'group', !isFn && this.st.pipeIn)
+  }
+
+  // A `}`: it closes the subshell a piped `{` opened, or the innermost group or function body, remembered
+  // for a `|` after it.
+  private closeBrace() {
+    const lv = this.level
+    if (lv.kind === 'sub' && lv.isBrace) return this.closeTo(['sub'])
+    const at = this.levels.findLastIndex(l => l.kind === 'group' || l.kind === 'fn')
+    const group = at > 0 ? this.levels[at] : undefined
+    this.closeTo(['group', 'fn'])
+    if (group?.kind === 'group' && this.levels.length <= at) this.closedGroup = group.from
   }
 
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
@@ -760,38 +790,8 @@ class Reader {
   }
 }
 
-// PowerShell computes an unquoted word that goes on past a quoted part (`'--x'.Trim()`, `'a'+'b'`) or past a
-// variable (`$o.Trim()`, `${o}[0]`), or opens with a cast (`[string]'x'`). Inside double quotes it is text.
-function isExpression(w: Word, c: string): boolean {
-  if (c === '[' && w.text === '' && !w.quoted) return true
-  if (w.quoted && c !== "'" && c !== '"') return true
-  return /[.[(+*]/.test(c) && /\$([A-Za-z_][\w:]*|\{[^}]*\})$/.test(w.text)
-}
-
 /** A PowerShell assignment operator: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `??=`. */
 export const PS_OPERATOR = /^(?:[-+*/%]|\?\?)?=$/
-
-// One or more `[...]` casts and nothing else, brackets balanced: `[void]`, `[Dictionary[string,int]]`.
-function isCasts(text: string): boolean {
-  let depth = 0
-  for (const ch of text) {
-    if (ch === '[') depth++
-    else if (ch === ']') depth--
-    else if (depth === 0) return false
-    if (depth < 0) return false
-  }
-  return depth === 0 && text.startsWith('[')
-}
-
-// Every bracket, paren and brace opened in the text is closed again.
-function isBalanced(text: string): boolean {
-  let depth = 0
-  for (const ch of text) {
-    if ('[({'.includes(ch)) depth++
-    else if ('])}'.includes(ch) && --depth < 0) return false
-  }
-  return depth === 0
-}
 
 export function parse(command: string, powershell: boolean): Statement[] {
   return new Reader(command, powershell).run()
