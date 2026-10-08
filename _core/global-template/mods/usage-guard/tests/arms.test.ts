@@ -240,7 +240,8 @@ test('a standing arm shows a slim line with its wake, and its Disarm drops the a
   expect(await ui.find({ key: 'usage-arm-line' })).toBeUndefined()
   await arm5h($)
   await ui.redraw()
-  expect(await ui.find({ type: 'Text', text: /^⏰ resumes Fri 12:02 · after the 5-hour reset/ })).toBeDefined()
+  const line = /^⏰ resumes Fri 12:02 · after the 5-hour reset · used 5-hour 40%/
+  expect(await ui.find({ type: 'Text', text: line })).toBeDefined()
   await ui.press({ key: 'usage-arm-disarm' })
   expect(await ui.find({ key: 'usage-arm-line' })).toBeUndefined()
   // The press answers as the card's cancel does.
