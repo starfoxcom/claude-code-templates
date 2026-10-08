@@ -197,11 +197,19 @@ const PRINTS = /^(git|gh|echo|cat|type|get-content|gc|write-output|write-host)$/
 /** A statement that may set a variable in a way the reading does not follow (`read M`, `for M in`,
  * `printf -v M`, `unset M`, `mapfile M`): every name it spells as a word is unknown after it. */
 export function forget(st: Statement, name: string, r: VarState) {
+  // PowerShell's common parameters that store a command's output or errors in a variable, any command's.
+  if (r.ps) {
+    st.words.forEach((w, i) => {
+      const out = OUT_VARS.exec(w.text)
+      const target = out?.[1] ?? (out ? st.words[i + 1]?.text : undefined)
+      if (target) setVar(r, target.replace(/^[+]/, ''), undefined)
+    })
+  }
   if (PRINTS.test(name)) return
   if (name === 'source' || name === '.' || st.isSourced) r.isSourced = true
   unsure(st, r, () => {
     for (const w of st.words) {
-      const m = (r.ps ? /^\$?([A-Za-z_]\w*)$/ : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
+      const m = (r.ps ? /^\$?(?:variable:)?([A-Za-z_]\w*)$/i : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
       if (m && !w.dynamic) setVar(r, m[1] ?? '', undefined)
     }
   })
@@ -286,7 +294,7 @@ function isPsText(v: Word): boolean {
 
 // A PowerShell variable as assigned to: `$m`, `${m}`, or with a scope (`$script:m`, `$global:m`), which
 // names the same variable from inside a function or block.
-const PS_NAME = /^\$\{?(?:(?:script|global|local|private):)?(\w+)\}?$/i
+const PS_NAME = /^\$\{?(?:(?:script|global|local|private|variable):)?(\w+)\}?$/i
 
 // PowerShell: `$m = ...`; `$p += @{...}`, `$p.Body = ...`, `$p['Body'] = ...`, `$p.Add(...)`: a value
 // changed after it was typed is no longer known.
@@ -314,7 +322,7 @@ function assignPs(w: Word[], r: VarState): boolean {
 
 // PowerShell sets an environment variable in three spellings: `$env:X = v`, the `env:` drive
 // (`Set-Item env:X v`, `New-Item -Path Env:\X -Value v`) and .NET (`[Environment]::SetEnvironmentVariable('X', v)`).
-const ENV_ITEM = /^(set-item|si|new-item|ni)$/i
+const ENV_ITEM = /^(set-item|si|new-item|ni|set-content|sc|add-content|ac)$/i
 const ENV_PATH = /^env:[\\/]?(\w+)$/i
 const DOTNET_ENV = new RegExp(
   String.raw`^\[(?:system\.)?environment\]::setenvironmentvariable\(` +
@@ -332,9 +340,11 @@ export function psEnvSet(st: Statement): { name?: string; statement: Statement }
   const dotnet = DOTNET_ENV.exec(words.map(w => w.text).join(' '))
   if (dotnet) {
     name = /^\w+$/.test(dotnet[2] ?? '') ? dotnet[2] : undefined
+    // The reader drops the quotes: a value is literal when its word started quoted, or is a number or $null.
     const raw = dotnet[3] ?? ''
-    const quoted = /^'([^']*)'$/.exec(raw)
-    value = { text: quoted ? (quoted[1] ?? '') : raw, dynamic: !quoted, bodies: [] }
+    const word = words.slice(1).find(w => w.text.replace(/[,)]+$/, '') === raw)
+    const isLiteral = Boolean(word?.literalStart) || /^-?[0-9]+$/.test(raw) || /^[$]null$/i.test(raw)
+    value = { text: /^[$]null$/i.test(raw) ? '' : raw, dynamic: !isLiteral, bodies: [] }
   } else if (ENV_ITEM.test(head)) {
     const at = words.findIndex(w => /^env:/i.test(w.text) || (w.dynamic && /env:/i.test(w.text)))
     if (at === -1) return undefined
@@ -342,8 +352,43 @@ export function psEnvSet(st: Statement): { name?: string; statement: Statement }
     name = path.dynamic ? undefined : ENV_PATH.exec(path.text)?.[1]
     const flag = words.findIndex(w => /^-value$/i.test(w.text))
     value = flag !== -1 ? words[flag + 1] : words.slice(at + 1).find(w => !w.text.startsWith('-'))
+    // An append leaves the value unknown.
+    if (value && /^(add-content|ac)$/i.test(head)) value = { ...value, dynamic: true }
   } else return undefined
   const set = value ?? { text: '', dynamic: true, bodies: [] }
   const literal = (text: string): Word => ({ text, dynamic: false, bodies: [] })
   return { name, statement: { ...st, words: [literal(`$env:${name ?? 'UNKNOWN'}`), literal('='), set] } }
+}
+
+const OUT_VARS = new RegExp(
+  '^-(?:outvariable|ov|errorvariable|ev|warningvariable|wv|informationvariable|iv|pipelinevariable|pv)(?::(.+))?$',
+  'i',
+)
+const PS_TYPED = /^\[[\w.]+(?:\[\])?\]\$(\w+)$/
+
+/** A PowerShell assignment whose value is a command (`$r = git push 2>&1`, `[string]$r += gh pr ...`): the
+ * variable, set unknown, and the command as a statement of its own, to be read in turn. A typed target with
+ * a plain value only sets its variable unknown. */
+export function psAssignedCommand(st: Statement, r: VarState): { command?: Statement } | undefined {
+  const w = st.words
+  const plain = PS_NAME.exec(w[0]?.text ?? '')?.[1]
+  const name = plain ?? PS_TYPED.exec(w[0]?.text ?? '')?.[1]
+  if (!name || !/^([-+*/%]|[?][?])?=$/.test(w[1]?.text ?? '')) return undefined
+  let tail = w.slice(2)
+  // A leading `.` or `&` there is the call operator.
+  const isCall = !tail[0]?.literalStart && /^[.&]$/.test(tail[0]?.text ?? '')
+  if (isCall) tail = tail.slice(1)
+  const first = tail[0]
+  const isValue = first && (first.dynamic || first.literalStart || first.list || first.expr || isPsText(first))
+  const isPlainValue = !isCall && tail.length <= 1 && (isValue || !first)
+  if (plain && isPlainValue) return undefined
+  setVar(r, name, undefined)
+  if (isPlainValue) return {}
+  return { command: { ...st, words: tail, inner: [], isCall: isCall || undefined } }
+}
+
+/** A Bash command that sets an environment variable whose name is built at run time (`export "$k=v"`).
+ * PowerShell's spellings are told by `psEnvSet`. */
+export function setsEnvAtRunTime(name: string, args: Word[]): boolean {
+  return /^(export|declare|typeset)$/.test(name) && args.some(a => a.dynamic && !/^[A-Za-z_]\w*[+]?=/.test(a.text))
 }

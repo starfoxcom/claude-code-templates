@@ -31,6 +31,7 @@ import {
   isSameFolder,
   landsAt,
   moveTo,
+  norm,
   placeHere,
   ranBefore,
   repoMoves,
@@ -55,7 +56,7 @@ import {
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
-import { withWords } from './vars'
+import { psAssignedCommand, setsEnvAtRunTime, withWords } from './vars'
 import type { Var, VarState } from './vars'
 import {
   COMMIT,
@@ -117,6 +118,8 @@ type Reading = VarState & {
   feedFolder?: Folder
   /** A statement so far set a git alias, include or config file (`-c alias.x=`, `GIT_CONFIG_GLOBAL=`). */
   isConfigMoved?: boolean
+  /** An environment variable named at run time was set: any later git or gh call may run under it. */
+  isEnvUnknown?: boolean
   /** An earlier statement pointed git at another repo for what follows (`export GIT_DIR=x`). */
   isRepoMoved?: boolean
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
@@ -200,8 +203,6 @@ export function inspect(command: string, powershell: boolean): Plan {
   return plan
 }
 
-const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
-
 // `outer`: where commands from a `$(...)` or a `bash -c` script run; their own subshells nest inside it.
 function read(statements: Statement[], r: Reading, outer?: string) {
   statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r, outer))
@@ -222,8 +223,8 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const filled = withProgram(withWords(typed, r), r)
   // PowerShell's `env:` drive and .NET spellings are read as `$env:X = v`.
   const env = r.ps ? psEnvSet(filled) : undefined
-  if (env && env.name === undefined) unreadCall(r, 'an environment variable named at run time')
   const st = env?.statement ?? filled
+  if (env && env.name === undefined) r.isEnvUnknown = true
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
   const at = placeHere(r).folder
@@ -238,6 +239,9 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   r.isRepoMoved ||= moves.movesLater
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
   if (!r.ps && name === 'trap') return readTrap(args, r)
+  // A PowerShell variable set from a command's output (`$r = git push`): the command is read in turn.
+  const assigned = r.ps ? psAssignedCommand(st, r) : undefined
+  if (assigned) return void (assigned.command && readStatement(assigned.command, prev, r, outer))
   if (assign(st, name, args, r)) return
   if (moveTo(name, args, r)) return
   if (readScript(st, name, args, r)) return
@@ -277,6 +281,9 @@ function checkBuilt(st: Statement, name: string, args: Word[], r: Reading) {
   // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
   r.isConfigMoved ||= setsGitConfig(st, name, args, r.ps)
   if (r.isConfigMoved && name === 'git') unreadCall(r, 'a git setting built at run time')
+  // An environment variable named at run time may be any (`LEFTHOOK`, `GIT_DIR`): later git and gh calls.
+  r.isEnvUnknown ||= !r.ps && setsEnvAtRunTime(name, args)
+  if (r.isEnvUnknown && /^(git|gh)$/.test(name)) unreadCall(r, 'an environment variable named at run time')
 }
 
 // A program named through a variable the command did not set (from outside it, `$(which git)`), with
