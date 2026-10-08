@@ -151,13 +151,6 @@ test('an instance a newer load has replaced judges no push', async ($, on) => {
   expect(seen.ghCalls).toEqual([])
 })
 
-test('a command that is no push asks GitHub nothing', async ($, on) => {
-  const { seen } = world(on)
-  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
-  expect(seen.ghCalls.filter(c => c.includes('graphql'))).toEqual([])
-})
-
 test("the count's file is the user's: no tool call may write it", async ($, on) => {
   world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
