@@ -726,3 +726,26 @@ test('a message the command hides is refused in enforce mode', { options: { mode
   }
   expect(seen.ran).toEqual([])
 })
+
+// A body file already on disk that an earlier program of the command may rewrite: the text there now is not
+// the text the call sends, so it is refused with its way out. A program that only reads it changes nothing.
+const REWRITE = 'a body file an earlier program of the command may rewrite is refused'
+test(REWRITE, { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on, { 'C:/Repos/my-game/b.md': '## What\n- clean\n' })
+  for (const before of [
+    "cp other.md b.md",
+    "tee b.md < other.md",
+    `python -c "open('b.md','w').write('x')"`,
+  ]) {
+    const result = await bash($, `${before} && gh pr create --title t --body-file b.md`)
+    expect([before, String((result as { deny?: string }).deny)]).toEqual([
+      before,
+      expect.stringContaining('another program in this command may write b.md'),
+    ])
+  }
+  for (const before of ['cat b.md', 'git add b.md', 'wc -l b.md']) {
+    const result = await bash($, `${before} && gh pr create --title t --body-file b.md`)
+    expect([before, (result as { deny?: string }).deny]).toEqual([before, undefined])
+  }
+  expect(seen.ran.length).toBeGreaterThan(0)
+})

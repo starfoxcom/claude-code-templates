@@ -106,7 +106,7 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
   // Each written file where its writer ran, `.` and `..` folded in on both sides.
   const placed = (path: string, folder: Folder) => foldDots(fileAt(path, folder, session, isBash)).toLowerCase()
   const written = new Set(plan.written.filter(w => !isUnplaced(w.path, w.folder)).map(w => placed(w.path, w.folder)))
-  for (const { where, path, written: fromCommand, folder, scripted } of plan.files) {
+  for (const { where, path, written: fromCommand, folder, scripted, named } of plan.files) {
     const full = fileAt(path, folder, session, isBash)
     if (isUnplaced(path, folder)) {
       if (!fromCommand) plan.unread.push(where)
@@ -134,6 +134,12 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
         continue
       }
       return `could not read the body file ${full} for ${where}. Write the file first, or check the path.`
+    }
+    // On disk already, but an earlier program of the command may rewrite it: the text read now is not the
+    // text the call sends.
+    if (named) {
+      plan.unread.push(`${where} (another program in this command may write ${path})`)
+      continue
     }
     const reason = textReason(text, `${where} (file ${path})`, rules)
     if (reason) return reason
@@ -216,6 +222,10 @@ const WAYS_OUT: [RegExp, string][] = [
     'Run it in a folder named out (`cd <path>` or `git -C <path>`), with no git folder or repo set at run time.',
   ],
   [/^the new branch name/, 'Type the branch name out.'],
+  [
+    /another program in this command may write/,
+    'Write the body file in an earlier command, or in this one with `>` or a here-doc, which the guard reads.',
+  ],
   [/^a program named at run time/, 'Name the program itself (`git`, `gh`).'],
   [
     /^a git setting built at run time/,

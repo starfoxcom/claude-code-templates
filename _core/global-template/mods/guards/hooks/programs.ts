@@ -86,3 +86,27 @@ export function runsInlineCode(st: Statement): boolean {
   }
   return st.heredocs.length > 0 && !st.hasDynamicBody
 }
+
+// Programs that only read the files they name, and git subcommands that leave the work tree as it is.
+const READERS = new Set(
+  [
+    'cat', 'type', 'get-content', 'gc', 'head', 'tail', 'wc', 'grep', 'egrep', 'rg', 'select-string', 'sls',
+    'test-path', 'ls', 'dir', 'get-item', 'gi', 'get-childitem', 'gci', 'stat', 'echo', 'write-output',
+    'write-host', 'printf', 'gh',
+  ],
+)
+const GIT_READS = /^(add|diff|status|log|show|commit|push|ls-files|rev-parse|branch|fetch|remote)$/
+
+/** The file names (lowercased, folder dropped) a statement may write: every name in its words, unless its
+ * program only reads (`cat b.md`, `git add b.md`). `Set-Content b.md`, `cp x b.md`, `tee b.md` and
+ * `[IO.File]::WriteAllText('b.md', ...)` each name one. */
+export function namedFiles(st: Statement): string[] {
+  const { name, args } = programOf(st)
+  const sub = args.find(a => !a.text.startsWith('-'))?.text ?? ''
+  if (READERS.has(name) || (name === 'git' && GIT_READS.test(sub))) return []
+  if (name === 'gh' && /download/.test(args.map(a => a.text).join(' '))) return ['*']
+  return st.words.flatMap(w => w.text.split(/[\s(),;'"=]+/)).map(baseName).filter(Boolean)
+}
+
+/** A path's file name, lowercased: what `namedFiles` compares. */
+export const baseName = (path: string) => (path.split(/[\\/]/).pop() ?? '').toLowerCase()

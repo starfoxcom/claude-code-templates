@@ -491,7 +491,10 @@ class Reader {
   // Subshells, process substitutions and PowerShell blocks. True when `c` opened or closed one.
   private structure(c: string): boolean {
     if (!this.powershell) return this.bashStructure(c)
-    if (this.word) return false
+    // A word of casts only (`[void]`, `[ordered]`, `[System.Collections.Generic.List[string]]`) still opens
+    // what follows it: `[void](git ...)` runs the pipeline inside, `[ordered]@{ ... }` is one hashtable.
+    const isCast = this.word !== null && isCasts(this.word.text)
+    if (this.word && !(isCast && (c === '(' || c === '@'))) return false
     if (c === '(') this.substitution(this.startWord())
     else if (c === '{') {
       // A block an `if`, a loop, `switch` or `try` runs in place; any other is a script block that may run
@@ -733,6 +736,18 @@ function isExpression(w: Word, c: string): boolean {
 
 /** A PowerShell assignment operator: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `??=`. */
 export const PS_OPERATOR = /^(?:[-+*/%]|\?\?)?=$/
+
+// One or more `[...]` casts and nothing else, brackets balanced: `[void]`, `[Dictionary[string,int]]`.
+function isCasts(text: string): boolean {
+  let depth = 0
+  for (const ch of text) {
+    if (ch === '[') depth++
+    else if (ch === ']') depth--
+    else if (depth === 0) return false
+    if (depth < 0) return false
+  }
+  return depth === 0 && text.startsWith('[')
+}
 
 // Every bracket, paren and brace opened in the text is closed again.
 function isBalanced(text: string): boolean {

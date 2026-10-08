@@ -15,7 +15,8 @@
 //   (`eval "$CMD"`, `bash -c "$CMD"`), or any other program that writes to GitHub on its own (a Python
 //   script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
-//   file does not exist yet, so it reports that it could not read it; one that inline script code in the
+//   file does not exist yet, so it reports that it could not read it, and one already on disk that an earlier
+//   program names is refused as unread; one that inline script code in the
 //   command may write is noted instead, and passes;
 // - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
 //   unread and refused, its text never checked;
@@ -54,7 +55,7 @@ import {
   writesHistory,
 } from './gitwords'
 import { script } from './scripts'
-import { programOf, runsInlineCode } from './programs'
+import { baseName, namedFiles, programOf, runsInlineCode } from './programs'
 import { parse } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
 import { assignPsTargets, forgetOutVars, psAssignment, withWords } from './vars'
@@ -82,8 +83,9 @@ export type Plan = {
   /** Body files the command hands to git or gh, as written (relative to `folder` when not absolute).
    * `written`: this same command writes the file, and what it writes was read from the command text. */
   /** `folder`: where a relative path resolves, as the command stands where the file is named.
-   * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading. */
-  files: { where: string; path: string; written?: boolean; folder?: Folder; scripted?: boolean }[]
+   * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading.
+   * `named`: an earlier program names it (`Set-Content b.md`, `cp x b.md`), so it may rewrite it. */
+  files: { where: string; path: string; written?: boolean; folder?: Folder; scripted?: boolean; named?: boolean }[]
   /** Files the command itself writes (`> file`). */
   written: { path: string; folder: Folder }[]
   branches: string[]
@@ -125,6 +127,8 @@ type Reading = VarState & {
   isRepoMoved?: boolean
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
   opened: number
+  /** File names earlier statements may write, past `>` (`Set-Content b.md`, `cp x b.md`): see `namedFiles`. */
+  named: Set<string>
   /** The statements that write files (`> file`), in order, each with its normalized path and where it runs. */
   writers: Writer[]
   /** Message routes read from stdin so far (`-F -`, `--body-file -`, `--input -`, `body=@-`). */
@@ -163,6 +167,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     scope: '',
     opened: 0,
     writers: [],
+    named: new Set(),
     stdin: 0,
     writes: 0,
   }
@@ -264,6 +269,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
   // The repo rules and the diff scan follow each write to where it runs, never to the first `cd`.
   if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
+  for (const file of namedFiles(st)) r.named.add(file)
 }
 
 // A program named through a variable the command did not set (from outside it, `$(which git)`), with
@@ -412,9 +418,11 @@ function varsIn(path: string, r: Reading): (Var | undefined)[] {
 
 // A body file named here, matched to the statements that wrote it so far, if any.
 function pushFile(r: Reading, where: string, path: string) {
-  const entry = { where, path }
+  const entry: Plan['files'][number] = { where, path }
   matchFile(r, entry, landsAt(path, r))
   r.plan.files.push(entry)
+  // A file an earlier program of the command may write (`Set-Content b.md`, `cp x b.md`).
+  if (!entry.written && (r.named.has(baseName(path)) || r.named.has('*'))) entry.named = true
 }
 
 // The file's writers, back to one that surely ran before it is read. With none sure, the file on disk is
