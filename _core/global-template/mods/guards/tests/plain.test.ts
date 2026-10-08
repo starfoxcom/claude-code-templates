@@ -54,6 +54,11 @@ test('a command naming a history write that is not plain is refused outright', (
     "echo 'commit-msg:' > lefthook-local.yml; git commit -m 'fix: x'",
     "echo 'repos: []' > .pre-commit-config.yaml; git commit -m 'fix: x'",
     "echo 'hooksPath = /dev/null' >> ~/.gitconfig",
+    // A file named after a git hook, wherever it sits, a hooks folder of its own, or a copy into `.git`.
+    "echo 'exit 0' > commit-msg; git commit -m 'fix: x'",
+    "cd .githooks && echo 'exit 0' > pre-push; cd ..; git push",
+    "cd ~/.config/git && echo '[core]' > config; git commit -m 'fix: x'",
+    'cp hook.sh .git/',
     // A program name Bash builds from a brace expansion or a glob.
     "{gi,commi}t -n -m 'x'",
     "/usr/bin/g[i]t commit -n -m 'x'",
@@ -134,6 +139,13 @@ test('a plain command is read as before', () => {
     // Bash reads curly quotes as plain letters; a .github folder or .gitignore holds no commit gate.
     ['git commit -m "fix: keep the \u201cplain\u201d rule"', false],
     ["cat .github/workflows/tests.yml; echo x >> .gitignore; git commit -m 'fix: x'", false],
+    // A folder that only holds the word is ordinary: `hook` in a name, a `git` folder of repos.
+    ['cd ~/src/webhook-relay && git push', false],
+    ["cd src/hooks && git commit -m 'fix: x'", false],
+    ['cd ~/git/app && git push', false],
+    ['cd C:\\git\\app; git push', true],
+    ["git commit -m 'fix: x' 2>> logs/hook-debug.log", false],
+    ["echo x > .github/notes.md; git commit -m 'fix: x'", false],
   ] as const) {
     expect([command, notPlain(command, ps)]).toEqual([command, undefined])
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
@@ -144,6 +156,16 @@ test('a write named only in data, or a command that names none, is left to the r
   expect(namesWrite("python - <<'EOF'\nprint('git commit')\nEOF")).toBe(false)
   expect(namesWrite("grep -n 'git push' notes.md")).toBe(false)
   expect(namesWrite('ls $HOME')).toBe(false)
+  // A `.git` only read past, and a hook manager run by name, name no write.
+  for (const command of [
+    "rg --glob '!.git' foo",
+    "find . -name '*.ts' -not -path './.git/*'",
+    'tar --exclude=.git -czf x.tgz .',
+    'pip install git+https://github.com/a/b.git',
+    'npx lefthook run pre-commit',
+    'HUSKY=0 npm ci',
+  ])
+    expect([command, namesWrite(command)]).toEqual([command, false])
   expect(namesWrite("bash -c 'git commit -m x'")).toBe(true)
   expect(namesWrite("git -c alias.ci='commit --no-verify' ci -m x")).toBe(true)
   expect(namesWrite("echo \"<<'X'\"\ngit push --no-verify\nX")).toBe(true)

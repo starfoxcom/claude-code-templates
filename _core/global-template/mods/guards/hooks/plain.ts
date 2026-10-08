@@ -20,13 +20,18 @@ const NAMES_GH = /\bgh\b/
 const GH_WRITES = /\b(create|edit|comment|review|merge|close|reopen|delete|ready|lock|unlock|transfer|upload)\b/
 const GH_API_WRITE =
   /\bapi\b[\s\S]*(\s-x\s*(post|patch|put|delete)|--method|\s-f\b|\s-f\S*=|--field|--raw-field|--input)/
-const OTHER_WRITES =
-  /api\.github\.com|hookspath|husky|lefthook|pre-commit|pre_commit|simple-git-hooks|no-verify|\.git[/\\]+hooks/
+// A hook manager named alone (`npx lefthook install`, `HUSKY=0 npm ci`) is no write: the reading refuses its
+// `uninstall`, and a switch counts where it reaches a git call that runs hooks, which names a write itself.
+const OTHER_WRITES = /api\.github\.com|hookspath|no-verify|\.git[/\\]+hooks/
 
-// A git folder or config file, or a hook manager's config, named anywhere (quotes included): writing one can
-// switch the commit gates off, so the command is judged as plain or refused.
-const GIT_FILES =
-  /\.git(?:config|modules|attributes)?(?![\w.-])|[\\/]git[\\/]config|\.husky|lefthook|\.pre-commit-config/
+// A git folder's hooks or config, a git config file, or a hook manager's folder or config, named anywhere
+// (quotes included): writing one can switch the commit gates off, so the command is judged as plain or
+// refused. A `.git` only read past (`--glob '!.git'`, `--exclude=.git`, a `.git` URL) names none of them.
+const GIT_FILES = new RegExp(
+  String.raw`\.git[\\/]+(?:hooks|config|info)(?![\w.-])|\.git[\\/]+(?=[\s'"]|$)` +
+    String.raw`|\.git(?:config|modules|attributes)(?![\w.-])|[\\/]git[\\/]+config|\.husky|\.githooks` +
+    String.raw`|\.?lefthook(?:-local)?\.(?:ya?ml|json|toml)|\.pre-commit-config`,
+)
 
 // A program that runs shell text (a shell, `eval`, `xargs`): with one in the command, its quoted text may
 // run, so all of it is read. Code in another language (python, node) is that program's own: what it runs
@@ -125,8 +130,21 @@ const BASH_REDIRECT =
 const PS_REDIRECT = /^(?:[1-6*]?>>?)[ \t]*(?:\$null|&1|'[^']*'|"[^"$`]*"|[A-Za-z0-9_\-./:%+~\\]+)(?=[\s;|]|$)/i
 
 // A redirect or a `cd` into a git folder or config file (the repo's `.git`, `~/.gitconfig`, `~/.config/git`),
-// a hook folder or a hook manager's config could switch the commit gates: never plain.
-const INTO_HOOKS = /\.git(?!hub|ignore)|[\\/]git[\\/]|\.husky|hook|pre-commit|pre_commit/i
+// a hook folder (`.husky`, `.githooks`), a hook manager's config or a file named after a git hook could switch
+// the commit gates: never plain. Matched on path segments, so a folder that only holds the word (`src/hooks`,
+// `webhook-relay`, `C:\git\app`) is ordinary.
+const AT_SEGMENT = String.raw`(?:^|[\\/\s<>'"=])`
+const SEGMENT_END = String.raw`(?=[\\/\s'"]|$)`
+const HOOK_NAMES =
+  'applypatch-msg|pre-applypatch|post-applypatch|pre-commit|pre-merge-commit|prepare-commit-msg|commit-msg|' +
+  'post-commit|pre-rebase|post-checkout|post-merge|pre-push|post-rewrite|push-to-checkout|' +
+  'reference-transaction|pre-auto-gc|fsmonitor-watchman|sendemail-validate|post-index-change'
+const HOOK_FILES = String.raw`${HOOK_NAMES}|\.pre-commit-config\.ya?ml|\.?lefthook(?:-local)?\.(?:ya?ml|json|toml)`
+const INTO_HOOKS = new RegExp(
+  String.raw`${AT_SEGMENT}(?:\.git(?:config|modules|attributes)?|\.husky|\.githooks)${SEGMENT_END}` +
+    String.raw`|${AT_SEGMENT}\.config[\\/]+git${SEGMENT_END}|${AT_SEGMENT}(?:${HOOK_FILES})['"]?$`,
+  'i',
+)
 const CD_HEADS = ['cd', 'pushd', 'set-location', 'sl']
 
 // Unquoted characters that stand for themselves in each shell.
