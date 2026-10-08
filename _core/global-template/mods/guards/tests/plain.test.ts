@@ -38,6 +38,22 @@ test('a command naming a history write that is not plain is refused outright', (
     'npm run build && git commit -m x',
     "echo x > .git/hooks/commit-msg; git commit -m 'fix: x'",
     'git -c core.hooksPath=$X commit -m x',
+    // The commit-message form inside a single-quoted string opens no here-doc: the lines after it are code.
+    "echo 'x \"$(cat <<'EOF'\n'; HUSKY=0 npm x; echo '\nEOF\n)\"'; git commit -m 'fix: y'",
+    // A quoted or split program word may be git, and the hook files around it are then judged too.
+    "echo 'exit 0' > '.git/hooks/commit-msg'; 'git' commit -m 'fix: x'",
+    "rm '.git/hooks/commit-msg'; 'git' commit -m 'fix: x'",
+    "rm .git/hooks/commit-msg; g''it commit -m 'fix: x'",
+    // A cd into a hooks or git folder, then a plain redirect there.
+    "cd .git/hooks && echo 'exit 0' > commit-msg; cd ../..; git commit -m 'fix: x'",
+    "pushd .husky && echo 'exit 0' > commit-msg; popd; git commit -m 'fix: x'",
+    "cd .git; echo '[core]' >> config; cd ..; git commit -m 'fix: x'",
+    // git's own config files and the hook managers' configs.
+    "echo '[core]' >> ~/.gitconfig && git commit -m 'fix: x'",
+    "echo '[core]' > ~/.config/git/config; git commit -m 'fix: x'",
+    "echo 'commit-msg:' > lefthook-local.yml; git commit -m 'fix: x'",
+    "echo 'repos: []' > .pre-commit-config.yaml; git commit -m 'fix: x'",
+    "echo 'hooksPath = /dev/null' >> ~/.gitconfig",
   ]) {
     expect([command, refused(command)]).toEqual([command, expect.stringContaining('not plain')])
   }
@@ -56,6 +72,12 @@ test('a PowerShell command naming a history write that is not plain is refused o
     "@('a') | % { git commit -m $_ }",
     "$r = [ref]$m; git commit -m 'x'",
     "Set-Variable -Name $n -Value $out; git commit -m 'x'",
+    // Windows PowerShell reads curly quotes as quote marks: the text after one is code.
+    "git commit -m 'fix: x’ --no-verify ‘'",
+    "echo 'x’; git commit --no-verify -m y; ‘'",
+    "Remove-Item '.git\\hooks\\commit-msg'; & 'git' commit -m 'fix: x'",
+    "cd .git/hooks; 'exit 0' > commit-msg; cd ..\\..; git commit -m 'fix: x'",
+    'git push origin x && gh pr create --title t --body-file b.md',
   ]) {
     expect([command, refused(command, true)]).toEqual([command, expect.stringContaining('not plain')])
   }
@@ -65,6 +87,10 @@ test('the refusal names what is not plain', () => {
   expect(refused('M=x; git commit -m "$M"')).toContain('Not plain here: `$` inside double quotes.')
   expect(refused('npm test && git push')).toContain('`npm`, which is not one of the programs a plain command runs')
   expect(refused("git push origin x | sed 's/a/b/'")).toContain('`sed`')
+  // The advice works in Windows PowerShell, which has no &&.
+  const chained = refused('git push origin x && gh pr create --title t --body-file b.md', true)
+  expect(chained).toContain('Windows PowerShell has no && or ||')
+  expect(chained).toContain('In PowerShell, run each git or gh call as its own tool call')
 })
 
 // Plain commands go on to the reading, which judges what they write.
@@ -80,6 +106,9 @@ test('a plain command is read as before', () => {
     ["git commit -m 'fix: x'; git push", true],
     ["'## What' > b.md; gh pr create --title t --body-file b.md", true],
     ["Set-Location C:\\repo; git push -q origin x 2>&1 | Select-Object -Last 2", true],
+    // Bash reads curly quotes as plain letters; a .github folder or .gitignore holds no commit gate.
+    ['git commit -m "fix: keep the \u201cplain\u201d rule"', false],
+    ["cat .github/workflows/tests.yml; echo x >> .gitignore; git commit -m 'fix: x'", false],
   ] as const) {
     expect([command, notPlain(command, ps)]).toEqual([command, undefined])
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
@@ -93,6 +122,16 @@ test('a write named only in data, or a command that names none, is left to the r
   expect(namesWrite("bash -c 'git commit -m x'")).toBe(true)
   expect(namesWrite("git -c alias.ci='commit --no-verify' ci -m x")).toBe(true)
   expect(namesWrite("echo \"<<'X'\"\ngit push --no-verify\nX")).toBe(true)
+  // A quoted or split program word may be git; quoted data that only starts like a statement is not one.
+  for (const command of ["'git' commit -m x", "g''it push", 'g\\it push', "echo x; 'gh' pr merge 5"])
+    expect([command, namesWrite(command)]).toEqual([command, true])
+  expect(namesWrite("echo 'a; b' | grep a")).toBe(false)
+  // In PowerShell a quoted program path is git only when it names git; a backslash is a path's own.
+  expect(namesWrite("& 'C:/Program Files/Git/cmd/git.exe' commit -m x", true)).toBe(true)
+  expect(namesWrite('& "C:/Program Files/Godot/godot.exe" --headless --path game', true)).toBe(false)
+  expect(namesWrite('C:\\tmp\\lv\\run_mem.ps1 -Tag a -GpuIndex 1', true)).toBe(false)
+  expect(namesWrite("$env:X = ''; & C:\\tmp\\lv\\run_mem.ps1 -Tag a", true)).toBe(false)
+  expect(namesWrite('g`it commit -m x', true)).toBe(true)
   for (const command of ['g=gi; ${g}t commit -m x', '$G push', 'V=1 `echo git` push', 'x; "$g" push']) {
     expect([command, refused(command)]).toEqual([command, expect.stringContaining('not plain')])
   }
