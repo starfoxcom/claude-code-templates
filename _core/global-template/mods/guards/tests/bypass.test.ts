@@ -123,7 +123,7 @@ test('a PowerShell splat built at run time is unread; a typed one is checked as 
   expect(inspect('$p = @{ Title = "$env:T" }; gh pr create @p', true).unread).toEqual(['the PR text'])
   const fromFile = "$p = @{ Title = 't'; Body = (Get-Content b.md -Raw) }; gh pr create @p"
   expect(inspect(fromFile, true).unread).toEqual(['the PR text'])
-  expect(inspect("$p = @{ Title = 'feat: x' }; gh pr create @p", true).unread).toEqual([])
+  expect(inspect("$p = @{ Title = 'feat: x' }; gh pr create @p", true).unread).toEqual(['the PR text'])
 })
 
 test('an escaped dollar in an unquoted here-doc is literal; a bare one is unread', () => {
@@ -177,7 +177,8 @@ test('a hashtable with a value that runs, or changed after it was typed, is unre
   expect(unread("$p = @{ Title = 't' }; $p.Body = (Get-Content b.md); gh pr create @p")).toEqual(['the PR text'])
   expect(unread("$p = @{ Title = 't' }; $p['Body'] = 'x'; gh pr create @p")).toEqual(['the PR text'])
   const typed = "$p = @{\n  Title = 'feat: x'; Draft = $true\n  Base = \"develop\"\n}; gh pr create @p"
-  expect(unread(typed)).toEqual([])
+  // Typed as it may be, gh gets it as `-key:value` words, never that text.
+  expect(unread(typed)).toEqual(['the PR text'])
 })
 
 test('a body names a variable the command set: read with its value', () => {
@@ -413,9 +414,9 @@ test('an assignment in front of eval is seen by its words, and unknown after it'
 
 test('a hashtable with escaped text or a here-string is typed', () => {
   const unread = (c: string) => inspect(c, true).unread
-  expect(unread('$p = @{ Title = "t"; Body = "## What`n- add it" }; gh pr create @p')).toEqual([])
-  expect(unread("$p = @{ Title = 't'; Body = @'\n## What\n- add it\n'@ }; gh pr create @p")).toEqual([])
-  expect(unread('$p = @{ Title = "t"; Body = "cost: `$5" }; gh pr create @p')).toEqual([])
+  expect(unread('$p = @{ Title = "t"; Body = "## What`n- add it" }; gh pr create @p')).toEqual(['the PR text'])
+  expect(unread("$p = @{ Title = 't'; Body = @'\n## What\n- add it\n'@ }; gh pr create @p")).toEqual(['the PR text'])
+  expect(unread('$p = @{ Title = "t"; Body = "cost: `$5" }; gh pr create @p')).toEqual(['the PR text'])
   expect(unread('$p = @{ Title = "t"; Body = "cost: $five" }; gh pr create @p')).toEqual(['the PR text'])
 })
 
@@ -804,8 +805,8 @@ test('a PowerShell splat up to the subcommand, or raw mode, makes a write unread
     'git push origin main --% %NV%',
   ]
   for (const command of unread) expect([command, inspect(command, true).unread]).not.toEqual([command, []])
-  // After the action word a splat is read entry by entry.
-  expect(inspect("$p = @{ title = 't' }; gh pr create @p", true).unread).toEqual([])
+  // After the action word a splat is never the typed text: unread too.
+  expect(inspect("$p = @{ title = 't' }; gh pr create @p", true).unread).toEqual(['the PR text'])
 })
 
 test('a braced variable with a member or an index is computed, never filled in', () => {
@@ -846,4 +847,18 @@ test('git options that take a separate value are skipped with it', () => {
   for (const command of ['git --attr-source HEAD commit --no-verify -m x', 'git --attr-source HEAD push --no-verify']) {
     expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('hook')])
   }
+})
+
+// cmd fills in `%NAME%`, drops `^` and splits its line at `&` and `|`, unlike the shell.
+test('a git or gh call in a cmd script with cmd syntax is unread', () => {
+  const bash = [
+    'NV=--no-verify cmd //c git commit -m x %NV%',
+    'cmd //c git commit --no-veri^fy -m x',
+    'cmd //c git %S% -m x',
+  ]
+  for (const command of bash) expect([command, inspect(command, false).unread]).not.toEqual([command, []])
+  expect(inspect('cmd /c "git commit --no-veri^fy -m x"', false).unread).not.toEqual([])
+  expect(inspect("cmd /c git status '&' git commit --no-verify -m x", true).unread).not.toEqual([])
+  expect(inspect("$p = @{ nm = 'x' }; git commit @p", true).unread).not.toEqual([])
+  expect(inspect('$n = 42; gh pr merge $n --merge', true).unread).toEqual([])
 })

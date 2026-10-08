@@ -379,15 +379,17 @@ for (const command of NOT_ALONE) {
 
 const NOT_PLAIN = 'the PR body (format check, create: not a single plain PR call)'
 
-test('a PowerShell splat set in the command is checked as typed; one from outside is refused', {
+// PowerShell hands gh a hashtable as `-key:value` words, never the typed text: refused either way.
+test('a PowerShell splat on a write is refused, set in the command or not', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE })
   on('tool.call', { tool: 'PowerShell' }, () => ({ result: {} as never }))
   await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
   const set = "$params = @{ Title = 'feat: x' }; gh pr create @params"
-  expect(((await $.tool.call({ tool: 'PowerShell', command: set } as never)) as { deny?: string }).deny).toBeUndefined()
-  expect(lastEntry(seen).notes).toContain(NOT_PLAIN)
+  const typed = await $.tool.call({ tool: 'PowerShell', command: set } as never)
+  expect(String((typed as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+  expect(lastEntry(seen).unread).toEqual(['the PR text'])
   const outside = await $.tool.call({ tool: 'PowerShell', command: 'gh pr create @params' } as never)
   expect(String((outside as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
 })

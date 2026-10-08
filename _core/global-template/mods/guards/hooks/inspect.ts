@@ -49,7 +49,6 @@ import {
   PS_WEB,
   RAW_WRITES,
   SWITCH,
-  TYPED_TABLE,
 } from './specs'
 import type { Kind, Spec } from './specs'
 import type { Statement, Word } from './shell'
@@ -348,6 +347,10 @@ function readScript(st: Statement, name: string, args: Word[], r: Reading): bool
   read(isKnown ? parse(e.text, inner.ps) : inner.statements, r, child)
   r.ps = ps
   if (inner.dynamic && !isKnown && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
+  // cmd fills in `%NAME%`, drops `^` and runs each part of a line split at `&` or `|`: unlike the shell.
+  const line = inner.text ?? args.map(a => a.text).join(' ')
+  const isCmdSyntax = name === 'cmd' && /[%^&|]/.test(line)
+  if (isCmdSyntax && /\b(git|gh)\b/.test(line)) unreadCall(r, 'a cmd script built at run time')
   return true
 }
 
@@ -359,9 +362,8 @@ function readSplats(args: Word[], r: Reading, where: string) {
     if (!splat) continue
     const v = lookup(r, splat[1] ?? '')
     if (v) r.plan.texts.push({ where, text: v.text, creditOnly: true })
-    // A hashtable built at run time (`@{ Title = "$env:T" }`, `Body = Get-Content b.md`, changed after
-    // it was typed) cannot be read either.
-    if (!v || !TYPED_TABLE.test(v.text)) r.plan.unread.push(where)
+    // A native program gets a hashtable as `-key:value` words (`@{ nm = 'x' }` is `-n -m :x`), a list as items.
+    r.plan.unread.push(where)
   }
 }
 
