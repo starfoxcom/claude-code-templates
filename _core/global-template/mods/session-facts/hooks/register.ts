@@ -16,7 +16,7 @@ import {
   writtenLifetime,
 } from './cache'
 import type { SharedPlan } from './plan'
-import { parseSharedPlan, planPart, SHARED_PLAN_FILE, sharedPlanText } from './plan'
+import { parseSharedPlan, planPart, SHARED_PLAN_FILE, sharedPlanText, wakePart } from './plan'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
 // The hooks run in a sandbox with no time zone of its own, so the host's
@@ -98,7 +98,9 @@ async function factsLine($: EngineInterface, isCompacting = false): Promise<Fact
     const ctx = contextPart(isCompacting ? undefined : context.tokens, context.window, now)
     const borrowedAt = live.sharedPlan && formatLocal(live.sharedPlan.at, live.zone).slice(11, 16)
     const plan = planPart(rateLimits, live.hasReplied, live.sharedPlan, borrowedAt)
-    return { text: `${time} | ${ctx.text}${plan.text}`, isPartial: !ctx.isKnown || !plan.isOwn }
+    const [pausedUntil, armAt] = await Promise.all([readPausedUntil($), readArmAt($)])
+    const wake = wakePart(now, live.zone.offsetMinutes, pausedUntil, armAt)
+    return { text: `${time} | ${ctx.text}${plan.text}${wake}`, isPartial: !ctx.isKnown || !plan.isOwn }
   } catch {
     return { text: `${time} | ctx unreadable`, isPartial: true }
   }
@@ -188,13 +190,28 @@ async function readWrapUpAt($: EngineInterface): Promise<number> {
   }
 }
 
+async function usageGuardFile($: EngineInterface, name: string): Promise<string> {
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  return `${configured ?? `${home}/.claude`}/mods-data/usage-guard/${name}`.replaceAll('\\', '/')
+}
+
 async function readPausedUntil($: EngineInterface): Promise<number | undefined> {
   try {
-    const configured = await $.env.get('CLAUDE_CONFIG_DIR')
-    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
-    const file = `${configured ?? `${home}/.claude`}/mods-data/usage-guard/pause.json`.replaceAll('\\', '/')
+    const file = await usageGuardFile($, 'pause.json')
     const pause = JSON.parse(String(await $.fs.read(file))) as { status?: string; wakeAt?: number }
     return pause.status === 'active' ? pause.wakeAt : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// This session's own usage-guard arm: its saved copy, the arm or `null` once dropped.
+async function readArmAt($: EngineInterface): Promise<number | undefined> {
+  try {
+    const file = await usageGuardFile($, `arms/${await $.session.id()}.json`)
+    const arm = JSON.parse(String(await $.fs.read(file))) as { wakeAt?: unknown } | null
+    return typeof arm?.wakeAt === 'number' ? arm.wakeAt : undefined
   } catch {
     return undefined
   }
