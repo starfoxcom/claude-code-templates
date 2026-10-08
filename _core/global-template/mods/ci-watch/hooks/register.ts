@@ -12,6 +12,11 @@ const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
 const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
+// For an hour after this session pushed to a PR (or asked to watch it), a new head on it is the session's own
+// and wakes it; later, it is someone else's push and only updates the row. Past that hour a settled watch
+// asks GitHub about its PR every RECHECK_MS instead of every poll.
+const OWN_HEAD_MS = 60 * 60_000
+const RECHECK_MS = 10 * 60_000
 const HINT = '[help | settings | set | stop | phone]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
@@ -27,6 +32,8 @@ const live = {
   pollMs: 30_000,
   timeoutMs: 60 * 60_000,
   watches: [] as Watch[],
+  /** When each long-settled watch (by id) last asked GitHub about its PR: memory only. */
+  rechecked: new Map<string, number>(),
   /** The load's one start: claim, sweep, load, poll. Every hook awaits it, so none acts mid-claim. */
   started: undefined as Promise<void> | undefined,
   /** The last save failed: memory holds watches the file may lack. */
@@ -310,10 +317,16 @@ async function startWatch(
   isAsked = false,
 ): Promise<Watch> {
   const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
-  if (same && !isAsked) return same
   const startedAt = await $.clock.now()
+  if (same && !isAsked) {
+    // GitHub may not name the pushed commit yet: the head that shows within the hour is this session's.
+    const pushed = { ...same, pushedAt: startedAt }
+    live.watches = live.watches.map(w => (w === same ? pushed : w))
+    await save($)
+    return pushed
+  }
   const id = `${startedAt}-${Math.random().toString(36).slice(2)}`
-  const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id }
+  const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id, pushedAt: startedAt }
   live.watches = [...live.watches.filter(w => !(w.repo === repo && w.number === number)), fresh]
   live.generation++
   await save($)
@@ -323,8 +336,13 @@ async function startWatch(
 // A settled watch stays on the row until its PR is merged or closed, here or outside this session (the web
 // page), or the user stops it: a PR that is still open is unfinished work, red or green. A head that moved
 // restarts it: right after a push GitHub can still name the old commit, so the push found the settled
-// watch, and its new commit is caught here.
+// watch, and its new commit is caught here. Past OWN_HEAD_MS the new head is someone else's push: the
+// restarted watch keeps the row current and wakes no session.
 async function recheckSettled($: EngineInterface, watch: Watch, now: number): Promise<Watch | undefined> {
+  const isOwn = now - (watch.pushedAt ?? watch.startedAt) < OWN_HEAD_MS
+  const key = watch.id ?? `${watch.repo}#${watch.number}`
+  if (!isOwn && now - (live.rechecked.get(key) ?? -Infinity) < RECHECK_MS) return watch
+  if (!isOwn) live.rechecked.set(key, now)
   let view: { state?: string; headRefOid?: string } = {}
   try {
     view = JSON.parse(
@@ -337,7 +355,9 @@ async function recheckSettled($: EngineInterface, watch: Watch, now: number): Pr
   const head = String(view.headRefOid ?? '')
   if (!head || head === watch.headSha) return watch
   const id = `${now}-${Math.random().toString(36).slice(2)}`
-  return { repo: watch.repo, number: watch.number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
+  const { repo, number } = watch
+  const fresh: Watch = { repo, number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
+  return { ...fresh, pushedAt: watch.pushedAt ?? watch.startedAt, ...(isOwn ? {} : { isSilent: true }) }
 }
 
 // GitHub's status, read at most every few minutes and only while some watch waits long past a normal run.
@@ -359,7 +379,8 @@ async function noteIncidents($: EngineInterface, now: number): Promise<boolean> 
     const buckets = Object.values(w.checks)
     return buckets.length === 0 || buckets.some(bucket => PENDING.has(bucket))
   }
-  const isWaiting = (w: Watch) => !w.outcome && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
+  const isWaiting = (w: Watch) =>
+    !w.outcome && !w.isSilent && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
   if (!live.watches.some(isWaiting)) return false
   const incident = await readIncident($, now)
   if (!incident) return false
@@ -437,7 +458,7 @@ async function poll($: EngineInterface): Promise<void> {
   }
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
-  const toWake = settled.filter(w => live.watches.includes(w))
+  const toWake = settled.filter(w => live.watches.includes(w) && !w.isSilent)
   // GitHub's status is read before the retirement check: the read can take seconds, and a load retired
   // meanwhile must not save over the newer one's file afterwards.
   const isIncidentNoted = await noteIncidents($, now)

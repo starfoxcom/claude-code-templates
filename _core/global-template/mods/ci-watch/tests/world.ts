@@ -42,6 +42,8 @@ export type Seen = {
   refusals?: number
   /** Each slash command registered, with its argument hint. */
   commands: { name: string; argumentHint?: string }[]
+  /** Every gh call's words. */
+  ghCalls: string[]
 }
 
 export function world(on: On) {
@@ -56,6 +58,7 @@ export function world(on: On) {
     commands: [],
     checksRead: 0,
     statusReads: 0,
+    ghCalls: [],
   }
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/Users/me' })
@@ -94,6 +97,7 @@ export function world(on: On) {
       const stdout = seen.status ?? ''
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
+    if (e.argv[0] === 'gh') seen.ghCalls.push(args)
     if (args.includes('pr checks')) seen.checksRead++
     if (args.includes('pr checks')) await seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {
