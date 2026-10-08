@@ -70,7 +70,7 @@ export function isPush(command: string, isPowerShell = false): boolean {
 }
 
 // Push options that take the next word as their value.
-const PUSH_VALUES = /^(-o|--push-option|--repo|--receive-pack|--exec)$/
+const PUSH_VALUES = /^(-o|--push-option|--repo|--receive-pack|--exec|--recurse-submodules)$/
 // Where a push's statement ends: `;`, a pipe, a line break, or an `&` that is no part of a redirect (`2>&1`,
 // `&>log`).
 const STATEMENT_END = /[;|\n]|(?<![<>])&(?!>)/
@@ -119,8 +119,9 @@ export function pushesBranch(command: string, branch: string, isPowerShell = fal
     const isOurs = (ref: string) => {
       if (ref === ':') return true
       if (ref.startsWith(':')) return false
-      const dst = ref.split(':').pop() ?? ''
-      return dst === 'HEAD' || dst === branch || dst === `refs/heads/${branch}`
+      // Git reads `heads/<branch>` and `refs/heads/<branch>` as the branch too.
+      const dst = (ref.split(':').pop() ?? '').replace(/^(?:refs\/)?heads\//, '')
+      return dst === 'HEAD' || dst === branch
     }
     if (refs.some(isOurs)) return true
   }

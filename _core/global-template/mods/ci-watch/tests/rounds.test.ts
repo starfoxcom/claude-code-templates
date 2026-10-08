@@ -74,6 +74,10 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push -u origin $(git branch --show-current)',
     'git push origin $branch',
     'git push origin @',
+    // Git's short spellings of the branch, and an option whose value is the next word.
+    'git push origin HEAD:heads/feature/x',
+    'git push origin heads/feature/x',
+    'git push --recurse-submodules on-demand origin',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, true])
   }
@@ -166,12 +170,26 @@ test("the count's file is the user's: no tool call may write it", async ($, on) 
   const calls = [
     { tool: 'Write', file_path: path, content: '{}' },
     { tool: 'Edit', file_path: path.replaceAll('/', '\\'), old_string: 'a', new_string: 'b' },
+    { tool: 'NotebookEdit', notebook_path: path, new_source: '' },
     { tool: 'Bash', command: `echo '{}' > ${path}` },
+    { tool: 'Bash', command: `cat ${path} > /tmp/x; cp /tmp/x ${path}` },
     { tool: 'PowerShell', command: `Set-Content '${path}' '{}'` },
   ]
   for (const call of calls) {
     const answer = (await $.tool.call(call as never)) as { deny?: string }
     expect([call.tool, answer.deny]).toEqual([call.tool, expect.stringContaining('only `/ci-watch rounds reset`')])
+  }
+})
+
+test("a plain read of the count's file passes", async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  for (const call of [
+    { tool: 'Bash', command: `cat ${path}` },
+    { tool: 'PowerShell', command: `Get-Content '${path}'` },
+  ]) {
+    const answer = (await $.tool.call(call as never)) as { deny?: string }
+    expect([call.command, answer.deny]).toEqual([call.command, undefined])
   }
 })
 
