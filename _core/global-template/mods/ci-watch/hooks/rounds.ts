@@ -1,88 +1,35 @@
 // The fix-round limit: once a PR has had ROUND_LIMIT pushed rounds in a row whose checks did not all pass
-// (both reviews included), a further push to it is refused until the user resets the count. Counted from
-// GitHub's own record of each commit's checks, so it holds across sessions and projects. Pure, no engine
+// (both reviews included), a further push to it is refused until the user resets the count. A round is a
+// watch of a pushed head that settled: what ci-watch itself saw, never rebuilt from the branch's history (a
+// merge, amend or rebase reshapes that), so pushes from another machine are not counted. Pure, no engine
 // access.
 
 export const ROUND_LIMIT = 6
 
-/** A PR's latest commits, each with the overall state of its checks and each check's own result and start. */
-export const ROUNDS_QUERY =
-  'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number)' +
-  '{headRefOid commits(last:100){nodes{commit{oid parents(first:1){nodes{oid}} ' +
-  'statusCheckRollup{state contexts(last:100){nodes{' +
-  '... on CheckRun{conclusion startedAt} ... on StatusContext{state createdAt}}}}}}}}}}'
+/** One settled watch of a PR's pushed head: whether a check failed. */
+export type Round = { sha: string; red: boolean }
+/** A PR's rounds, oldest first; the user's reset empties the list. */
+export type PrRounds = { rounds: Round[] }
 
-type Context = {
-  conclusion?: string | null
-  state?: string | null
-  startedAt?: string | null
-  createdAt?: string | null
-}
-export type RoundNode = {
-  commit?: { oid?: string; statusCheckRollup?: { state?: string; contexts?: { nodes?: Context[] } } | null }
+const KEPT = 50
+
+/** The PR's rounds with one more settled watch. A watch of a head already on the list (a re-run) replaces
+ * that round. */
+export function recordRound(pr: PrRounds | undefined, sha: string, red: boolean): PrRounds {
+  const rounds = (Array.isArray(pr?.rounds) ? pr.rounds : []).filter(r => r.sha !== sha)
+  return { rounds: [...rounds, { sha, red }].slice(-KEPT) }
 }
 
-/** The user's reset: the PR's head commit then, and when (ms since the epoch). */
-export type Reset = { sha?: string; at?: number }
-
-// When GitHub first ran a commit's checks (ms since the epoch), set by GitHub, not by the commit's author.
-const firstRun = (contexts: readonly Context[]) =>
-  Math.min(...contexts.map(c => Date.parse(c.startedAt ?? c.createdAt ?? '')).filter(t => !Number.isNaN(t)))
-
-// A check that really failed. A run cancelled by a newer push (`concurrency: cancel-in-progress`), skipped or
-// neutral is no failure, though GitHub's overall state turns red for it.
-const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'ACTION_REQUIRED', 'ERROR'])
-const hasFailed = (contexts: readonly Context[]) =>
-  contexts.some(c => FAILED.has(c.conclusion ?? '') || FAILED.has(c.state ?? ''))
-
-/** The commits of a `ROUNDS_QUERY` answer, oldest first; none when it cannot be read. */
-export function roundNodes(answer: string): RoundNode[] {
-  try {
-    const pr = JSON.parse(answer)?.data?.repository?.pullRequest
-    const nodes = pr?.commits?.nodes
-    return Array.isArray(nodes) ? pushOrder(nodes as RoundNode[], pr?.headRefOid) : []
-  } catch {
-    return []
-  }
-}
-
-// GitHub lists a PR's commits by date, and a rebase or cherry-pick keeps an old date: the order the rounds
-// were pushed in is the first-parent chain back from the head, oldest first. A list with no parents read
-// keeps its own order.
-function pushOrder(nodes: RoundNode[], head: unknown): RoundNode[] {
-  const byOid = new Map(nodes.map(n => [n.commit?.oid, n]))
-  if (typeof head !== 'string' || !byOid.has(head)) return nodes
-  const chain: RoundNode[] = []
-  for (let at: string | undefined = head; at !== undefined && byOid.has(at); ) {
-    const node = byOid.get(at) as RoundNode
-    if (chain.includes(node)) break
-    chain.push(node)
-    at = (node.commit as { parents?: { nodes?: { oid?: string }[] } }).parents?.nodes?.[0]?.oid
-  }
-  return chain.reverse()
-}
-
-/** The pushed rounds in a row, newest first, where a check really failed, back to the user's reset or the last
- * round that passed. The reset ends the walk at its commit (itself not counted) or at the first commit whose
- * checks ran before it: a rewritten history (`reset --hard`, `--amend`) drops the reset's commit from the PR,
- * and the older rounds still on it are from before the reset. A commit with no check that failed is no
- * round: one with no checks (pushed together with later ones), one whose runs a newer push cancelled, or the
- * round in flight until one of its checks fails. */
-export function redRounds(nodes: readonly RoundNode[], reset: Reset = {}): number {
+/** The rounds in a row, newest first, that had a failed check, back to the last one that passed. */
+export function redStreak(pr: PrRounds | undefined): number {
+  const rounds = Array.isArray(pr?.rounds) ? pr.rounds : []
   let red = 0
-  for (const node of [...nodes].reverse()) {
-    if (reset.sha !== undefined && node.commit?.oid === reset.sha) break
-    const rollup = node.commit?.statusCheckRollup
-    const contexts = rollup?.contexts?.nodes ?? []
-    if (reset.at !== undefined && firstRun(contexts) < reset.at) break
-    if (rollup?.state === 'SUCCESS') break
-    if (hasFailed(contexts)) red++
-  }
+  for (let i = rounds.length - 1; i >= 0 && rounds[i]?.red; i--) red++
   return red
 }
 
-/** The count's file, `{ "<owner/name>#<number>": Reset }`: written only by the user's own
- * `/ci-watch rounds reset`, and spared by the sweep (it is named by no session). */
+/** The count's file, `{ "<owner/name>#<number>": PrRounds }`: written by the mod as watches settle and by
+ * the user's own `/ci-watch rounds reset`, and spared by the sweep (it is named by no session). */
 export const ROUNDS_FILE = 'rounds.json'
 
 /** A path naming the count's file. An Edit, Write or NotebookEdit of it is refused, so only the
