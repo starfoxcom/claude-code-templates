@@ -130,9 +130,10 @@ export function pauseChip(b: Budgets, now: number): Chip | undefined {
   return { text: `PAUSED → ${shortLocal(b.pausedUntil, b.offsetMinutes)}`, color: 'red' }
 }
 
+// A pause keeps the plan chips beside it: the person judges from them whether one last step fits.
 export function chipsOf(b: Budgets, now: number): Chip[] {
   const pause = pauseChip(b, now)
-  const plan = pause ? [pause] : b.limits.map(limit => planChip(limit, b))
+  const plan = [...(pause ? [pause] : []), ...b.limits.map(limit => planChip(limit, b))]
   const cache = cacheChip(b, now)
   return [contextChip(b, now), ...plan, ...(cache ? [cache] : [])]
 }
@@ -166,7 +167,7 @@ export function phoneText(b: Budgets, now: number): string {
   const plans = b.limits.length > 0 ? b.limits.map(limit => phonePlanLine(limit, b)) : ['5-hour --', 'week --']
   const until = pauseChip(b, now) && b.pausedUntil !== undefined ? shortLocal(b.pausedUntil, b.offsetMinutes) : ''
   const lines = [`📊 Budgets · ${shortLocal(now, b.offsetMinutes).slice(4)}`, context]
-  return [...lines, ...(until ? [`🟥 PAUSED until ${until}`] : plans), phoneCacheLine(b, now)].join('\n')
+  return [...lines, ...(until ? [`🟥 PAUSED until ${until}`] : []), ...plans, phoneCacheLine(b, now)].join('\n')
 }
 
 // In a narrow band (a side pane takes room) the row wraps by whole chips: a chip that does not fit moves
