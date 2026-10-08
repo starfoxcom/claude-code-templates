@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { inspect } from '../hooks/inspect'
+import { wayOut } from '../hooks/register'
 
 // How the reading follows a PowerShell assignment in every spelling, and the environment a command sets.
 
@@ -400,4 +401,62 @@ test('assignments alone, exec paths, pwsh spellings and bash -s arguments are re
   for (const command of ['HOME=/tmp/h git commit -m x', 'export XDG_CONFIG_HOME=/tmp/x; git commit -m x']) {
     expect([command, inspect(command, false).unread]).toEqual([command, expect.arrayContaining([expect.anything()])])
   }
+})
+
+// Bash names keep their case, a `$` typed in single quotes or escaped is text, the joined `--config-env=` is
+// judged, and a new branch at HEAD changes no file.
+test('names keep their case in Bash, plain dollars stay text, and a new branch at HEAD writes nothing', () => {
+  const read = (command: string, ps = false) => inspect(command, ps)
+  const texts = (command: string, ps = false) => read(command, ps).texts.filter(t => !t.creditOnly).map(t => t.text)
+  for (const command of ['N="$OUT"; n=\'fix: x\'; git commit -m "$N"', 'git --config-env="$E" commit -m x']) {
+    expect([command, read(command).unread]).toEqual([command, expect.arrayContaining([expect.anything()])])
+  }
+  for (const [command, ps, text] of [
+    ["M='fix: x'; m=$(date); git commit -m \"$M\"", false, 'fix: x'],
+    ['F=notes.md; git commit -m "docs: document \\$PATH in $F"', false, 'docs: document $PATH in notes.md'],
+    ["A='fix: x'; B=y; git commit -m '$A '\"$B\"", false, '$A y'],
+    ["A=x; B=y; git commit -m 'a`b '\"$B\"", false, 'a`b y'],
+    ["$item='a'; git commit -m \"cost `$5 for $item\"", true, 'cost $5 for a'],
+    ["$item='a'; git commit -m \"cost `$item for $item\"", true, 'cost $item for a'],
+    ["$M = 'x'; git commit -m $m", true, 'x'],
+  ] as const) {
+    const seen = [command, read(command, ps).unread, texts(command, ps)]
+    expect(seen).toEqual([command, [], expect.arrayContaining([text])])
+  }
+  const named = (b: string) => read(`${b} && git commit -F msg.md`).files.map(f => f.named).at(-1)
+  for (const b of ['git checkout -b feat', 'git checkout -B feat', 'git switch -c feat', 'git switch --create feat']) {
+    expect([b, named(b)]).toEqual([b, undefined])
+  }
+  for (const b of ['git checkout -b f main', 'git checkout f', 'git switch -c f -- x', 'git checkout -b "$B"']) {
+    expect([b, named(b)]).toEqual([b, true])
+  }
+})
+
+// Every kind of unread entry other than a message names a way out of its own.
+test('each unread kind has its own way out', () => {
+  for (const where of [
+    'a word built at run time',
+    'a git setting built at run time',
+    'an environment variable named at run time',
+    'a program named at run time',
+    'a trap action built at run time',
+    'a bash script built at run time',
+    'a pwsh script built at run time',
+    'a cmd script built at run time',
+    'a git option built at run time',
+    'a git subcommand built at run time',
+    'a gh subcommand built at run time',
+    'a flag value built at run time',
+    'the new branch name',
+    'the PR text (in a folder unknown before it runs)',
+    'the PR text (in a folder unknown before it runs, and another program in this command may write b.md)',
+    'the PR text (another program in this command may write b.md)',
+    "the PR text (Git Bash's /tmp did not map to a folder the guard reads)",
+    'the lines the commit adds (in a folder or repo built at run time)',
+  ]) {
+    expect([where, wayOut(where)]).toEqual([where, expect.any(String)])
+  }
+  expect(wayOut('a cmd script built at run time')).toContain('%NAME%')
+  expect(wayOut('a bash script built at run time')).toContain('Write the script out')
+  expect(wayOut('the commit message')).toBeUndefined()
 })

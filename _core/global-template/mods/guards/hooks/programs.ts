@@ -193,5 +193,13 @@ function gitMayWrite(args: Word[]): boolean {
   // `-o` names an output file only on `diff`, `log` and `show`: on `push` it is a push option.
   const isLogLike = /^(diff|log|show)$/.test(sub)
   const isOutput = rest.some(a => /^--output(=|$)/.test(a.text) || (a.text === '-o' && isLogLike))
-  return isConfigured || !GIT_READS.test(sub) || isOutput
+  return isConfigured || !(GIT_READS.test(sub) || isNewBranch(sub, rest)) || isOutput
+}
+
+// A new branch made where HEAD is (`git checkout -b feat`, `git switch -c feat`), with no start point or path
+// after it: no file's text changes.
+function isNewBranch(sub: string, rest: Word[]): boolean {
+  const [flag, name, more] = rest
+  const flags = sub === 'checkout' ? /^-[bB]$/ : sub === 'switch' ? /^(-[cC]|--create|--force-create)$/ : null
+  return Boolean(flags?.test(flag?.text ?? '') && name && !name.dynamic && !name.text.startsWith('-') && !more)
 }

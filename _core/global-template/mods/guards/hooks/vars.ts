@@ -3,7 +3,7 @@
 // and the ones it opens, and gone once it closes. A child shell (`bash -c`) sees only exported values.
 // Pure.
 
-import { PS_OPERATOR } from './shell'
+import { PS_OPERATOR, sliceWord } from './shell'
 import type { Statement, Word } from './shell'
 
 /** A variable's value: `literal` when it is known, `scope` where it was set, `exported` when a child shell
@@ -12,7 +12,8 @@ export type Var = { text: string; literal: boolean; scope: string; exported?: bo
 
 /** What the reading knows of variables at the statement it reads. */
 export type VarState = {
-  /** Every value set so far by lower-cased name, one per scope, most recent last. */
+  /** Every value set so far by name (lower-cased in PowerShell, where case does not matter), one per scope,
+   * most recent last. */
   vars: Map<string, Var[]>
   /** Where the statement being read runs, outermost first: its Bash subshells (`1/3`), each `$(...)` an
    * `s<n>` and each child shell a `p<n>`. Empty at the top. */
@@ -54,7 +55,7 @@ export function setVar(r: VarState, name: string, value: Word | undefined, expor
   if (!value.dynamic) return store(r, name, { text: value.text, literal: true, scope }, exported)
   const held = catValue(value, r)
   if (held) return store(r, name, { ...held, scope }, exported)
-  const e = expand(value.text, r)
+  const e = expand(value.text, r, value.literals)
   store(r, name, { text: e.unresolved ? value.text : e.text, literal: !e.unresolved, scope }, exported)
 }
 
@@ -98,8 +99,11 @@ function heredocBody(rest: string, delim: string, strip: boolean): string | unde
 }
 
 /** Keeps `v` as the variable's value in its scope; a variable once exported stays exported. */
+// The map key of a name: Bash names are case-sensitive (`N` and `n` are two variables), PowerShell's are not.
+const keyOf = (r: VarState, name: string) => (r.ps ? name.toLowerCase() : name)
+
 export function store(r: VarState, name: string, v: Var, exported = false) {
-  const key = name.toLowerCase()
+  const key = keyOf(r, name)
   if (r.isLater) (r.volatile ??= new Set()).add(key)
   // Set in a branch: known inside it, and unknown where the branch sits, first, so the value inside wins.
   const base = branchBase(v.scope)
@@ -118,8 +122,8 @@ function put(r: VarState, key: string, v: Var, exported = false) {
 
 /** The variable as the statement being read sees it, or undefined. */
 export function lookup(r: VarState, name: string): Var | undefined {
-  if (r.isSourced || r.volatile?.has(name.toLowerCase())) return undefined
-  const stack = r.vars.get(name.toLowerCase()) ?? []
+  if (r.isSourced || r.volatile?.has(keyOf(r, name))) return undefined
+  const stack = r.vars.get(keyOf(r, name)) ?? []
   for (let i = stack.length - 1; i >= 0; i--) {
     const v = stack[i] as Var
     const isInside = v.scope === '' || r.scope === v.scope || r.scope.startsWith(`${v.scope}/`)
@@ -137,14 +141,22 @@ const SUBSTITUTION = /\$\((?:[^()]|\([^()]*\))*\)/g
  * the only unknown parts. */
 export type Expanded = { text: string; unresolved: boolean; files: string[]; isFilesOnly: boolean }
 
-/** A value with its variables replaced by what the command set them to. */
-export function expand(text: string, r: VarState): Expanded {
+// Stands in for a `$` or a backtick typed as plain text while a value is filled in.
+const PLAIN = ''
+const PLAIN_BACKTICK = ''
+
+/** A value with its variables replaced by what the command set them to. `literals`: where a `$` or a
+ * backtick in it was typed as plain text (`Word.literals`), passed on as is. */
+export function expand(typed: string, r: VarState, literals: number[] = []): Expanded {
+  const chars = typed.split('')
+  for (const at of literals) chars[at] = chars[at] === '`' ? PLAIN_BACKTICK : PLAIN
+  const text = literals.length > 0 ? chars.join('') : typed
   // Only `$NAME` and a plain `${NAME}` are filled in: any other `${...}` (`${!X}`, `${X:-y}`, `${X[@]}`)
   // and Bash's special parameters (`$@`, `$1`) are built at run time.
   const special = r.ps ? /\$\{(?![A-Za-z_]\w*\})/ : /\$\{(?![A-Za-z_]\w*\})|\$[@*#?$!0-9-]/
   let isOther = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`')) || special.test(text)
   const files: string[] = []
-  const out = text.replace(SUBSTITUTION, ' ').replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (_, b, n) => {
+  const filled = text.replace(SUBSTITUTION, ' ').replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (_, b, n) => {
     const name = (b ?? n) as string
     const v = lookup(r, name)
     if (v?.literal) return v.text
@@ -152,6 +164,7 @@ export function expand(text: string, r: VarState): Expanded {
     else isOther = true
     return ' '
   })
+  const out = literals.length > 0 ? filled.replaceAll(PLAIN, '$').replaceAll(PLAIN_BACKTICK, '`') : filled
   return { text: out, unresolved: isOther || files.length > 0, files, isFilesOnly: !isOther && files.length > 0 }
 }
 
@@ -185,7 +198,7 @@ export function withWords(st: Statement, r: VarState): Statement {
   const words = st.words.flatMap((w, i) => {
     // A PowerShell expression (`$o.Trim()`) computes its value: filling in the variable alone is wrong text.
     if (!w.dynamic || w.expr || i < targets) return [w]
-    const e = expand(w.text, r)
+    const e = expand(w.text, r, w.literals)
     const splits = !r.ps && w.splits === true
     if (e.unresolved || (splits && /[*?[]/.test(e.text))) return [w]
     changed = true
@@ -225,7 +238,7 @@ export function inherit(st: Statement, args: Word[], r: VarState, child: string)
     const m = /^([A-Za-z_]\w*)(\+?)=/.exec(t)
     if (!m || unset) continue
     // An append in front of a child shell (`M+=x bash -c`) is left unknown.
-    const value = m[2] ? undefined : { ...(lead[i] as Word), text: t.slice(m[0].length) }
+    const value = m[2] ? undefined : sliceWord(lead[i] as Word, m[0].length)
     setVar(r, m[1] ?? '', value, true, child)
   }
   // A child Bash first runs the file `BASH_ENV` names (`sh` reads `ENV`), which may set any variable.
@@ -251,9 +264,9 @@ function assignNow(st: Statement, name: string, args: Word[], r: VarState): bool
     const changes = name !== 'export' && /[nilauA]/.test(flags)
     for (const a of pairs) {
       const m = /^([A-Za-z_]\w*)(\+?)=/.exec(a.text)
-      if (m) setPair(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) }, Boolean(m[2]), isExport, changes)
+      if (m) setPair(r, m[1] ?? '', sliceWord(a, m[0].length), Boolean(m[2]), isExport, changes)
       else if (name === 'export')
-        for (const v of r.vars.get(a.text.toLowerCase()) ?? []) v.exported = isExport
+        for (const v of r.vars.get(keyOf(r, a.text)) ?? []) v.exported = isExport
     }
     return true
   }

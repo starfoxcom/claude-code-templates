@@ -111,6 +111,9 @@ test('writes the reading misses are still refused in enforce mode', { options: {
   expect((seen.files.get(LOG) ?? '').trim().split('\n')).toHaveLength(5)
 })
 
+// The way out of a refusal for a body file in a folder the guard cannot place.
+const FOLDER_OUT = 'Give the body file its full path, or run the command in a folder named out'
+
 test(
   'a Bash body file under /tmp is read from the Windows temp folder',
   { options: { mode: 'enforce' } },
@@ -121,7 +124,7 @@ test(
     expect(seen.ran).toHaveLength(1)
     // Not there either: the mapping was a guess, so the file is named unread and refused.
     const missed = await bash($, 'gh pr create --title t --body-file /tmp/gone.md')
-    expect(String((missed as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+    expect(String((missed as { deny?: string }).deny)).toContain("Give the body file's Windows path")
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
     expect(entry.unread?.length).toBe(1)
   },
@@ -147,9 +150,9 @@ test(
     // A `popd` with no `pushd` before it leaves the folder unknown: the file and the lines the commit adds
     // are named unread and refused.
     const popped = await bash($, 'popd; git commit -F m.txt')
-    expect(String((popped as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
+    expect(String((popped as { deny?: string }).deny)).toContain(FOLDER_OUT)
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-    expect(entry.unread).toEqual(['the commit message', UNSCANNED])
+    expect(entry.unread).toEqual(['the commit message (in a folder unknown before it runs)', UNSCANNED])
   },
 )
 
@@ -179,7 +182,7 @@ test('a relative body file under a folder built at run time is named unread and 
   ]) {
     await bash($, command)
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-    expect(entry.mod).toContain('cannot read')
+    expect(entry.mod).toContain('Give the body file its full path, or run the command in a folder named out')
     expect(entry.unread?.length).toBe(command.startsWith('git') ? 2 : 1)
   }
   // A file of the same name in the session folder is a different file: still named unread, never read.
@@ -187,7 +190,7 @@ test('a relative body file under a folder built at run time is named unread and 
   await bash($, 'cd "$REPO" && gh pr create --title t --body-file body.md')
   const sameName = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
   expect(sameName.unread?.length).toBe(1)
-  expect(sameName.mod).toContain('cannot read')
+  expect(sameName.mod).toContain('Give the body file its full path, or run the command in a folder named out')
   // A literal folder still refuses a file that is not there.
   await bash($, 'cd C:/Repos/other && gh pr create --title t --body-file body.md')
   const literal = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
@@ -314,8 +317,8 @@ test('a relative body file under a folder built at run time is never judged from
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
   const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
   // Refused as unread, never for the format of the session folder's b.md.
-  expect(String((result as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
-  expect(lastEntry(seen).unread).toEqual(['the PR text'])
+  expect(String((result as { deny?: string }).deny)).toContain(FOLDER_OUT)
+  expect(lastEntry(seen).unread).toEqual(['the PR text (in a folder unknown before it runs)'])
 })
 
 test('an invalid pattern in the rules file leaves the PR unjudged and the credit checks running', {
@@ -556,8 +559,8 @@ test('a PR call after a cd to a literal folder is judged there', { options: { mo
 test('a PR call after a cd built at run time is refused as unread', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': NO_ROW })
   const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
-  expect(String((result as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
-  expect(lastEntry(seen).unread).toEqual(['the PR text'])
+  expect(String((result as { deny?: string }).deny)).toContain(FOLDER_OUT)
+  expect(lastEntry(seen).unread).toEqual(['the PR text (in a folder unknown before it runs)'])
 })
 
 // From the shadow trial: a python here-doc writes the API input, then gh sends it.
@@ -784,7 +787,8 @@ test('a rewritable body file in an unknown folder is refused', { options: { mode
   const command =
     "cd \"$(git rev-parse --show-toplevel)\"; F=$(mktemp); cat > \"$F\" <<'EOF'\nclean\nEOF\n" +
     'cp other.md "$F"; gh pr create -t t --body-file "$F"'
-  expect(String((await bash($, command) as { deny?: string }).deny)).toContain('cannot read')
+  const deny = String((await bash($, command) as { deny?: string }).deny)
+  expect(deny).toContain('Give the body file its full path, and write it in an earlier command')
 })
 
 // Wrapper shells and assignments write no file: a clean body file on disk beside them is read as it is.
@@ -799,4 +803,17 @@ test('a body file beside a wrapper shell, an export or set passes', { options: {
   ]) {
     expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
   }
+})
+
+// A refusal for an environment variable, a folder or a cmd line built at run time names the fix for it.
+test('refusals for run-time names, folders and cmd lines name their own way out', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  world(on)
+  const deny = async (command: string) => String(((await bash($, command)) as { deny?: string }).deny)
+  expect(await deny('export "$k=$v"; git commit -m x')).toContain('Type the name of each environment variable')
+  expect(await deny('cd "$(git rev-parse --show-toplevel)" && gh pr create -t t -F b.md')).toContain(
+    FOLDER_OUT,
+  )
+  expect(await deny('cmd //c "git add -A & git commit -m x"')).toContain('Give `cmd /c` one plain command')
 })
