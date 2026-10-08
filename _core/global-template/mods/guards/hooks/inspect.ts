@@ -76,7 +76,8 @@ import {
   SWITCH,
 } from './specs'
 import type { Kind, Spec } from './specs'
-import type { Plan } from './plan'
+import { emptyPlan, type Plan } from './plan'
+import { namesWrite, NOT_PLAIN, notPlain } from './plain'
 import type { Statement, Word } from './shell'
 
 export type { Plan } from './plan'
@@ -128,18 +129,15 @@ type Reading = VarState & {
 }
 
 export function inspect(command: string, powershell: boolean): Plan {
-  const plan: Plan = {
-    texts: [],
-    files: [],
-    written: [],
-    branches: [],
-    targets: [],
-    unread: [],
-    notes: [],
-    isWrite: false,
-    prs: [],
-    ghCalls: 0,
-  }
+  // A command naming a history write is read only when it is plain: anything else is refused (plain.ts).
+  const why = namesWrite(command) ? notPlain(command, powershell) : undefined
+  if (why) return { ...emptyPlan(), isWrite: true, block: `${NOT_PLAIN} Not plain here: ${why}.` }
+  return readCommand(command, powershell)
+}
+
+/** The reading itself, of a plain command or one that names no history write. */
+export function readCommand(command: string, powershell: boolean): Plan {
+  const plan = emptyPlan()
   const r: Reading = {
     plan,
     places: new Map([['', { folder: { isUnknown: false }, folders: [] }]]),

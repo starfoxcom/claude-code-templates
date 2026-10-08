@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { inspect } from '../hooks/inspect'
+import { readCommand } from '../hooks/inspect'
 import { wayOut } from '../hooks/register'
 
 // How the reading follows a PowerShell assignment in every spelling, and the environment a command sets.
@@ -13,10 +13,10 @@ test('a PowerShell assignment of a command reads the command', () => {
     '[string]$r = git commit --no-verify -m x',
     '$r = . git commit --no-verify -m x',
   ]) {
-    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+    expect([command, readCommand(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
   }
-  expect(inspect('$out = git commit -m $outside', true).unread).toContain('the commit message')
-  expect(inspect('$r = gh pr create -t t --body-file b.md', true).files.map(f => f.path)).toEqual(['b.md'])
+  expect(readCommand('$out = git commit -m $outside', true).unread).toContain('the commit message')
+  expect(readCommand('$r = gh pr create -t t --body-file b.md', true).files.map(f => f.path)).toEqual(['b.md'])
 })
 
 // The variable: drive, a typed assignment and -OutVariable all change a variable: its value is unknown after.
@@ -30,15 +30,15 @@ test('every PowerShell spelling that sets a variable leaves it unknown', () => {
     "$m = 'ok'; Write-Output $outside -ov m; git commit -m $m",
     "$m = 'ok'; [string]$m = $outside; git commit -m $m",
   ]) {
-    expect([command, inspect(command, true).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+    expect([command, readCommand(command, true).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
   }
-  expect(inspect('Set-Content env:LEFTHOOK 0; git commit -m x', true).block).toContain('lefthook')
+  expect(readCommand('Set-Content env:LEFTHOOK 0; git commit -m x', true).block).toContain('lefthook')
 })
 
 // .NET takes the value as typed: a quoted literal or a number is known, so lefthook on passes and off is refused.
 test('a literal .NET environment value is read as typed', () => {
-  expect(inspect("[Environment]::SetEnvironmentVariable('LEFTHOOK', '1'); git commit -m x", true).block).toBeUndefined()
-  expect(inspect("[Environment]::SetEnvironmentVariable('LEFTHOOK', '0'); git commit -m x", true).block).toContain(
+  expect(readCommand("[Environment]::SetEnvironmentVariable('LEFTHOOK', '1'); git commit -m x", true).block).toBeUndefined()
+  expect(readCommand("[Environment]::SetEnvironmentVariable('LEFTHOOK', '0'); git commit -m x", true).block).toContain(
     'lefthook',
   )
 })
@@ -50,14 +50,14 @@ test('an environment variable named at run time unreads only later git and gh ca
     ['[Environment]::SetEnvironmentVariable($n, $v); npm test', true],
     ['export "$k=$v"; npm test', false],
   ] as const) {
-    expect([command, inspect(command, ps).unread]).toEqual([command, []])
+    expect([command, readCommand(command, ps).unread]).toEqual([command, []])
   }
   const named = 'an environment variable named at run time'
-  expect(inspect('Set-Item "env:$k" 0; git commit -m x', true).unread).toContain(named)
-  expect(inspect('export "$k=0"; git commit -m x', false).unread).toContain(named)
+  expect(readCommand('Set-Item "env:$k" 0; git commit -m x', true).unread).toContain(named)
+  expect(readCommand('export "$k=0"; git commit -m x', false).unread).toContain(named)
   // `declare -p`, `-f` and `-F` only print.
   for (const command of ['declare -p "$x"; git status', 'typeset -p "$x"; git status', 'declare -F "$f"; git status']) {
-    expect([command, inspect(command, false).unread]).toEqual([command, []])
+    expect([command, readCommand(command, false).unread]).toEqual([command, []])
   }
 })
 
@@ -80,11 +80,11 @@ test('a PowerShell command assigned to any target is read', () => {
     '$env:R = git commit --no-verify -m x',
     '$a = $r = git commit --no-verify -m x',
   ]) {
-    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+    expect([command, readCommand(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
   }
-  expect(inspect('$r=git commit -F msg.md', true).files.map(f => f.path)).toEqual(['msg.md'])
-  expect(inspect('$env:R = gh pr create -t t --body-file b.md', true).files.map(f => f.path)).toEqual(['b.md'])
-  expect(inspect('$r=git commit -m $outside', true).unread).toContain('the commit message')
+  expect(readCommand('$r=git commit -F msg.md', true).files.map(f => f.path)).toEqual(['msg.md'])
+  expect(readCommand('$env:R = gh pr create -t t --body-file b.md', true).files.map(f => f.path)).toEqual(['b.md'])
+  expect(readCommand('$r=git commit -m $outside', true).unread).toContain('the commit message')
 })
 
 // `$env:X = <command>` is set at run time: lefthook and git's hook settings cannot be read from it.
@@ -95,15 +95,15 @@ test('a PowerShell environment variable set from a command is set at run time', 
     "$env:LEFTHOOK = 'a' + 'b'; git commit -m x",
     '$env:LEFTHOOK += 0; git commit -m x',
   ]) {
-    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('lefthook')])
+    expect([command, readCommand(command, true).block]).toEqual([command, expect.stringContaining('lefthook')])
   }
   const config = `$env:GIT_CONFIG_PARAMETERS = echo "'core.hooksPath=/dev/null'"; git commit -m x`
-  expect(inspect(config, true).block).toContain('skipping git hooks')
+  expect(readCommand(config, true).block).toContain('skipping git hooks')
   // A literal value is read as typed; $null removes it, which leaves lefthook on.
   for (const command of ["$env:LEFTHOOK='1'; git commit -m x", '$env:LEFTHOOK = $null; git commit -m x']) {
-    expect([command, inspect(command, true).block]).toEqual([command, undefined])
+    expect([command, readCommand(command, true).block]).toEqual([command, undefined])
   }
-  expect(inspect("$env:LEFTHOOK='0'; git commit -m x", true).block).toContain('lefthook')
+  expect(readCommand("$env:LEFTHOOK='0'; git commit -m x", true).block).toContain('lefthook')
 })
 
 // A reassignment in any spelling leaves the variable unknown: git gets the new value, not the old text.
@@ -123,31 +123,31 @@ test('a PowerShell reassignment the reading cannot know leaves the variable unkn
     '$a=$m=$outside',
   ]) {
     const command = `$m = 'fix: x'; ${change}; git commit -m $m`
-    expect([command, inspect(command, true).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+    expect([command, readCommand(command, true).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
   }
-  expect(inspect('$a=Get-Clipboard; git push origin main $a', true).unread).toContain('a word built at run time')
+  expect(readCommand('$a=Get-Clipboard; git push origin main $a', true).unread).toContain('a word built at run time')
 })
 
 // Plain values keep their reading: a joined string, a list beside it, a splat, a here-string.
 test('PowerShell plain values keep their reading in every spelling', () => {
-  expect(inspect("$m='fix: x'; git commit -m $m", true).texts.map(t => t.text)).toContain('fix: x')
-  expect(inspect("$m='x'; git commit -m $m", true).unread).toEqual([])
+  expect(readCommand("$m='fix: x'; git commit -m $m", true).texts.map(t => t.text)).toContain('fix: x')
+  expect(readCommand("$m='x'; git commit -m $m", true).unread).toEqual([])
   const list = "$docs = 'fix: x'; $labels = 'bug', 'docs'; git commit -m $docs"
-  expect(inspect(list, true).unread).toEqual([])
-  expect(inspect(list, true).texts.map(t => t.text)).toContain('fix: x')
+  expect(readCommand(list, true).unread).toEqual([])
+  expect(readCommand(list, true).texts.map(t => t.text)).toContain('fix: x')
   // gh gets a splat as `-key:value` words: it stays unread, entry by entry as before.
-  expect(inspect("$p = @{ Title = 't'; Body = 'b' }; gh pr create @p", true).unread).toEqual(['the PR text'])
-  expect(inspect("$m = 'a' + 'b'; git commit -m $m", true).unread).toContain('the commit message')
+  expect(readCommand("$p = @{ Title = 't'; Body = 'b' }; gh pr create @p", true).unread).toEqual(['the PR text'])
+  expect(readCommand("$m = 'a' + 'b'; git commit -m $m", true).unread).toContain('the commit message')
   // A member, an index or a .NET property set is no message and no refusal.
   for (const command of [
     "$PSDefaultParameterValues['*:Encoding'] = 'utf8'; git commit -m 'fix: x'",
     "[Console]::OutputEncoding = [Text.Encoding]::UTF8; git commit -m 'fix: x'",
     "$p = [ordered]@{ a = 1 }; git commit -m 'fix: x'",
   ]) {
-    expect([command, inspect(command, true).unread, inspect(command, true).block]).toEqual([command, [], undefined])
+    expect([command, readCommand(command, true).unread, readCommand(command, true).block]).toEqual([command, [], undefined])
   }
   // A comparison or a bracketed `=` is no assignment.
-  expect(inspect('[Parameter(Mandatory=$true)]$x = 1; git status', true).unread).toEqual([])
+  expect(readCommand('[Parameter(Mandatory=$true)]$x = 1; git status', true).unread).toEqual([])
 })
 
 // A cast in front of parens or a hashtable (`[void](...)`, `[ordered]@{...}`) still opens it: what runs
@@ -158,13 +158,13 @@ test('a PowerShell cast in front of parens or a hashtable still opens it', () =>
     '[string](git commit --no-verify -m x)',
     '[System.Collections.Generic.List[string]](git commit --no-verify -m x)',
   ]) {
-    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+    expect([command, readCommand(command, true).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
   }
-  expect(inspect('[void](Set-Item env:LEFTHOOK 0); git commit -m x', true).block).toContain('lefthook')
-  expect(inspect('[void](git commit -m $outside)', true).unread).toContain('the commit message')
-  expect(inspect('[void](git commit -F msg.md)', true).files.map(f => f.path)).toEqual(['msg.md'])
+  expect(readCommand('[void](Set-Item env:LEFTHOOK 0); git commit -m x', true).block).toContain('lefthook')
+  expect(readCommand('[void](git commit -m $outside)', true).unread).toContain('the commit message')
+  expect(readCommand('[void](git commit -F msg.md)', true).files.map(f => f.path)).toEqual(['msg.md'])
   const scoped = "if ($ok) { $p = [ordered]@{ a = 1 }; $m = 'fix: x' }; git commit -m $m"
-  expect(inspect(scoped, true).unread).toContain('the commit message')
+  expect(readCommand(scoped, true).unread).toContain('the commit message')
 })
 
 // The .NET call that sets the environment, behind a cast or a discarded result, is still read.
@@ -175,14 +175,14 @@ test('a .NET environment call behind a cast or a discarded result is read', () =
     "$null = [void][System.Environment]::SetEnvironmentVariable('LEFTHOOK', '0', 'Process'); git commit -m x",
     "[Environment]::SetEnvironmentVariable('LEFTHOOK', '0') | Out-Null; git commit -m x",
   ]) {
-    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining('lefthook')])
+    expect([command, readCommand(command, true).block]).toEqual([command, expect.stringContaining('lefthook')])
   }
   const named = 'an environment variable named at run time'
   for (const command of [
     '[void][Environment]::SetEnvironmentVariable($n, $v); git commit -m x',
     '$null = [Environment]::SetEnvironmentVariable($n, $v); git commit -m x',
   ]) {
-    expect([command, inspect(command, true).unread]).toEqual([command, expect.arrayContaining([named])])
+    expect([command, readCommand(command, true).unread]).toEqual([command, expect.arrayContaining([named])])
   }
 })
 
@@ -194,10 +194,10 @@ test('a PowerShell or .NET write names the body file it may rewrite', () => {
     "[IO.File]::WriteAllText('b.md', 'x')",
     "Copy-Item other.md b.md",
   ]) {
-    const files = inspect(`${before}; gh pr create -t t --body-file b.md`, true).files
+    const files = readCommand(`${before}; gh pr create -t t --body-file b.md`, true).files
     expect([before, files.map(f => f.named)]).toEqual([before, [true]])
   }
-  expect(inspect('Get-Content b.md; gh pr create -t t --body-file b.md', true).files.map(f => f.named)).toEqual([
+  expect(readCommand('Get-Content b.md; gh pr create -t t --body-file b.md', true).files.map(f => f.named)).toEqual([
     undefined,
   ])
 })
@@ -206,7 +206,7 @@ test('a PowerShell or .NET write names the body file it may rewrite', () => {
 // PowerShell parameter, a .NET call behind `$null =`, and a destination built at run time.
 test('every write spelling names the body file it may rewrite', () => {
   const named = (before: string, ps: boolean) =>
-    inspect(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named)
+    readCommand(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named)
   for (const [before, ps] of [
     ['gh release download v1 -p b.md --clobber', false],
     ['gh run download 5 -n art', false],
@@ -241,7 +241,7 @@ test('every write spelling names the body file it may rewrite', () => {
 // options that run a program. And `-o` that is no output file.
 test('every hidden program run makes the body file rewritable', () => {
   const named = (before: string, ps: boolean) =>
-    inspect(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
+    readCommand(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
   for (const [before, ps] of [
     ["cat > b.md <<'EOF'\nclean\nEOF\neval \"$CMD\"", false],
     ['Invoke-Expression $cmd', true],
@@ -268,14 +268,14 @@ test('every hidden program run makes the body file rewritable', () => {
   ] as const) {
     expect([before, named(before, ps)]).toEqual([before, undefined])
   }
-  expect(inspect("$t = $s.Trim(); git commit -m 'fix: x'", true).unread).toEqual([])
+  expect(readCommand("$t = $s.Trim(); git commit -m 'fix: x'", true).unread).toEqual([])
 })
 
 // The round's last spellings: a FileInfo.Replace, gh's action past -R and its short flags, variables that
 // make git run a program, a script file's own -c, a split cmd line, and a script built at run time.
 test('the remaining spellings make the body file rewritable, and searches do not', () => {
   const named = (before: string, ps: boolean) =>
-    inspect(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
+    readCommand(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
   for (const [before, ps] of [
     ["$f = Get-Item other.md; $null = $f.Replace('b.md', $null)", true],
     ["$f = Get-Item other.md; $f.Replace('b.md', $null)", true],
@@ -318,10 +318,10 @@ test('a wrapper shell with value options is still read, a PowerShell script file
     'pwsh -ExecutionPolicy Bypass -Command "git commit --no-verify -m x"',
     'powershell git commit --no-verify -m x',
   ]) {
-    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+    expect([command, readCommand(command, false).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
   }
   const named = (before: string) =>
-    inspect(`${before}\ngh pr create -t t --body-file b.md`, false).files.map(f => f.named).at(-1)
+    readCommand(`${before}\ngh pr create -t t --body-file b.md`, false).files.map(f => f.named).at(-1)
   for (const before of [
     'pwsh gen.ps1 -Command x',
     'powershell gen.ps1 -c x',
@@ -352,9 +352,9 @@ test('bundles and prefixes keep the wrapped script read, and harmless settings r
     ['pwsh -win hidden -c "git commit --no-verify -m x"', false],
     ['pwsh -comm "git commit --no-verify -m x"', false],
   ] as const) {
-    expect([command, inspect(command, ps).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+    expect([command, readCommand(command, ps).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
   }
-  const last = (command: string) => inspect(command, false).files.map(f => f.named).at(-1)
+  const last = (command: string) => readCommand(command, false).files.map(f => f.named).at(-1)
   const before = (b: string) => last(`${b}\ngh pr create -t t --body-file b.md`)
   expect(before('powershell -EncodedCommand ZwBpAHQAIABzAHQAYQB0AHUAcwA=')).toBe(true)
   expect(before('pwsh -File gen.ps1')).toBe(true)
@@ -377,7 +377,7 @@ test('bundles and prefixes keep the wrapped script read, and harmless settings r
 // A statement of assignments only, a bare export, git's exec path, more pwsh spellings and `bash -s` arguments.
 test('assignments alone, exec paths, pwsh spellings and bash -s arguments are read', () => {
   const before = (b: string) =>
-    inspect(`${b}\ngh pr create -t t --body-file b.md`, false).files.map(f => f.named).at(-1)
+    readCommand(`${b}\ngh pr create -t t --body-file b.md`, false).files.map(f => f.named).at(-1)
   for (const b of [
     'PATH="$PWD/bin:$PATH"',
     'HOME=/tmp/h',
@@ -396,17 +396,17 @@ test('assignments alone, exec paths, pwsh spellings and bash -s arguments are re
     "bash -s -- \"$x\" <<'EOF'\ngit commit --no-verify -m x\nEOF",
     "bash -s arg <<'EOF'\ngit commit --no-verify -m x\nEOF",
   ]) {
-    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+    expect([command, readCommand(command, false).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
   }
   for (const command of ['HOME=/tmp/h git commit -m x', 'export XDG_CONFIG_HOME=/tmp/x; git commit -m x']) {
-    expect([command, inspect(command, false).unread]).toEqual([command, expect.arrayContaining([expect.anything()])])
+    expect([command, readCommand(command, false).unread]).toEqual([command, expect.arrayContaining([expect.anything()])])
   }
 })
 
 // Bash names keep their case, a `$` typed in single quotes or escaped is text, the joined `--config-env=` is
 // judged, and a new branch at HEAD changes no file.
 test('names keep their case in Bash, plain dollars stay text, and a new branch at HEAD writes nothing', () => {
-  const read = (command: string, ps = false) => inspect(command, ps)
+  const read = (command: string, ps = false) => readCommand(command, ps)
   const texts = (command: string, ps = false) => read(command, ps).texts.filter(t => !t.creditOnly).map(t => t.text)
   for (const command of ['N="$OUT"; n=\'fix: x\'; git commit -m "$N"', 'git --config-env="$E" commit -m x']) {
     expect([command, read(command).unread]).toEqual([command, expect.arrayContaining([expect.anything()])])
@@ -464,7 +464,7 @@ test('each unread kind has its own way out', () => {
 // files; `$'...'` and `@"..."@` read as their shells read them; a splat is no branch name; and each shell
 // keeps its own variables.
 test('plain dollars follow every cut, quoting style and shell', () => {
-  const read = (command: string, ps = false) => inspect(command, ps)
+  const read = (command: string, ps = false) => readCommand(command, ps)
   const texts = (command: string, ps = false) => read(command, ps).texts.filter(t => !t.creditOnly).map(t => t.text)
   for (const [command, ps] of [
     ['git commit -m\'$ \'"$OUT"', false],
@@ -505,19 +505,19 @@ test('plain dollars follow every cut, quoting style and shell', () => {
 
 // A redirect joined to a target that holds a variable (`>"$F"`, `<$IN`) is read as one, filled in.
 test('a redirect joined to a variable target writes or feeds that file', () => {
-  const files = (command: string) => inspect(command, false).files.map(f => [f.path, f.written ?? false])
+  const files = (command: string) => readCommand(command, false).files.map(f => [f.path, f.written ?? false])
   for (const w of ['cat >"$F" <<\'EOF\'\nx\nEOF', 'echo hi >$F', 'printf x 1>"$F"']) {
     const command = `F=b.md; ${w}\ngh pr create -t t -F b.md`
     expect([command, files(command)]).toEqual([command, [['b.md', true]]])
   }
   expect(files('F=m.txt; git commit -F - <"$F"')).toEqual([['m.txt', false]])
-  expect(inspect('git commit -F - <"$IN"', false).unread).toEqual(['the commit message'])
+  expect(readCommand('git commit -F - <"$IN"', false).unread).toEqual(['the commit message'])
 })
 
 // A `{ }` group in a pipeline runs in a subshell; a command naming `IFS` leaves unquoted splits unknown; a
 // trap action built at run time is read as an `eval`; a hook manager's off switch with any other value passes.
 test('piped groups, IFS, trap actions and hook-manager values are read as the shell runs them', () => {
-  const read = (command: string, ps = false) => inspect(command, ps)
+  const read = (command: string, ps = false) => readCommand(command, ps)
   const plain = read('git commit -am x').targets[0]?.folder
   expect(read('{ cd sub; } | cat; git commit -am x').targets[0]?.folder).toEqual(plain)
   expect(read('{ cd sub; } 2>&1 | tail -5; git commit -am x').targets[0]?.folder).toEqual(plain)
@@ -554,7 +554,7 @@ test('piped groups, IFS, trap actions and hook-manager values are read as the sh
 // its `-Command` and its pipe; an `EXIT` trap in a subshell runs before what follows; a deferred statement
 // reads a variable set again later as unknown; a name set at run time may be any; `` `make `` is a command.
 test('switches reach git calls, iex reads its input, and deferred or run-time names stay unknown', () => {
-  const read = (command: string, ps = false) => inspect(command, ps)
+  const read = (command: string, ps = false) => readCommand(command, ps)
   for (const command of [
     'HUSKY=0 npm ci',
     'export HUSKY=0; npm install',
@@ -603,7 +603,7 @@ test('switches reach git calls, iex reads its input, and deferred or run-time na
 // value piped in; attached and PowerShell spellings of a set are counted; `coproc` runs in a subshell; a
 // writer is fed with no value a later set may have changed.
 test('switches in any order, piped iex, attached sets, coproc and late writers', () => {
-  const read = (command: string, ps = false) => inspect(command, ps)
+  const read = (command: string, ps = false) => readCommand(command, ps)
   for (const command of [
     "trap 'git commit -m x' EXIT; export HUSKY=0",
     'f() { git commit -m x; }; export HUSKY=0; f',
@@ -639,7 +639,7 @@ test('switches in any order, piped iex, attached sets, coproc and late writers',
 // time, loops that run a statement again after a later set, writers fed the values where they ran, and the
 // closing word of a block.
 test('coproc names, function names, namerefs, run-time names, loops, writer values and blocks', () => {
-  const read = (command: string, ps = false) => inspect(command, ps)
+  const read = (command: string, ps = false) => readCommand(command, ps)
   expect(read('coproc C { git commit --no-verify -m x; }').block).toContain('skipping git hooks')
   for (const command of [
     'a.b() { git commit -m x; }; HUSKY=0 a.b',
