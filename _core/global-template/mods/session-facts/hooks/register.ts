@@ -248,6 +248,10 @@ async function idleCompact($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   const { idleCompactAt: idleAt, cacheExpiresAt: expiresAt } = cacheTimes(shown.tokens)
   if (!isIdleCompactDue(now, idleAt, expiresAt, live.lastResponseAt, live.idleTriedFor)) return
+  // A hot reload leaves this module's timer running beside the new one's: go on only while the session's
+  // memory file still holds this reply, which every newer reply rewrites.
+  const saved = memoryFile ? parseMemory(String(await $.fs.read(memoryFile).catch(() => ''))) : undefined
+  if (saved?.lastResponseAt !== live.lastResponseAt) return
   live.idleTriedFor = live.lastResponseAt
   await $.session.compact().catch(() => undefined)
 }

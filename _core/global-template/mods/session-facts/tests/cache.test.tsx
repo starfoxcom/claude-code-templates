@@ -506,3 +506,13 @@ test("a fresh reply counts even while the row's reading is stale", async ($, on)
   await clock.advance(5 * MINUTE + 30_000)
   expect(compactions).toEqual([])
 })
+
+test('a module left running by a hot reload never compacts past a newer reply', async ($, on) => {
+  const { clock, files, compactions } = world(on)
+  await start($)
+  await turn($)
+  // What the newer module writes on its own reply.
+  files.set(MEMORY, JSON.stringify({ lastResponseAt: NOW + 50 * MINUTE, lifetimeMs: HOUR, isLifetimeRead: true }))
+  await clock.advance(55 * MINUTE + 30_000)
+  expect(compactions).toEqual([])
+})
