@@ -2,8 +2,9 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
-import { isPushOrPr, mergedNumber, targetFolder } from './command'
+import { isPush, isPushOrPr, mergedNumber, targetFolder } from './command'
 import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
+import { redRounds, refusalText, ROUND_LIMIT, roundNodes, ROUNDS_FILE, ROUNDS_QUERY, TOUCHES_ROUNDS } from './rounds'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
 
@@ -13,7 +14,7 @@ const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 const KEEP_SETTLED_MS = 60 * 60_000
-const HINT = '[help | settings | set | stop | phone]'
+const HINT = '[help | settings | set | stop | phone | rounds]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
   '  /ci-watch           the watched PRs and their checks',
@@ -21,6 +22,8 @@ export const HELP = [
   '  /ci-watch settings  open the settings pane',
   '  /ci-watch set       change a setting: set <name> <value>; alone, list them',
   '  /ci-watch phone     the same as text, for phone chats',
+  `  /ci-watch rounds    the fix rounds in a row without green checks on this branch's PR (or rounds <pr>);`,
+  `                      pushes are refused at ${ROUND_LIMIT}, until you type: rounds reset <pr>`,
   '  /ci-watch help      this list',
 ].join('\n')
 
@@ -266,12 +269,15 @@ async function gh($: EngineInterface, args: readonly string[], cwd?: string): Pr
   return stdout.trim()
 }
 
+// The branch's PR, or the PR `number` names, in the repo of the folder.
 async function prOfBranch(
   $: EngineInterface,
   cwd?: string,
+  number?: string,
 ): Promise<{ repo: string; number: number; headSha: string } | undefined> {
   try {
-    const view = JSON.parse(await gh($, ['pr', 'view', '--json', 'number,url,headRefOid'], cwd)) as {
+    const args = ['pr', 'view', ...(number ? [number] : []), '--json', 'number,url,headRefOid']
+    const view = JSON.parse(await gh($, args, cwd)) as {
       number: number
       url: string
       headRefOid: string
@@ -299,6 +305,59 @@ async function headOf($: EngineInterface, repo: string, number: number): Promise
   } catch {
     return ''
   }
+}
+
+// The fix-round limit (rounds.ts). The resets live beside the session files, shared by every session.
+async function roundsPath($: EngineInterface): Promise<string> {
+  const path = await statePath($)
+  return `${path.slice(0, path.lastIndexOf('/'))}/${ROUNDS_FILE}`
+}
+
+async function readResets($: EngineInterface): Promise<Record<string, string>> {
+  try {
+    const resets = JSON.parse(String(await $.fs.read(await roundsPath($))))
+    return resets && typeof resets === 'object' ? (resets as Record<string, string>) : {}
+  } catch {
+    return {}
+  }
+}
+
+async function redRoundsOf($: EngineInterface, pr: { repo: string; number: number }): Promise<number> {
+  const [owner, name] = pr.repo.split('/')
+  const query = ['api', 'graphql', '-f', `query=${ROUNDS_QUERY}`, '-F', `owner=${owner}`, '-F', `name=${name}`]
+  const answer = await gh($, [...query, '-F', `number=${pr.number}`]).catch(() => '')
+  return redRounds(roundNodes(answer), (await readResets($))[`${pr.repo}#${pr.number}`])
+}
+
+// A push to a PR past the limit: why it is refused. A PR GitHub cannot be asked about is not refused.
+async function roundRefusal($: EngineInterface, command: string, isPowerShell: boolean) {
+  const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
+  const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
+  if (!pr) return undefined
+  const red = await redRoundsOf($, pr)
+  return red >= ROUND_LIMIT ? `BLOCKED (ci-watch): ${refusalText(`${pr.repo}#${pr.number}`, red)}` : undefined
+}
+
+const ROUNDS_OWN =
+  "BLOCKED (ci-watch): the fix-round count's file is the user's: only `/ci-watch rounds reset` writes it."
+
+// `/ci-watch rounds [reset] [<pr>]`. A reset counts only when the user typed it (at the prompt or from the
+// phone): a command a plugin or the session runs never clears the limit.
+async function roundsCommand($: EngineInterface, args: string, origin: { kind: string }): Promise<string> {
+  const match = /^rounds(\s+reset)?(?:\s+#?(\d+))?\s*$/.exec(args)
+  if (!match) return HELP
+  const pr = await prOfBranch($, undefined, match[2])
+  if (!pr) return match[2] ? `No PR #${match[2]} in this folder's repo.` : "This folder's branch has no PR."
+  const key = `${pr.repo}#${pr.number}`
+  if (!match[1]) {
+    const red = await redRoundsOf($, pr)
+    return `${key}: ${red} fix round(s) in a row without every check green; pushes are refused at ${ROUND_LIMIT}.`
+  }
+  if (origin.kind !== 'composer' && origin.kind !== 'bridge') return 'Only the user resets the fix-round count.'
+  const path = await roundsPath($)
+  await ensureDir($, path.slice(0, path.lastIndexOf('/')))
+  await $.fs.write(path, JSON.stringify({ ...(await readResets($)), [key]: pr.headSha }))
+  return `Reset the fix-round count of ${key}: rounds after ${pr.headSha.slice(0, 7)} count from zero.`
 }
 
 // A push that moves no commit (tags, "Everything up-to-date") keeps the watch on that head, settled or
@@ -630,6 +689,9 @@ export const register: Register = (on, options) => {
 
   // The other common tools carry a finished watch into the running turn too.
   on('tool.call', { tool: ['Read', 'Edit', 'Write', 'Grep', 'Glob'] }, async ($, e, next) => {
+    const input = e as { tool?: unknown; file_path?: unknown }
+    const isWrite = input.tool === 'Edit' || input.tool === 'Write'
+    if (isWrite && TOUCHES_ROUNDS.test(String(input.file_path ?? ''))) return { deny: ROUNDS_OWN }
     await startPolling($)
     if (await isRetired($)) return next(e)
     const result = await next(e)
@@ -639,6 +701,12 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+    const command = String((e as { command?: unknown }).command ?? '')
+    const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
+    // Held by every instance, retired or not: the limit never waits on which one polls.
+    if (TOUCHES_ROUNDS.test(command)) return { deny: ROUNDS_OWN }
+    const refusal = isPush(command, isPowerShell) ? await roundRefusal($, command, isPowerShell) : undefined
+    if (refusal) return { deny: refusal }
     await startPolling($)
     if (await isRetired($)) return next(e)
     const answered = await next(e)
@@ -646,8 +714,6 @@ export const register: Register = (on, options) => {
     const notes = e.agentId !== undefined || 'deny' in answered ? [] : await takeNotes($)
     const isPlain = 'deny' in answered || notes.length === 0
     const result = isPlain ? answered : { ...answered, context: [...(answered.context ?? []), ...notes] }
-    const command = String((e as { command?: unknown }).command ?? '')
-    const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
     if (result.deny !== undefined || result.isError) return result
     const merged = mergedNumber(command, isPowerShell)
     if (merged !== undefined) {
@@ -695,6 +761,7 @@ export const register: Register = (on, options) => {
     // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
     // row draws: the bare command answers with the phone text.
     const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
+    if (/^rounds\b/.test(verb)) return { text: await roundsCommand($, verb, e.origin ?? { kind: 'unclassified' }) }
     if (!['', 'settings', 'stop', 'phone'].includes(verb)) return { text: HELP }
     if (verb === 'settings') {
       await $.ui.open({ id: SETTINGS_PANE, title: 'CI watch settings', focus: true })

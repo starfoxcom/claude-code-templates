@@ -412,7 +412,7 @@ test('a push in another folder is looked up there', () => {
 test('/ci-watch shows its verbs in the menu, and help or an unknown verb lists them', async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  expect(seen.commands).toEqual([{ name: 'ci-watch', argumentHint: '[help | settings | set | stop | phone]' }])
+  expect(seen.commands).toEqual([{ name: 'ci-watch', argumentHint: '[help | settings | set | stop | phone | rounds]' }])
   for (const args of ['help', 'stopp']) {
     const answer = await $.command.run({ command: 'ci-watch', args } as never)
     expect(answer).toEqual(expect.objectContaining({ text: HELP }))
