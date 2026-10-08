@@ -1,7 +1,7 @@
 // Where a command's statements run: the folder each `cd`, `pushd` and `popd` leads to, kept apart for
 // each subshell, `$(...)` and child shell, as the shell keeps it. Pure.
 
-import { programOf } from './shell'
+import { programOf } from './programs'
 import type { Statement, Word } from './shell'
 import { branchBase, lookup } from './vars'
 import type { VarState } from './vars'

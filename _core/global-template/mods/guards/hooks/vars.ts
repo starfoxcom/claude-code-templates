@@ -3,6 +3,7 @@
 // and the ones it opens, and gone once it closes. A child shell (`bash -c`) sees only exported values.
 // Pure.
 
+import { PS_OPERATOR } from './shell'
 import type { Statement, Word } from './shell'
 
 /** A variable's value: `literal` when it is known, `scope` where it was set, `exported` when a child shell
@@ -177,10 +178,13 @@ export function expandBody(body: string, r: VarState): { text: string; unresolve
  * A word with any other part, or one that would split into a glob, stays as typed. */
 export function withWords(st: Statement, r: VarState): Statement {
   let changed = false
+  // A PowerShell statement starting with a variable assigns to it or calls a member, unless `&` runs it: its
+  // targets (`$m`, `[string] $m`, `$a, $m`, both of `$a = $m = 1`) are names, never filled in.
+  const last = psAssignment(st) ? st.words.map(isOperator).lastIndexOf(true) : 1
+  const targets = r.ps && !st.isCall ? Math.max(1, last) : 0
   const words = st.words.flatMap((w, i) => {
-    // A PowerShell statement starting with a variable assigns to it or calls a member, unless `&` runs it.
     // A PowerShell expression (`$o.Trim()`) computes its value: filling in the variable alone is wrong text.
-    if (!w.dynamic || w.expr || (r.ps && i === 0 && !st.isCall)) return [w]
+    if (!w.dynamic || w.expr || i < targets) return [w]
     const e = expand(w.text, r)
     const splits = !r.ps && w.splits === true
     if (e.unresolved || (splits && /[*?[]/.test(e.text))) return [w]
@@ -197,14 +201,6 @@ const PRINTS = /^(git|gh|echo|cat|type|get-content|gc|write-output|write-host)$/
 /** A statement that may set a variable in a way the reading does not follow (`read M`, `for M in`,
  * `printf -v M`, `unset M`, `mapfile M`): every name it spells as a word is unknown after it. */
 export function forget(st: Statement, name: string, r: VarState) {
-  // PowerShell's common parameters that store a command's output or errors in a variable, any command's.
-  if (r.ps) {
-    st.words.forEach((w, i) => {
-      const out = OUT_VARS.exec(w.text)
-      const target = out?.[1] ?? (out ? st.words[i + 1]?.text : undefined)
-      if (target) setVar(r, target.replace(/^[+]/, ''), undefined)
-    })
-  }
   if (PRINTS.test(name)) return
   if (name === 'source' || name === '.' || st.isSourced) r.isSourced = true
   unsure(st, r, () => {
@@ -296,28 +292,19 @@ function isPsText(v: Word): boolean {
 // names the same variable from inside a function or block.
 const PS_NAME = /^\$\{?(?:(?:script|global|local|private|variable):)?(\w+)\}?$/i
 
-// PowerShell: `$m = ...`; `$p += @{...}`, `$p.Body = ...`, `$p['Body'] = ...`, `$p.Add(...)`: a value
-// changed after it was typed is no longer known.
+// PowerShell: a method call on a variable (`$p.Add(...)`, `$p.Remove('Body')`) changes a value after it
+// was typed. Assignments are read by `psAssignment`.
 function assignPs(w: Word[], r: VarState): boolean {
-  const spaced = PS_NAME.exec(w[0]?.text ?? '')
-  if (spaced && w[1]?.text === '=') {
-    // Known only as one string, a here-string, a number or another variable. A bare word is a command
-    // (`$m = Get-Date`), a list (`'a','b'`, `@(...)`) several values, an expression (`'x'.Trim()`) computed.
-    const value = w.length === 3 ? w[2] : undefined
-    setVar(r, spaced[1] ?? '', value && isPsText(value) ? value : undefined)
-    return true
-  }
-  const isCompound = spaced !== null && /^([-+*/%]|\?\?)=$/.test(w[1]?.text ?? '')
-  const member = isCompound ? spaced : /^\$(\w+)[.[]/.exec(w[0]?.text ?? '')
+  const member = /^\$(\w+)[.[]/.exec(w[0]?.text ?? '')
   const changed = member ? lookup(r, member[1] ?? '') : undefined
-  // A fresh value, so a statement that kept the old one sees the change.
-  const text = `${changed?.text ?? ''}\n${w.map(x => x.text).join(' ')}`
-  if (changed) store(r, member?.[1] ?? '', { ...changed, text, literal: false })
-  else if (isCompound) setVar(r, spaced?.[1] ?? '', undefined)
-  const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
-  if (joined && w[0]?.expr) setVar(r, joined[1] ?? '', undefined)
-  else if (joined) setVar(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
-  return Boolean(joined) || isCompound
+  if (changed) markChanged(r, member?.[1] ?? '', changed, w)
+  return false
+}
+
+// A known value changed in place: its text, with the change after it, so a splat of it is read entry by
+// entry, and no longer a known string.
+function markChanged(r: VarState, name: string, old: Var, w: Word[]) {
+  store(r, name, { ...old, text: `${old.text}\n${w.map(x => x.text).join(' ')}`, literal: false })
 }
 
 // PowerShell sets an environment variable in three spellings: `$env:X = v`, the `env:` drive
@@ -332,13 +319,23 @@ const DOTNET_ENV = new RegExp(
 
 /** A PowerShell statement that sets an environment variable through the `env:` drive or .NET, as the
  * `$env:X = v` statement the readers know: `name` undefined when the name is built at run time. */
-export function psEnvSet(st: Statement): { name?: string; statement: Statement } | undefined {
+export function psEnvSet(st: Statement, a?: PsAssignment): { name?: string; statement: Statement } | undefined {
   const words = st.words
   const head = words[0]?.text ?? ''
   let name: string | undefined
   let value: Word | undefined
   const dotnet = DOTNET_ENV.exec(words.map(w => w.text).join(' '))
-  if (dotnet) {
+  const envs = a?.targets.filter(t => t.isEnv) ?? []
+  if (a && envs.length > 0) {
+    // `$env:X = v`: known only as one quoted string, a number or $null. A command, a list, an expression or
+    // a change (`+=`) is not, and with several targets the name is not known either.
+    const [only] = a.value
+    const isOne = a.targets.length === 1 && a.op === '=' && !a.command && a.value.length === 1 && only
+    const isNull = isOne && /^[$]null$/i.test(only.text)
+    const isLiteral = isOne && !only.dynamic && (only.literalStart || /^-?[0-9]+$/.test(only.text))
+    name = a.targets.length === 1 ? envs[0]?.name : undefined
+    value = isNull ? { text: '', dynamic: false, bodies: [] } : isLiteral ? only : undefined
+  } else if (dotnet) {
     name = /^\w+$/.test(dotnet[2] ?? '') ? dotnet[2] : undefined
     // The reader drops the quotes: a value is literal when its word started quoted, or is a number or $null.
     const raw = dotnet[3] ?? ''
@@ -364,31 +361,103 @@ const OUT_VARS = new RegExp(
   '^-(?:outvariable|ov|errorvariable|ev|warningvariable|wv|informationvariable|iv|pipelinevariable|pv)(?::(.+))?$',
   'i',
 )
-const PS_TYPED = /^\[[\w.]+(?:\[\])?\]\$(\w+)$/
 
-/** A PowerShell assignment whose value is a command (`$r = git push 2>&1`, `[string]$r += gh pr ...`): the
- * variable, set unknown, and the command as a statement of its own, to be read in turn. A typed target with
- * a plain value only sets its variable unknown. */
-export function psAssignedCommand(st: Statement, r: VarState): { command?: Statement } | undefined {
+/** PowerShell's common parameters that store a command's output or errors in a variable (`-ov m`,
+ * `-OutVariable:m`, `-ev +e`), any command's: each such variable is unknown after it. */
+export function forgetOutVars(st: Statement, r: VarState) {
+  st.words.forEach((w, i) => {
+    const out = OUT_VARS.exec(w.text)
+    const target = out?.[1] ?? (out ? st.words[i + 1]?.text : undefined)
+    if (target) setVar(r, target.replace(/^[+]/, ''), undefined)
+  })
+}
+
+/** One target of a PowerShell assignment: the variable it names (`$p.Body` names `p`), whether it is an
+ * environment variable (`$env:X`), and whether it is the whole variable with no cast (`$m`, `${m}`,
+ * `$script:m`), the one shape a plain value is known in. */
+type PsTarget = { name: string; isEnv: boolean; isPlain: boolean }
+
+/** A PowerShell assignment: its targets, its operator, the words of its value, and `command` when the value
+ * runs a command (`$r = git push`, `$r = & $g ...`), as a statement of its own. The reader makes the
+ * operator a word of its own (`$r=git` is `$r`, `=`, `git`). */
+export type PsAssignment = { targets: PsTarget[]; op: string; value: Word[]; command?: Statement }
+
+export function psAssignment(st: Statement): PsAssignment | undefined {
   const w = st.words
-  const plain = PS_NAME.exec(w[0]?.text ?? '')?.[1]
-  const name = plain ?? PS_TYPED.exec(w[0]?.text ?? '')?.[1]
-  if (!name || !/^([-+*/%]|[?][?])?=$/.test(w[1]?.text ?? '')) return undefined
-  let tail = w.slice(2)
-  // A leading `.` or `&` there is the call operator.
-  const isCall = !tail[0]?.literalStart && /^[.&]$/.test(tail[0]?.text ?? '')
-  if (isCall) tail = tail.slice(1)
-  const first = tail[0]
-  const isValue = first && (first.dynamic || first.literalStart || first.list || first.expr || isPsText(first))
-  const isPlainValue = !isCall && tail.length <= 1 && (isValue || !first)
-  if (plain && isPlainValue) return undefined
-  setVar(r, name, undefined)
-  if (isPlainValue) return {}
-  return { command: { ...st, words: tail, inner: [], isCall: isCall || undefined } }
+  const at = w.findIndex(isOperator)
+  const head = w[0]
+  if (at < 1 || st.isCall || !head || head.literalStart || !/^[$[]/.test(head.text)) return undefined
+  // `$a, $b = ...` names several; a cast may hold a comma of its own (`[Dictionary[string,int]]$d`).
+  const targets = splitTop(w.slice(0, at).map(x => x.text).join(' ')).flatMap(psTarget)
+  let value = w.slice(at + 1)
+  // A leading `.` or `&` is the call operator.
+  const isCall = value[0] !== undefined && !value[0].literalStart && /^[.&]$/.test(value[0].text)
+  if (isCall) value = value.slice(1)
+  // A bare word first is a command (`git`, `Get-Clipboard`); a quoted string, a number, a variable, a list,
+  // an expression, a hashtable or a here-string is a value.
+  const f = value[0]
+  const isBare = f !== undefined && !(f.literalStart || f.quoted || f.dynamic || f.list || f.expr)
+  // A chained assignment (`$a = $b = 1`) is read as an assignment of its own, after the first.
+  const isCommand = isCall || (isBare && !/^(-?[0-9]|@)/.test(f.text)) || value.some(isOperator)
+  const command = isCommand ? { ...st, words: value, inner: [], isCall: isCall || undefined } : undefined
+  return { targets, op: w[at]?.text ?? '=', value, command }
+}
+
+const isOperator = (w: Word) => !w.literalStart && PS_OPERATOR.test(w.text)
+
+// The text split at its commas outside brackets.
+function splitTop(text: string): string[] {
+  const parts = ['']
+  let depth = 0
+  for (const ch of text) {
+    if ('[({'.includes(ch)) depth++
+    else if ('])}'.includes(ch)) depth--
+    if (ch === ',' && depth === 0) parts.push('')
+    else parts[parts.length - 1] += ch
+  }
+  return parts
+}
+
+// One target, past its casts and attributes (`[string] $r`, `[ValidateNotNull()][string]$r`).
+function psTarget(piece: string): PsTarget[] {
+  let text = piece.trim()
+  let isCast = false
+  while (text.startsWith('[')) {
+    let depth = 0
+    let end = 0
+    for (; end < text.length; end++) {
+      if (text[end] === '[') depth++
+      else if (text[end] === ']' && --depth === 0) break
+    }
+    text = text.slice(end + 1).trimStart()
+    isCast = true
+  }
+  const m = /^\$\{?(?:(\w+):)?(\w+)/.exec(text)
+  if (!m) return []
+  return [{ name: m[2] ?? '', isEnv: /^env$/i.test(m[1] ?? ''), isPlain: !isCast && PS_NAME.test(text) }]
+}
+
+/** What a PowerShell assignment does to its variables. A plain value into one whole variable is known (`$m =
+ * 'x'`, `$m = @'...'@`, `$m = $other`). A change to one known value keeps its text, changed (`$p += @{...}`,
+ * `$p.Body = 'b'`). Anything else (a command, several values, several targets, a cast) leaves each unknown. */
+export function assignPsTargets(st: Statement, a: PsAssignment, r: VarState) {
+  unsure(st, r, () => {
+    const vars = a.targets.filter(t => !t.isEnv)
+    const one = a.targets.length === 1 ? vars[0] : undefined
+    const [value] = a.value
+    const isWhole = one?.isPlain && a.op === '='
+    const isPlain = isWhole && !a.command && a.value.length === 1 && value && isPsText(value)
+    if (one && isPlain) return setVar(r, one.name, value)
+    const old = one && !isWhole && !a.command ? lookup(r, one.name) : undefined
+    if (one && old) return markChanged(r, one.name, old, st.words)
+    for (const t of vars) setVar(r, t.name, undefined)
+  })
 }
 
 /** A Bash command that sets an environment variable whose name is built at run time (`export "$k=v"`).
- * PowerShell's spellings are told by `psEnvSet`. */
+ * PowerShell's spellings are told by `psEnvSet`. `declare -p`, `-f` and `-F` only print. */
 export function setsEnvAtRunTime(name: string, args: Word[]): boolean {
-  return /^(export|declare|typeset)$/.test(name) && args.some(a => a.dynamic && !/^[A-Za-z_]\w*[+]?=/.test(a.text))
+  if (!/^(export|declare|typeset)$/.test(name)) return false
+  if (name !== 'export' && args.some(a => !a.dynamic && /^-[a-zA-Z]*[pfF]/.test(a.text))) return false
+  return args.some(a => a.dynamic && !/^[A-Za-z_]\w*[+]?=/.test(a.text))
 }
