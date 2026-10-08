@@ -765,3 +765,24 @@ test('a body file written with > beside a program that may rewrite it is refused
   const reads = "cat > b.md <<'EOF'\n## What\n- clean\nEOF\ngit status\ngh pr create --title t --body-file b.md"
   expect((await bash($, reads) as { deny?: string }).deny).toBeUndefined()
 })
+
+// Programs that only make, stamp or remove files, or print, leave a here-doc body file as it was written.
+test('a here-doc body file beside mktemp, mkdir or date passes', { options: { mode: 'enforce' } }, async ($, on) => {
+  world(on)
+  for (const command of [
+    "F=$(mktemp); cat > \"$F\" <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t --body-file \"$F\"",
+    "S=$(mktemp -d); cat > \"$S/b.md\" <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t --body-file \"$S/b.md\"",
+    "mkdir -p .tmp && cat > .tmp/b.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t -F .tmp/b.md",
+  ]) {
+    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
+  }
+})
+
+// In a folder the guard cannot place, a body file another program may rewrite is still refused.
+test('a rewritable body file in an unknown folder is refused', { options: { mode: 'enforce' } }, async ($, on) => {
+  world(on)
+  const command =
+    "cd \"$(git rev-parse --show-toplevel)\"; F=$(mktemp); cat > \"$F\" <<'EOF'\nclean\nEOF\n" +
+    'cp other.md "$F"; gh pr create -t t --body-file "$F"'
+  expect(String((await bash($, command) as { deny?: string }).deny)).toContain('cannot read')
+})

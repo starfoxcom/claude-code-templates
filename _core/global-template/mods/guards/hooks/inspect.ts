@@ -252,6 +252,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   // A PowerShell assignment sets its variables; a command after its operator (`$r = git push`) is read in turn.
   if (assignment) assignPsTargets(st, assignment, r)
   if (assignment) return void (assignment.command && readStatement(assignment.command, prev, r, outer))
+  r.mayRewrite ||= mayWriteFiles(st)
   if (assign(st, name, args, r)) return
   if (moveTo(name, args, r)) return
   if (readScript(st, name, args, r)) return
@@ -271,7 +272,6 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
   // The repo rules and the diff scan follow each write to where it runs, never to the first `cd`.
   if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
-  r.mayRewrite ||= mayWriteFiles(st)
 }
 
 // A program named through a variable the command did not set (from outside it, `$(which git)`), with
@@ -308,6 +308,8 @@ function readEval(st: Statement, args: Word[], r: Reading) {
   const e = args.some(a => a.dynamic) ? expand(text, r) : { text, unresolved: false }
   if (e.unresolved) {
     if (evalWrites(parse(text, r.ps), r.ps)) r.plan.block ??= EVAL
+    // Text the reading cannot know may run any program.
+    r.mayRewrite = true
     return
   }
   // `M=x eval '...'`: the words see `M=x`; whether the shell keeps it afterwards depends on its mode, so
