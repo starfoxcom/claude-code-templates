@@ -305,3 +305,35 @@ test('the remaining spellings make the body file rewritable, and searches do not
     expect([before, named(before, ps)]).toEqual([before, undefined])
   }
 })
+
+// A wrapper shell's options that take a value never hide its script; a script file's own -Command is its.
+test('a wrapper shell with value options is still read, a PowerShell script file is not', () => {
+  for (const command of [
+    "bash -o pipefail -c 'git commit --no-verify -m x'",
+    "bash -O extglob -c 'git commit --no-verify -m x'",
+    "bash +o history -c 'git commit --no-verify -m x'",
+    "bash --rcfile f -c 'git commit --no-verify -m x'",
+    "bash -o pipefail <<'EOF'\ngit commit --no-verify -m x\nEOF",
+    'pwsh -ExecutionPolicy Bypass -Command "git commit --no-verify -m x"',
+    'powershell git commit --no-verify -m x',
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+  }
+  const named = (before: string) =>
+    inspect(`${before}\ngh pr create -t t --body-file b.md`, false).files.map(f => f.named).at(-1)
+  for (const before of [
+    'pwsh gen.ps1 -Command x',
+    'powershell gen.ps1 -c x',
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0='sh x.sh' git diff",
+    "GIT_CONFIG_PARAMETERS=\"'diff.external'='sh x.sh'\" git diff",
+    'GIT_CONFIG_GLOBAL=cfg git diff',
+    "EXT='sh x.sh' git --config-env=diff.external=EXT diff",
+    "git -c diff.external='sh x.sh' diff",
+    "GH_BROWSER='sh x.sh' gh browse",
+    'export "GIT_SSH_COMMAND=sh x.sh"; git fetch',
+    'export PATH="$PWD/bin:$PATH"; git status',
+  ]) {
+    expect([before, named(before)]).toEqual([before, true])
+  }
+  expect(named("export S=$(mktemp -d)")).toBeUndefined()
+})

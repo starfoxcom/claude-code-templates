@@ -127,8 +127,15 @@ const GH_SWITCHES = (words: string[], args: Word[]) =>
   (words[1] === 'develop' && args.some(a => a.text === '-c')) ||
   (words[1] === 'merge' && args.some(a => /^--delete-branch(=true)?$|^-[a-z]*d[a-z]*$/.test(a.text)))
 
-// Variables that make git, ssh or rg run a program of their choosing (`GIT_EXTERNAL_DIFF=./x git diff`).
-const RUN_VARS = /^(GIT_EXTERNAL_DIFF|GIT_SSH_COMMAND|GIT_SSH|GIT_ASKPASS|SSH_ASKPASS|RIPGREP_CONFIG_PATH)$/i
+// Variables that configure the programs a command runs, any of which may make one run a program of its
+// choosing (`GIT_EXTERNAL_DIFF`, `GIT_CONFIG_KEY_0=diff.external`, `GH_BROWSER`, a `PATH` or `HOME` of its
+// own): whole families, since no list of the dangerous ones is complete.
+const RUN_VARS = new RegExp(
+  '^(GIT_\\w*|GH_\\w*|SSH_\\w*|RIPGREP_\\w*|XDG_\\w*|LD_\\w*|DYLD_\\w*|PATH|HOME|BROWSER|PAGER|EDITOR|VISUAL|' +
+    'SHELL|BASH_ENV|ENV|NODE_OPTIONS|PYTHON\\w*|PSModulePath|COMSPEC|PATHEXT)$',
+  'i',
+)
+const DECLARES = /^(export|declare|typeset|local|readonly)$/
 
 /** Whether a statement makes a later or wrapped program run one of its own choosing: `env -S 'cp x b.md'`,
  * or a variable in `RUN_VARS` set in front of a program, by `export`/`declare`, or as `$env:X = ...`. Read
@@ -138,9 +145,10 @@ export function setsRunner(st: Statement): boolean {
   const lead = st.words.slice(0, Math.max(0, st.words.length - args.length - 1))
   const isEnv = lead.some(w => w.text === 'env')
   if (isEnv && lead.some(w => /^(-[a-zA-Z]*S|--split-string)/.test(w.text))) return true
-  // `NAME=v` as typed (not quoted text), or PowerShell's `$env:NAME` heading the statement.
+  // `NAME=v` as typed (not quoted text, but `export "NAME=v"` is one), or `$env:NAME` heading the statement.
+  const isDeclare = DECLARES.test(programOf(st).name)
   return st.words.some((w, i) => {
-    const pair = w.literalStart ? null : /^([A-Za-z_]\w*)\+?=/.exec(w.text)
+    const pair = w.literalStart && !isDeclare ? null : /^([A-Za-z_]\w*)\+?=/.exec(w.text)
     const ps = i === 0 ? /^\$env:(\w+)$/i.exec(w.text) : null
     return RUN_VARS.test(pair?.[1] ?? ps?.[1] ?? '')
   })
@@ -159,6 +167,8 @@ export function mayWriteFiles(st: Statement): boolean {
   const isLogLike = /^(diff|log|show)$/.test(words[0] ?? '')
   const isOutput = args.some(a => /^--output(=|$)/.test(a.text) || (a.text === '-o' && isLogLike))
   if (args.some(a => RUNS.test(a.text))) return true
+  // A git setting typed on the line may run a program (`-c diff.external=x`, `--config-env=core.pager=V`).
+  if (name === 'git' && args.some(a => /^(-c|--config-env)(=|$)/.test(a.text))) return true
   if (PURE_CALL.test(st.words[0]?.text ?? '')) return false
   if (READERS.has(name) || (name === 'git' && GIT_READS.test(words[0] ?? '') && !isOutput)) return false
   return !(name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download') && !GH_SWITCHES(words, args))
