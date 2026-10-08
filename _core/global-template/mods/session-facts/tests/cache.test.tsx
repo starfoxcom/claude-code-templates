@@ -7,6 +7,7 @@ import {
   idleCompactAt,
   idleCompactMin,
   isIdleCompactDue,
+  isSwept,
   nextLifetime,
   parseMemory,
   SHORT_LIFETIME_MS,
@@ -581,5 +582,29 @@ test('a compaction another module started since the reply keeps this one out', a
   // What the hook of a module loaded by a hot reload writes as its compaction starts.
   files.set(MARKER, JSON.stringify({ startedAt: NOW + 54 * MINUTE }))
   await clock.advance(2 * MINUTE)
+  expect(compactions).toEqual([])
+})
+
+// The sweep takes only other sessions' own files: the settings and the shared plan figures stay.
+test("isSwept: another session's memory and marker, never the settings or the plan", () => {
+  const id = '0f8c2b3a-1d4e-4f5a-9b6c-7d8e9f0a1b2c'
+  const other = '11111111-2222-4333-8444-555555555555'
+  expect(['settings.json', 'plan.json', `${id}.json`, `${id}.compact.json`].map(n => isSwept(n, id))).toEqual([
+    false,
+    false,
+    false,
+    false,
+  ])
+  expect([`${other}.json`, `${other}.compact.json`, 'notes.txt'].map(n => isSwept(n, id))).toEqual([true, true, false])
+})
+
+// With prompt caching off a reply reads and writes no cache: there is none to keep warm, so nothing to save.
+test('a conversation whose replies touch no cache is never compacted on idle', async ($, on) => {
+  const { clock, compactions, reply } = world(on)
+  const none = { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  reply.usage = { input_tokens: 250_000, output_tokens: 500, ...none }
+  await start($)
+  await turn($)
+  await clock.advance(55 * MINUTE + 30_000)
   expect(compactions).toEqual([])
 })

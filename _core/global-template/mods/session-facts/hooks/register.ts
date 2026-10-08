@@ -12,6 +12,7 @@ import {
   nextLifetime,
   parseMemory,
   PREPARE_DIR,
+  SESSION_FILE,
   READ_CACHE_LINES,
   writtenLifetime,
 } from './cache'
@@ -354,7 +355,7 @@ async function prepareMemory($: EngineInterface): Promise<void> {
     const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
     const dir = `${configured ?? `${home}/.claude`}/mods-data/session-facts`.replaceAll('\\', '/')
     const id = await $.session.id()
-    const { exitCode } = await $.process.run([...PREPARE_DIR, dir, id], { timeoutMs: 10_000 })
+    const { exitCode } = await $.process.run([...PREPARE_DIR, dir, id, SESSION_FILE.source], { timeoutMs: 10_000 })
     if (exitCode !== 0) return
     dataDir = dir
     memoryFile = `${dir}/${id}.json`
@@ -472,7 +473,10 @@ export const register: Register = (on, options) => {
     const sentAt = await $.clock.now()
     const result = yield* next(e)
     if (e.agentId === undefined && e.index === 0 && result.usage) noteCache(result.usage, sentAt)
-    if (e.agentId === undefined && result.usage) live.lastWarmAt = sentAt
+    // Only a request that read or wrote the cache keeps it warm: with caching off there is none to keep.
+    const used = result.usage
+    const cached = used && (used.cache_read_input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0)
+    if (e.agentId === undefined && cached) live.lastWarmAt = sentAt
     return result
   })
 
