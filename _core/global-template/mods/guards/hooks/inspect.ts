@@ -25,7 +25,22 @@ import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
-import { folderNow, isSameFolder, moveFolder, movePlace, placeHere, repoMoves, targetOf, writerOf } from './folders'
+import {
+  aloneOf,
+  CD_NAMES,
+  folderNow,
+  isSameFolder,
+  landsAt,
+  moveFolder,
+  movePlace,
+  placeHere,
+  POP_NAMES,
+  PUSH_NAMES,
+  ranBefore,
+  repoMoves,
+  targetOf,
+  writersOf,
+} from './folders'
 import type { Folder, Here, Place, Target } from './folders'
 import {
   branchesOf,
@@ -90,15 +105,15 @@ export type Plan = {
 export type { Folder, Target } from './folders'
 
 // The statement that writes a file, where it runs, and the values of the variables its path names there.
-type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[]; folder: Folder }
+type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[]; folder: Folder; path: string }
 
 // The reading's working state while it walks one command.
 type Reading = VarState & {
   plan: Plan
   /** The folder each `cd` so far leads to, and the `pushd` stack, by the scope that moved them. */
   places: Map<string, Place>
-  /** Body files matched to the statement that wrote them under the same spelling. */
-  matched: Map<object, Writer>
+  /** Body files matched to the statements that may have written them, latest first. */
+  matched: Map<object, Writer[]>
   /** What the statement being read sets for itself: its `git -C` folder, `gh --repo`, its commit's lines. */
   at: Here
   /** While a writer's statement is fed in after the walk: the folder it ran in. */
@@ -109,8 +124,8 @@ type Reading = VarState & {
   isRepoMoved?: boolean
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
   opened: number
-  /** The statement that writes each file (`> file`), by normalized path, with where it runs. */
-  writers: Map<string, Writer>
+  /** The statements that write files (`> file`), in order, each with its normalized path and where it runs. */
+  writers: Writer[]
   /** Message routes read from stdin so far (`-F -`, `--body-file -`, `--input -`, `body=@-`). */
   stdin: number
   /** Write statements found so far. */
@@ -123,7 +138,6 @@ type Reading = VarState & {
   /** A statement runs `eval` or `Invoke-Expression`. */
   hasEval?: boolean
 }
-
 
 export function inspect(command: string, powershell: boolean): Plan {
   const plan: Plan = {
@@ -147,7 +161,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     vars: new Map(),
     scope: '',
     opened: 0,
-    writers: new Map(),
+    writers: [],
     stdin: 0,
     writes: 0,
   }
@@ -165,20 +179,19 @@ export function inspect(command: string, powershell: boolean): Plan {
   const fed = new Map<Writer, Set<string>>()
   for (let i = 0; i < plan.files.length; i++) {
     const f = plan.files[i] as Plan['files'][number]
-    // The writer it had where it was named: one after it writes over a file the command already read.
-    const writer = r.matched.get(f)
-    if (!writer) continue
-    f.written = true
-    const paths = fed.get(writer) ?? new Set<string>()
-    if (paths.has(norm(f.path))) continue
-    fed.set(writer, paths.add(norm(f.path)))
-    const before = plan.unread.length
-    const named = plan.files.length
-    const at = { ...r, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
-    feed(writer.st, at, `${f.where} (file ${f.path})`)
-    // A file the writer reads (`cat CHANGES.md > b.md`) is where the writer ran.
-    for (const g of plan.files.slice(named)) g.folder ??= writer.folder
-    plan.notes.push(...plan.unread.splice(before))
+    // The writers it had where it was named: one after it writes over a file the command already read.
+    for (const writer of r.matched.get(f) ?? []) {
+      const paths = fed.get(writer) ?? new Set<string>()
+      if (paths.has(norm(f.path))) continue
+      fed.set(writer, paths.add(norm(f.path)))
+      const before = plan.unread.length
+      const named = plan.files.length
+      const at = { ...r, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
+      feed(writer.st, at, `${f.where} (file ${f.path})`)
+      // A file the writer reads (`cat CHANGES.md > b.md`) is where the writer ran.
+      for (const g of plan.files.slice(named)) g.folder ??= writer.folder
+      plan.notes.push(...plan.unread.splice(before))
+    }
   }
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
   // for credit lines, so a spelling the reading does not model still cannot carry one into history. The
@@ -191,21 +204,6 @@ export function inspect(command: string, powershell: boolean): Plan {
 }
 
 const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
-
-const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'push-location', 'sl'])
-const PUSH_NAMES = new Set(['pushd', 'push-location'])
-
-// The statement a command runs on its own: the only one, or the last after `cd`s to literal folders
-// (`cd "C:/Repos/game" && gh pr create ...`), whose folder is then known. Any other shape has none.
-function aloneOf(statements: Statement[]): Statement | undefined {
-  const last = statements.at(-1)
-  const isPlainCd = (st: Statement) => {
-    const { name, args } = programOf(st)
-    const bare = !st.inner.length && !st.heredocs.length && !st.writes.length && !st.pipeIn && !st.isNested
-    return bare && CD_NAMES.has(name) && args.length === 1 && !args[0]?.dynamic && !args[0]?.text.startsWith('-')
-  }
-  return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
-}
 
 // `outer`: where commands from a `$(...)` or a `bash -c` script run; their own subshells nest inside it.
 function read(statements: Statement[], r: Reading, outer?: string) {
@@ -229,9 +227,8 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
   const at = placeHere(r).folder
   plan.written.push(...writes.map(path => ({ path, folder: at })))
-  // Kept in the order written, so a file's last writer is the last one found for it.
-  for (const path of writes) r.writers.delete(norm(path))
-  for (const path of writes) r.writers.set(norm(path), { st, ps: r.ps, scope, vars: varsIn(path, r), folder: at })
+  for (const path of writes)
+    r.writers.push({ st, ps: r.ps, scope, vars: varsIn(path, r), folder: at, path: norm(path) })
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
@@ -253,6 +250,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   r.isConfigMoved ||= setsGitConfig(st.words, name === 'git')
   if (r.isConfigMoved && name === 'git') unreadCall(r, 'a git setting built at run time')
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
+  if (!r.ps && name === 'trap') return readTrap(args, r)
   if (assign(st, name, args, r)) return
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
     const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
@@ -312,8 +310,6 @@ function readWrite(st: Statement, prev: Statement | undefined, name: string, arg
   if (r.stdin > stdin && st.heredocs.length === 0) readStdin(st, prev, r, where)
 }
 
-const POP_NAMES = new Set(['popd', 'pop-location'])
-
 // `eval` and `Invoke-Expression` run their words as a command in this same shell: read here, with the
 // variables set earlier filled in. Words built in a way the reading cannot follow hide the command, so
 // they are refused when their text names a history write.
@@ -335,14 +331,31 @@ function readEval(st: Statement, args: Word[], r: Reading) {
     // An append (`M+=x eval ...`) is left unknown.
     setVar(r, m[1] ?? '', m[2] ? undefined : { ...w, text: w.text.slice(m[0].length) })
   }
-  // The eval's own subshells are numbered apart from the command's; its top level runs in place.
+  readInPlace(parse(e.text, r.ps), r, 'e', st.isDeferred)
+  for (const name of names) setVar(r, name, undefined)
+}
+
+// `trap 'ACTION' SIGNAL...`: the action runs in this shell later (`DEBUG` before every command), so what it
+// sets may change anything read after it. One built at run time cannot be read.
+function readTrap(args: Word[], r: Reading) {
+  const k = args.findIndex(a => !/^(-[lp]+|--)$/.test(a.text))
+  const action = args[k]
+  if (!action || args.length - k < 2 || action.text === '-') return
+  if (action.dynamic) return void r.plan.unread.push('a trap action built at run time')
+  readInPlace(parse(action.text, false), r, 'c', true)
+}
+
+// Commands an `eval` or a `trap` runs in this same shell: their subshells numbered apart from the command's.
+// A trap's run later, all in a branch of their own (`c<n>`).
+function readInPlace(statements: Statement[], r: Reading, tag: 'e' | 'c', isDeferred?: boolean) {
   const n = ++r.opened
   const at = r.scope
-  const statements = parse(e.text, r.ps)
-  for (const s of statements) if (s.scope) s.scope = `e${n}/${s.scope}`
+  for (const s of statements) {
+    if (s.scope || tag === 'c') s.scope = within(`${tag}${n}`, s.scope)
+    s.isDeferred ||= isDeferred
+  }
   read(statements, r, at)
   r.scope = at
-  for (const name of names) setVar(r, name, undefined)
 }
 
 // `bash -c '...'` and the like: the script is read as commands of its own, run in a child shell that
@@ -416,12 +429,21 @@ function varsIn(path: string, r: Reading): (Var | undefined)[] {
   return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
 }
 
-// A body file named here, matched to the statement that wrote it so far, if any.
+// A body file named here, matched to the statements that wrote it so far, if any.
 function pushFile(r: Reading, where: string, path: string) {
   const entry = { where, path }
-  const writer = writerOf(path, r.writers, r)
-  if (writer) r.matched.set(entry, writer)
+  matchFile(r, entry, landsAt(path, r))
   r.plan.files.push(entry)
+}
+
+// The file's writers, back to one that surely ran before it is read. With none sure, the file on disk is
+// read too: the writers may not have run.
+function matchFile(r: Reading, entry: Plan['files'][number], isIt: (w: Writer) => boolean): boolean {
+  const found = writersOf(r.writers, r.scope, isIt)
+  if (found.length === 0) return false
+  r.matched.set(entry, found)
+  if (ranBefore(found.at(-1)?.scope ?? '', r.scope)) entry.written = true
+  return true
 }
 
 // A call whose own words are built at run time: a write, since what it does cannot be read.
@@ -578,12 +600,8 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     return undefined
   }
   // The endpoint is a positional; keep it out of the field walk.
-  if (group === 'api')
-    return ghApi(
-      st,
-      args.filter((_, i) => i !== gi),
-      r,
-    )
+  const apiArgs = args.filter((_, i) => i !== gi)
+  if (group === 'api') return ghApi(st, apiArgs, r)
   if (!GH_WRITES[group]?.includes(action)) {
     walk(rest, { '-R': 'repo', '--repo': 'repo' }, r, '')
     return undefined
@@ -615,12 +633,8 @@ function web(name: string, st: Statement, args: Word[], r: Reading): string | un
   }
   if (/^(invoke-restmethod|invoke-webrequest|irm|iwr)$/.test(name)) {
     write(r, st, where)
-    walk(
-      args.map(a => ({ ...a, text: a.text.startsWith('-') ? a.text.toLowerCase() : a.text })),
-      PS_WEB,
-      r,
-      where,
-    )
+    const lowered = args.map(a => ({ ...a, text: a.text.startsWith('-') ? a.text.toLowerCase() : a.text }))
+    walk(lowered, PS_WEB, r, where)
     return where
   }
   return undefined
@@ -703,15 +717,12 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       if (!e.unresolved) return void pushFile(r, where, e.text)
       // A file this command writes under the same spelling (`F=$(mktemp); cat > "$F"`), with every
       // variable in it unchanged since: the same file.
-      const writer = r.writers.get(norm(value.text))
       const now = varsIn(value.text, r)
       const isTracked = now.length > 0 && now.every(Boolean) && !/\$[({@*#?$!0-9-]|`|\$env:/i.test(value.text)
-      const isSame = writer && isTracked && isSameFolder(value.text, writer.folder, r)
-      if (writer && isSame && writer.vars.length === now.length && writer.vars.every((v, i) => v === now[i])) {
-        const entry = { where, path: value.text }
-        r.matched.set(entry, writer)
-        return void plan.files.push(entry)
-      }
+      const isSame = (w: Writer) => w.path === norm(value.text) && isSameFolder(value.text, w.folder, r)
+      const isIt = (w: Writer) => isSame(w) && w.vars.length === now.length && w.vars.every((v, i) => v === now[i])
+      const entry = { where, path: value.text }
+      if (isTracked && matchFile(r, entry, isIt)) return void plan.files.push(entry)
       // `-F <(cat <<'EOF' ... EOF)` hands over the here-doc's text; any other path built at run time
       // names a file the reading cannot know.
       if (!held(value, r, where, '<')) plan.unread.push(where)

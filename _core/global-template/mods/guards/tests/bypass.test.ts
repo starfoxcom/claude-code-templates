@@ -373,8 +373,10 @@ test('a case block is read as the shell reads it', () => {
     inspect(c, false).texts.filter(t => !t.creditOnly && t.where === 'the commit message').map(t => t.text)
   // The outer value stays where a subshell with a case block sets its own.
   expect(messages('M=a; (cd sub; case $x in a) M=b;; esac); git commit -m "$M"')).toEqual(['a'])
-  // In place, the arm's value is the one read; a commit inside an arm is read as one.
-  expect(messages('case $x in a) M=b;; esac; git commit -m "$M"')).toEqual(['b'])
+  // An arm may not run: its value is known inside it, unknown after the block. A commit inside an arm is
+  // read as one.
+  expect(messages('case $x in a) M=b; git commit -m "$M";; esac')).toEqual(['b'])
+  expect(inspect('case $x in a) M=b;; esac; git commit -m "$M"', false).unread).toEqual(['the commit message'])
   expect(messages("case $x in a) git commit -m 'fix: y';; esac")).toEqual(['fix: y'])
   // A `$(...)` with a case block ends at its own `)`: the commit after it is read.
   const sub = inspect("X=$(case $y in a) echo a;; esac); git commit --no-verify -m 'fix: z'", false)
@@ -748,7 +750,10 @@ test('a relative body file is the written one only when named in the same known 
   expect(message(`${body}cd "$REPO" && git commit -F m.md`)?.written).toBeUndefined()
   expect(message(`${body}cd sub && git commit -F m.md`)?.written).toBeUndefined()
   expect(message(`${body}git -C sub commit -F m.md`)?.written).toBeUndefined()
-  expect(message(`cd sub && ${body}git commit -F m.md`)?.written).toBe(true)
+  expect(message(`cd sub; ${body}git commit -F m.md`)?.written).toBe(true)
+  // A writer after `&&` may not have run by the next line: the file on disk is read too.
+  expect(message(`cd sub && ${body}git commit -F m.md`)?.written).toBeUndefined()
+  expect(message("cd sub && cat > m.md <<'EOF' && git commit -F m.md\nfix: x\nEOF")?.written).toBe(true)
   expect(message("cat > /tmp/m.md <<'EOF'\nfix: x\nEOF\ncd sub && git commit -F /tmp/m.md")?.written).toBe(true)
 })
 
@@ -821,7 +826,7 @@ test('a file a fed writer reads is fed in turn, wherever the command runs', () =
   const plan = inspect(command, false)
   expect(plan.texts.some(t => t.text.includes('the body') && !t.creditOnly)).toBe(true)
   expect(plan.files.find(f => f.path === 'a.md')?.written).toBe(true)
-  expect(inspect(`cd sub && ${command}`, false).files.find(f => f.path === 'a.md')?.written).toBe(true)
+  expect(inspect(`cd sub; ${command}`, false).files.find(f => f.path === 'a.md')?.written).toBe(true)
   // A writer that reads its own file is fed once.
   expect(inspect('cat m.md >> m.md; git commit -F m.md', false).files.length).toBeLessThan(5)
 })
@@ -918,4 +923,49 @@ test('a read-only git or gh call with a word built at run time is never unread',
   }
   expect(inspect('eval "git $(cat sub) -m x"', false).block).toContain('eval')
   expect(inspect('eval "bash -c \'git push $X\'"', false).block).toContain('eval')
+})
+
+// A value set where it may not run (a branch, after `&&` or `||`), may run later (a function body, a trap,
+// a sourced file) or runs in a subshell (a pipeline part, a background job) is never taken as the only one.
+test('a value set in a branch is known inside it and unknown after it', () => {
+  const unread = [
+    "if [ -n \"$x\" ]; then M='made by a bot'; else M='fix: x'; fi; git commit -m \"$M\"",
+    "[ -n \"$M\" ] || M='fix: x'; git commit -m \"$M\"",
+    "M='fix: x'; test -f a && M='fix: y'; git commit -m \"$M\"",
+    "while read -r l; do M=\"$l\"; done < f; git commit -m \"$M\"",
+    "for m in a b; do M='fix: x'; done; git commit -m \"$M\"",
+    "f() { M='made by a bot'; }; M='fix: x'; f; git commit -m \"$M\"",
+    "function f { M='made by a bot'; }; M='fix: x'; f; git commit -m \"$M\"",
+    "trap 'M=bot' DEBUG; M='fix: x'; git commit -m \"$M\"",
+    "M='fix: x'; . ./env.sh; git commit -m \"$M\"",
+    "M='fix: x' | cat; git commit -m \"$M\"",
+    "M='fix: x' & git commit -m \"$M\"",
+    "export M='fix: x'; BASH_ENV=e.sh bash -c 'git commit -m \"$M\"'",
+  ]
+  for (const command of unread) {
+    expect([command, inspect(command, false).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+  }
+  const ps = [
+    "if ($a) { $m = 'made by a bot' } else { $m = 'fix: x' }; git commit -m $m",
+    "function f { $script:m = 'made by a bot' }; $m = 'fix: x'; f; git commit -m $m",
+  ]
+  for (const command of ps) expect([command, inspect(command, true).unread]).not.toEqual([command, []])
+  const message = (c: string, ps = false) =>
+    inspect(c, ps).texts.filter(t => !t.creditOnly && t.where === 'the commit message').map(t => t.text)
+  // Inside the branch that set it, after `&&` in the same list, or in a plain `{ }` group, it is known.
+  expect(message("if c; then M='fix: x'; git commit -m \"$M\"; fi")).toEqual(['fix: x'])
+  expect(message("cd repo && M='fix: x' && git commit -m \"$M\"")).toEqual(['fix: x'])
+  expect(message("M='fix: x'; git commit -m \"$M\" || echo failed")).toEqual(['fix: x'])
+  expect(message("{ M='fix: x'; }; git commit -m \"$M\"")).toEqual(['fix: x'])
+  expect(message("$m = 'fix: x'; $script:m = 'chore: y'; git commit -m $m", true)).toEqual(['chore: y'])
+  // A `cd` in a branch leaves the folder unknown after it.
+  expect(inspect('test -d sub && cd sub; git commit -m x', false).targets[0]?.folder.isUnknown).toBe(true)
+  expect(inspect('cd sub && git commit -m x', false).targets[0]?.folder).toEqual({ path: 'sub', isUnknown: false })
+  // A body file a branch may write: every writer back to one that surely ran is read, and the file on disk.
+  const twice = "cat > b.md <<'EOF'\none\nEOF\n[ -f x ] && cat > b.md <<'EOF'\ntwo\nEOF\ngh pr create -t t -F b.md"
+  const plan = inspect(twice, false)
+  expect(['one', 'two'].map(w => plan.texts.some(t => t.text.includes(w) && !t.creditOnly))).toEqual([true, true])
+  expect(plan.files.find(f => f.path === 'b.md')?.written).toBe(true)
+  const maybe = inspect("[ -f x ] && cat > b.md <<'EOF'\ntwo\nEOF\ngh pr create -t t -F b.md", false)
+  expect(maybe.files.find(f => f.path === 'b.md')?.written).toBeUndefined()
 })

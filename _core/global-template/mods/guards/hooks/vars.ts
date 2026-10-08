@@ -17,7 +17,29 @@ export type VarState = {
    * `s<n>` and each child shell a `p<n>`. Empty at the top. */
   scope: string
   ps: boolean
+  /** While a statement that may run at any later point is read (a function body, a `trap` action): a name
+   * it sets stays unknown from then on. */
+  isLater?: boolean
+  /** Names a function body, a `trap` action or a PowerShell block sets: unknown wherever they are read. */
+  volatile?: Set<string>
+  /** A file was sourced (`source x`, `. x`): it may set any variable, at once or through a trap or a
+   * function, so every variable is unknown from then on. */
+  isSourced?: boolean
 }
+
+// Reads one statement, marking what it sets as unknown from then on when it may run at any later point.
+function unsure<T>(st: Statement, r: VarState, read: () => T): T {
+  r.isLater = st.isDeferred
+  try {
+    return read()
+  } finally {
+    r.isLater = undefined
+  }
+}
+
+/** Where the branch a scope sits in sits itself (`1/c4/c5` is in `1`): what the branch sets may or may not
+ * be set there. The scope itself when it is in no branch, or in a subshell inside one. */
+export const branchBase = (scope: string) => scope.replace(/(^|[/])c[0-9]+([/]c[0-9]+)*$/, '')
 
 /** A place inside `outer`: `tag` alone at the top. */
 export function within(outer: string, tag: string | undefined): string {
@@ -77,6 +99,14 @@ function heredocBody(rest: string, delim: string, strip: boolean): string | unde
 /** Keeps `v` as the variable's value in its scope; a variable once exported stays exported. */
 export function store(r: VarState, name: string, v: Var, exported = false) {
   const key = name.toLowerCase()
+  if (r.isLater) (r.volatile ??= new Set()).add(key)
+  // Set in a branch: known inside it, and unknown where the branch sits, first, so the value inside wins.
+  const base = branchBase(v.scope)
+  if (base !== v.scope) put(r, key, { text: '', literal: false, scope: base, exported: exported || v.exported })
+  put(r, key, v, exported)
+}
+
+function put(r: VarState, key: string, v: Var, exported = false) {
   const stack = r.vars.get(key) ?? []
   const old = stack.findIndex(x => x.scope === v.scope)
   if (old !== -1) v.exported ||= stack.splice(old, 1)[0]?.exported
@@ -87,6 +117,7 @@ export function store(r: VarState, name: string, v: Var, exported = false) {
 
 /** The variable as the statement being read sees it, or undefined. */
 export function lookup(r: VarState, name: string): Var | undefined {
+  if (r.isSourced || r.volatile?.has(name.toLowerCase())) return undefined
   const stack = r.vars.get(name.toLowerCase()) ?? []
   for (let i = stack.length - 1; i >= 0; i--) {
     const v = stack[i] as Var
@@ -167,10 +198,13 @@ const PRINTS = /^(git|gh|echo|cat|type|get-content|gc|write-output|write-host)$/
  * `printf -v M`, `unset M`, `mapfile M`): every name it spells as a word is unknown after it. */
 export function forget(st: Statement, name: string, r: VarState) {
   if (PRINTS.test(name)) return
-  for (const w of st.words) {
-    const m = (r.ps ? /^\$?([A-Za-z_]\w*)$/ : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
-    if (m && !w.dynamic) setVar(r, m[1] ?? '', undefined)
-  }
+  if (name === 'source' || name === '.') r.isSourced = true
+  unsure(st, r, () => {
+    for (const w of st.words) {
+      const m = (r.ps ? /^\$?([A-Za-z_]\w*)$/ : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
+      if (m && !w.dynamic) setVar(r, m[1] ?? '', undefined)
+    }
+  })
 }
 
 /** What a child shell gets besides the exported values: the assignments in front of it (`M=x bash -c`,
@@ -190,11 +224,19 @@ export function inherit(st: Statement, args: Word[], r: VarState, child: string)
     const value = m[2] ? undefined : { ...(lead[i] as Word), text: t.slice(m[0].length) }
     setVar(r, m[1] ?? '', value, true, child)
   }
+  // A child Bash first runs the file `BASH_ENV` names (`sh` reads `ENV`), which may set any variable.
+  const isEnvFile = (name: string) => lead.some(w => w.text.startsWith(`${name}=`)) || lookup(r, name)?.exported
+  if (isEnvFile('BASH_ENV') || isEnvFile('ENV'))
+    for (const name of r.vars.keys()) store(r, name, { text: '', literal: false, scope: child }, true)
 }
 
 /** Variables set earlier in the command (`MSG='...'`, `$m = @'...'@`, `read -r -d '' BODY <<'EOF'`): a
  * message that names one is read with its value. True for an assignment statement. */
 export function assign(st: Statement, name: string, args: Word[], r: VarState): boolean {
+  return unsure(st, r, () => assignNow(st, name, args, r))
+}
+
+function assignNow(st: Statement, name: string, args: Word[], r: VarState): boolean {
   if (r.ps) return assignPs(st.words, r)
   const pairs = name === '' ? st.words : /^(export|declare|local|readonly|typeset)$/.test(name) ? args : null
   if (pairs) {
@@ -242,10 +284,14 @@ function isPsText(v: Word): boolean {
   return /^-?\d+(\.\d+)?$/.test(v.text) || (v.dynamic && /^\$\w+$/.test(v.text))
 }
 
+// A PowerShell variable as assigned to: `$m`, `${m}`, or with a scope (`$script:m`, `$global:m`), which
+// names the same variable from inside a function or block.
+const PS_NAME = /^\$\{?(?:(?:script|global|local|private):)?(\w+)\}?$/i
+
 // PowerShell: `$m = ...`; `$p += @{...}`, `$p.Body = ...`, `$p['Body'] = ...`, `$p.Add(...)`: a value
 // changed after it was typed is no longer known.
 function assignPs(w: Word[], r: VarState): boolean {
-  const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
+  const spaced = PS_NAME.exec(w[0]?.text ?? '')
   if (spaced && w[1]?.text === '=') {
     // Known only as one string, a here-string, a number or another variable. A bare word is a command
     // (`$m = Get-Date`), a list (`'a','b'`, `@(...)`) several values, an expression (`'x'.Trim()`) computed.

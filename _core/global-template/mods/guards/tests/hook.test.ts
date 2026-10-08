@@ -578,7 +578,13 @@ test('a body file written in another folder is read from its writer, by where it
     `cd sub && cat > b.md <<'EOF'\n## What\n${body}\nEOF\ncd .. && gh pr create -t t -F ${named}`
   const clean = await bash($, written('- add it', 'sub/b.md'))
   expect((clean as { deny?: string }).deny).toBeUndefined()
-  expect(seen.files.get(LOG)).toBeUndefined()
+  // The writer runs after `&&` on an earlier line, so it may not have: the file is noted, never refused.
+  expect(lastEntry(seen).notes).toEqual(['the PR text (written by this command, under another spelling)'])
+  // In one list it surely ran: read from it alone, so nothing is logged.
+  const logged = () => (seen.files.get(LOG) ?? '').trim().split('\n').length
+  const before = logged()
+  await bash($, "cd sub && cat > b.md <<'EOF' && cd .. && gh pr create -t t -F sub/b.md\n## What\n- add it\nEOF")
+  expect(logged()).toBe(before)
   // Read from the writer with every check, not only the credit check on the command text.
   const named = await bash($, written(`- made with ${'Cla' + 'ude'}`, './sub/../sub/b.md'))
   expect(String((named as { deny?: string }).deny)).toContain('file ./sub/../sub/b.md')

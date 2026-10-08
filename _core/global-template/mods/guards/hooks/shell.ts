@@ -40,13 +40,18 @@ export type Statement = {
   hasDynamicBody?: boolean
   /** Inside a `( )` subshell or a PowerShell `{ }` block: a `cd` there may not move what follows. */
   isNested?: boolean
-  /** The Bash subshells it runs in, outermost first (`1/3`); none at the top. A variable set in one is
-   * known inside it and gone once it closes. A PowerShell `{ }` block keeps its variables, so has none. */
+  /** Where it runs, outermost first (`1/c3`); none at the top. A number is a Bash subshell (a `( )`, a
+   * pipeline part, a job sent to the background): what it sets is gone once it closes. `c<n>` is a branch
+   * that may not run (an `if` or `case` arm, a loop body, the part after `&&` or `||`, a function body, a
+   * PowerShell block): what it sets is known inside it, and unknown where the branch sits. */
   scope?: string
   /** For a statement inside a `$(...)` or backticks: which one, numbered within its parse. */
   group?: number
   /** PowerShell: run through the call operator (`& $git commit`). */
   isCall?: boolean
+  /** In a function body, a `trap` action or a PowerShell script block: it may run at any later point, so a
+   * value it sets leaves the name unknown from then on. */
+  isDeferred?: boolean
 }
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
@@ -66,6 +71,17 @@ const BODY_EXPANSION = /\$[A-Za-z_{(]|`|\\/
 // Words after which the next one is still in command position, where `case` opens a block.
 const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', '{', 'time'])
 
+// The keywords that open a block after their own statement, closed by `fi` or `done`.
+const OPENERS = new Set(['if', 'while', 'until', 'for', 'select'])
+const PS_IN_PLACE = /^(if|elseif|else|foreach|for|while|do|until|switch|try|catch|finally)$/
+const FN_PARENS = /^[(][ \t]*[)]/
+
+// A block the reader is inside: a Bash subshell, a branch (`cond`), a `case` arm, a `{ }` group or a body
+// that runs later (`fn`). `at`: where its scopes end; `chain`, `list`: see `Reader.levels`.
+type Level = { kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'; at: number; chain?: number; list: number }
+
+const joined = (outer: string | undefined, inner: string) => [outer, inner].filter(Boolean).join('/')
+
 const fresh = (pipeIn = false): Statement => ({ words: [], heredocs: [], writes: [], reads: [], pipeIn, inner: [] })
 
 // One pass over the command text, a character at a time; each method reads one kind of thing.
@@ -80,8 +96,9 @@ class Reader {
   private i = 0
   // How many `( )` subshells or PowerShell `{ }` blocks the reading is inside.
   private depth = 0
-  // The Bash subshells open now, each with its own number.
-  private scopes: number[] = []
+  // The subshells and branches open now, outermost first: a number for a Bash subshell, `c<n>` for a branch
+  // (see `Statement.scope`).
+  private scopes: string[] = []
   private opened = 0
   // `$(...)` and backtick substitutions read so far.
   private groups = 0
@@ -90,6 +107,14 @@ class Reader {
   private cases: { state: 'head' | 'pattern' | 'body'; at: number; depth: number }[] = []
   // A Bash `$(...)` read by a reader of its own: the `)` that closes it ends the reading.
   private isClosed = false
+  // The blocks open now, innermost last, each with where its own scopes end in `scopes`. `chain`: where the
+  // `&&`/`||` list read at that level started there, once it has one; `list`: the index in `out` of that
+  // list's first statement.
+  private levels: Level[] = [{ kind: 'group', at: 0, list: 0 }]
+  // The line goes on past its end: it stopped at a `|`, `&&` or `||`.
+  private continues = false
+  // A function's name was just read (`f()`, `function f`): the block that follows is its body.
+  private isFnNext = false
 
   constructor(
     private readonly command: string,
@@ -147,6 +172,11 @@ class Reader {
       return
     }
     if (isPlain && this.caseWord(w.text)) return
+    // `function f { ...`: the body starts a statement of its own.
+    const words = this.st.words
+    if (isPlain && w.text === '{' && words.length === 2 && words[0]?.text === 'function') this.endStatement()
+    if (isPlain && !this.powershell && this.st.words.every(x => KEYWORDS.has(x.text))) this.keyword(w.text)
+    this.continues = false
     this.st.words.push(w)
   }
 
@@ -163,6 +193,7 @@ class Reader {
     else if (text === 'in' && here?.state === 'head' && (words.length === here.at + 2 || words.length === 0))
       here.state = 'pattern'
     else if (text === 'esac' && words.length === 0 && here && here.state !== 'head') {
+      if (here.state === 'body') this.closeTo(['arm'])
       this.cases.pop()
       return true
     }
@@ -202,6 +233,7 @@ class Reader {
     }
     this.i++
     top.state = 'body'
+    this.open('arm')
     return true
   }
 
@@ -214,10 +246,94 @@ class Reader {
     this.endWord()
     this.redirectNext = null
     const st = this.st
-    if (st.words.length > 0 || st.heredocs.length > 0 || st.inner.length > 0) this.out.push(st)
+    if (st.words.length > 0 || st.heredocs.length > 0 || st.inner.length > 0) {
+      // Each part of a Bash pipeline runs in a subshell of its own.
+      if (!this.powershell && (pipeNext || st.pipeIn)) st.scope = joined(st.scope, String(++this.opened))
+      if (this.levels.some(l => l.kind === 'fn')) st.isDeferred = true
+      this.out.push(st)
+    }
     this.st = fresh(pipeNext)
     if (this.depth > 0) this.st.isNested = true
-    if (this.scopes.length > 0) this.st.scope = this.scopes.join('/')
+    this.rescope()
+    if (!this.powershell) this.opens(st)
+  }
+
+  private rescope() {
+    this.st.scope = this.scopes.length > 0 ? this.scopes.join('/') : undefined
+  }
+
+  private get level(): Level {
+    return this.levels.at(-1) as Level
+  }
+
+  // Opens a block for the statements after this point; all but a `{ }` group get a scope of their own.
+  private open(kind: Level['kind']) {
+    if (kind !== 'group') this.scopes.push(kind === 'sub' ? String(++this.opened) : `c${++this.opened}`)
+    this.levels.push({ kind, at: this.scopes.length, list: this.out.length })
+    this.rescope()
+  }
+
+  // Closes blocks up to the innermost one of `kinds`, never past a subshell it does not name.
+  private closeTo(kinds: Level['kind'][]) {
+    while (this.levels.length > 1) {
+      const lv = this.level
+      if (lv.kind === 'sub' && !kinds.includes('sub')) return
+      this.levels.pop()
+      this.scopes.length = lv.at - (lv.kind === 'group' ? 0 : 1)
+      this.rescope()
+      if (kinds.includes(lv.kind)) return
+    }
+  }
+
+  // After `&&` the next statement runs only when the one before it succeeded: in a branch inside that one's.
+  // After `||` only when it failed: in a branch beside them.
+  private chain(op: string) {
+    const lv = this.level
+    lv.chain ??= this.scopes.length
+    if (op === '|') this.scopes.length = lv.chain
+    this.scopes.push(`c${++this.opened}`)
+    this.rescope()
+  }
+
+  // The end of a list (`;`, a line break, `&`): its branches close. A list sent to the background with `&`
+  // runs in a subshell of its own, so what it sets is gone after it.
+  private endList(isBackground = false) {
+    const lv = this.level
+    const start = lv.chain ?? this.scopes.length
+    if (isBackground && !this.powershell) {
+      const base = this.scopes.slice(0, start).join('/')
+      const tag = String(++this.opened)
+      for (const st of this.out.slice(lv.list))
+        st.scope = joined(joined(base, tag), (st.scope ?? '').slice(base.length).replace(/^[/]/, ''))
+    }
+    this.scopes.length = start
+    lv.chain = undefined
+    lv.list = this.out.length
+    this.rescope()
+  }
+
+  // The blocks a statement's leading keywords open after it (`if`, `while`, `until`, `for`, `select`), and
+  // a function named by `function f`, whose body comes later.
+  private opens(st: Statement) {
+    for (const w of st.words) {
+      if (w.dynamic || !(KEYWORDS.has(w.text) || OPENERS.has(w.text))) break
+      if (OPENERS.has(w.text)) this.open('cond')
+    }
+    if (st.words[0]?.text === 'function' && st.words.length === 2) this.isFnNext = true
+  }
+
+  // A keyword where a command starts that opens or closes a block at once: the statement goes on inside
+  // it (`{ M=x`, `else M=y`) or after it (`fi > log`).
+  private keyword(text: string) {
+    const isFn = this.isFnNext
+    this.isFnNext = false
+    if (text === 'else' || text === 'elif') {
+      if (this.level.kind !== 'cond') return
+      this.closeTo(['cond'])
+      this.open('cond')
+    } else if (text === 'fi' || text === 'done') this.closeTo(['cond'])
+    else if (text === '}') this.closeTo(['group', 'fn'])
+    else if (text === '{') this.open(isFn ? 'fn' : 'group')
   }
 
   // Reads the here-doc bodies queued on the line that just ended; `i` sits after its newline.
@@ -350,6 +466,7 @@ class Reader {
       this.readBodies(bodies)
       this.st.heredocs.push(...bodies)
       this.endStatement()
+      if (!this.continues) this.endList()
     } else if (c === ' ' || c === '\t' || c === '\r') {
       this.endWord()
       this.i++
@@ -365,10 +482,19 @@ class Reader {
     if (!this.powershell) return this.bashStructure(c)
     if (this.word) return false
     if (c === '(') this.substitution(this.startWord())
-    else if (c === '{' || c === '}') {
+    else if (c === '{') {
+      // A block an `if`, a loop, `switch` or `try` runs in place; any other is a script block that may run
+      // at any later point (a function, `& { }`, `$b = { }`).
+      const head = this.st.words[0]?.text.toLowerCase() ?? ''
       this.i++
-      this.depth = Math.max(0, this.depth + (c === '{' ? 1 : -1))
+      this.depth++
       this.endStatement()
+      this.open(PS_IN_PLACE.test(head) ? 'cond' : 'fn')
+    } else if (c === '}') {
+      this.i++
+      this.depth = Math.max(0, this.depth - 1)
+      this.endStatement()
+      this.closeTo(['cond', 'fn'])
     } else if (c === '@' && (this.at(1) === '(' || this.at(1) === '{'))
       this.substitution(this.startWord(), this.at(1) === '{')
     else return false
@@ -386,6 +512,14 @@ class Reader {
     }
     // `X=(a b)` and `X+=(c)`: an array, whose value the reading does not keep.
     if (c === '(' && this.word && /^[A-Za-z_]\w*\+?=$/.test(this.word.text)) return this.arrayValue(this.word)
+    // `f()` names a function: the block after it is its body.
+    const fn = c === '(' ? FN_PARENS.exec(this.command.slice(this.i)) : null
+    if (fn) {
+      this.i += fn[0].length
+      this.endStatement()
+      this.isFnNext = true
+      return true
+    }
     // `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
     if (c !== '(' && c !== ')') return false
     this.i++
@@ -394,9 +528,10 @@ class Reader {
       return true
     }
     this.depth = Math.max(0, this.depth + (c === '(' ? 1 : -1))
-    if (c === '(') this.scopes.push(++this.opened)
-    else this.scopes.pop()
     this.endStatement()
+    this.isFnNext = false
+    if (c === '(') this.open('sub')
+    else this.closeTo(['sub'])
     return true
   }
 
@@ -428,6 +563,7 @@ class Reader {
     if (c === '|' && this.at(1) !== '|') {
       this.i += this.at(1) === '&' ? 2 : 1
       this.endStatement(true)
+      this.continues = true
       return true
     }
     if (c !== ';' && c !== '|' && c !== '&') return false
@@ -437,6 +573,7 @@ class Reader {
       this.i += this.command.startsWith(';;&', this.i) ? 3 : 2
       top.state = 'pattern'
       this.endStatement()
+      this.closeTo(['arm'])
       return true
     }
     // PowerShell's call operator `& "path"` and a redirect's `>&` are not separators.
@@ -450,8 +587,12 @@ class Reader {
       this.i++
       return true
     }
+    const isChain = c !== ';' && this.at(1) === c
     this.i += this.at(1) === c ? 2 : 1
     this.endStatement()
+    if (isChain) this.chain(c)
+    else this.endList(c === '&')
+    this.continues = isChain
     return true
   }
 

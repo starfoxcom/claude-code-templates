@@ -1,8 +1,9 @@
 // Where a command's statements run: the folder each `cd`, `pushd` and `popd` leads to, kept apart for
 // each subshell, `$(...)` and child shell, as the shell keeps it. Pure.
 
+import { programOf } from './shell'
 import type { Statement, Word } from './shell'
-import { lookup } from './vars'
+import { branchBase, lookup } from './vars'
 import type { VarState } from './vars'
 
 /** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
@@ -49,8 +50,12 @@ type Places = { places: Map<string, Place>; scope: string }
 // copy of its own, so a `cd` there is gone once it closes.
 export type Place = { folder: Folder; folders: Folder[] }
 
-export function placeHere(r: Places): Place {
-  for (let s = r.scope; ; s = s.includes('/') ? s.slice(0, s.lastIndexOf('/')) : '') {
+export const placeHere = (r: Places): Place => placeAt(r, r.scope)
+
+const parentOf = (scope: string) => (scope.includes('/') ? scope.slice(0, scope.lastIndexOf('/')) : '')
+
+function placeAt(r: Places, scope: string): Place {
+  for (let s = scope; ; s = parentOf(s)) {
     const place = r.places.get(s)
     if (place) return place
     if (s === '') return { folder: { isUnknown: false }, folders: [] }
@@ -63,6 +68,14 @@ export function movePlace(r: Places): Place {
   if (r.places.get(r.scope) === outer) return outer
   const place = { folder: outer.folder, folders: [...outer.folders] }
   r.places.set(r.scope, place)
+  // A move in a branch may not happen: where the branch sits, and in each place between, the folder is
+  // unknown from here on.
+  const base = branchBase(r.scope)
+  for (let s = r.scope; s !== base; ) {
+    s = parentOf(s)
+    const at = placeAt(r, s)
+    r.places.set(s, { folder: { isUnknown: true }, folders: at.folders.map(() => ({ isUnknown: true })) })
+  }
   return place
 }
 
@@ -121,10 +134,46 @@ function placedPath(path: string, folder: Folder): string | undefined {
   return foldDots(folder.path === undefined ? p : `${folder.path}/${p}`).toLowerCase()
 }
 
-/** The last writer of the file a literal path names where it is named, matched by where both land, not by
+/** Whether a writer wrote the file a literal path names where it is named: by where both land, not by
  * spelling (`cd sub && cat > b.md && cd .. && gh pr create -F sub/b.md`). */
-export function writerOf<W extends { folder: Folder }>(path: string, writers: Map<string, W>, r: FolderReading) {
+export function landsAt(path: string, r: FolderReading): (w: { path: string; folder: Folder }) => boolean {
   const here = placedPath(path, folderNow(r))
-  if (here === undefined) return undefined
-  return [...writers].reverse().find(([written, w]) => placedPath(written, w.folder) === here)?.[1]
+  return w => here !== undefined && placedPath(w.path, w.folder) === here
+}
+
+/** Whether a statement in scope `written` surely ran before one in `reading`: a subshell runs, a branch may
+ * not, so the branch it sits in must hold the reader too. */
+export function ranBefore(written: string, reading: string): boolean {
+  const parts = written.split('/')
+  while (parts.length > 0 && !/^c[0-9]/.test(parts.at(-1) ?? '')) parts.pop()
+  const branch = parts.join('/')
+  return branch === '' || reading === branch || reading.startsWith(`${branch}/`)
+}
+
+/** The writers `isIt` picks, latest first, back to the last one that surely ran before `reading`: what the
+ * file may hold there. */
+export function writersOf<W extends { scope: string }>(writers: W[], reading: string, isIt: (w: W) => boolean) {
+  const found: W[] = []
+  for (const w of [...writers].reverse().filter(isIt)) {
+    found.push(w)
+    if (ranBefore(w.scope, reading)) break
+  }
+  return found
+}
+
+// The commands that move the folder, and those of them that keep a stack of folders to return to.
+export const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'push-location', 'sl'])
+export const PUSH_NAMES = new Set(['pushd', 'push-location'])
+export const POP_NAMES = new Set(['popd', 'pop-location'])
+
+// The statement a command runs on its own: the only one, or the last after `cd`s to literal folders
+// (`cd "C:/Repos/game" && gh pr create ...`), whose folder is then known. Any other shape has none.
+export function aloneOf(statements: Statement[]): Statement | undefined {
+  const last = statements.at(-1)
+  const isPlainCd = (st: Statement) => {
+    const { name, args } = programOf(st)
+    const bare = !st.inner.length && !st.heredocs.length && !st.writes.length && !st.pipeIn && !st.isNested
+    return bare && CD_NAMES.has(name) && args.length === 1 && !args[0]?.dynamic && !args[0]?.text.startsWith('-')
+  }
+  return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
 }
