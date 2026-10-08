@@ -87,7 +87,7 @@ export function world(on: On) {
       seen.order.push(`mkdir ${e.argv[3]}`)
       await seen.duringMkdir?.()
     }
-    if (e.argv[2] === SWEEP_SCRIPT) seen.order.push(`sweep ${e.argv.slice(3).join(' ')}`)
+    if (e.argv[1]?.endsWith(`/${SWEEP_SCRIPT}`)) seen.order.push(`sweep ${e.argv.slice(2).join(' ')}`)
     if (e.argv[2] === STATUS_SCRIPT) {
       seen.statusReads++
       await seen.duringStatus?.()
