@@ -148,7 +148,8 @@ export function withWords(st: Statement, r: VarState): Statement {
   let changed = false
   const words = st.words.flatMap((w, i) => {
     // A PowerShell statement starting with a variable assigns to it or calls a member, unless `&` runs it.
-    if (!w.dynamic || (r.ps && i === 0 && !st.isCall)) return [w]
+    // A PowerShell expression (`$o.Trim()`) computes its value: filling in the variable alone is wrong text.
+    if (!w.dynamic || w.expr || (r.ps && i === 0 && !st.isCall)) return [w]
     const e = expand(w.text, r)
     const splits = !r.ps && w.splits === true
     if (e.unresolved || (splits && /[*?[]/.test(e.text))) return [w]
@@ -233,17 +234,23 @@ function setPair(r: VarState, name: string, value: Word, isAppend: boolean, expo
   setVar(r, name, isKnown ? { ...value, text: `${old.text}${value.text}` } : undefined, exported)
 }
 
+// A PowerShell value whose text the reading knows as typed. A hashtable (`@{ title = 't' }`) is kept as
+// typed: a splat of it is read entry by entry.
+function isPsText(v: Word): boolean {
+  if (v.expr || v.list) return false
+  if (v.literalStart || /^@\{/.test(v.text)) return true
+  return /^-?\d+(\.\d+)?$/.test(v.text) || (v.dynamic && /^\$\w+$/.test(v.text))
+}
+
 // PowerShell: `$m = ...`; `$p += @{...}`, `$p.Body = ...`, `$p['Body'] = ...`, `$p.Add(...)`: a value
 // changed after it was typed is no longer known.
 function assignPs(w: Word[], r: VarState): boolean {
   const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
   if (spaced && w[1]?.text === '=') {
-    // A bare word there is a command that runs (`$m = Get-Date`), not text; a quoted one or a number is.
-    // A list (`'a','b'`, `@(...)`) is several values, never one text.
+    // Known only as one string, a here-string, a number or another variable. A bare word is a command
+    // (`$m = Get-Date`), a list (`'a','b'`, `@(...)`) several values, an expression (`'x'.Trim()`) computed.
     const value = w.length === 3 ? w[2] : undefined
-    const isCommand = value && !value.dynamic && !value.literalStart && /^[A-Za-z][\w.-]*$/.test(value.text)
-    const isList = value?.list || /^@\(/.test(value?.text ?? '')
-    setVar(r, spaced[1] ?? '', isCommand || isList ? undefined : value)
+    setVar(r, spaced[1] ?? '', value && isPsText(value) ? value : undefined)
     return true
   }
   const isCompound = spaced !== null && /^([-+*/%]|\?\?)=$/.test(w[1]?.text ?? '')
@@ -254,6 +261,7 @@ function assignPs(w: Word[], r: VarState): boolean {
   if (changed) store(r, member?.[1] ?? '', { ...changed, text, literal: false })
   else if (isCompound) setVar(r, spaced?.[1] ?? '', undefined)
   const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
-  if (joined) setVar(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
+  if (joined && w[0]?.expr) setVar(r, joined[1] ?? '', undefined)
+  else if (joined) setVar(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
   return Boolean(joined) || isCompound
 }

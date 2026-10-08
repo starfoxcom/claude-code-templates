@@ -749,3 +749,42 @@ test('a relative body file is the written one only when named in the same known 
   expect(message(`cd sub && ${body}git commit -F m.md`)?.written).toBe(true)
   expect(message("cat > /tmp/m.md <<'EOF'\nfix: x\nEOF\ncd sub && git commit -F /tmp/m.md")?.written).toBe(true)
 })
+
+// A PowerShell expression is computed, never text: as a stored value, a word of a write, or a splat.
+test('a PowerShell expression or splat on a write is unread; a plain string is text', () => {
+  const unread = [
+    "$a = '--no-verify'.Trim(); git push origin main $a",
+    "$a = [string]'--no-verify'; git commit -m 'fix: x' $a",
+    "$a = '--no-'+'verify'; git commit -m 'fix: x' $a",
+    "$o = ' --no-verify'; git push origin main $o.Trim()",
+    "$a = @('--no-verify'); git push origin main @a",
+    "$a = '--no-verify'; git push origin @a",
+  ]
+  for (const command of unread) expect([command, inspect(command, true).unread]).not.toEqual([command, []])
+  expect(inspect("$o = ' x'; git push origin main $o.Trim()", true).unread).toContain('a word built at run time')
+  expect(inspect("$m = 'fix: x'; git commit -m $m", true).unread).toEqual([])
+  expect(inspect("$m = 'fix: x'; git commit -m \"$m (y)\"", true).unread).toEqual([])
+  expect(inspect("$n = 3; git commit -m 'fix: x'", true).unread).toEqual([])
+})
+
+test('a separator inside a quoted value never hides the subcommand', () => {
+  const command = "git -c credential.helper='!f() { echo x; }; f' push origin $REF"
+  expect(inspect(command, false).unread).toContain('a word built at run time')
+  expect(inspect("git -C 'D:/a&b' push origin \"$R\"", false).unread).toContain('a word built at run time')
+})
+
+test("a file a writer reads is where the writer ran", () => {
+  const command = 'cd docs && cat CHANGES.md > /tmp/b.md && cd .. && gh pr create -t t --body-file /tmp/b.md'
+  const plan = inspect(command, false)
+  expect(plan.files.find(f => f.path === 'CHANGES.md')?.folder).toEqual({ path: 'docs', isUnknown: false })
+})
+
+test('a $(mktemp) file is a full path, so a folder change keeps it the written one', () => {
+  const body = "cat > \"$F\" <<'EOF'\nfix: x\nEOF\n"
+  const message = (command: string) => inspect(command, false).files.find(f => f.where === 'the commit message')
+  expect(message(`F=$(mktemp)\n${body}git -C ../repo commit -F "$F"`)?.written).toBe(true)
+  expect(message(`F=$(mktemp -t m.XXXX)\n${body}cd sub && git commit -F "$F"`)?.written).toBe(true)
+  // With a template or a folder of its own, mktemp may print a relative path.
+  expect(message(`F=$(mktemp -p .)\n${body}cd sub && git commit -F "$F"`)?.written).toBeUndefined()
+  expect(message(`F=$(mktemp m.XXXX)\n${body}cd sub && git commit -F "$F"`)?.written).toBeUndefined()
+})

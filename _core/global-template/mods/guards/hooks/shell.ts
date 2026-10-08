@@ -17,6 +17,11 @@ export type Word = {
   splits?: boolean
   /** PowerShell: holds a comma outside quotes, so it is a list, passed to a program as several arguments. */
   list?: boolean
+  /** PowerShell: an expression PowerShell computes (`'--x'.Trim()`, `$o.Trim()`, `[string]'x'`), so its
+   * value is unknown. */
+  expr?: boolean
+  /** PowerShell: holds a quoted part, so an unquoted character after it makes the word an expression. */
+  quoted?: boolean
 }
 
 export type Statement = {
@@ -469,7 +474,12 @@ class Reader {
 
   private wordChar(c: string) {
     const w = this.startWord()
+    if (this.powershell && isExpression(w, c)) {
+      w.expr = true
+      w.dynamic = true
+    }
     if ((c === "'" || c === '"' || c === this.esc) && w.text === '') w.literalStart = true
+    if (c === "'" || c === '"') w.quoted = true
     if (c === "'") return this.singleQuoted(w)
     if (c === '"') return this.doubleQuoted(w)
     // `$NAME`, `${...}`, `$(...)` and Bash's special parameters (`$@`, `$1`, `$?`) outside quotes.
@@ -534,6 +544,14 @@ class Reader {
     else if (nx !== '\n') w.text += d + nx
     this.i += 2
   }
+}
+
+// PowerShell computes an unquoted word that goes on past a quoted part (`'--x'.Trim()`, `'a'+'b'`) or past a
+// variable (`$o.Trim()`, `$a[0]`), or opens with a cast (`[string]'x'`). Inside double quotes it is text.
+function isExpression(w: Word, c: string): boolean {
+  if (c === '[' && w.text === '' && !w.quoted) return true
+  if (w.quoted && c !== "'" && c !== '"') return true
+  return /[.[(+*]/.test(c) && /\$[A-Za-z_][\w:]*$/.test(w.text)
 }
 
 export function parse(command: string, powershell: boolean): Statement[] {
