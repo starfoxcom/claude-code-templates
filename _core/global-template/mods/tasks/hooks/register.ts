@@ -100,12 +100,10 @@ const UNCOUNTED_TOOLS = new Set([...TASK_TOOLS, 'ToolSearch', 'TaskStop', 'TaskO
 const UNLINK_SCRIPT =
   'const fs=require("fs"),p=require("path");const [d,...names]=process.argv.slice(1);' +
   'for(const n of names){try{fs.unlinkSync(p.join(d,n))}catch{}}'
-// `<folder> <days> <this session's id>`: a session resumed after SWEEP_DAYS keeps its own list.
-export const SWEEP_SCRIPT =
-  'const fs=require("fs"),p=require("path");const [d,days,keep]=process.argv.slice(1);' +
-  'if(fs.existsSync(d)){const cut=Date.now()-days*864e5;' +
-  'for(const n of fs.readdirSync(d)){if(n===keep+".json")continue;' +
-  'const f=p.join(d,n);if(fs.statSync(f).mtimeMs<cut)fs.unlinkSync(f)}}'
+// Other sessions' lists and alive stamps not written for SWEEP_DAYS go, never the settings; a session
+// resumed after SWEEP_DAYS keeps its own list
+// (`node <plugin root>/scripts/sweep.cjs <folder> <this session's id> <days>`; test-helper/sweep.spec.cjs runs it).
+export const SWEEP_SCRIPT = 'scripts/sweep.cjs'
 
 const live: {
   mirror?: Mirror
@@ -664,9 +662,8 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
     const dir = await dataDir($)
     // Done before this session's list is read, so the two never race.
-    await $.process
-      .run(['node', '-e', SWEEP_SCRIPT, dir, String(SWEEP_DAYS), await $.session.id()], { timeoutMs: 20_000 })
-      .catch(() => undefined)
+    const sweep = ['node', `${$.plugin.root}/${SWEEP_SCRIPT}`, dir, await $.session.id(), String(SWEEP_DAYS)]
+    await $.process.run(sweep, { timeoutMs: 20_000 }).catch(() => undefined)
     await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)
     await startAlive($)
