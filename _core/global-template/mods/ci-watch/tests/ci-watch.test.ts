@@ -187,7 +187,7 @@ test("other sessions' old files are swept once per load, never this session's", 
   await $.tool.call({ tool: 'Bash', command: 'git status' } as never)
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   expect(seen.order.filter(step => step.startsWith('sweep'))).toEqual([
-    'sweep C:/Users/me/.claude/mods-data/ci-watch 2 s1',
+    'sweep C:/Users/me/.claude/mods-data/ci-watch s1 2',
   ])
 })
 

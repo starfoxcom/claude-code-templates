@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Mirror } from '../hooks/register'
-import { HELP, MKDIR_SCRIPT } from '../hooks/register'
+import { HELP, MKDIR_SCRIPT, SWEEP_SCRIPT } from '../hooks/register'
 
 const MIRROR_FILE = 'C:/Users/me/.claude/mods-data/tasks/sess-a.json'
 
@@ -42,9 +42,10 @@ function world(on: On): World {
   on('process.run', ($, e) => {
     const argv = [...(e as never as { argv: string[] }).argv]
     seen.runs.push(argv)
-    // The sweep removes the files marked old, all but the one it is told to keep.
-    if (argv[2]?.includes('mtimeMs<cut')) {
-      for (const path of seen.old) if (path !== `${argv[3]}/${argv[5]}.json`) seen.files.delete(path)
+    // The sweep removes the files marked old, all but this session's (test-helper/sweep.spec.cjs runs the
+    // real script on real files).
+    if (argv[1]?.endsWith(`/${SWEEP_SCRIPT}`)) {
+      for (const path of seen.old) if (path !== `${argv[2]}/${argv[3]}.json`) seen.files.delete(path)
     }
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
