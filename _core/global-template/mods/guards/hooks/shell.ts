@@ -6,66 +6,9 @@
 
 import { ansiBody, isBalanced, isCasts, isExpression, plain, PS_ESCAPES, sliceWord } from './quoting'
 
-export type Word = {
-  /** The word as the program receives it: quotes removed, escapes applied. */
-  text: string
-  /** Holds an expansion ($VAR, $(...), backticks) whose value the reading cannot know. */
-  dynamic: boolean
-  /** Here-doc bodies written inside a `$(...)` of this word: `-m "$(cat <<'EOF' ... EOF)"`. */
-  bodies: string[]
-  /** Its first character came from quotes or an escape, so a leading `<` or `>` is text, not a redirect;
-   * `quotedStart` when from quotes (`'`, `"`, a here-string, `$'`), so it is a value, never a command. */
-  literalStart?: boolean
-  quotedStart?: boolean
-  /** Holds an expansion outside quotes, which the shell splits into words at blanks (`$F`, not `"$F"`). */
-  splits?: boolean
-  /** PowerShell: holds a comma outside quotes, so it is a list, passed to a program as several arguments. */
-  list?: boolean
-  /** PowerShell: an expression PowerShell computes (`'--x'.Trim()`, `$o.Trim()`, `[string]'x'`), so its
-   * value is unknown. */
-  expr?: boolean
-  /** PowerShell: holds a quoted part, so an unquoted character after it makes the word an expression. */
-  quoted?: boolean
-  /** Where in `text` a `$` or a backtick was typed as plain text (in single quotes, or escaped): the shell
-   * passes it on as is, so it starts no expansion. */
-  literals?: number[]
-}
+export type { Statement, Word } from './statement'
 
-export type Statement = {
-  words: Word[]
-  /** Here-doc, here-string and `<<<` bodies fed to this statement. */
-  heredocs: string[]
-  /** Files this statement writes through `>` / `>>`. */
-  writes: string[]
-  /** The word of each `writes` entry that holds an expansion, at the same index; none for a literal one. */
-  writeWords?: (Word | undefined)[]
-  /** Files fed to this statement through `<`. */
-  reads: string[]
-  /** The word of each `reads` entry that holds an expansion, at the same index. */
-  readWords?: (Word | undefined)[]
-  /** Its input comes from the statement before it, through a pipe. */
-  pipeIn: boolean
-  /** Commands run inside a `$(...)` of its words (`PR=$(gh pr create ...)`); they run before it. */
-  inner: Statement[]
-  /** A body holds an expansion the shell fills in at run time (`<<< "$MSG"`, an unquoted `<<EOF`). */
-  hasDynamicBody?: boolean
-  /** Inside a `( )` subshell or a PowerShell `{ }` block: a `cd` there may not move what follows. */
-  isNested?: boolean
-  /** Where it runs, outermost first (`1/c3`); none at the top. A number is a Bash subshell (a `( )`, a
-   * pipeline part, a job sent to the background): what it sets is gone once it closes. `c<n>` is a branch
-   * that may not run (an `if` or `case` arm, a loop body, the part after `&&` or `||`, a function body, a
-   * PowerShell block): what it sets is known inside it, and unknown where the branch sits. */
-  scope?: string
-  /** For a statement inside a `$(...)` or backticks: which one, numbered within its parse. */
-  group?: number
-  /** PowerShell: run through the call operator (`& $git commit`), or dot-sourced (`. $git commit`). */
-  isCall?: boolean
-  /** PowerShell: dot-sourced, so what it runs sets variables in this scope. */
-  isSourced?: boolean
-  /** In a function body, a `trap` action or a PowerShell script block: it may run at any later point, so a
-   * value it sets leaves the name unknown from then on. */
-  isDeferred?: boolean
-}
+import type { Statement, Word } from './statement'
 
 const REDIRECT = /^(\d*)(>>?|<)(&\d+|&-)?$/
 const REDIRECT_ATTACHED = /^\d*(>>?|<)(?!&)(.+)$/
@@ -86,6 +29,9 @@ const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', 
 
 // The keywords that open a block after their own statement, closed by `fi` or `done`.
 const OPENERS = new Set(['if', 'while', 'until', 'for', 'select'])
+// Loop keywords: their statements may run again. Bash's own are lower-case; PowerShell's `switch` loops
+// over a list.
+const LOOPS = /^(while|until|for|select|do|foreach|switch)$/
 const PS_IN_PLACE = /^(if|elseif|else|foreach|for|while|do|until|switch|try|catch|finally)$/
 const FN_PARENS = /^[(][ \t]*[)]/
 
@@ -94,7 +40,7 @@ const FN_PARENS = /^[(][ \t]*[)]/
 // list's last operator was `||`; `from`: the index in `out` of its first statement; `isBrace`: a subshell a
 // `{` opened, as a pipeline part (`echo | { read M; }`).
 type Level = { kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'; at: number; chain?: number; isOr?: boolean }
-  & { list: number; from: number; isBrace?: boolean }
+  & { list: number; from: number; isBrace?: boolean; isLoop?: boolean }
 
 const joined = (outer: string | undefined, inner: string) => [outer, inner].filter(Boolean).join('/')
 
@@ -290,6 +236,7 @@ class Reader {
       const isPart = pipeNext || st.pipeIn || st.words[0]?.text === 'coproc'
       if (!this.powershell && isPart) st.scope = joined(st.scope, String(++this.opened))
       if (this.levels.some(l => l.kind === 'fn')) st.isDeferred = true
+      if (this.levels.some(l => l.isLoop) || this.leadsLoop(st)) st.isLooped = true
       this.out.push(st)
       // A `{ }` group piped on (`{ cd x; } | tail`) runs in a subshell of its own, all of it.
       if (!this.powershell && pipeNext && group !== undefined) this.retag(group, this.scopes.join('/'))
@@ -309,10 +256,20 @@ class Reader {
   }
 
   // Opens a block for the statements after this point; all but a `{ }` group get a scope of their own.
-  private open(kind: Level['kind'], isBrace?: boolean) {
+  private open(kind: Level['kind'], isBrace?: boolean, isLoop?: boolean) {
     if (kind !== 'group') this.scopes.push(kind === 'sub' ? String(++this.opened) : `c${++this.opened}`)
-    this.levels.push({ kind, at: this.scopes.length, list: this.out.length, from: this.out.length, isBrace })
+    this.levels.push({ kind, at: this.scopes.length, list: this.out.length, from: this.out.length, isBrace, isLoop })
     this.rescope()
+  }
+
+  // A statement led by a loop keyword (`while git commit ...`, PowerShell's `while (...)` after a `do`).
+  private leadsLoop(st: Statement): boolean {
+    for (const w of st.words) {
+      if (w.dynamic) return false
+      if (LOOPS.test(this.powershell ? w.text.toLowerCase() : w.text)) return true
+      if (this.powershell || !KEYWORDS.has(w.text)) return false
+    }
+    return false
   }
 
   // Closes blocks up to the innermost one of `kinds`, never past a subshell it does not name.
@@ -364,7 +321,7 @@ class Reader {
   private opens(st: Statement) {
     for (const w of st.words) {
       if (w.dynamic || !(KEYWORDS.has(w.text) || OPENERS.has(w.text))) break
-      if (OPENERS.has(w.text)) this.open('cond')
+      if (OPENERS.has(w.text)) this.open('cond', undefined, w.text !== 'if')
     }
     if (st.words[0]?.text === 'function' && st.words.length === 2) this.isFnNext = true
   }
@@ -554,7 +511,7 @@ class Reader {
       this.i++
       this.depth++
       this.endStatement()
-      this.open(PS_IN_PLACE.test(head) ? 'cond' : 'fn')
+      this.open(PS_IN_PLACE.test(head) ? 'cond' : 'fn', undefined, LOOPS.test(head))
     } else if (c === '}') {
       this.i++
       this.depth = Math.max(0, this.depth - 1)

@@ -572,3 +572,11 @@ export function psSetsUnknown(st: Statement, name: string, args: Word[]): boolea
   const target = flag === -1 ? args.find(a => !a.text.startsWith('-')) : args[flag + 1]
   return Boolean(target?.dynamic)
 }
+
+/** The variables as the reading knows them at one point, kept apart from later changes. */
+export type Seen = Pick<VarState, 'vars' | 'volatile' | 'isSourced'>
+
+export function seenOf(r: Seen): Seen {
+  const vars = new Map([...r.vars].map(([k, stack]) => [k, stack.map(v => ({ ...v }))]))
+  return { vars, volatile: r.volatile && new Set(r.volatile), isSourced: r.isSourced }
+}

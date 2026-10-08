@@ -97,7 +97,7 @@ const READERS = new Set(
     'cat', 'type', 'get-content', 'gc', 'head', 'tail', 'wc', 'grep', 'egrep', 'rg', 'select-string', 'sls',
     'test-path', 'ls', 'dir', 'get-item', 'gi', 'get-childitem', 'gci', 'stat', 'echo', 'write-output',
     'write-host', 'printf', 'for', 'select', 'case', 'foreach', 'while', 'until', 'elseif', 'switch', 'done',
-    'fi', 'esac', 'function', 'return', 'exit', 'break', 'continue', 'test', '[', '[[', 'true', 'false', ':',
+    'fi', 'esac', '}', 'function', 'return', 'exit', 'break', 'continue', 'test', '[', '[[', 'true', 'false', ':',
     'cd', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location', 'pwd', 'get-location',
     'sleep', 'start-sleep', '',
     // These make, stamp or remove files and folders, or only print: none changes an existing file's text.
@@ -175,6 +175,8 @@ export function mayWriteFiles(st: Statement, ps = false): boolean {
   const { name, args } = programOf(st)
   if (args.some(a => RUNS.test(a.text))) return true
   if (PURE_CALL.test(st.words[0]?.text ?? '')) return false
+  // A block's closing word with a redirect (`{ ...; } > b.md`, `done > b.md`) writes all the block prints.
+  if (/^(}|done|fi|esac)$/.test(name) && st.writes.length > 0) return true
   if (READERS.has(name)) return false
   if (name === 'git') return gitMayWrite(args)
   // The words past options, without the value of gh's `-R`/`--repo`, which may sit before the action.

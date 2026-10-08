@@ -634,3 +634,57 @@ test('switches in any order, piped iex, attached sets, coproc and late writers',
   const late = read("M='A'; f() { echo \"$M\" > b.md; }; f; M=ok; gh pr create -t t -F b.md")
   expect(late.texts.map(t => t.text)).not.toContain('ok')
 })
+
+// Names Bash takes for a coproc or a function, writes through a nameref or a PowerShell name built at run
+// time, loops that run a statement again after a later set, writers fed the values where they ran, and the
+// closing word of a block.
+test('coproc names, function names, namerefs, run-time names, loops, writer values and blocks', () => {
+  const read = (command: string, ps = false) => inspect(command, ps)
+  expect(read('coproc C { git commit --no-verify -m x; }').block).toContain('skipping git hooks')
+  for (const command of [
+    'a.b() { git commit -m x; }; HUSKY=0 a.b',
+    'function a:b { git commit -m x; }; LEFTHOOK=0 a:b',
+  ]) {
+    expect([command, read(command).block]).toEqual([command, expect.stringContaining('git hooks off')])
+  }
+  for (const [command, ps] of [
+    ["M='fix: x'; declare -n R=M; R=\"$OUT\"; git commit -m \"$M\"", false],
+    ["M='fix: x'; local -n R=M; read -r R <<< \"$OUT\"; git commit -m \"$M\"", false],
+    ["M='fix: x'; typeset -n R=M; printf -v R '%s' \"$OUT\"; git commit -m \"$M\"", false],
+    ["M='fix: x'; declare -n R=\"$v\"; R=\"$OUT\"; git commit -m \"$M\"", false],
+    ["$m = 'fix: x'; Set-Variable -Name $n -Value $out; git commit -m $m", true],
+    ["$m = 'fix: x'; sv $n $out; git commit -m $m", true],
+    ["$m = 'fix: x'; New-Variable $n $out -Force; git commit -m $m", true],
+    ["$m = 'fix: x'; Set-Item \"variable:$n\" $out; git commit -m $m", true],
+    ["$m = 'fix: x'; $r = [ref]$m; $r.Value = $out; git commit -m $m", true],
+    ["M='fix: a'; for i in 1 2; do git commit -m \"$M\"; M=$OUT; done", false],
+    ["M='fix: a'; while git commit -m \"$M\"; M=$OUT; do :; done", false],
+    ["$m = 'fix: a'; foreach ($i in 1,2) { git commit -m $m; $m = $out }", true],
+    ["$m = 'fix: a'; do { git commit -m $m; $m = $out } while ($true)", true],
+  ] as const) {
+    expect([command, read(command, ps).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+  }
+  expect(read("for i in 1 2; do M='fix: a'; git commit -m \"$M\"; done").unread).toEqual([])
+  const body = (command: string, ps = false) => {
+    const plan = read(`${command}; gh pr create -t t --body-file b.md`, ps)
+    return { notes: plan.notes, texts: plan.texts.map(t => t.text).filter(t => t.startsWith('## What')) }
+  }
+  for (const [command, ps] of [
+    ["BODY='## What'; BODY+=' - add x'; printf '%s\\n' \"$BODY\" > b.md", false],
+    ["B='draft'; B='## What - add x'; cat > b.md <<EOF\n$B\nEOF\n", false],
+    ["B='draft'; B='## What - add x'; cat > b.md <<< \"$B\"", false],
+    ["$b = 'draft'; $b = '## What - add x'; $b > b.md", true],
+  ] as const) {
+    expect([command, body(command, ps)]).toEqual([command, { notes: [], texts: ['## What - add x'] }])
+  }
+  const named = (before: string) =>
+    read(`${before}; gh pr create -t t --body-file b.md`).files.map(f => f.named).at(-1)
+  expect(named('coproc C { sleep 1; }')).toBeUndefined()
+  expect(named('{ sleep 1; }')).toBeUndefined()
+  const blocks = ["{ echo 'x'; } > b.md", "for i in 1; do echo 'x'; done > b.md", "if true; then echo 'x'; fi > b.md"]
+  for (const before of blocks) {
+    expect([before, named(before)]).toEqual([before, true])
+  }
+  const loop = read("B=a; for i in 1 2; do echo \"$B\" > b.md; B=$OUT; done; gh pr create -t t -F b.md")
+  expect(loop.notes).toContain('the PR text (file b.md)')
+})

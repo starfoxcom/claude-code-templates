@@ -60,8 +60,7 @@ import { joinWords, sliceWord } from './quoting'
 import { parse } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
 import { assignPsTargets, forgetOutVars, knownPath, psAssignment, setCounts, setsNameAtRunTime } from './vars'
-import { psSetsUnknown } from './vars'
-import { varsIn, withWords } from './vars'
+import { psSetsUnknown, type Seen, seenOf, varsIn, withWords } from './vars'
 import type { Var, VarState } from './vars'
 import {
   COMMIT,
@@ -86,6 +85,7 @@ export type { Folder, Target } from './folders'
 
 // The statement that writes a file, where it runs, and the values of the variables its path names there.
 type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[]; folder: Folder; path: string }
+  & { seen: Seen; isLater: boolean }
 
 // The reading's working state while it walks one command.
 type Reading = VarState & {
@@ -178,8 +178,11 @@ export function inspect(command: string, powershell: boolean): Plan {
       fed.set(writer, paths.add(norm(f.path)))
       const before = plan.unread.length
       const named = plan.files.length
-      // Fed after the walk, where a name set again later holds its last value: such a name is unknown.
-      const at = { ...r, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder, isDeferredRead: true }
+      // Fed with the variables as they stood where it ran. One that may run later (a function body, a trap
+      // action, a loop) sees each name's last value, so a name set more than once is unknown there.
+      const vars = writer.isLater ? {} : seenOf(writer.seen)
+      const at = { ...r, ...vars, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
+      at.isDeferredRead = writer.isLater
       feed(writer.st, at, `${f.where} (file ${f.path})`)
       // A file the writer reads (`cat CHANGES.md > b.md`) is where the writer ran.
       for (const g of plan.files.slice(named)) g.folder ??= writer.folder
@@ -203,7 +206,7 @@ export function inspect(command: string, powershell: boolean): Plan {
 function read(statements: Statement[], r: Reading, outer?: string) {
   statements.forEach((st, idx) => {
     const was = r.isDeferredRead
-    r.isDeferredRead = was || st.isDeferred
+    r.isDeferredRead = was || st.isDeferred || st.isLooped
     readStatement(st, statements[idx - 1], r, outer)
     r.isDeferredRead = was
   })
@@ -232,8 +235,12 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const writes = st.writes.map((path, i) => knownPath(st.writeWords?.[i] ?? path, r) ?? path)
   const at = placeHere(r).folder
   plan.written.push(...writes.map(path => ({ path, folder: at })))
-  for (const path of writes)
-    r.writers.push({ st, ps: r.ps, scope, vars: varsIn(path, r), folder: at, path: norm(path) })
+  const seen = writes.length > 0 ? seenOf(r) : undefined
+  const isLater = Boolean(r.isDeferredRead)
+  for (const path of writes) {
+    const vars = varsIn(path, r)
+    r.writers.push({ st, ps: r.ps, scope, vars, folder: at, path: norm(path), seen: seen as Seen, isLater })
+  }
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args, r)
