@@ -397,7 +397,7 @@ test('text piped in, set in a variable, or written to a file earlier in the comm
   expect(plan('gh pr view 5 --json body --jq .body > b.md; gh pr edit 5 --body-file b.md').notes).toEqual([
     'the PR edit (file b.md)',
   ])
-  expect(plan(`$p = @{ title = 't' }; gh pr create @p`, true).unread).toEqual([])
+  expect(plan(`$p = @{ title = 't' }; gh pr create @p`, true).unread).toEqual(['the PR text'])
   expect(plan('gh pr create @p', true).unread).toEqual(['the PR text'])
   expect(plan('bash -c "git commit -m \\"$MSG\\""').unread).toContain('a bash script built at run time')
   expect(plan('MSG=fixed; git commit -m "$MSG"').unread).toEqual([])
