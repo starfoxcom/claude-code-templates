@@ -134,8 +134,10 @@ test("the line names the pause and this session's own arm while they are ahead",
   expect(wakePart(NOW, 420, NOW + HOUR)).toBe(' | paused until Fri 10:00')
   expect(wakePart(NOW, 420, undefined, NOW + 2 * HOUR)).toBe(' | armed: resumes Fri 11:00')
   expect(wakePart(NOW, 420, NOW + HOUR, NOW + 2 * HOUR)).toBe(' | paused until Fri 10:00 | armed: resumes Fri 11:00')
-  // An arm at the pause's own time is that wake, named once; a wake that passed is no longer ahead.
+  // An arm at or before the pause's wake joins it (usage-guard defers it there, also after the pause is
+  // extended), so it is named once; a wake that passed is no longer ahead.
   expect(wakePart(NOW, 420, NOW + HOUR, NOW + HOUR)).toBe(' | paused until Fri 10:00')
+  expect(wakePart(NOW, 420, NOW + 2 * HOUR, NOW + HOUR)).toBe(' | paused until Fri 11:00')
   expect(wakePart(NOW, 420, NOW, NOW - 1)).toBe('')
 })
 
