@@ -12,7 +12,6 @@ const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
 const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
-const KEEP_SETTLED_MS = 60 * 60_000
 const HINT = '[help | settings | set | stop | phone]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
@@ -321,11 +320,11 @@ async function startWatch(
   return fresh
 }
 
-// A settled watch is kept an hour so a second instance does not wake for it again. A merge made outside
-// this session (the web page) drops it. A head that moved restarts it: right after a push GitHub can
-// still name the old commit, so the push found the settled watch, and its new commit is caught here.
+// A settled watch stays on the row until its PR is merged or closed, here or outside this session (the web
+// page), or the user stops it: a PR that is still open is unfinished work, red or green. A head that moved
+// restarts it: right after a push GitHub can still name the old commit, so the push found the settled
+// watch, and its new commit is caught here.
 async function recheckSettled($: EngineInterface, watch: Watch, now: number): Promise<Watch | undefined> {
-  if (now - (watch.settledAt ?? now) >= KEEP_SETTLED_MS) return undefined
   let view: { state?: string; headRefOid?: string } = {}
   try {
     view = JSON.parse(

@@ -351,6 +351,25 @@ test('a merge drops the watch only once GitHub says the PR is merged', async ($,
   expect(watched()).toEqual([])
 })
 
+// An open PR is unfinished work: its settled watch stays on the row, however long ago it settled, until
+// the PR is merged or closed.
+test('a settled watch stays until its PR is merged or closed, not for a set time', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  const watched = () => (JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }).watches
+  for (let i = 0; i < 6; i++) await clock.advance(30_000)
+  expect(watched().map(w => w.outcome)).toEqual(['failed'])
+  await clock.advance(3 * HOUR)
+  for (let i = 0; i < 3; i++) await clock.advance(30_000)
+  expect(watched().map(w => [w.number, w.outcome])).toEqual([[7, 'failed']])
+  seen.prState = 'CLOSED'
+  await clock.advance(30_000)
+  expect(watched()).toEqual([])
+})
+
 test('a merge names its PR, or 0 for the branch PR; other commands are not merges', () => {
   expect(mergedNumber('gh pr merge 1278 --merge --delete-branch')).toBe(1278)
   expect(mergedNumber('gh pr merge --merge #42')).toBe(42)
