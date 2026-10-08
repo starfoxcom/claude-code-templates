@@ -87,13 +87,16 @@ export function runsInlineCode(st: Statement): boolean {
   return st.heredocs.length > 0 && !st.hasDynamicBody
 }
 
-// Programs that only read the files they name, with none of their options writing one, and shell keywords.
+// Programs that write no file (a `>` they carry is read on its own), with none of their options writing one,
+// and shell keywords.
 const READERS = new Set(
   [
     'cat', 'type', 'get-content', 'gc', 'head', 'tail', 'wc', 'grep', 'egrep', 'rg', 'select-string', 'sls',
     'test-path', 'ls', 'dir', 'get-item', 'gi', 'get-childitem', 'gci', 'stat', 'echo', 'write-output',
     'write-host', 'printf', 'for', 'select', 'case', 'foreach', 'while', 'until', 'elseif', 'switch', 'done',
     'fi', 'esac', 'function', 'return', 'exit', 'break', 'continue', 'test', '[', '[[', 'true', 'false', ':',
+    'cd', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location', 'pwd', 'get-location',
+    'sleep', 'start-sleep', '',
   ],
 )
 // git subcommands that leave the work tree as it is, unless an output file is named (`git log --output=x`).
@@ -102,21 +105,13 @@ const GIT_READS = /^(add|diff|status|log|show|commit|push|ls-files|rev-parse|bra
 // `codespace cp`, `repo clone`, an extension) may write one.
 const GH_READS = /^(pr|issue|api|search|label|browse|status|auth|workflow|secret|variable|ruleset|cache)$/
 
-/** The file names (lowercased, folder dropped) a statement may write: every name in its words, unless its
- * program only reads (`cat b.md`, `git add b.md`). `Set-Content b.md`, `cp x b.md`, `tee b.md` and
- * `[IO.File]::WriteAllText('b.md', ...)` each name one. `*` when a word is built at run time (`cp x "$F"`),
- * or a download names none: any file. */
-export function namedFiles(st: Statement): string[] {
+/** Whether a statement may write files beyond its own `>`: any program not known to write none (`Set-Content`,
+ * `cp`, `tee`, `npm`, a .NET call, a function, `xargs cp`), git outside its read subcommands or with an
+ * output file (`git log --output=x`), and gh outside its read and send groups (`gh release download`). */
+export function mayWriteFiles(st: Statement): boolean {
   const { name, args } = programOf(st)
   const words = args.filter(a => !a.text.startsWith('-')).map(a => a.text)
   const isOutput = args.some(a => /^(--output|-o)(=|$)/.test(a.text))
-  if (READERS.has(name) || (name === 'git' && GIT_READS.test(words[0] ?? '') && !isOutput)) return []
-  if (name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download')) return []
-  // A word split at quotes, parens, `=` and a PowerShell parameter's colon (`-Path:b.md`).
-  const names = st.words.flatMap(w => w.text.split(/[\s(),;'"=]+|^-\w+:/)).map(baseName).filter(Boolean)
-  const isAny = st.words.some(w => w.dynamic) || (name === 'gh' && words.includes('download'))
-  return isAny ? [...names, '*'] : names
+  if (READERS.has(name) || (name === 'git' && GIT_READS.test(words[0] ?? '') && !isOutput)) return false
+  return !(name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download'))
 }
-
-/** A path's file name, lowercased: what `namedFiles` compares. */
-export const baseName = (path: string) => (path.split(/[\\/]/).pop() ?? '').toLowerCase()
