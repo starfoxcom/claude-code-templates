@@ -559,3 +559,16 @@ export function setsNameAtRunTime(name: string, args: Word[]): boolean {
   if (!/^(read|mapfile|readarray|unset|local|readonly|declare|typeset|export)$/.test(name)) return false
   return args.some(a => a.dynamic && !a.text.startsWith('-') && !/^[A-Za-z_]\w*\+?=/.test(a.text))
 }
+
+/** A PowerShell statement that may set a variable whose name the reading does not know: `Set-Variable`, `sv`,
+ * `New-Variable` or `nv` given a name built at run time, the `variable:` drive under one (`Set-Item
+ * "variable:$n"`), or a `[ref]$m`, through which a later write changes `$m` unseen. */
+export function psSetsUnknown(st: Statement, name: string, args: Word[]): boolean {
+  if (st.words.some(w => /\[ref\]\s*\$/i.test(w.text))) return true
+  if (/^(set-item|si|new-item|ni|set-content|sc|add-content|ac)$/i.test(name))
+    return args.some(a => a.dynamic && /variable:/i.test(a.text))
+  if (!/^(set-variable|sv|new-variable|nv)$/i.test(name)) return false
+  const flag = args.findIndex(a => /^-n(a(m(e)?)?)?$/i.test(a.text))
+  const target = flag === -1 ? args.find(a => !a.text.startsWith('-')) : args[flag + 1]
+  return Boolean(target?.dynamic)
+}
