@@ -439,7 +439,6 @@ test('each unread kind has its own way out', () => {
     'a git setting built at run time',
     'an environment variable named at run time',
     'a program named at run time',
-    'a trap action built at run time',
     'a bash script built at run time',
     'a pwsh script built at run time',
     'a cmd script built at run time',
@@ -513,4 +512,40 @@ test('a redirect joined to a variable target writes or feeds that file', () => {
   }
   expect(files('F=m.txt; git commit -F - <"$F"')).toEqual([['m.txt', false]])
   expect(inspect('git commit -F - <"$IN"', false).unread).toEqual(['the commit message'])
+})
+
+// A `{ }` group in a pipeline runs in a subshell; a command naming `IFS` leaves unquoted splits unknown; a
+// trap action built at run time is read as an `eval`; a hook manager's off switch with any other value passes.
+test('piped groups, IFS, trap actions and hook-manager values are read as the shell runs them', () => {
+  const read = (command: string, ps = false) => inspect(command, ps)
+  const plain = read('git commit -am x').targets[0]?.folder
+  expect(read('{ cd sub; } | cat; git commit -am x').targets[0]?.folder).toEqual(plain)
+  expect(read('{ cd sub; } 2>&1 | tail -5; git commit -am x').targets[0]?.folder).toEqual(plain)
+  for (const command of [
+    '{ M=x; } | cat; git commit -m "$M"',
+    'echo | { true; M=x; }; git commit -m "$M"',
+    'echo | { read L; M=x; } | cat; git commit -m "$M"',
+  ]) {
+    expect([command, read(command).unread]).toEqual([command, ['the commit message']])
+  }
+  // Not piped, the group runs in this shell.
+  expect(read("{ M='fix: x'; }; git commit -m \"$M\"").unread).toEqual([])
+  const ifs = read("IFS=,; X='--no-verify,'; git commit -m 'fix: x' $X")
+  expect([ifs.block, ifs.unread]).not.toEqual([undefined, []])
+  // An `EXIT` trap built at run time runs after everything; any other may change what follows.
+  const temp = "T=$(mktemp); trap \"rm -f $T\" EXIT; cat > \"$T\" <<'EOF'\nfix: x\nEOF\ngit commit -F \"$T\""
+  expect(read(temp).unread).toEqual([])
+  expect(read('trap "$X" DEBUG; M=\'fix: x\'; git commit -m "$M"').unread).toEqual(['the commit message'])
+  expect(read('trap "git commit --no-verify -m $X" EXIT').block).toContain('a trap action built at run time')
+  for (const command of ['HUSKY=1 git commit -m x', 'SKIP= git commit -m x', 'LEFTHOOK=1 git commit -m x']) {
+    expect([command, read(command).block]).toEqual([command, undefined])
+  }
+  // PowerShell: a value written with `>` is no program that may rewrite the body file.
+  for (const command of [
+    "'## What' > b.md; gh pr create -t t -F b.md",
+    "@'\n## What\n- x\n'@ > b.md; gh pr create -t t -F b.md",
+    "$body = 'x'; $body > b.md; gh pr create -t t -F b.md",
+  ]) {
+    expect([command, read(command, true).files.map(f => f.named)]).toEqual([command, [undefined]])
+  }
 })

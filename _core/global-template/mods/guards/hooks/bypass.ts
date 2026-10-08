@@ -1,5 +1,5 @@
 // The routes around the attribution check, refused outright whatever the message says: history rewrites,
-// skipped git hooks, `--trailer`, a reused commit message and lefthook switched off (`eval` is judged by
+// skipped git hooks, `--trailer`, a reused commit message and a hook manager switched off (`eval` is judged by
 // the reading, in inspect.ts). Each one rewrites, hides or skips the text the check reads. They are read
 // from the statement as the shell reader parsed it, so a message that names a flag, a quote the reader
 // unescapes or a here-doc body never trips them, and a word like `commit` counts only as git's
@@ -15,7 +15,9 @@ const TRAILER = '--trailer is not allowed; write the message body directly.'
 const REUSE = "reusing another commit's message (-C, -c, --reuse-message, --reedit-message) cannot be read."
 const CONFIG_UNREAD = 'a git config setting built at run time cannot be read.'
 export const EVAL = 'eval builds the command at run time, so its message cannot be read.'
-const LEFTHOOK = 'disabling lefthook removes the commit-msg attribution check.'
+const HOOKS_OFF =
+  "switching the repo's git hooks off (lefthook, husky, pre-commit or simple-git-hooks) is not allowed: they " +
+  'hold its commit gates.'
 
 // git's global options that take the next word as their value; the subcommand comes after them.
 const GIT_VALUE_OPTIONS = new Set([
@@ -40,14 +42,17 @@ const CONFIG_VERBS = /^(set|unset|unset-all|replace-all|add)$/
 // A hooks setting passed through the environment: `GIT_CONFIG_PARAMETERS`, or `GIT_CONFIG_KEY_<n>`.
 const ENV_HOOKS =
   /^(GIT_CONFIG_PARAMETERS\+?=.*(core\.hookspath|hooks\.)|GIT_CONFIG_KEY_\d+\+?=(core\.hookspath|hooks\.))/i
-// Lefthook skips every hook with `LEFTHOOK=0` or `false`, and named ones with `LEFTHOOK_EXCLUDE`.
-const LEFTHOOK_OFF = /^(LEFTHOOK\+?=(0|false)|LEFTHOOK_EXCLUDE\+?=.*)$/i
+// The hook managers the bundles ship, and the switches that skip their hooks: lefthook every hook with
+// `LEFTHOOK=0` or `false` and named ones with `LEFTHOOK_EXCLUDE`, husky with `HUSKY=0` (v9) or
+// `HUSKY_SKIP_HOOKS` (v4), pre-commit the hooks `SKIP` names, simple-git-hooks with `SKIP_SIMPLE_GIT_HOOKS`.
+const HOOKS_OFF_SET =
+  /^(LEFTHOOK\+?=(0|false)|HUSKY\+?=0|(LEFTHOOK_EXCLUDE|HUSKY_SKIP_HOOKS|SKIP|SKIP_SIMPLE_GIT_HOOKS)\+?=.+)$/i
 // The same settings given a value built at run time (`LEFTHOOK=$V`): what they switch off is unknown.
-const LEFTHOOK_NAME = /^(LEFTHOOK|LEFTHOOK_EXCLUDE)\+?=/i
+const HOOKS_OFF_NAME = /^(LEFTHOOK|LEFTHOOK_EXCLUDE|HUSKY|HUSKY_SKIP_HOOKS|SKIP|SKIP_SIMPLE_GIT_HOOKS)\+?=/i
 const GIT_ENV_NAME = /^GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\+?=/i
-// Package runners that start a tool by name (`npx lefthook uninstall`, `pnpm exec lefthook ...`).
-const RUNNERS = /^(npx|pnpx|bunx|pnpm|yarn|bun|npm)$/
-const LEFTHOOK_TOOL = /^(@evilmartians\/)?lefthook(@\S*)?$/
+// Package runners that start a tool by name (`npx lefthook uninstall`, `pnpm exec husky ...`, `uvx pre-commit`).
+const RUNNERS = /^(npx|pnpx|bunx|pnpm|yarn|bun|npm|pipx|uvx|uv)$/
+const MANAGER_TOOL = /^((@evilmartians\/)?lefthook|husky|pre-commit|pre_commit)(@\S*)?$/
 
 // Builtins whose arguments are the assignments themselves (`export LEFTHOOK=0`, `declare -x LEFTHOOK=0`).
 const ASSIGNS = /^(export|declare|local|typeset|readonly)$/
@@ -199,9 +204,11 @@ function gitReason(args: Word[]): string | undefined {
 // git's environment. Every word before the program counts, past keywords and wrappers. `lefthook
 // uninstall` too.
 function envReason(st: Statement, name: string, args: Word[]): string | undefined {
-  const tool = RUNNERS.test(name) ? args.findIndex(a => LEFTHOOK_TOOL.test(a.text)) : -1
-  const lefthook = name === 'lefthook' ? args : tool === -1 ? [] : args.slice(tool + 1)
-  if (lefthook.find(a => !a.text.startsWith('-'))?.text === 'uninstall') return LEFTHOOK
+  // A manager run by name, through a package runner, or as `python -m pre_commit`, told to uninstall.
+  const isRunner = RUNNERS.test(name) || (/^(python3?|py)$/.test(name) && args[0]?.text === '-m')
+  const tool = isRunner ? args.findIndex(a => MANAGER_TOOL.test(a.text)) : -1
+  const manager = MANAGER_TOOL.test(name) ? args : tool === -1 ? [] : args.slice(tool + 1)
+  if (manager.find(a => !a.text.startsWith('-'))?.text === 'uninstall') return HOOKS_OFF
   const words = st.words
   const ps = /^\$env:(\w+)(?:=(.*))?$/i.exec(words[0]?.text ?? '')
   const spaced = words[1]?.text === '=' ? words[2] : undefined
@@ -213,7 +220,7 @@ function envReason(st: Statement, name: string, args: Word[]): string | undefine
   const lead = words.slice(0, words.length - args.length - (name ? 1 : 0))
   const applied = ASSIGNS.test(name) ? [...lead, ...args] : lead
   for (const { text, dynamic } of assigned ? [assigned] : applied) {
-    if (LEFTHOOK_OFF.test(text) || (dynamic && LEFTHOOK_NAME.test(text))) return LEFTHOOK
+    if (HOOKS_OFF_SET.test(text) || (dynamic && HOOKS_OFF_NAME.test(text))) return HOOKS_OFF
     if (ENV_HOOKS.test(text) || (dynamic && GIT_ENV_NAME.test(text))) return HOOK_SKIP
   }
   return undefined

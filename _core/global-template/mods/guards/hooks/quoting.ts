@@ -1,5 +1,6 @@
 // How the shells pass quoted and escaped text on: a word's plain `$` and backticks, cut or joined with it,
-// Bash's `$'...'` escapes and PowerShell's backtick escapes. Pure.
+// Bash's `$'...'` escapes, PowerShell's backtick escapes, and the PowerShell words that are expressions,
+// casts or balanced brackets. Pure.
 
 import type { Word } from './shell'
 
@@ -57,4 +58,34 @@ export function ansiBody(rest: string): { text: string; length: number } {
 export function plain(w: Word, text: string) {
   for (let k = 0; k < text.length; k++) if (/[$`]/.test(text[k] ?? '')) (w.literals ??= []).push(w.text.length + k)
   w.text += text
+}
+
+// PowerShell computes an unquoted word that goes on past a quoted part (`'--x'.Trim()`, `'a'+'b'`) or past a
+// variable (`$o.Trim()`, `${o}[0]`), or opens with a cast (`[string]'x'`). Inside double quotes it is text.
+export function isExpression(w: Word, c: string): boolean {
+  if (c === '[' && w.text === '' && !w.quoted) return true
+  if (w.quoted && c !== "'" && c !== '"') return true
+  return /[.[(+*]/.test(c) && /\$([A-Za-z_][\w:]*|\{[^}]*\})$/.test(w.text)
+}
+
+// One or more `[...]` casts and nothing else, brackets balanced: `[void]`, `[Dictionary[string,int]]`.
+export function isCasts(text: string): boolean {
+  let depth = 0
+  for (const ch of text) {
+    if (ch === '[') depth++
+    else if (ch === ']') depth--
+    else if (depth === 0) return false
+    if (depth < 0) return false
+  }
+  return depth === 0 && text.startsWith('[')
+}
+
+// Every bracket, paren and brace opened in the text is closed again.
+export function isBalanced(text: string): boolean {
+  let depth = 0
+  for (const ch of text) {
+    if ('[({'.includes(ch)) depth++
+    else if ('])}'.includes(ch) && --depth < 0) return false
+  }
+  return depth === 0
 }
