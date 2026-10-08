@@ -1,0 +1,90 @@
+name: Attribution
+
+# The server-side backstop to the local attribution guards. The local hook and
+# the guards mod catch AI credit written the ordinary way from a session; a
+# commit made elsewhere, or a write that slipped past them, reaches this check.
+# It fails a pull request when one of its commits (message, author or
+# committer), its title or its body carries AI attribution: an AI
+# Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
+# session link or the robot emoji. Plain mentions of the product pass.
+#
+# The patterns are the shipped hook's own (`ATTRIBUTION` in
+# `_core/global-template/hooks/no-ai-attribution.py`), read from protected
+# `develop`, never from the pull request: a PR that edits the hook cannot
+# weaken the check on itself. No manual trigger.
+
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: attribution-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  attribution:
+    name: No AI attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the hook's patterns from develop
+        run: |
+          git fetch --no-tags origin develop
+          git show origin/develop:_core/global-template/hooks/no-ai-attribution.py > "$RUNNER_TEMP/attribution_hook.py"
+
+      # The PR's text reaches the script through the environment, never the
+      # script's own text, so a title or body cannot run as code.
+      - name: Scan the commits, title and body
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'EOF'
+          import importlib.util, os, subprocess, sys
+
+          spec = importlib.util.spec_from_file_location(
+              "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
+          hook = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(hook)
+
+          # Each commit the PR adds: what its base already holds is not its own.
+          log = subprocess.run(
+              ["git", "log", "--format=%H%x1f%an <%ae>%x1f%cn <%ce>%x1f%B%x1e",
+               f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"],
+              check=True, capture_output=True, text=True).stdout
+          texts = [("the PR title", os.environ.get("PR_TITLE", "")),
+                   ("the PR body", os.environ.get("PR_BODY", ""))]
+          for entry in filter(str.strip, log.split("\x1e")):
+              sha, author, committer, message = entry.strip("\n").split("\x1f", 3)
+              texts += [(f"commit {sha[:7]}'s author", author),
+                        (f"commit {sha[:7]}'s committer", committer),
+                        (f"commit {sha[:7]}'s message", message)]
+
+          hits = []
+          for where, text in texts:
+              hit = hook.ATTRIBUTION.search(hook.strip_paths(text))
+              if hit:
+                  hits.append(f"{where}: '{hit.group(0).strip()}'")
+          for line in hits:
+              print(f"::error::AI attribution in {line}")
+          if hits:
+              print("Commits, PRs, issues, comments and releases belong to the maintainer: remove the "
+                    "attribution (reword the commits, edit the title or body) and push again.")
+              sys.exit(1)
+          print(f"No AI attribution in {len(texts)} texts.")
+          EOF
