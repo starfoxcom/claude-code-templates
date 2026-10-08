@@ -29,9 +29,13 @@ const HOOKS_SECTION = /^(core|hooks)(\.|$)/i
 const CONFIG_VALUE_FLAGS = /^(-f|--file|--blob|-t|--type|--default|--comment|--value)$/
 const CONFIG_VERBS = /^(set|unset|unset-all|replace-all|add)$/
 // A hooks setting passed through the environment: `GIT_CONFIG_PARAMETERS`, or `GIT_CONFIG_KEY_<n>`.
-const ENV_HOOKS = /^(GIT_CONFIG_PARAMETERS=.*(core\.hookspath|hooks\.)|GIT_CONFIG_KEY_\d+=(core\.hookspath|hooks\.))/i
+const ENV_HOOKS =
+  /^(GIT_CONFIG_PARAMETERS\+?=.*(core\.hookspath|hooks\.)|GIT_CONFIG_KEY_\d+\+?=(core\.hookspath|hooks\.))/i
 // Lefthook skips every hook with `LEFTHOOK=0` or `false`, and named ones with `LEFTHOOK_EXCLUDE`.
-const LEFTHOOK_OFF = /^(LEFTHOOK=(0|false)|LEFTHOOK_EXCLUDE=.*)$/i
+const LEFTHOOK_OFF = /^(LEFTHOOK\+?=(0|false)|LEFTHOOK_EXCLUDE\+?=.*)$/i
+// The same settings given a value built at run time (`LEFTHOOK=$V`): what they switch off is unknown.
+const LEFTHOOK_NAME = /^(LEFTHOOK|LEFTHOOK_EXCLUDE)\+?=/i
+const GIT_ENV_NAME = /^GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\+?=/i
 // Package runners that start a tool by name (`npx lefthook uninstall`, `pnpm exec lefthook ...`).
 const RUNNERS = /^(npx|pnpx|bunx|pnpm|yarn|bun|npm)$/
 const LEFTHOOK_TOOL = /^(@evilmartians\/)?lefthook(@\S*)?$/
@@ -158,14 +162,19 @@ function envReason(st: Statement, name: string, args: Word[]): string | undefine
   const tool = RUNNERS.test(name) ? args.findIndex(a => LEFTHOOK_TOOL.test(a.text)) : -1
   const lefthook = name === 'lefthook' ? args : tool === -1 ? [] : args.slice(tool + 1)
   if (lefthook.find(a => !a.text.startsWith('-'))?.text === 'uninstall') return LEFTHOOK
-  const words = st.words.map(w => w.text)
-  const ps = /^\$env:(\w+)(?:=(.*))?$/i.exec(words[0] ?? '')
-  const assigned = ps ? `${ps[1]}=${ps[2] ?? (words[1] === '=' ? (words[2] ?? '') : '')}` : undefined
+  const words = st.words
+  const ps = /^\$env:(\w+)(?:=(.*))?$/i.exec(words[0]?.text ?? '')
+  const spaced = words[1]?.text === '=' ? words[2] : undefined
+  const assigned = ps && {
+    text: `${ps[1]}=${ps[2] ?? spaced?.text ?? ''}`,
+    // `$env:` itself is no run-time value; one after the `=` is.
+    dynamic: /[$`(]/.test(ps[2] ?? '') || Boolean(spaced?.dynamic),
+  }
   const lead = words.slice(0, words.length - args.length - (name ? 1 : 0))
-  const applied = ASSIGNS.test(name) ? [...lead, ...args.map(a => a.text)] : lead
-  for (const text of assigned === undefined ? applied : [assigned]) {
-    if (LEFTHOOK_OFF.test(text)) return LEFTHOOK
-    if (ENV_HOOKS.test(text)) return HOOK_SKIP
+  const applied = ASSIGNS.test(name) ? [...lead, ...args] : lead
+  for (const { text, dynamic } of assigned ? [assigned] : applied) {
+    if (LEFTHOOK_OFF.test(text) || (dynamic && LEFTHOOK_NAME.test(text))) return LEFTHOOK
+    if (ENV_HOOKS.test(text) || (dynamic && GIT_ENV_NAME.test(text))) return HOOK_SKIP
   }
   return undefined
 }

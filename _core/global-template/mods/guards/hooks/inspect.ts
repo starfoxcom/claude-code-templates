@@ -27,7 +27,7 @@ import { readPr } from './prbody'
 import type { PrCall } from './prbody'
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
-import { catValue, expand, expandBody, lookup, setVar, store, within } from './vars'
+import { assign, catValue, expand, expandBody, forget, inherit, lookup, setVar, within, withWords } from './vars'
 import type { VarState } from './vars'
 import {
   COMMIT,
@@ -195,7 +195,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const inner = typed.inner
   inner.forEach((st, i) => readStatement(st, inner[i - 1], r, r.ps ? scope : placeOf(st.group)))
   r.scope = scope
-  const st = withProgram(typed, r)
+  const st = withProgram(withWords(typed, r), r)
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
   plan.written.push(...writes)
@@ -212,6 +212,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
     return
   }
   if (readScript(st, name, args, r)) return
+  forget(st, name, r)
   // Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its
   // text is under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
   if (runsInlineCode(st)) r.ranScript = true
@@ -226,20 +227,14 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
 }
 
-// A program named through a variable (`GIT=git; $GIT commit ...`): read as the value the command set.
-// One built at run time otherwise (from outside the command, `$(which git)`), with arguments that would
-// write history as git's or gh's, is unread.
+// A program named through a variable the command did not set (from outside it, `$(which git)`), with
+// arguments that would write history as git's or gh's, is unread. One it set is filled in by `withWords`.
 function withProgram(st: Statement, r: Reading): Statement {
   const { name, args } = programOf(st)
   const k = st.words.length - args.length - 1
   const head = st.words[k]
   // PowerShell runs a program named by a variable only through `&` (`& $git commit`).
   if (!name || !head?.dynamic || (r.ps && !st.isCall)) return st
-  const e = expand(head.text, r)
-  if (!e.unresolved) {
-    const words = e.text.split(/\s+/).filter(Boolean).map(text => ({ text, dynamic: false, bodies: [] }))
-    return { ...st, words: [...st.words.slice(0, k), ...words, ...st.words.slice(k + 1)] }
-  }
   const rest = args.map(a => a.text).join(' ')
   if (RAW_WRITES.some(re => re.test(`git ${rest}`) || re.test(`gh ${rest}`))) {
     r.plan.isWrite = true
@@ -318,22 +313,6 @@ function readScript(st: Statement, name: string, args: Word[], r: Reading): bool
   return true
 }
 
-// What a child shell gets besides the exported values: the assignments in front of it (`M=x bash -c`,
-// `env M=x bash -c`), filled in where they are typed, and nothing of what `env -i` or `env -u M` clears.
-function inherit(st: Statement, args: Word[], r: Reading, child: string) {
-  const lead = st.words.slice(0, st.words.length - args.length - 1)
-  const isEnv = lead.some(w => w.text === 'env')
-  const clear = (name: string) => store(r, name, { text: '', literal: true, scope: child }, true)
-  for (let i = 0; i < lead.length; i++) {
-    const t = lead[i]?.text ?? ''
-    if (isEnv && /^(-i|-|--ignore-environment)$/.test(t)) for (const name of r.vars.keys()) clear(name)
-    const unset = isEnv ? /^(?:-u|--unset=?)(.*)$/.exec(t) : null
-    if (unset) clear(unset[1] || (lead[++i]?.text ?? ''))
-    const m = /^([A-Za-z_]\w*)=/.exec(t)
-    if (m && !unset) setVar(r, m[1] ?? '', { ...(lead[i] as Word), text: t.slice(m[0].length) }, true, child)
-  }
-}
-
 // PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed; one
 // from outside the command cannot be read.
 function readSplats(args: Word[], r: Reading, where: string) {
@@ -377,49 +356,15 @@ function feed(st: Statement, r: Reading, where: string) {
   plan.unread.push(where)
 }
 
-// Variables set earlier in the command (`MSG='...'`, `$m = @'...'@`, `read -r -d '' BODY <<'EOF'`):
-// a message that names one is read with its value. Returns true for an assignment statement.
-function assign(st: Statement, name: string, args: Word[], r: Reading): boolean {
-  const w = st.words
-  if (r.ps) {
-    const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
-    if (spaced && w[1]?.text === '=') {
-      setVar(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined)
-      return true
-    }
-    // `$p += @{...}`, `$p.Body = ...`, `$p['Body'] = ...`, `$p.Add(...)`: a value changed after it was
-    // typed is no longer known.
-    const isCompound = spaced !== null && /^([-+*/%]|\?\?)=$/.test(w[1]?.text ?? '')
-    const member = isCompound ? spaced : /^\$(\w+)[.[]/.exec(w[0]?.text ?? '')
-    const changed = member ? lookup(r, member[1] ?? '') : undefined
-    if (changed) {
-      changed.text += `\n${w.map(x => x.text).join(' ')}`
-      changed.literal = false
-    } else if (isCompound) setVar(r, spaced?.[1] ?? '', undefined)
-    const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
-    if (joined) setVar(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
-    return Boolean(joined) || isCompound
-  }
-  const pairs = name === '' ? w : /^(export|declare|local|readonly|typeset)$/.test(name) ? args : null
-  if (pairs) {
-    // `export M=x`, `declare -x M`: a child shell sees it too.
-    const isExport = name === 'export' || args.some(a => /^-[a-z]*x/.test(a.text))
-    for (const a of pairs) {
-      const m = /^([A-Za-z_]\w*)=/.exec(a.text)
-      if (m) setVar(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) }, isExport)
-      else if (isExport) for (const v of r.vars.get(a.text.toLowerCase()) ?? []) v.exported = true
-    }
-    return true
-  }
-  if (name === 'read' && st.heredocs.length > 0) {
-    const v = [...args].reverse().find(a => /^[A-Za-z_]\w*$/.test(a.text))
-    const body = st.heredocs[0] ?? ''
-    const e = st.hasDynamicBody ? expandBody(body, r) : { text: body, unresolved: false }
-    if (v) store(r, v.text, { text: e.unresolved ? body : e.text, literal: !e.unresolved, scope: r.scope })
-    return true
-  }
-  return false
+// A call whose own words are built at run time: a write, since what it does cannot be read.
+function unreadCall(r: Reading, what: string) {
+  r.plan.isWrite = true
+  if (!r.plan.unread.includes(what)) r.plan.unread.push(what)
 }
+
+// A word built at run time that the program may read as a flag: split by the shell, or starting with an
+// expansion or a dash.
+const mayBeFlag = (w: Word) => w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text))
 
 function setCwd(plan: Plan, word: Word | undefined) {
   if (word?.dynamic) plan.isCwdUnknown = true
@@ -466,8 +411,12 @@ function gitSubcommand(args: Word[], r: Reading): number {
       if (!plan.cwd && !plan.isCwdUnknown) setCwd(plan, args[k + 1])
       r.statementDir = args[k + 1]
       k += 2
-    } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env)$/.test(t)) k += 2
-    else if (t.startsWith('-')) k++
+    } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env)$/.test(t)) {
+      // A setting built at run time may name a hook path or an alias: what git then runs is unknown.
+      const isSetting = t === '-c' || t === '--config-env' || t === '--namespace'
+      if (isSetting && args[k + 1]?.dynamic) unreadCall(r, 'a git setting built at run time')
+      k += 2
+    } else if (t.startsWith('-')) k++
     else break
   }
   return k
@@ -505,6 +454,7 @@ function gitCommit(st: Statement, rest: Word[], r: Reading): string {
 function git(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
   const k = gitSubcommand(args, r)
+  if (args[k]?.dynamic) return void unreadCall(r, 'a git subcommand built at run time')
   const sub = args[k]?.text ?? ''
   const rest = args.slice(k + 1)
   switch (sub) {
@@ -583,6 +533,10 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
   plan.ghCalls++
   const { gi, ai } = ghWords(args, r)
+  // The subcommand, or a `gh api` endpoint that may turn into a flag, built at run time.
+  const isApi = args[gi]?.text === 'api'
+  if (args[gi]?.dynamic || (args[ai] && (isApi ? mayBeFlag(args[ai]) : args[ai]?.dynamic)))
+    return void unreadCall(r, 'a gh subcommand built at run time')
   const group = args[gi]?.text ?? ''
   const action = args[ai]?.text ?? ''
   const rest = args.filter((_, i) => i !== gi && i !== ai)
@@ -688,6 +642,8 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string, sub?: string)
       }
       continue
     }
+    // A word built at run time where a flag could stand may turn into one (`$NV`, `"$@"`).
+    if (where && mayBeFlag(w) && !r.plan.unread.includes(where)) r.plan.unread.push(where)
     positional.push(w)
   }
   return positional
@@ -721,7 +677,8 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       r.method = value.text.toUpperCase()
       return
     case 'branch':
-      if (!value.dynamic) plan.branches.push(value.text)
+      if (value.dynamic) unreadCall(r, 'the new branch name')
+      else plan.branches.push(value.text)
       return
     case 'field': {
       const eq = value.text.indexOf('=')
