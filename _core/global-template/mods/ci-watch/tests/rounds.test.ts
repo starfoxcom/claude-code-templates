@@ -18,8 +18,24 @@ test('red rounds count back to a green round or the reset', () => {
   expect(redRounds(nodes(reds(6)))).toBe(6)
   expect(redRounds(nodes([...reds(3), 'SUCCESS', ...reds(2)]))).toBe(2)
   expect(redRounds(nodes([RED, null, RED, 'ERROR', 'PENDING']))).toBe(3)
-  expect(redRounds(nodes(reds(8)), 'c4')).toBe(3)
-  expect(redRounds(nodes(reds(8)), 'c7')).toBe(0)
+  expect(redRounds(nodes(reds(8)), { sha: 'c4' })).toBe(3)
+  expect(redRounds(nodes(reds(8)), { sha: 'c7' })).toBe(0)
+})
+
+// The reset at c5, then `git reset --hard c2` and a new commit d1 force-pushed: c5 leaves the PR, and c2..c0
+// ran their checks before the reset.
+test('a history rewritten after the reset does not bring back the rounds before it', () => {
+  const at = (s: number) => `2026-10-08T10:00:0${s}Z`
+  const ran = (oid: string, startedAt: string): RoundNode => ({
+    commit: { oid, statusCheckRollup: { state: 'FAILURE', contexts: { nodes: [{ conclusion: RED, startedAt }] } } },
+  })
+  const rewritten = [ran('c0', at(0)), ran('c1', at(1)), ran('c2', at(2)), ran('d1', at(8))]
+  expect(redRounds(rewritten, { sha: 'c5', at: Date.parse(at(5)) })).toBe(1)
+  expect(redRounds(rewritten, { sha: 'c5' })).toBe(4)
+  // A status context reports its own time; a commit with no time is read as before.
+  const contexts = { nodes: [{ state: 'ERROR', createdAt: at(1) }] }
+  const status: RoundNode = { commit: { oid: 's', statusCheckRollup: { state: 'ERROR', contexts } } }
+  expect(redRounds([status, ...nodes(reds(2))], { at: Date.parse(at(5)) })).toBe(2)
 })
 
 // A quick second push cancels the first one's runs (`concurrency: cancel-in-progress`): GitHub shows that
@@ -46,8 +62,23 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push origin x:refs/heads/feature/x',
     'git push --all origin',
     'git add -A && git commit -m x && git push -q origin feature/x 2>&1 | tail -1',
+    // Redirects and a comment after the remote: still the branch itself.
+    'git push origin 2>&1 | tail -3',
+    'git push origin > log 2>&1',
+    'git push origin >/dev/null 2>&1',
+    'git push origin   # retry',
+    'git push origin :',
+    // Words the shell fills in when it runs cannot be read for sure: they count as this branch.
+    'git push origin "feature/x"',
+    'git push -u origin "$(git branch --show-current)"',
+    'git push -u origin $(git branch --show-current)',
+    'git push origin $branch',
+    'git push origin @',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, true])
+  }
+  for (const command of ['git push origin 2>$null', 'git push origin *>&1 | Out-Null', 'git push origin $b']) {
+    expect([command, pushesBranch(command, 'feature/x', true)]).toEqual([command, true])
   }
   for (const command of [
     'git push origin v1.3.0',
@@ -56,6 +87,10 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push origin HEAD:feature/new-direction',
     'git push origin feature/other',
     'git push origin --delete feature/x',
+    'git push origin :feature/x',
+    'git push origin +:feature/x',
+    'git push -d origin "$b"',
+    'git push origin v1.3.0 2>&1 | tail -3',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, false])
   }
@@ -93,6 +128,21 @@ test("past the limit, a tag, another branch, another folder's push or a closed P
   expect(await deny('git push origin feature/x')).toBeUndefined()
   seen.prState = 'OPEN'
   expect(await deny('git push origin feature/x')).toContain('endless round hunt')
+})
+
+// A hot reload leaves the older instance's hooks running beside the newer one's: only the live one judges,
+// so a fix to a false refusal is never overruled by the code it replaced.
+test('an instance a newer load has replaced judges no push', async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  // This instance takes the owner file on its first push, then a hot reload's newer one takes it over.
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.files.set('C:/Users/me/.claude/mods-data/ci-watch/s1.owner', 'a-newer-instance')
+  seen.rollups = reds(ROUND_LIMIT)
+  seen.ghCalls = []
+  expect(await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)).not.toHaveProperty('deny')
+  expect(seen.ghCalls).toEqual([])
 })
 
 test('owner and repo names go to GitHub as strings, so an all-digit one still counts', async ($, on) => {
@@ -147,7 +197,7 @@ test("the user's reset clears the count from the head it was typed on", async ($
   const typed = { command: 'ci-watch', args: 'rounds reset 7', origin: { kind: 'composer' } }
   const answer = (await $.command.run(typed as never)) as { text: string }
   expect(answer.text).toContain('Reset the fix-round count of o/r#7')
-  expect(JSON.parse(seen.files.get(path) ?? '{}')).toEqual({ 'o/r#7': 'c6' })
+  expect(JSON.parse(seen.files.get(path) ?? '{}')).toEqual({ 'o/r#7': { sha: 'c6', at: 1_000 } })
   expect(await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)).not.toHaveProperty('deny')
   seen.rollups = reds(13)
   const past = (await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)) as { deny?: string }
