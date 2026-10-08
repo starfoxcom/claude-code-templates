@@ -152,6 +152,8 @@ const live: {
   idleCompactMinTokens: number
   // The reply the mod's own idle compaction last ran for: once per reply.
   idleTriedFor?: number
+  // The setting that lets the mod compact an idle conversation itself.
+  isIdleCompactOn: boolean
   // The model of the last response and whether a compaction ran since: either starts the cache over.
   lastModel?: string
   isWindowFresh: boolean
@@ -168,6 +170,7 @@ const live: {
   cacheLifetimeMs: 60 * 60_000,
   isLifetimeRead: false,
   idleCompactMinTokens: IDLE_COMPACT_MIN_TOKENS,
+  isIdleCompactOn: true,
   hasReplied: false,
   isWindowFresh: false,
 }
@@ -241,13 +244,15 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
 // timer, never a hook or a command, and only for a reply this process saw: a session resumed or
 // reloaded is in use again. The engine refuses it while a turn runs; the next reply starts over.
 async function idleCompact($: EngineInterface): Promise<void> {
+  if (!live.isIdleCompactOn || !live.hasReplied) return
   const shown = await read($, budgets)
-  if (!live.hasReplied || !shown) return
+  if (!shown) return
   // The times from the reply as it stands now, never the row's last reading, which may be stale; only the
   // size comes from the row.
   const now = await $.clock.now()
   const { idleCompactAt: idleAt, cacheExpiresAt: expiresAt } = cacheTimes(shown.tokens)
   if (!isIdleCompactDue(now, idleAt, expiresAt, live.lastResponseAt, live.idleTriedFor)) return
+  if (!(await isAutoCompactOn($))) return
   // A hot reload leaves this module's timer running beside the new one's: go on only while the session's
   // memory file still holds this reply, which every newer reply rewrites.
   const saved = memoryFile ? parseMemory(String(await $.fs.read(memoryFile).catch(() => ''))) : undefined
@@ -257,6 +262,26 @@ async function idleCompact($: EngineInterface): Promise<void> {
   if (live.idleTriedFor === live.lastResponseAt) return
   live.idleTriedFor = live.lastResponseAt
   await $.session.compact().catch(() => undefined)
+}
+
+// The person's own off switches for automatic compaction: `DISABLE_AUTO_COMPACT` or `DISABLE_COMPACT`, or
+// auto-compact turned off in /config (`autoCompactEnabled`, kept in the global config, not the settings).
+async function isAutoCompactOn($: EngineInterface): Promise<boolean> {
+  const isSet = (value: string | undefined) => Boolean(value) && !/^(0|false)$/i.test(value ?? '')
+  if (isSet(await $.env.get('DISABLE_AUTO_COMPACT').catch(() => undefined))) return false
+  if (isSet(await $.env.get('DISABLE_COMPACT').catch(() => undefined))) return false
+  const settings = (await $.settings.read().catch(() => ({}))) as { autoCompactEnabled?: unknown }
+  if (settings.autoCompactEnabled === false) return false
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+  const file = configured ? `${configured}/.claude.json` : `${home}/.claude.json`
+  try {
+    const config = JSON.parse(String(await $.fs.read(file.replace(/\\/g, '/')))) as { autoCompactEnabled?: unknown }
+    return config.autoCompactEnabled !== false
+  } catch {
+    // No global config to read: auto-compact is on, as the engine starts it.
+    return true
+  }
 }
 
 // The first request after a prompt is the one a cold cache makes pay for the whole conversation.
@@ -388,6 +413,7 @@ export const register: Register = (on, options) => {
   // The settings come from the mod's own file over the loaded options, read again as it changes.
   settings(on, options, values => {
     live.planWarnAt = Number(values.planWarnAt ?? 75)
+    live.isIdleCompactOn = values.idleCompact !== false
     live.cacheWarnMinutes = Number(values.cacheWarnMinutes ?? 10)
     const ttlMs = Number(values.cacheTtlMinutes ?? 60) * 60_000
     // A new TTL starts the countdown over until a response tells the session's own lifetime. The file is
