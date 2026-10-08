@@ -5,12 +5,22 @@
 
 export const ROUND_LIMIT = 6
 
-/** A PR's latest commits, each with the overall state of its checks. */
+/** A PR's latest commits, each with the overall state of its checks and each check's own result. */
 export const ROUNDS_QUERY =
   'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number)' +
-  '{commits(last:100){nodes{commit{oid statusCheckRollup{state}}}}}}}'
+  '{commits(last:100){nodes{commit{oid statusCheckRollup{state contexts(last:100){nodes{' +
+  '... on CheckRun{conclusion} ... on StatusContext{state}}}}}}}}}}'
 
-export type RoundNode = { commit?: { oid?: string; statusCheckRollup?: { state?: string } | null } }
+type Context = { conclusion?: string | null; state?: string | null }
+export type RoundNode = {
+  commit?: { oid?: string; statusCheckRollup?: { state?: string; contexts?: { nodes?: Context[] } } | null }
+}
+
+// A check that really failed. A run cancelled by a newer push (`concurrency: cancel-in-progress`), skipped or
+// neutral is no failure, though GitHub's overall state turns red for it.
+const FAILED = new Set(['FAILURE', 'TIMED_OUT', 'STARTUP_FAILURE', 'ACTION_REQUIRED', 'ERROR'])
+const hasFailed = (contexts: readonly Context[]) =>
+  contexts.some(c => FAILED.has(c.conclusion ?? '') || FAILED.has(c.state ?? ''))
 
 /** The commits of a `ROUNDS_QUERY` answer, oldest first; none when it cannot be read. */
 export function roundNodes(answer: string): RoundNode[] {
@@ -22,16 +32,17 @@ export function roundNodes(answer: string): RoundNode[] {
   }
 }
 
-/** The pushed rounds in a row, newest first, whose checks did not all pass, back to `resetAt` (the commit
- * the user reset the count on, itself not counted) or the last round that passed. A commit with no checks
- * (pushed together with later ones) or with checks still running (the round in flight) is skipped. */
+/** The pushed rounds in a row, newest first, where a check really failed, back to `resetAt` (the commit the
+ * user reset the count on, itself not counted) or the last round that passed. A commit with no checks
+ * (pushed together with later ones), with checks still running (the round in flight) or with no check that
+ * failed (its runs cancelled by a newer push) is no round. */
 export function redRounds(nodes: readonly RoundNode[], resetAt?: string): number {
   let red = 0
   for (const node of [...nodes].reverse()) {
     if (resetAt !== undefined && node.commit?.oid === resetAt) break
-    const state = node.commit?.statusCheckRollup?.state
-    if (state === 'SUCCESS') break
-    if (state === 'FAILURE' || state === 'ERROR') red++
+    const rollup = node.commit?.statusCheckRollup
+    if (rollup?.state === 'SUCCESS') break
+    if (hasFailed(rollup?.contexts?.nodes ?? [])) red++
   }
   return red
 }

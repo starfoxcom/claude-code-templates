@@ -69,6 +69,30 @@ export function isPush(command: string, isPowerShell = false): boolean {
   return new RegExp(PUSH).test(commandWords(command, isPowerShell))
 }
 
+// Push options that take the next word as their value.
+const PUSH_VALUES = /^(-o|--push-option|--repo|--receive-pack|--exec)$/
+
+/** Whether a push in the command updates `branch`, the folder's checked-out one: with no refspec (the
+ * branch itself, or every branch with `--all`/`--mirror`), or a refspec to `HEAD` or to that branch. A tag
+ * push, `--tags` alone, a `--delete` or a refspec to another branch adds no round to its PR. */
+export function pushesBranch(command: string, branch: string, isPowerShell = false): boolean {
+  const words = commandWords(command, isPowerShell)
+  for (const push of words.matchAll(new RegExp(`${PUSH}([^;&|\\n]*)`, 'g'))) {
+    const args = (push[1] ?? '').split(/\s+/).filter(Boolean)
+    if (args.some(a => a === '--delete' || a === '-d')) continue
+    const plain = args.filter((a, i) => !a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
+    const refs = plain.slice(1)
+    const isEvery = args.includes('--all') || args.includes('--mirror')
+    if (refs.length === 0 && (isEvery || !args.includes('--tags'))) return true
+    const isOurs = (ref: string) => {
+      const dst = ref.replace(/^\+/, '').split(':').pop() ?? ''
+      return dst === 'HEAD' || dst === branch || dst === `refs/heads/${branch}`
+    }
+    if (refs.some(isOurs)) return true
+  }
+  return false
+}
+
 // A merged PR's watch is noise: the chat already says it merged. Returns the
 // PR number a `gh pr merge` names, 0 when it names none (the branch's PR).
 export function mergedNumber(command: string, isPowerShell = false): number | undefined {
