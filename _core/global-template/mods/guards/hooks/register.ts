@@ -235,11 +235,11 @@ const WAYS_OUT: [RegExp, string][] = [
   ],
   [
     /^a cmd script built at run time/,
-    'Give `cmd /c` one plain command, with no `%NAME%`, `^`, `&` or `|`: run each command in a call of its own.',
+    'Run the git or gh call directly, not through `cmd /c`, with every word typed out (no `%NAME%`).',
   ],
   [
     /^a \w+ script built at run time/,
-    'Write the script out, with no variable or `$(...)` in it, or run its git and gh calls on their own.',
+    'Run the git or gh call directly, not through a shell, with every word typed out (no variable or `$(...)`).',
   ],
   [
     /folder or repo built at run time/,
