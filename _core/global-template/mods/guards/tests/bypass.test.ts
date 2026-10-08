@@ -1003,3 +1003,36 @@ test('a branch name built at run time is unread in every spelling', () => {
     expect([command, inspect(command, false).unread]).toEqual([command, ['the new branch name']])
   }
 })
+
+// PowerShell has its own spellings for the same routes: a git setting, an environment variable, a dot-source.
+test('PowerShell git settings, env drive and .NET spellings, and dot-sourcing are read', () => {
+  for (const command of [
+    'git -c alias.ci="commit --no-verify" ci -m x',
+    "git config alias.ci 'commit --no-verify'; git ci -m x",
+    'git config --global include.path h.cfg; git commit -m x',
+    '. $git commit -m x',
+  ]) {
+    expect([command, inspect(command, true).unread]).not.toEqual([command, []])
+  }
+  for (const [command, reason] of [
+    ['Set-Item env:LEFTHOOK 0; git commit -m x', 'lefthook'],
+    ['Set-Item -Path Env:LEFTHOOK -Value 0; git commit -m x', 'lefthook'],
+    ["[Environment]::SetEnvironmentVariable('LEFTHOOK', '0'); git commit -m x", 'lefthook'],
+    ['. git commit --no-verify -m x', 'skipping git hooks'],
+  ] as const) {
+    expect([command, inspect(command, true).block]).toEqual([command, expect.stringContaining(reason)])
+  }
+  expect(inspect('Set-Item env:GIT_DIR C:/x; git commit -m x', true).targets[0]?.folder.isUnknown).toBe(true)
+})
+
+test('a git branch listing option takes its value, never names a new branch', () => {
+  for (const command of [
+    'git branch --points-at "$(git rev-parse HEAD)"',
+    'git branch --no-contains "$BASE"',
+    'git branch --format "$F"',
+    'git branch --sort refname',
+  ]) {
+    const plan = inspect(command, false)
+    expect([command, plan.unread, plan.branches]).toEqual([command, [], []])
+  }
+})

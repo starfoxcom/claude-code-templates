@@ -47,8 +47,10 @@ export type Statement = {
   scope?: string
   /** For a statement inside a `$(...)` or backticks: which one, numbered within its parse. */
   group?: number
-  /** PowerShell: run through the call operator (`& $git commit`). */
+  /** PowerShell: run through the call operator (`& $git commit`), or dot-sourced (`. $git commit`). */
   isCall?: boolean
+  /** PowerShell: dot-sourced, so what it runs sets variables in this scope. */
+  isSourced?: boolean
   /** In a function body, a `trap` action or a PowerShell script block: it may run at any later point, so a
    * value it sets leaves the name unknown from then on. */
   isDeferred?: boolean
@@ -173,6 +175,11 @@ class Reader {
       return
     }
     if (isPlain && this.caseWord(w.text)) return
+    // PowerShell's dot-source operator runs the program after it, as `&` does, in this scope.
+    if (isPlain && this.powershell && w.text === '.' && this.st.words.length === 0) {
+      this.st.isCall = this.st.isSourced = true
+      return
+    }
     // `function f { ...`: the body starts a statement of its own.
     const words = this.st.words
     if (isPlain && w.text === '{' && words.length === 2 && words[0]?.text === 'function') this.endStatement()

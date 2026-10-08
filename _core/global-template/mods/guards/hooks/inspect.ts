@@ -54,7 +54,8 @@ import {
 } from './gitwords'
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
-import { assign, catValue, expand, expandBody, forget, inherit, lookup, setVar, within, withWords } from './vars'
+import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
+import { withWords } from './vars'
 import type { Var, VarState } from './vars'
 import {
   COMMIT,
@@ -218,7 +219,11 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const inner = typed.inner
   inner.forEach((st, i) => readStatement(st, inner[i - 1], r, r.ps ? scope : placeOf(st.group)))
   r.scope = scope
-  const st = withProgram(withWords(typed, r), r)
+  const filled = withProgram(withWords(typed, r), r)
+  // PowerShell's `env:` drive and .NET spellings are read as `$env:X = v`.
+  const env = r.ps ? psEnvSet(filled) : undefined
+  if (env && env.name === undefined) unreadCall(r, 'an environment variable named at run time')
+  const st = env?.statement ?? filled
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
   const at = placeHere(r).folder

@@ -20,7 +20,8 @@ export const TAG_READS = /^-[ldv]$|^-n\d*$|^--(list|delete|verify|contains|no-co
 // `git branch` flags that list, delete or configure instead of creating a branch.
 const BRANCH_NOT_CREATE = new RegExp(
   '^-[dDlarvu]|^--(' +
-    'delete|list|all|remotes|show-current|contains|merged|no-merged|set-upstream|unset-upstream|edit-description' +
+    'delete|list|all|remotes|show-current|contains|no-contains|merged|no-merged|points-at|sort|format|column|' +
+    'ignore-case|omit-empty|set-upstream|unset-upstream|edit-description' +
     ')',
 )
 
@@ -72,7 +73,7 @@ const CONFIG_READS =
 
 export function setsGitConfig(st: Statement, name: string, args: Word[], ps: boolean): boolean {
   // PowerShell sets one through `$env:` or the `env:` drive.
-  if (ps) return st.words.some(w => /^\$?env:GIT_CONFIG/i.test(w.text)) && name !== 'git'
+  if (ps && name !== 'git') return st.words.some(w => /^\$?env:GIT_CONFIG/i.test(w.text))
   const lead = name ? st.words.slice(0, st.words.length - args.length - 1) : st.words
   const exported = /^(export|declare|typeset|local|readonly)$/.test(name) ? args : []
   if ([...lead, ...exported].some(w => CONFIG_ENV.test(w.text))) return true
