@@ -241,12 +241,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(week.props.wrap).toBe('truncate-end')
   })
 
-  test(`${surface}: a usage-guard pause replaces the plan chips`, async ($, on) => {
+  // The plan figures stay beside the pause, so the person can judge one last step before the limit.
+  test(`${surface}: a usage-guard pause shows beside the plan chips`, async ($, on) => {
     world(on, { status: 'active', wakeAt: NOW + 60 * MINUTE })
     await start($, surface)
     const ui = await $.ui.mount({ plugin: 'session-facts', surface, component: 'AbovePrompt', props: PROPS })
     expect(await ui.find({ type: 'Text', text: /PAUSED → Fri 10:00/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /5h 80%/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /5h 80%/ })).toBeDefined()
   })
 
   test(`${surface}: a compaction is named on the row for a quarter hour`, async ($, on) => {
@@ -279,16 +280,18 @@ test('the phone text is the row as squares, with every reset time and the cache 
   ])
 })
 
-test('the phone text says -- for what is unknown, and the pause in place of the plan lines', () => {
+test('the phone text says -- for what is unknown, and the pause above the plan lines', () => {
   expect(phoneText({ ...B, tokens: undefined }, NOW).split('\n').slice(1)).toEqual([
     'ctx --',
     '5-hour --',
     'week --',
     'cache --',
   ])
-  const paused = { ...B, pausedUntil: NOW + 180 * MINUTE, cacheExpiresAt: NOW + 5 * MINUTE }
+  const limits = [{ kind: 'seven_day', percentUsed: 95, resetsAt: NOW + 180 * MINUTE }]
+  const paused = { ...B, limits, pausedUntil: NOW + 180 * MINUTE, cacheExpiresAt: NOW + 5 * MINUTE }
   expect(phoneText(paused, NOW).split('\n').slice(2)).toEqual([
     '🟥 PAUSED until Fri 12:00',
+    'week 🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥 95% · resets Fri 12:00',
     '🟨 cache 5m left · cold start 250k',
   ])
 })
