@@ -89,6 +89,9 @@ test('a PowerShell command naming a history write that is not plain is refused o
     'git push origin x && gh pr create --title t --body-file b.md',
     "& (gcm g?t) commit -n -m 'x'",
     ". (Get-Command g*t) commit -n -m 'x'",
+    // Windows PowerShell splits an unquoted dash word at its first dot: git would get `--no-verify .`.
+    "git commit -m 'fix: x' --no-verify.",
+    'gh pr create --title t --body-file=b.md',
   ]) {
     expect([command, refused(command, true)]).toEqual([command, expect.stringContaining('not plain')])
   }
@@ -126,6 +129,8 @@ test('a plain command is read as before', () => {
     ["git commit -m 'fix: x'; git push", true],
     ["'## What' > b.md; gh pr create --title t --body-file b.md", true],
     ["Set-Location C:\\repo; git push -q origin x 2>&1 | Select-Object -Last 2", true],
+    // A quoted dash word reaches git as typed.
+    ["gh pr create --title t '--body-file=b.md'", true],
     // Bash reads curly quotes as plain letters; a .github folder or .gitignore holds no commit gate.
     ['git commit -m "fix: keep the \u201cplain\u201d rule"', false],
     ["cat .github/workflows/tests.yml; echo x >> .gitignore; git commit -m 'fix: x'", false],
