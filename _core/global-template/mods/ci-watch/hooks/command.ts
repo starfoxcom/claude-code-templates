@@ -77,8 +77,9 @@ const STATEMENT_END = /[;|\n]|(?<![<>])&(?!>)/
 // A redirect word (`2>&1`, `>log`, `*>$null`), and one that names its target in the next word (`> log`).
 const REDIRECT = /^[\d*&]?(?:>>?|<)/
 const REDIRECT_ALONE = /^[\d*&]?(?:>>?|<)$/
-// A word read for sure: a plain name, with nothing the shell fills in when it runs (quotes, `$`, `@`, `(`).
-const LITERAL = /^[\w./:+^~,=-]+$/
+// A word read for sure: a plain name, with nothing the shell fills in when it runs (quotes, `$`, `(`). `@`
+// inside a word is plain (`git@github.com:o/r.git`); a word that starts with one (`@`, `@{u}`, `@args`) is not.
+const LITERAL = /^[\w./:+^~,=-][\w./:+^~,=@-]*$/
 
 /** Each push's words, to the end of its statement, without redirects or a trailing comment; `isUnread` when
  * one of them is no plain name, so where it pushes cannot be read for sure. */

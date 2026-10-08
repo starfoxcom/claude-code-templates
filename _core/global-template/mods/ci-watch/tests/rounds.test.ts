@@ -74,6 +74,9 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push -u origin $(git branch --show-current)',
     'git push origin $branch',
     'git push origin @',
+    // A remote given as an SSH address: `@` inside a word is plain.
+    'git push git@github.com:o/r.git',
+    'git push git@github.com:o/r.git HEAD',
     // Git's short spellings of the branch, and an option whose value is the next word.
     'git push origin HEAD:heads/feature/x',
     'git push origin heads/feature/x',
@@ -95,6 +98,9 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push origin +:feature/x',
     'git push -d origin "$b"',
     'git push origin v1.3.0 2>&1 | tail -3',
+    'git push git@github.com:o/r.git v1.0',
+    'git push git@github.com:o/r.git --tags',
+    'git push ssh://git@github.com/o/r.git feature/other',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, false])
   }
