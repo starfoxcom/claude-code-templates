@@ -136,22 +136,27 @@ const RUN_VARS = new RegExp(
   'i',
 )
 const DECLARES = /^(export|declare|typeset|local|readonly)$/
+// Members of those families that only name who, where or how quietly, and run nothing.
+const RUNS_NOTHING = new RegExp(
+  '^(GIT_AUTHOR_\\w*|GIT_COMMITTER_\\w*|GH_REPO|GH_HOST|GH_TOKEN|GH_ENTERPRISE_TOKEN|GH_PROMPT_DISABLED|' +
+    'GH_NO_UPDATE_NOTIFIER|GIT_TERMINAL_PROMPT)$',
+  'i',
+)
 
 /** Whether a statement makes a later or wrapped program run one of its own choosing: `env -S 'cp x b.md'`,
  * or a variable in `RUN_VARS` set in front of a program, by `export`/`declare`, or as `$env:X = ...`. Read
  * before any early return, since an assignment returns before `mayWriteFiles`. */
 export function setsRunner(st: Statement): boolean {
-  const { args } = programOf(st)
+  const { name, args } = programOf(st)
   const lead = st.words.slice(0, Math.max(0, st.words.length - args.length - 1))
   const isEnv = lead.some(w => w.text === 'env')
   if (isEnv && lead.some(w => /^(-[a-zA-Z]*S|--split-string)/.test(w.text))) return true
-  // `NAME=v` as typed (not quoted text, but `export "NAME=v"` is one), or `$env:NAME` heading the statement.
-  const isDeclare = DECLARES.test(programOf(st).name)
-  return st.words.some((w, i) => {
-    const pair = w.literalStart && !isDeclare ? null : /^([A-Za-z_]\w*)\+?=/.exec(w.text)
-    const ps = i === 0 ? /^\$env:(\w+)$/i.exec(w.text) : null
-    return RUN_VARS.test(pair?.[1] ?? ps?.[1] ?? '')
-  })
+  // `NAME=v` in front of the program as typed, an argument of `export`/`declare` (quoted too), or
+  // `$env:NAME` heading the statement. Never a word some other program is given (`rg GH_TOKEN= .`).
+  const pairs = [...lead.filter(w => !w.literalStart), ...(DECLARES.test(name) ? args : [])]
+  const names = pairs.map(w => /^([A-Za-z_]\w*)\+?=/.exec(w.text)?.[1] ?? '')
+  names.push(/^\$env:(\w+)$/i.exec(st.words[0]?.text ?? '')?.[1] ?? '')
+  return names.some(n => RUN_VARS.test(n) && !RUNS_NOTHING.test(n))
 }
 
 /** Whether a statement may write files beyond its own `>`: any program not known to write none (`Set-Content`,
@@ -159,17 +164,32 @@ export function setsRunner(st: Statement): boolean {
  * output file (`git log --output=x`), and gh outside its read and send groups (`gh release download`). */
 export function mayWriteFiles(st: Statement): boolean {
   const { name, args } = programOf(st)
+  if (args.some(a => RUNS.test(a.text))) return true
+  if (PURE_CALL.test(st.words[0]?.text ?? '')) return false
+  if (READERS.has(name)) return false
+  if (name === 'git') return gitMayWrite(args)
   // The words past options, without the value of gh's `-R`/`--repo`, which may sit before the action.
   const words = args
     .filter((a, i) => !a.text.startsWith('-') && !/^(-R|--repo)$/.test(args[i - 1]?.text ?? ''))
     .map(a => a.text)
-  // `-o` names an output file only on `diff`, `log` and `show`: on `push` it is a push option.
-  const isLogLike = /^(diff|log|show)$/.test(words[0] ?? '')
-  const isOutput = args.some(a => /^--output(=|$)/.test(a.text) || (a.text === '-o' && isLogLike))
-  if (args.some(a => RUNS.test(a.text))) return true
-  // A git setting typed on the line may run a program (`-c diff.external=x`, `--config-env=core.pager=V`).
-  if (name === 'git' && args.some(a => /^(-c|--config-env)(=|$)/.test(a.text))) return true
-  if (PURE_CALL.test(st.words[0]?.text ?? '')) return false
-  if (READERS.has(name) || (name === 'git' && GIT_READS.test(words[0] ?? '') && !isOutput)) return false
   return !(name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download') && !GH_SWITCHES(words, args))
+}
+
+// git past its global options and their values (`git -C ../repo log`): a setting typed among them may run a
+// program (`-c diff.external=x`, `--config-env=core.pager=V`); then the subcommand decides.
+function gitMayWrite(args: Word[]): boolean {
+  let k = 0
+  let isConfigured = false
+  for (; k < args.length; k++) {
+    const t = args[k]?.text ?? ''
+    if (!t.startsWith('-')) break
+    if (/^(-c|--config-env)(=|$)/.test(t)) isConfigured = true
+    if (/^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source|--super-prefix)$/.test(t)) k++
+  }
+  const sub = args[k]?.text ?? ''
+  const rest = args.slice(k + 1)
+  // `-o` names an output file only on `diff`, `log` and `show`: on `push` it is a push option.
+  const isLogLike = /^(diff|log|show)$/.test(sub)
+  const isOutput = rest.some(a => /^--output(=|$)/.test(a.text) || (a.text === '-o' && isLogLike))
+  return isConfigured || !GIT_READS.test(sub) || isOutput
 }

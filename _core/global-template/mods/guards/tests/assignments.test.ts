@@ -337,3 +337,38 @@ test('a wrapper shell with value options is still read, a PowerShell script file
   }
   expect(named("export S=$(mktemp -d)")).toBeUndefined()
 })
+
+// Bundled shell options, PowerShell parameter prefixes, an encoded command, and the prefixes that run nothing.
+test('bundles and prefixes keep the wrapped script read, and harmless settings refuse nothing', () => {
+  for (const [command, ps] of [
+    ["bash -euo pipefail -c 'git commit --no-verify -m x'", false],
+    ["bash -eo pipefail -c 'git commit --no-verify -m x'", false],
+    ["bash -euxo pipefail -c 'git commit --no-verify -m x'", false],
+    ["bash -co pipefail 'git commit --no-verify -m x'", false],
+    ["bash -euo pipefail <<'EOF'\ngit commit --no-verify -m x\nEOF", false],
+    ['powershell -exec bypass -c "git commit --no-verify -m x"', false],
+    ['pwsh -exec bypass -c "git commit --no-verify -m x"', false],
+    ['pwsh -win hidden -c "git commit --no-verify -m x"', false],
+    ['pwsh -comm "git commit --no-verify -m x"', false],
+  ] as const) {
+    expect([command, inspect(command, ps).block]).toEqual([command, expect.stringContaining('skipping git hooks')])
+  }
+  const last = (command: string) => inspect(command, false).files.map(f => f.named).at(-1)
+  const before = (b: string) => last(`${b}\ngh pr create -t t --body-file b.md`)
+  expect(before('powershell -EncodedCommand ZwBpAHQAIABzAHQAYQB0AHUAcwA=')).toBe(true)
+  expect(before('pwsh -File gen.ps1')).toBe(true)
+  for (const command of [
+    'GH_REPO=o/r gh pr create -t t --body-file b.md',
+    'GH_TOKEN=$T gh pr create -t t -F b.md',
+    'GIT_AUTHOR_DATE=x git commit -F msg.txt',
+    'git -C ../repo commit -F msg.txt',
+  ]) {
+    expect([command, last(command)]).toEqual([command, undefined])
+  }
+  for (const b of ['git log -c -3', 'git show -c HEAD', 'git branch -c a b', 'rg -n GH_TOKEN= .', 'echo PATH=$PATH']) {
+    expect([b, before(b)]).toEqual([b, undefined])
+  }
+  for (const b of ["git -c diff.external='sh x.sh' diff", 'GIT_DIR=x git status', 'export PATH="$PWD/bin:$PATH"']) {
+    expect([b, before(b)]).toEqual([b, true])
+  }
+})
