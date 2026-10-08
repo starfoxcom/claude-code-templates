@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { readCommand } from '../hooks/inspect'
+import { notPlain } from '../hooks/plain'
 import { wayOut } from '../hooks/register'
 
 // How the reading follows a PowerShell assignment in every spelling, and the environment a command sets.
@@ -455,9 +456,24 @@ test('each unread kind has its own way out', () => {
   ]) {
     expect([where, wayOut(where)]).toEqual([where, expect.any(String)])
   }
-  expect(wayOut('a cmd script built at run time')).toContain('%NAME%')
-  expect(wayOut('a bash script built at run time')).toContain('Write the script out')
+  expect(wayOut('a cmd script built at run time')).toContain('not through `cmd /c`')
+  expect(wayOut('a bash script built at run time')).toContain('not through a shell')
   expect(wayOut('the commit message')).toBeUndefined()
+})
+
+// A way out that names a command form leads to one the plain rule accepts.
+test('each command form a way out names is plain', () => {
+  for (const [command, ps] of [
+    ['git commit -m x', false],
+    ['git commit -m x', true],
+    ['cd C:/repo && git commit -m x', false],
+    ['git -C C:/repo commit -m x', false],
+    ['git -C C:/repo commit -m x', true],
+    ['git -c user.name=me commit -m x', false],
+    ["cat > C:/s/b.md <<'EOF'\nbody\nEOF\ngh pr create -t t --body-file C:/s/b.md", false],
+  ] as const) {
+    expect([command, notPlain(command, ps)]).toEqual([command, undefined])
+  }
 })
 
 // Plain `$` stay where they were typed through every cut of a word, into scripts, `eval`, paths and written
