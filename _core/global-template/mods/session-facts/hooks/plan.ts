@@ -1,10 +1,15 @@
 import type { SessionRateLimit } from 'claude-code'
 
-import { shortLocal } from './budgets'
-
 // Plan usage belongs to the account, so every session sees the same figures. A fresh session has none
 // of its own until its first response; meanwhile it borrows the newest figures another session
 // recorded, while they are recent. Kept free of the engine so it tests alone.
+
+/** `Fri 10:00` in the host's zone. */
+export function shortLocal(epochMs: number, offsetMinutes: number): string {
+  const local = new Date(epochMs - offsetMinutes * 60_000)
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][local.getUTCDay()]
+  return `${day} ${local.toISOString().slice(11, 16)}`
+}
 
 export const SHARED_PLAN_FILE = 'plan.json'
 export const SHARED_PLAN_MAX_AGE_MS = 30 * 60_000
@@ -61,11 +66,12 @@ export function planPart(
 }
 
 /** usage-guard's scheduled wakes, for the State line: the phone draws no row, so the line is where the
- * person reads them. The shared pause and this session's own arm, each only while still ahead; an arm at
- * the pause's own time is the pause's wake and is not named twice. */
+ * person reads them. The shared pause and this session's own arm, each only while still ahead. An arm at or
+ * before the pause's wake joins it (usage-guard moves an arm that fires inside a pause to the pause's wake,
+ * also after a later limit extends the pause), so it is named only through the pause. */
 export function wakePart(now: number, offsetMinutes: number, pausedUntil?: number, armAt?: number): string {
   const paused = pausedUntil !== undefined && pausedUntil > now
-  const armed = armAt !== undefined && armAt > now && !(paused && armAt === pausedUntil)
+  const armed = armAt !== undefined && armAt > now && !(paused && armAt <= pausedUntil)
   return (
     (paused ? ` | paused until ${shortLocal(pausedUntil, offsetMinutes)}` : '') +
     (armed ? ` | armed: resumes ${shortLocal(armAt, offsetMinutes)}` : '')

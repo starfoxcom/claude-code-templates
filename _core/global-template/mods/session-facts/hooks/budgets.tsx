@@ -2,6 +2,7 @@ import { atom, read } from 'claude-code'
 import type { On } from 'claude-code'
 
 import type { Budgets, PlanWindow } from '../types'
+import { shortLocal } from './plan'
 
 // Written by register.ts; each file names the state with its own literal reference.
 const budgets = atom({ plugin: 'session-facts', key: 'budgets' } as const, null)
@@ -19,12 +20,7 @@ function thousands(tokens: number): string {
   return `${Math.round(tokens / 1000)}k`
 }
 
-/** `Fri 10:00` in the host's zone. */
-export function shortLocal(epochMs: number, offsetMinutes: number): string {
-  const local = new Date(epochMs - offsetMinutes * 60_000)
-  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][local.getUTCDay()]
-  return `${day} ${local.toISOString().slice(11, 16)}`
-}
+export { shortLocal }
 
 /** How full the context is against the compaction point: yellow at three quarters, red at nine tenths. */
 export function fillTone(ratio: number): Tone {
@@ -141,7 +137,8 @@ export function chipsOf(b: Budgets, now: number): Chip[] {
 
 const PHONE_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'week' }
 
-// A plan window as ten squares in its chip's tone, with the reset time the row shows only past the warning.
+// A plan window as ten squares in its chip's tone, with its reset time; none during a pause, whose own
+// line names when work resumes.
 function phonePlanLine(limit: PlanWindow, b: Budgets, isPaused: boolean): string {
   const name = PHONE_NAMES[limit.kind] ?? limit.kind.replace(/_/g, '-')
   const used = Math.round(limit.percentUsed)
@@ -162,6 +159,7 @@ function phoneCacheLine(b: Budgets, now: number): string {
 /**
  * The budgets row as plain text for a phone chat, which draws no row: the same chips' figures and tones,
  * colour as squares, plus what the row keeps until it matters (every reset time, the cache's time left).
+ * During a pause the plan lines name no reset: the pause line already says when work resumes.
  */
 export function phoneText(b: Budgets, now: number): string {
   const context = contextText(b.tokens, b.size, b.compactsAt, true) + compactedMark(b.compactedAt, b.offsetMinutes, now)
