@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { isPush, pushesBranch } from '../hooks/command'
-import { redRounds, ROUND_LIMIT, type RoundNode } from '../hooks/rounds'
+import { redRounds, ROUND_LIMIT, roundNodes, type RoundNode } from '../hooks/rounds'
 import { rollupOf, world } from './world'
 
 const nodes = (results: (string | null)[]): RoundNode[] =>
@@ -36,6 +36,21 @@ test('a history rewritten after the reset does not bring back the rounds before 
   const contexts = { nodes: [{ state: 'ERROR', createdAt: at(1) }] }
   const status: RoundNode = { commit: { oid: 's', statusCheckRollup: { state: 'ERROR', contexts } } }
   expect(redRounds([status, ...nodes(reds(2))], { at: Date.parse(at(5)) })).toBe(2)
+})
+
+// GitHub lists commits by date; a rebased fix keeps its old date. The rounds are read in push order, back
+// along the first parents from the head, so the green fix still ends the streak.
+test('rounds follow the push order, not the dates GitHub lists them by', () => {
+  const at = (oid: string, parent: string | undefined, result: string) => ({
+    commit: { oid, parents: { nodes: parent ? [{ oid: parent }] : [] }, statusCheckRollup: rollupOf(result) },
+  })
+  const listed = [at('a', 'r3', 'SUCCESS'), at('r1', undefined, RED), at('r2', 'r1', RED), at('r3', 'r2', RED)]
+  const nodes = [...listed, at('r4', 'a', RED), at('r5', 'r4', RED), at('r6', 'r5', RED)]
+  const answer = (headRefOid: string) =>
+    JSON.stringify({ data: { repository: { pullRequest: { headRefOid, commits: { nodes } } } } })
+  expect(redRounds(roundNodes(answer('r6')))).toBe(3)
+  // With no head to start from, the list's own order is kept.
+  expect(roundNodes(answer('gone')).map(n => n.commit?.oid)).toEqual(nodes.map(n => n.commit.oid))
 })
 
 // A quick second push cancels the first one's runs (`concurrency: cancel-in-progress`): GitHub shows that
@@ -77,6 +92,9 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     // A remote given as an SSH address: `@` inside a word is plain.
     'git push git@github.com:o/r.git',
     'git push git@github.com:o/r.git HEAD',
+    // A group of short flags: the `o` takes the next word, or the rest of the group, as its value.
+    'git push -fo ci.skip origin',
+    'git push -uoci.skip origin',
     // Git's short spellings of the branch, and an option whose value is the next word.
     'git push origin HEAD:heads/feature/x',
     'git push origin heads/feature/x',
@@ -99,6 +117,7 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push -d origin "$b"',
     'git push origin v1.3.0 2>&1 | tail -3',
     'git push git@github.com:o/r.git v1.0',
+    'git push -fd origin feature/x',
     'git push git@github.com:o/r.git --tags',
     'git push ssh://git@github.com/o/r.git feature/other',
   ]) {

@@ -8,7 +8,8 @@ export const ROUND_LIMIT = 6
 /** A PR's latest commits, each with the overall state of its checks and each check's own result and start. */
 export const ROUNDS_QUERY =
   'query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number)' +
-  '{commits(last:100){nodes{commit{oid statusCheckRollup{state contexts(last:100){nodes{' +
+  '{headRefOid commits(last:100){nodes{commit{oid parents(first:1){nodes{oid}} ' +
+  'statusCheckRollup{state contexts(last:100){nodes{' +
   '... on CheckRun{conclusion startedAt} ... on StatusContext{state createdAt}}}}}}}}}}'
 
 type Context = {
@@ -37,11 +38,28 @@ const hasFailed = (contexts: readonly Context[]) =>
 /** The commits of a `ROUNDS_QUERY` answer, oldest first; none when it cannot be read. */
 export function roundNodes(answer: string): RoundNode[] {
   try {
-    const nodes = JSON.parse(answer)?.data?.repository?.pullRequest?.commits?.nodes
-    return Array.isArray(nodes) ? (nodes as RoundNode[]) : []
+    const pr = JSON.parse(answer)?.data?.repository?.pullRequest
+    const nodes = pr?.commits?.nodes
+    return Array.isArray(nodes) ? pushOrder(nodes as RoundNode[], pr?.headRefOid) : []
   } catch {
     return []
   }
+}
+
+// GitHub lists a PR's commits by date, and a rebase or cherry-pick keeps an old date: the order the rounds
+// were pushed in is the first-parent chain back from the head, oldest first. A list with no parents read
+// keeps its own order.
+function pushOrder(nodes: RoundNode[], head: unknown): RoundNode[] {
+  const byOid = new Map(nodes.map(n => [n.commit?.oid, n]))
+  if (typeof head !== 'string' || !byOid.has(head)) return nodes
+  const chain: RoundNode[] = []
+  for (let at: string | undefined = head; at !== undefined && byOid.has(at); ) {
+    const node = byOid.get(at) as RoundNode
+    if (chain.includes(node)) break
+    chain.push(node)
+    at = (node.commit as { parents?: { nodes?: { oid?: string }[] } }).parents?.nodes?.[0]?.oid
+  }
+  return chain.reverse()
 }
 
 /** The pushed rounds in a row, newest first, where a check really failed, back to the user's reset or the last
