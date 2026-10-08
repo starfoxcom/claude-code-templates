@@ -271,3 +271,12 @@ export const GH_WRITES: Record<string, string[]> = {
   gist: ['create', 'edit'],
   repo: ['create', 'edit'],
 }
+
+// The flags of a gh write, by its group and action.
+export function ghSpec(group: string, action: string): Spec {
+  if (group === 'release') return GH_RELEASE
+  if (group === 'gist' || group === 'repo') return GH_DESC
+  if (group === 'pr' && action === 'review') return GH_REVIEW
+  if (group === 'pr' && action === 'merge') return GH_MERGE
+  return action === 'close' || action === 'reopen' ? GH_CLOSE : GH_BODY
+}

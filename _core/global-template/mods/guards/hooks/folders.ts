@@ -98,3 +98,33 @@ export function folderNow(r: FolderReading): Folder {
   const here = placeHere(r).folder
   return r.at.dir ? moveFolder(here, r.at.dir) : here
 }
+
+/** A path with its `.` and `..` parts folded in (`sub/../b.md` is `b.md`); a `..` above the root stays at it. */
+export function foldDots(path: string): string {
+  const out: string[] = []
+  for (const part of path.replace(/\\/g, '/').split('/')) {
+    const last = out[out.length - 1]
+    const isRoot = out.length === 1 && (last === '' || /^[a-zA-Z]:$/.test(last ?? ''))
+    if (part === '.' || (part === '' && out.length > 0)) continue
+    if (part !== '..' || last === undefined || last === '..') out.push(part)
+    else if (!isRoot) out.pop()
+  }
+  return out.join('/')
+}
+
+// Where a literal path lands from the folder it is named in, for comparing: unknown in a folder built at
+// run time. Relative to the session folder when the command never left it.
+function placedPath(path: string, folder: Folder): string | undefined {
+  const p = path.replace(/\\/g, '/')
+  if (/^([a-zA-Z]:)?\/|^~/.test(p)) return foldDots(p).toLowerCase()
+  if (folder.isUnknown) return undefined
+  return foldDots(folder.path === undefined ? p : `${folder.path}/${p}`).toLowerCase()
+}
+
+/** The last writer of the file a literal path names where it is named, matched by where both land, not by
+ * spelling (`cd sub && cat > b.md && cd .. && gh pr create -F sub/b.md`). */
+export function writerOf<W extends { folder: Folder }>(path: string, writers: Map<string, W>, r: FolderReading) {
+  const here = placedPath(path, folderNow(r))
+  if (here === undefined) return undefined
+  return [...writers].reverse().find(([written, w]) => placedPath(written, w.folder) === here)?.[1]
+}
