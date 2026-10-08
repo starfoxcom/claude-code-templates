@@ -88,9 +88,12 @@ function world(on: On, env: Record<string, string> = {}) {
     const stdout = path ? transcript.lines : '420 America/Phoenix\n'
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('session.usage', () => ({
-    value: { startedAt: 0, context: { tokens: 250_000, window: 500_000 }, rateLimits: [] },
-  }))
+  // `usage.isDown`: the engine cannot answer, so the row keeps its last reading.
+  const usage = { isDown: false }
+  on('session.usage', () => {
+    if (usage.isDown) throw new Error('usage is down')
+    return { value: { startedAt: 0, context: { tokens: 250_000, window: 500_000 }, rateLimits: [] } }
+  })
   on('settings.read', () => ({ value: { pluginConfigs: {} } }) as never)
   // The data folder, keyed with forward slashes; the pause file is never there.
   const files = new Map<string, string>()
@@ -126,7 +129,7 @@ function world(on: On, env: Record<string, string> = {}) {
   on('turn.complete', () => ({ text: '' }))
   on('classic.Stop', () => ({}) as never)
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { clock, reply, transcript, files, compactions, hold }
+  return { clock, reply, transcript, files, compactions, hold, usage }
 }
 
 // A streaming event runs only as it is read.
@@ -490,5 +493,16 @@ test('a session resumed past the idle time is in use again: no compaction', asyn
   files.set(MEMORY, JSON.stringify({ lastResponseAt: NOW - 55 * MINUTE, lifetimeMs: HOUR, isLifetimeRead: true }))
   await start($)
   await clock.advance(2 * MINUTE)
+  expect(compactions).toEqual([])
+})
+
+test("a fresh reply counts even while the row's reading is stale", async ($, on) => {
+  const { clock, compactions, usage } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(50 * MINUTE)
+  usage.isDown = true
+  await turn($)
+  await clock.advance(5 * MINUTE + 30_000)
   expect(compactions).toEqual([])
 })
