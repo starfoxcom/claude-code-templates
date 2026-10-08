@@ -231,16 +231,18 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
       cacheWarnMinutes: live.cacheWarnMinutes,
     }
     await update($, budgets, () => next)
-    await idleCompact($, next)
   } catch {
     // The row keeps its last reading.
   }
 }
 
 // Claude Code 2.1.293 no longer compacts an idle conversation itself (mods NOTES, 2026-10-07): a minute
-// past its time, with no compaction since the last reply, the mod does, once per reply. The engine
-// refuses it while a turn runs; the next reply then starts the count over.
-async function idleCompact($: EngineInterface, shown: Budgets): Promise<void> {
+// past its time, with no compaction since the last reply, the mod does, once per reply. Only from the
+// timer, never a hook or a command, and only for a reply this process saw: a session resumed or
+// reloaded is in use again. The engine refuses it while a turn runs; the next reply starts over.
+async function idleCompact($: EngineInterface): Promise<void> {
+  const shown = await read($, budgets)
+  if (!live.hasReplied || !shown) return
   const { idleCompactAt: idleAt, cacheExpiresAt: expiresAt } = shown
   if (!isIdleCompactDue(await $.clock.now(), idleAt, expiresAt, live.lastResponseAt, live.idleTriedFor)) return
   live.idleTriedFor = live.lastResponseAt
@@ -335,7 +337,7 @@ async function setUp($: EngineInterface): Promise<void> {
       live.zone = read
     })
   })
-  $.clock.every(BUDGETS_EVERY_MS, () => void refreshBudgets($))
+  $.clock.every(BUDGETS_EVERY_MS, () => void refreshBudgets($).then(() => idleCompact($)))
 }
 
 // The settings file at set-up (the session's start, or the first prompt after a reload), before any tool
@@ -454,6 +456,9 @@ export const register: Register = (on, options) => {
   // The turn that compacts goes on with no prompt and so no facts line, so one
   // follows the summary; the row and later lines carry the mark for a quarter hour.
   on('session.compact', async ($, e, next) => {
+    // A compaction that has started already counts for this reply: the mod never starts a second one
+    // while it runs.
+    if (e.agentId === undefined && e.trigger !== 'precompute') live.idleTriedFor = live.lastResponseAt
     const result = await next(e)
     if (e.agentId !== undefined || e.trigger === 'precompute') return result
     // `skip` tells the two result shapes apart: past it, the result is a compaction that
