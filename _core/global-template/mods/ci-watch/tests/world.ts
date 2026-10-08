@@ -44,8 +44,7 @@ export type Seen = {
   commands: { name: string; argumentHint?: string }[]
   /** Every gh call's words. */
   ghCalls: string[]
-  /** The PR's branch (default `feature/x`), and a folder where `gh pr view` finds no PR. */
-  branch?: string
+  /** A folder where `gh pr view` finds no PR (the PR's branch is `feature/x`). */
   noPrIn?: string
 }
 
@@ -125,7 +124,7 @@ export function world(on: On) {
           number: 7,
           url: 'https://github.com/o/r/pull/7',
           headRefOid: seen.head ?? 'a1',
-          headRefName: seen.branch ?? 'feature/x',
+          headRefName: 'feature/x',
           state: seen.prState,
         })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }

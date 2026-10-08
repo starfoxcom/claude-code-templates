@@ -95,6 +95,11 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push origin 2>& 1',
     'git push origin <<< y',
     'git push origin << EOF\ny\nEOF',
+    // A word that cannot be read may undo a delete: a push with one counts, `-d` or not.
+    'git push -d origin "$b"',
+    'git push -d --no-delete origin feature/x',
+    'git push --push-opt -d origin feature/x',
+    'git push "-o" -d origin feature/x',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, true])
   }
@@ -116,8 +121,11 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push origin --delete feature/x',
     'git push origin :feature/x',
     'git push origin +:feature/x',
-    'git push -d origin "$b"',
     'git push origin v1.3.0 2>&1 | tail -3',
+    // Output thrown away, joined or spaced, keeps the push readable.
+    'git push origin v1.3.0 > /dev/null 2>&1',
+    'git push origin v1.3.0 1>/dev/null',
+    'git push origin v1.3.0 >>/dev/null',
     'git push git@github.com:o/r.git v1.0',
     'git push -fd origin feature/x',
     'git push git@github.com:o/r.git --tags',
@@ -126,6 +134,10 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push origin v1.3.0 >/dev/null 2>&1',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, false])
+  }
+  const tagPushes = ['git push origin v1.0 > $null', 'git push origin v1.0 2> $null', 'git push origin v1.0 *>$null']
+  for (const command of tagPushes) {
+    expect([command, pushesBranch(command, 'feature/x', true)]).toEqual([command, false])
   }
 })
 
