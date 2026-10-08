@@ -74,9 +74,13 @@ const PUSH_VALUES = /^(-o|--push-option|--repo|--receive-pack|--exec|--recurse-s
 // Where a push's statement ends: `;`, a pipe, a line break, or an `&` that is no part of a redirect (`2>&1`,
 // `&>log`).
 const STATEMENT_END = /[;|\n]|(?<![<>])&(?!>)/
-// A redirect word (`2>&1`, `>log`, `*>$null`), and one that names its target in the next word (`> log`).
+// A redirect word, and the few that are read for sure: output joined or thrown away. Any other (`> log`,
+// `>& log`, `<<< y`, a here-doc) may take the next word as its target, so the push cannot be read for sure.
 const REDIRECT = /^[\d*&]?(?:>>?|<)/
-const REDIRECT_ALONE = /^[\d*&]?(?:>>?|<)$/
+const KNOWN_REDIRECTS = new Set([
+  ...['2>&1', '*>&1', '>/dev/null', '2>/dev/null', '&>/dev/null'],
+  ...['>$null', '2>$null', '*>$null'],
+])
 // A word read for sure: a plain name, with nothing the shell fills in when it runs (quotes, `$`, `(`). `@`
 // inside a word is plain (`git@github.com:o/r.git`); a word that starts with one (`@`, `@{u}`, `@args`) is not.
 const LITERAL = /^[\w./:+^~,=-][\w./:+^~,=@-]*$/
@@ -120,12 +124,15 @@ function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnr
       const token = tokens[i] ?? ''
       if (token.startsWith('#')) break
       if (REDIRECT.test(token)) {
-        if (REDIRECT_ALONE.test(token)) i++
+        isUnread ||= !KNOWN_REDIRECTS.has(token)
         continue
       }
-      // In PowerShell a comma splits a word into several arguments.
+      // In PowerShell a comma splits a word into several arguments. An option that takes the next word as
+      // its value (`-o -d`, `--repo --tags`) takes it whatever it looks like, so that word cannot be read.
       const flags = shortFlags(token)
+      const takesNext = PUSH_VALUES.test(flags[flags.length - 1] ?? '')
       isUnread ||= !LITERAL.test(token) || (isPowerShell && token.includes(',')) || !flags.every(isKnownFlag)
+      isUnread ||= takesNext
       args.push(...flags)
     }
     return { args, isUnread }
@@ -138,12 +145,14 @@ function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnr
  * (`--delete`, `-d`, `:<branch>`) or a plain refspec to another branch adds no round to its PR. */
 export function pushesBranch(command: string, branch: string, isPowerShell = false): boolean {
   for (const { args, isUnread } of pushes(command, isPowerShell)) {
-    if (args.some(a => a === '--delete' || a === '-d')) continue
+    // An option's value is no option of its own (`-o -d` sends the push option `-d`).
+    const options = args.filter((a, i) => a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
+    if (options.some(a => a === '--delete' || a === '-d')) continue
     if (isUnread) return true
     const plain = args.filter((a, i) => !a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
     const refs = plain.slice(1).map(ref => ref.replace(/^\+/, ''))
-    const isEvery = args.includes('--all') || args.includes('--mirror')
-    if (refs.length === 0 && (isEvery || !args.includes('--tags'))) return true
+    const isEvery = options.includes('--all') || options.includes('--mirror')
+    if (refs.length === 0 && (isEvery || !options.includes('--tags'))) return true
     const isOurs = (ref: string) => {
       if (ref === ':') return true
       if (ref.startsWith(':')) return false

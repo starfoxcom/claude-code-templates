@@ -83,6 +83,18 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push --frobnicate origin feature/other',
     'git push -- origin feature/other',
     'git push --forc origin feature/other',
+    // An option that takes the next word as its value takes it whatever it looks like.
+    'git push -o -d origin feature/x',
+    'git push -o --delete origin feature/x',
+    'git push -fo -d origin feature/x',
+    'git push --repo -d origin feature/x',
+    'git push --repo --tags origin',
+    'git push -6o ci.skip origin feature/other',
+    // A redirect other than output joined or thrown away may take the next word as its target.
+    'git push origin >& /tmp/push.log',
+    'git push origin 2>& 1',
+    'git push origin <<< y',
+    'git push origin << EOF\ny\nEOF',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, true])
   }
@@ -111,7 +123,7 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
     'git push git@github.com:o/r.git --tags',
     'git push ssh://git@github.com/o/r.git feature/other',
     'git push -4 -v --atomic origin feature/other',
-    'git push -6o ci.skip origin feature/other',
+    'git push origin v1.3.0 >/dev/null 2>&1',
   ]) {
     expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, false])
   }
@@ -129,6 +141,7 @@ test(`a push to a PR past ${ROUND_LIMIT} red rounds is refused, one below passes
     expect(past.deny).toContain('endless round hunt')
     expect(past.deny).toContain('o/r#7 has had 6 fix rounds in a row')
     expect(past.deny).toContain('/ci-watch rounds reset 7')
+    expect(past.deny).toContain('`git -C <path> push ...`')
   }
   const created = await $.tool.call({ tool: 'Bash', command: 'gh pr create -t t --body-file b.md' } as never)
   expect(created).not.toHaveProperty('deny')
