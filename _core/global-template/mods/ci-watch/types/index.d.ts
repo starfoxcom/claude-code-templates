@@ -12,6 +12,10 @@ export type Watch = {
   settledAt?: number
   /** Set when the watch starts; names its wake claim (see `claimWake`). */
   id?: string
+  /** When this session last pushed to the PR or asked to watch it: a new head within the hour is its own. */
+  pushedAt?: number
+  /** Restarted on a head someone else pushed: it keeps the row current and wakes no session. */
+  isSilent?: boolean
   /** Settled, its wake not sent yet: it goes out once no turn runs. Saved, so a reload sends it. */
   wakePending?: boolean
   /** An open GitHub incident touching Actions while this watch's checks sat pending; its name. */
