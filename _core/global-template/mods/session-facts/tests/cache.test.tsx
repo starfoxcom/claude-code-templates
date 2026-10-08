@@ -516,3 +516,14 @@ test('a module left running by a hot reload never compacts past a newer reply', 
   await clock.advance(55 * MINUTE + 30_000)
   expect(compactions).toEqual([])
 })
+
+test('a compaction another module started since the reply keeps this one out', async ($, on) => {
+  const { clock, files, compactions } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(54 * MINUTE + 30_000)
+  // What the hook of a module loaded by a hot reload writes as its compaction starts.
+  files.set(MEMORY.replace('.json', '.compact.json'), JSON.stringify({ startedAt: NOW + 54 * MINUTE }))
+  await clock.advance(2 * MINUTE)
+  expect(compactions).toEqual([])
+})

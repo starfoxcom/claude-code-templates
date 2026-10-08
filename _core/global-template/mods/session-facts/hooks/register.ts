@@ -252,6 +252,9 @@ async function idleCompact($: EngineInterface): Promise<void> {
   // memory file still holds this reply, which every newer reply rewrites.
   const saved = memoryFile ? parseMemory(String(await $.fs.read(memoryFile).catch(() => ''))) : undefined
   if (saved?.lastResponseAt !== live.lastResponseAt) return
+  // A compaction any module started since the reply, and one this module started during the reads above.
+  if ((await compactionStartedAt($)) >= (live.lastResponseAt ?? 0)) return
+  if (live.idleTriedFor === live.lastResponseAt) return
   live.idleTriedFor = live.lastResponseAt
   await $.session.compact().catch(() => undefined)
 }
@@ -283,6 +286,29 @@ async function readLifetime($: EngineInterface, transcript: string): Promise<voi
     await refreshBudgets($)
   } catch {
     // The countdown keeps the lifetime it had.
+  }
+}
+
+// This session's compaction marker, its path worked out on demand: a module a hot reload loaded may not
+// be set up, and still has to tell the other one that a compaction started.
+async function compactionMarker($: EngineInterface): Promise<string | undefined> {
+  try {
+    const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
+    const dir = `${configured ?? `${home}/.claude`}/mods-data/session-facts`.replaceAll('\\', '/')
+    return `${dir}/${await $.session.id()}.compact.json`
+  } catch {
+    return undefined
+  }
+}
+
+// When the newest compaction of this session started, by any module; 0 when none is recorded.
+async function compactionStartedAt($: EngineInterface): Promise<number> {
+  const file = await compactionMarker($)
+  try {
+    return Number(JSON.parse(String(file ? await $.fs.read(file) : '{}')).startedAt) || 0
+  } catch {
+    return 0
   }
 }
 
@@ -344,7 +370,7 @@ async function setUp($: EngineInterface): Promise<void> {
       live.zone = read
     })
   })
-  $.clock.every(BUDGETS_EVERY_MS, () => void refreshBudgets($).then(() => idleCompact($)))
+  $.clock.every(BUDGETS_EVERY_MS, () => void refreshBudgets($).then(() => idleCompact($)).catch(() => undefined))
 }
 
 // The settings file at set-up (the session's start, or the first prompt after a reload), before any tool
@@ -465,7 +491,12 @@ export const register: Register = (on, options) => {
   on('session.compact', async ($, e, next) => {
     // A compaction that has started already counts for this reply: the mod never starts a second one
     // while it runs.
-    if (e.agentId === undefined && e.trigger !== 'precompute') live.idleTriedFor = live.lastResponseAt
+    if (e.agentId === undefined && e.trigger !== 'precompute') {
+      live.idleTriedFor = live.lastResponseAt
+      const marker = await compactionMarker($)
+      const text = JSON.stringify({ startedAt: await $.clock.now() })
+      if (marker) await $.fs.write(marker, text).catch(() => undefined)
+    }
     const result = await next(e)
     if (e.agentId !== undefined || e.trigger === 'precompute') return result
     // `skip` tells the two result shapes apart: past it, the result is a compaction that
