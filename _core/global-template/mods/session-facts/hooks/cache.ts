@@ -165,23 +165,7 @@ export function parseMemory(text: string): CacheMemory | undefined {
   }
 }
 
-// A session's own files, named by its id: its memory and its compaction marker. Nothing else in the folder
-// (`settings.json`, `plan.json`) is ever swept.
-export const SESSION_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.compact)?\.json$/i
-
-/** Whether the sweep removes a file once it is old: another session's own file. */
-export const isSwept = (name: string, keep: string) => SESSION_FILE.test(name) && !name.startsWith(`${keep}.`)
-
-// The engine's fs makes no missing folders, and a session's file outlives it: one node run per load
-// makes the folder and removes other sessions' files older than two days
-// (`<folder> <this session> <SESSION_FILE's source>`), picked as `isSwept` picks them.
-export const PREPARE_DIR = [
-  'node',
-  '-e',
-  [
-    'const fs = require("fs"), p = require("path"); const [d, keep, own] = process.argv.slice(1)',
-    'fs.mkdirSync(d, { recursive: true }); const cut = Date.now() - 2 * 864e5; const re = new RegExp(own, "i")',
-    'for (const n of fs.readdirSync(d)) { if (!re.test(n) || n.startsWith(keep + ".")) continue',
-    'try { const f = p.join(d, n); if (fs.statSync(f).mtimeMs < cut) fs.unlinkSync(f) } catch {} }',
-  ].join('; '),
-]
+// The engine's fs makes no missing folders, and a session's file outlives it: one node run per load makes
+// the folder and removes other sessions' own files older than two days, never the settings or the plan
+// (`node <plugin root>/scripts/sweep.cjs <folder> <this session>`; test-helper/sweep.spec.cjs runs it).
+export const SWEEP_SCRIPT = 'scripts/sweep.cjs'
