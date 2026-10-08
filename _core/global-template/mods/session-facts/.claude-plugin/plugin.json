@@ -1,7 +1,7 @@
 {
   "name": "session-facts",
   "version": "0.1.0",
-  "description": "Adds the exact local time and context fill to every prompt, for the model only, and shows the session's budgets (context, plan usage, prompt cache) in a row above the prompt.",
+  "description": "Adds the exact local time and context fill to every prompt, for the model only, shows the session's budgets (context, plan usage, prompt cache) in a row above the prompt, and compacts a big conversation left idle before its prompt cache goes cold, which the engine no longer does itself.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "planWarnAt": {
@@ -21,6 +21,12 @@
       "title": "Prompt cache lifetime (minutes)",
       "description": "Used only until the lifetime is read from the session transcript after each reply (60 on a plan within its included usage, 5 past it or on an API key), or when the transcript cannot be read. Then a miss between 5 minutes and this lifetime switches the countdown to 5 minutes until a warm request outlives them.",
       "default": 60
+    },
+    "idleCompact": {
+      "type": "boolean",
+      "title": "Compact an idle conversation",
+      "description": "Since 2.1.293 the engine no longer compacts a big conversation left idle before its prompt cache goes cold. With this on, the mod does it once per reply, a minute after the engine's own time, unless auto-compact is off (in /config, DISABLE_AUTO_COMPACT or DISABLE_COMPACT).",
+      "default": true
     }
   }
 }

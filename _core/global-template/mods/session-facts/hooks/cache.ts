@@ -66,6 +66,25 @@ export function idleCompactAt(
   return lastResponseAt + lifetimeMs * IDLE_COMPACT_FRACTION
 }
 
+// The engine's own idle compaction gets this long past its time before the mod steps in.
+const IDLE_FALLBACK_GRACE_MS = 60_000
+
+/**
+ * Whether the mod compacts the idle conversation itself, as Claude Code 2.1.293 stopped doing: a grace
+ * minute past the engine's time, while the cache is still warm, once per reply. A compaction since the
+ * reply leaves no idle time to act on.
+ */
+export function isIdleCompactDue(
+  now: number,
+  idleAt: number | undefined,
+  expiresAt: number | undefined,
+  lastResponseAt: number | undefined,
+  triedFor: number | undefined,
+): boolean {
+  if (idleAt === undefined || expiresAt === undefined || lastResponseAt === undefined) return false
+  return triedFor !== lastResponseAt && now >= idleAt + IDLE_FALLBACK_GRACE_MS && now < expiresAt
+}
+
 /**
  * Prints the transcript's last lines that carry cache counts. The engine hands mods only the total a
  * request wrote to the cache; the transcript keeps the API's split by lifetime.
@@ -146,15 +165,7 @@ export function parseMemory(text: string): CacheMemory | undefined {
   }
 }
 
-// The engine's fs makes no missing folders, and a session's file outlives it: one node run per load
-// makes the folder and removes other sessions' files older than two days (`<folder> <this session>`).
-export const PREPARE_DIR = [
-  'node',
-  '-e',
-  [
-    'const fs = require("fs"), p = require("path"); const [d, keep] = process.argv.slice(1)',
-    'fs.mkdirSync(d, { recursive: true }); const cut = Date.now() - 2 * 864e5',
-    'for (const n of fs.readdirSync(d)) { if (n === keep + ".json") continue',
-    'try { const f = p.join(d, n); if (fs.statSync(f).mtimeMs < cut) fs.unlinkSync(f) } catch {} }',
-  ].join('; '),
-]
+// The engine's fs makes no missing folders, and a session's file outlives it: one node run per load makes
+// the folder and removes other sessions' own files older than two days, never the settings or the plan
+// (`node <plugin root>/scripts/sweep.cjs <folder> <this session>`; test-helper/sweep.spec.cjs runs it).
+export const SWEEP_SCRIPT = 'scripts/sweep.cjs'
