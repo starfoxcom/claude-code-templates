@@ -243,8 +243,11 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
 async function idleCompact($: EngineInterface): Promise<void> {
   const shown = await read($, budgets)
   if (!live.hasReplied || !shown) return
-  const { idleCompactAt: idleAt, cacheExpiresAt: expiresAt } = shown
-  if (!isIdleCompactDue(await $.clock.now(), idleAt, expiresAt, live.lastResponseAt, live.idleTriedFor)) return
+  // The times from the reply as it stands now, never the row's last reading, which may be stale; only the
+  // size comes from the row.
+  const now = await $.clock.now()
+  const { idleCompactAt: idleAt, cacheExpiresAt: expiresAt } = cacheTimes(shown.tokens)
+  if (!isIdleCompactDue(now, idleAt, expiresAt, live.lastResponseAt, live.idleTriedFor)) return
   live.idleTriedFor = live.lastResponseAt
   await $.session.compact().catch(() => undefined)
 }
