@@ -205,8 +205,7 @@ test('a PowerShell or .NET write names the body file it may rewrite', () => {
 // PowerShell parameter, a .NET call behind `$null =`, and a destination built at run time.
 test('every write spelling names the body file it may rewrite', () => {
   const named = (before: string, ps: boolean) =>
-    inspect(`${before}
-gh pr create -t t --body-file b.md`, ps).files.map(f => f.named)
+    inspect(`${before}\ngh pr create -t t --body-file b.md`, ps).files.map(f => f.named)
   for (const [before, ps] of [
     ['gh release download v1 -p b.md --clobber', false],
     ['gh run download 5 -n art', false],
@@ -218,12 +217,18 @@ gh pr create -t t --body-file b.md`, ps).files.map(f => f.named)
     ["$null = [IO.File]::WriteAllText('b.md', 'x')", true],
     ['cp other.md "$F"', false],
     ["cat > b.md <<'EOF'\nclean\nEOF\ncp other.md b.md", false],
+    // In any order, and in code that may run later: a function, a program fed its names by xargs.
+    ["cp other.md b.md\ncat > b.md <<'EOF'\nclean\nEOF", false],
+    ['npm run build', false],
+    ['f() { cp x b.md; }', false],
+    ['echo b.md | xargs cp other.md', false],
+    ['git pull', false],
   ] as const) {
     expect([before, named(before, ps)]).toEqual([before, [true]])
   }
   for (const [before, ps] of [
-    ["cp other.md b.md\ncat > b.md <<'EOF'\nclean\nEOF", false],
     ['gh pr create -F b.md', false],
+    ['cd sub; git add b.md', false],
     ['git log -1 --format=%B', false],
     ['for f in $files; do echo $f; done', false],
   ] as const) {

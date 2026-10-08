@@ -138,7 +138,7 @@ test(
     })
     for (const command of [
       'cd repo && cd sub && git commit -F m.txt',
-      'gh pr create --title t --body-file b.md && cd ../other && git pull',
+      'gh pr create --title t --body-file b.md && cd ../other && git status',
     ]) {
       const result = await bash($, command)
       expect((result as { deny?: string }).deny).toBeUndefined()
@@ -354,7 +354,7 @@ test('a PR body that cannot be read exactly is named unread, never blocked', { o
 // subshell) or around it (`bash -c`) could change which repo, folder or text gh really uses.
 const NOT_ALONE = [
   'F=short.md; gh pr create --title "feat: x" --body-file "$F"',
-  '(cd sub && make) && gh pr create --title "feat: x" --body-file short.md',
+  '(cd sub && git status) && gh pr create --title "feat: x" --body-file short.md',
   // The cd runs in a subshell: gh stays in the session folder.
   '(cd sub) && gh pr create --title "feat: x" --body-file short.md',
   'gh pr create -R "$OWNER/$REPO" -t t --body x',
@@ -750,12 +750,18 @@ test(REWRITE, { options: { mode: 'enforce' } }, async ($, on) => {
   expect(seen.ran.length).toBeGreaterThan(0)
 })
 
-// A file the command writes with `>` and another program then rewrites: the here-doc is not what is sent.
-test('a body file written with > and then rewritten is refused', { options: { mode: 'enforce' } }, async ($, on) => {
+// A file the command writes with `>` while another program of it may rewrite the file, in either order (a
+// loop, a function or a trap may run it after): the here-doc is not surely what is sent.
+test('a body file written with > beside a program that may rewrite it is refused', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
   world(on)
   const command = "cat > b.md <<'EOF'\n## What\n- clean\nEOF\ncp other.md b.md\ngh pr create --title t --body-file b.md"
   const result = await bash($, command)
   expect(String((result as { deny?: string }).deny)).toContain('another program in this command may write b.md')
   const before = "cp other.md b.md\ncat > b.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create --title t --body-file b.md"
-  expect((await bash($, before) as { deny?: string }).deny).toBeUndefined()
+  expect(String((await bash($, before) as { deny?: string }).deny)).toContain('another program in this command')
+  // Programs that write no file leave it as the here-doc wrote it.
+  const reads = "cat > b.md <<'EOF'\n## What\n- clean\nEOF\ngit status\ngh pr create --title t --body-file b.md"
+  expect((await bash($, reads) as { deny?: string }).deny).toBeUndefined()
 })
