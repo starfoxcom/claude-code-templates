@@ -209,7 +209,28 @@ async function checkPr($: Engine, plan: Plan, session: string, repo: string | un
   }
 }
 
+// The way out for each kind of unread entry; a message's is the last.
+const WAYS_OUT: [RegExp, string][] = [
+  [
+    /folder or repo built at run time/,
+    'Run it in a folder named out (`cd <path>` or `git -C <path>`), with no git folder or repo set at run time.',
+  ],
+  [/^the new branch name/, 'Type the branch name out.'],
+  [/^a program named at run time/, 'Name the program itself (`git`, `gh`).'],
+  [
+    /^a git setting built at run time/,
+    'Leave the git alias, include or config file out of the command, and write each `-c` setting out.',
+  ],
+  [/^a trap action/, 'Write the trap action out, or leave the trap out of the command.'],
+  [
+    /^a .* built at run time$/,
+    'Write each word of the git or gh call out: no variable, `$(...)`, list or splat in it.',
+  ],
+]
+
 function unreadReason(where: string): string {
+  const way = WAYS_OUT.find(([kind]) => kind.test(where))?.[1]
+  if (way) return `${where} cannot be read. ${way}`
   return (
     `${where} is built in a way the guard cannot read (a variable set outside this command, another ` +
     "program's output, a file it cannot find, a script built at run time). Write the text out, use a " +

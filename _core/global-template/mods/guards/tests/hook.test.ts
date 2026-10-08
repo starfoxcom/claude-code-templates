@@ -569,6 +569,16 @@ const SCRIPT_THEN_API = [
   'gh api graphql --input su.json',
 ].join('\n')
 
+// Each refusal names the way out that fits it; a message's says to write the text out.
+test('a refusal names the way out for what it could not read', { options: { mode: 'enforce' } }, async ($, on) => {
+  world(on)
+  const deny = async (command: string) => String(((await bash($, command)) as { deny?: string }).deny)
+  expect(await deny('git checkout -b "$NAME"')).toContain('Type the branch name out')
+  expect(await deny('git -c alias.ci=commit ci -m x')).toContain('Leave the git alias')
+  expect(await deny('git push origin $REFS')).toContain('Write each word of the git or gh call out')
+  expect(await deny('git commit -m "$MSG"')).toContain('use a here-doc')
+})
+
 // A written file is found where its writer ran, whatever spelling and folder it is named from later.
 test('a body file written in another folder is read from its writer, by where it lands', {
   options: { mode: 'enforce' },

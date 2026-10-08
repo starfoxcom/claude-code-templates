@@ -969,3 +969,37 @@ test('a value set in a branch is known inside it and unknown after it', () => {
   const maybe = inspect("[ -f x ] && cat > b.md <<'EOF'\ntwo\nEOF\ngh pr create -t t -F b.md", false)
   expect(maybe.files.find(f => f.path === 'b.md')?.written).toBeUndefined()
 })
+
+// Bash reads a list left to right: in `a || b && c`, `c` also runs when `b` never did.
+test('after an || then an &&, a value or cd the || part set is unknown', () => {
+  const plan = inspect(`[ -n "$M" ] || M='fix: x' && git commit -m "$M"`, false)
+  expect(plan.unread).toContain('the commit message')
+  expect(inspect('test -d .git || cd repo && git commit -am x', false).targets[0]?.folder.isUnknown).toBe(true)
+  expect(inspect(`a && b || M='fix: x' && git commit -m "$M"`, false).unread).toContain('the commit message')
+  // Inside one `&&` run after the `||`, the value set there is still known.
+  expect(inspect(`a || b && M='fix: x' && git commit -m "$M"`, false).unread).toEqual([])
+})
+
+// Only a real setting moves git's config: a path or a read named like one never does.
+test('a word named like a git alias or include is no setting', () => {
+  for (const command of [
+    'git diff include.php',
+    'git log -p alias.go',
+    'git config --get alias.co',
+    "git add include.php && git commit -m 'fix: x'",
+    "git commit -m 'alias.x: y'",
+    'unset GIT_CONFIG_GLOBAL; git status',
+  ]) {
+    const plan = inspect(command, false)
+    expect([command, plan.unread, plan.block]).toEqual([command, [], undefined])
+  }
+  expect(inspect("export GIT_CONFIG_GLOBAL=/tmp/h.cfg; git commit -m 'fix: x'", false).unread).toEqual([
+    'a git setting built at run time',
+  ])
+})
+
+test('a branch name built at run time is unread in every spelling', () => {
+  for (const command of ['git branch "$NAME"', 'git branch -m old "$NAME"', 'git checkout -b "$NAME"']) {
+    expect([command, inspect(command, false).unread]).toEqual([command, ['the new branch name']])
+  }
+})
