@@ -312,7 +312,8 @@ function markChanged(r: VarState, name: string, old: Var, w: Word[]) {
 const ENV_ITEM = /^(set-item|si|new-item|ni|set-content|sc|add-content|ac)$/i
 const ENV_PATH = /^env:[\\/]?(\w+)$/i
 const DOTNET_ENV = new RegExp(
-  String.raw`^\[(?:system\.)?environment\]::setenvironmentvariable\(` +
+  // After any casts and a `$x =` that discards the result (`[void][Environment]::...`, `$null = [Environment]::...`).
+  String.raw`^(?:\$[\w:{}]+\s*=\s*)?(?:\[[\w.]+\])*\[(?:system\.)?environment\]::setenvironmentvariable\(` +
     String.raw`\s*(['"]?)([^'",]*)\1\s*,\s*([\s\S]*?)\s*(?:,[^)]*)?\)$`,
   'i',
 )
