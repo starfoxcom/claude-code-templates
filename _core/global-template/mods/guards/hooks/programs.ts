@@ -148,13 +148,14 @@ const RUNS_NOTHING = new RegExp(
  * before any early return, since an assignment returns before `mayWriteFiles`. */
 export function setsRunner(st: Statement): boolean {
   const { name, args } = programOf(st)
-  const lead = st.words.slice(0, Math.max(0, st.words.length - args.length - 1))
+  // A statement of assignments only (`PATH=./bin:$PATH`) has no program: every word leads.
+  const lead = name ? st.words.slice(0, Math.max(0, st.words.length - args.length - 1)) : st.words
   const isEnv = lead.some(w => w.text === 'env')
   if (isEnv && lead.some(w => /^(-[a-zA-Z]*S|--split-string)/.test(w.text))) return true
-  // `NAME=v` in front of the program as typed, an argument of `export`/`declare` (quoted too), or
-  // `$env:NAME` heading the statement. Never a word some other program is given (`rg GH_TOKEN= .`).
-  const pairs = [...lead.filter(w => !w.literalStart), ...(DECLARES.test(name) ? args : [])]
-  const names = pairs.map(w => /^([A-Za-z_]\w*)\+?=/.exec(w.text)?.[1] ?? '')
+  // `NAME=v` in front of the program as typed, an argument of `export`/`declare` (quoted too, or a bare
+  // `NAME` set before), or `$env:NAME` heading the statement. Never a word another program is given.
+  const names = lead.filter(w => !w.literalStart).map(w => /^([A-Za-z_]\w*)\+?=/.exec(w.text)?.[1] ?? '')
+  if (DECLARES.test(name)) names.push(...args.map(w => /^([A-Za-z_]\w*)(\+?=|$)/.exec(w.text)?.[1] ?? ''))
   names.push(/^\$env:(\w+)$/i.exec(st.words[0]?.text ?? '')?.[1] ?? '')
   return names.some(n => RUN_VARS.test(n) && !RUNS_NOTHING.test(n))
 }
@@ -183,7 +184,8 @@ function gitMayWrite(args: Word[]): boolean {
   for (; k < args.length; k++) {
     const t = args[k]?.text ?? ''
     if (!t.startsWith('-')) break
-    if (/^(-c|--config-env)(=|$)/.test(t)) isConfigured = true
+    // `--exec-path=` puts its folder first on the path of every program git starts.
+    if (/^(-c|--config-env)(=|$)|^--exec-path=/.test(t)) isConfigured = true
     if (/^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source|--super-prefix)$/.test(t)) k++
   }
   const sub = args[k]?.text ?? ''

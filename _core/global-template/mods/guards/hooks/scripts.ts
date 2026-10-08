@@ -26,14 +26,16 @@ function fileAt(args: Word[]): number {
 
 // PowerShell's own parameters, matched by any prefix from their shortest form up (`-exec`, `-win`, `-comm`).
 const PS_PARAMS: [string, string[]][] = [
-  ['command', ['c']], ['file', ['f']], ['encodedcommand', ['e', 'ec']], ['encodedarguments', ['ea']],
+  ['command', ['c']], ['commandwithargs', ['cwa', 'commandw']], ['file', ['f']], ['encodedcommand', ['e', 'ec']],
+  ['encodedarguments', ['ea', 'encodeda']],
   ['executionpolicy', ['ex', 'ep']], ['windowstyle', ['w']], ['workingdirectory', ['wo', 'wd']],
   ['outputformat', ['o', 'of']], ['inputformat', ['inp', 'if']], ['configurationname', ['config']],
   ['configurationfile', ['configurationf']], ['custompipename', ['cus']], ['settingsfile', ['settings']],
   ['psconsolefile', ['psc']], ['version', ['v']],
 ]
 function psParam(t: string): string | undefined {
-  const p = t.replace(/^-/, '').toLowerCase()
+  // pwsh takes `-name` and `--name` alike.
+  const p = t.replace(/^--?/, '').toLowerCase()
   return PS_PARAMS.find(([n, short]) => short.includes(p) || (n.startsWith(p) && short.some(s => p.startsWith(s))))?.[0]
 }
 
@@ -41,7 +43,10 @@ function psParam(t: string): string | undefined {
 // but flags on the line.
 function stdinScript(st: Statement, args: Word[]): Script | undefined {
   const text = st.heredocs[0]
-  if (text === undefined || st.heredocs.length > 1 || fileAt(args) !== -1) return undefined
+  // With `-s` the words after the options are the script's own arguments (`bash -s -- "$x" <<'EOF'`).
+  const file = fileAt(args)
+  const isStdin = args.slice(0, file === -1 ? args.length : file).some(a => /^-[a-zA-Z]*s/.test(a.text))
+  if (text === undefined || st.heredocs.length > 1 || (file !== -1 && !isStdin)) return undefined
   return { statements: parse(text, false), ps: false, dynamic: Boolean(st.hasDynamicBody), text, isBody: true }
 }
 
@@ -93,8 +98,9 @@ function psScript(
     const t = args[i]?.text ?? ''
     if (!t.startsWith('-')) return name === 'pwsh' ? undefined : of(i, true, true)
     const p = psParam(t)
-    if (p === 'command') return of(i, true)
-    if (p === 'file' || p === 'encodedcommand' || p === 'encodedarguments') return undefined
+    if (p === 'command' || p === 'commandwithargs') return of(i, true)
+    // `-EncodedArguments` only carries a value: a `-Command` after it still runs.
+    if (p === 'file' || p === 'encodedcommand') return undefined
     if (p !== undefined && p !== 'version') i++
     else if (p === 'version' && name === 'powershell') i++
   }
