@@ -487,6 +487,8 @@ class Reader {
     // PowerShell passes a variable as one argument; only Bash splits it.
     if (!this.powershell && (isExpansion || c === '`')) w.splits = true
     if (this.powershell && c === ',') w.list = true
+    // PowerShell passes a variable that holds a list as several arguments: a bare one may be many words.
+    if (this.powershell && isExpansion && w.text === '' && !w.quoted) w.splits = true
     if (c === '$' && this.at(1) === '(') return this.substitution(w)
     if (isExpansion) w.dynamic = true
     if (c === '`' && !this.powershell) return this.backtick(w)
