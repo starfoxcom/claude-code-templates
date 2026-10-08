@@ -680,7 +680,8 @@ async function cardsAbove($: EngineInterface): Promise<Card[]> {
 async function armLine($: EngineInterface): Promise<string | undefined> {
   const arm = await read($, armedWake)
   if (!arm || arm.isQuestioned || (await read($, band))?.card) return undefined
-  return armLineText(arm, live.zone)
+  const limits = await $.session.usage().then(usage => usage.rateLimits, () => [])
+  return armLineText(arm, live.zone, limits)
 }
 
 export const register: Register = (on, options) => {
