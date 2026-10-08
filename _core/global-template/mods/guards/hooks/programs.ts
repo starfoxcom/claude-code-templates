@@ -16,6 +16,7 @@ const WRAPPERS = new Map<string, RegExp | null>(
     '!': null,
     '{': null,
     time: null,
+    coproc: null,
     nohup: null,
     builtin: null,
     command: null,

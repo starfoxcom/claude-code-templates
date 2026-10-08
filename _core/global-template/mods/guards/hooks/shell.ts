@@ -82,7 +82,7 @@ type Pending = { delim: string; strip: boolean; owner?: Statement; isQuoted?: bo
 const BODY_EXPANSION = /\$[A-Za-z_{(]|`|\\/
 
 // Words after which the next one is still in command position, where `case` opens a block.
-const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', '{', 'time'])
+const KEYWORDS = new Set(['if', 'then', 'elif', 'else', 'while', 'until', 'do', '!', '{', 'time', 'coproc'])
 
 // The keywords that open a block after their own statement, closed by `fi` or `done`.
 const OPENERS = new Set(['if', 'while', 'until', 'for', 'select'])
@@ -202,7 +202,10 @@ class Reader {
     // `function f { ...`: the body starts a statement of its own.
     const words = this.st.words
     if (isPlain && w.text === '{' && words.length === 2 && words[0]?.text === 'function') this.endStatement()
-    if (isPlain && !this.powershell && this.st.words.every(x => KEYWORDS.has(x.text))) this.keyword(w.text)
+    // `coproc NAME { ...`: the group after the name is the coprocess.
+    const now = this.st.words
+    const isCoproc = now[0]?.text === 'coproc' && now.length === 2 && w.text === '{'
+    if (isPlain && !this.powershell && (isCoproc || now.every(x => KEYWORDS.has(x.text)))) this.keyword(w.text)
     this.continues = false
     this.st.words.push(w)
   }
@@ -283,8 +286,9 @@ class Reader {
     const group = this.closedGroup
     this.closedGroup = undefined
     if (st.words.length > 0 || st.heredocs.length > 0 || st.inner.length > 0) {
-      // Each part of a Bash pipeline runs in a subshell of its own.
-      if (!this.powershell && (pipeNext || st.pipeIn)) st.scope = joined(st.scope, String(++this.opened))
+      // Each part of a Bash pipeline runs in a subshell of its own, and so does a `coproc`.
+      const isPart = pipeNext || st.pipeIn || st.words[0]?.text === 'coproc'
+      if (!this.powershell && isPart) st.scope = joined(st.scope, String(++this.opened))
       if (this.levels.some(l => l.kind === 'fn')) st.isDeferred = true
       this.out.push(st)
       // A `{ }` group piped on (`{ cd x; } | tail`) runs in a subshell of its own, all of it.
@@ -377,7 +381,10 @@ class Reader {
     } else if (text === 'fi' || text === 'done') this.closeTo(['cond'])
     else if (text === '}') this.closeBrace()
     // After a `|` the group is a pipeline part: a subshell.
-    else if (text === '{') this.open(isFn ? 'fn' : this.st.pipeIn ? 'sub' : 'group', !isFn && this.st.pipeIn)
+    else if (text === '{') {
+      const isSub = !isFn && (this.st.pipeIn || this.st.words[0]?.text === 'coproc')
+      this.open(isFn ? 'fn' : isSub ? 'sub' : 'group', isSub)
+    }
   }
 
   // A `}`: it closes the subshell a piped `{` opened, or the innermost group or function body, remembered

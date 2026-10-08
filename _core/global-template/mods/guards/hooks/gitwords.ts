@@ -224,3 +224,18 @@ export function builtReasons(st: Statement, name: string, args: Word[], state: B
   if (state.isEnvUnknown && /^(git|gh)$/.test(name)) reasons.push('an environment variable named at run time')
   return reasons
 }
+
+// A program named through a variable the command did not set (from outside it, `$(which git)`), with
+// arguments that would write history as git's or gh's, is unread. One it set is filled in by `withWords`.
+export function withProgram(st: Statement, ps: boolean, plan: { isWrite: boolean; unread: string[] }): Statement {
+  const { name, args } = programOf(st)
+  const k = st.words.length - args.length - 1
+  const head = st.words[k]
+  // PowerShell runs a program named by a variable only through `&` (`& $git commit`).
+  if (!name || !head?.dynamic || (ps && !st.isCall)) return st
+  if (writesAsAny(args, ps)) {
+    plan.isWrite = true
+    plan.unread.push('a program named at run time')
+  }
+  return st
+}

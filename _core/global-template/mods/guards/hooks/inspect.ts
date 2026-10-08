@@ -22,7 +22,7 @@
 //   unread and refused, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
-import { bypassOf, EVAL } from './bypass'
+import { bypassOf, EVAL, functionsOf, hooksOffReason } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import {
@@ -47,6 +47,7 @@ import {
   cmdWrites,
   evalWrites,
   isUnknownSetting,
+  withProgram,
   mayBeFlag,
   splitsAt,
   TAG_READS,
@@ -119,8 +120,10 @@ type Reading = VarState & {
   ranScript?: boolean
   /** A statement runs `eval` or `Invoke-Expression`. */
   hasEval?: boolean
-  /** A hook manager's switch was set for what follows (`export HUSKY=0`). */
+  /** A hook switch set, a hooked git call read, the functions defined: see `HookState`. */
   hooksOff?: boolean
+  isHooked?: boolean
+  functions?: Set<string>
 }
 
 export function inspect(command: string, powershell: boolean): Plan {
@@ -145,6 +148,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     vars: new Map(),
     isIfsSet: /\bIFS\b/.test(command),
     sets: setCounts(command, powershell),
+    functions: functionsOf(command),
     scope: '',
     opened: 0,
     writers: [],
@@ -157,6 +161,7 @@ export function inspect(command: string, powershell: boolean): Plan {
   // `eval` and `Invoke-Expression` build their command at run time: refused in a command that writes
   // history anywhere, as the reading finds it.
   if (r.hasEval && plan.isWrite) plan.block ??= EVAL
+  plan.block ??= hooksOffReason(r)
   // A body file this same command writes is read from the statement that writes it. What another
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
   // so that is noted, not refused.
@@ -172,7 +177,8 @@ export function inspect(command: string, powershell: boolean): Plan {
       fed.set(writer, paths.add(norm(f.path)))
       const before = plan.unread.length
       const named = plan.files.length
-      const at = { ...r, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
+      // Fed after the walk, where a name set again later holds its last value: such a name is unknown.
+      const at = { ...r, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder, isDeferredRead: true }
       feed(writer.st, at, `${f.where} (file ${f.path})`)
       // A file the writer reads (`cat CHANGES.md > b.md`) is where the writer ran.
       for (const g of plan.files.slice(named)) g.folder ??= writer.folder
@@ -214,7 +220,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const inner = typed.inner
   inner.forEach((st, i) => readStatement(st, inner[i - 1], r, r.ps ? scope : placeOf(st.group)))
   r.scope = scope
-  const filled = withProgram(withWords(typed, r), r)
+  const filled = withProgram(withWords(typed, r), r.ps, plan)
   const assignment = r.ps ? psAssignment(filled) : undefined
   if (r.ps) forgetOutVars(filled, r)
   // PowerShell's `$env:X = v`, `env:` drive and .NET spellings are read as `$env:X = v`.
@@ -263,21 +269,6 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
 }
 
-// A program named through a variable the command did not set (from outside it, `$(which git)`), with
-// arguments that would write history as git's or gh's, is unread. One it set is filled in by `withWords`.
-function withProgram(st: Statement, r: Reading): Statement {
-  const { name, args } = programOf(st)
-  const k = st.words.length - args.length - 1
-  const head = st.words[k]
-  // PowerShell runs a program named by a variable only through `&` (`& $git commit`).
-  if (!name || !head?.dynamic || (r.ps && !st.isCall)) return st
-  if (writesAsAny(args, r.ps)) {
-    r.plan.isWrite = true
-    r.plan.unread.push('a program named at run time')
-  }
-  return st
-}
-
 function readWrite(st: Statement, prev: Statement | undefined, name: string, args: Word[], r: Reading) {
   const stdin = r.stdin
   const where = name === 'git' ? git(st, args, r) : name === 'gh' ? gh(st, args, r) : web(name, st, args, r)
@@ -294,6 +285,8 @@ function readWrite(st: Statement, prev: Statement | undefined, name: string, arg
 function readEval(st: Statement, typed: Word[], r: Reading, prev?: Statement) {
   r.hasEval = true
   const args = r.ps ? psEvalWords(st, typed, prev) : typed
+  // Another program's output piped in (`gc fix.ps1 | iex`) may run anything and set anything.
+  if (!args) return void (r.mayRewrite = r.isSourced = true)
   const { text, literals } = joinWords(args)
   const e = args.some(a => a.dynamic) ? expand(text, r, literals) : { text, unresolved: false }
   if (e.unresolved) {

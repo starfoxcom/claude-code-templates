@@ -233,6 +233,9 @@ export function forget(st: Statement, name: string, r: VarState) {
     for (const w of st.words) {
       const m = (r.ps ? /^\$?(?:variable:)?([A-Za-z_]\w*)$/i : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
       if (m && !w.dynamic) setVar(r, m[1] ?? '', undefined)
+      // A name attached to its option: `printf -vNAME`, `read -raNAME`.
+      const attached = !r.ps && /^(printf|read)$/.test(name) ? /^-[a-zA-Z]*[va]([A-Za-z_]\w*)$/.exec(w.text) : null
+      if (attached && !w.dynamic) setVar(r, attached[1] ?? '', undefined)
     }
   })
 }
@@ -513,16 +516,20 @@ const IDENT = /[A-Za-z_]\w*/g
 const BASH_SETS = [
   /(?:^|[^\w$-])([A-Za-z_]\w*)(?:\[[^\]]*\])?\+?=/g,
   /\bfor\s+([A-Za-z_]\w*)/g,
-  /-v\s+['"]?([A-Za-z_]\w*)/g,
+  // `printf -v NAME`, `printf -vNAME`, `read -a NAME`, `read -raNAME`.
+  /(?:^|\s)-[a-zA-Z]*[va]\s*['"]?([A-Za-z_]\w*)/g,
 ]
 const BASH_SETTERS = /\b(?:read|mapfile|readarray|unset|export|declare|typeset|local|readonly)\b([^;&|\n]*)/g
 const PS_SETS = [
-  /\$(?:(?:script|global|local|private|variable):)?([A-Za-z_]\w*)\s*(?:[-+*/%]|\?\?)?=(?!=)/gi,
+  /\$\{?(?:(?:script|global|local|private|variable):)?([A-Za-z_]\w*)\}?\s*(?:[-+*/%]|\?\?)?=(?!=)/gi,
+  // Each target of a list (`$m, $n = ...`), and the `variable:` drive (`Set-Item variable:m`).
+  /\$\{?(?:(?:script|global|local|private|variable):)?([A-Za-z_]\w*)\}?\s*,/gi,
+  /\bvariable:([A-Za-z_]\w*)/gi,
   new RegExp(String.raw`-(?:outvariable|ov|errorvariable|ev|warningvariable|wv|informationvariable|iv|` +
     String.raw`pipelinevariable|pv)[:\s]+\+?([A-Za-z_]\w*)`, 'gi'),
   /\bforeach\s*\(\s*\$([A-Za-z_]\w*)/gi,
 ]
-const PS_SETTERS = /\b(?:set|new)-variable\b([^;|\n]*)/gi
+const PS_SETTERS = /\b(?:set-variable|new-variable|sv|nv)\b([^;|\n]*)/gi
 
 /** How many times the command sets each name, by its text (lower-cased in PowerShell). A deferred statement
  * (a trap action, a function body) reads a variable when it runs: one set more than once may hold another
@@ -542,8 +549,11 @@ export function setCounts(command: string, ps: boolean): Map<string, number> {
 /** A Bash builtin that sets a variable whose name is built at run time (`printf -v "$v"`, `read -r "$v"`,
  * `local "$v=x"`, `unset "$v"`): it may set any variable, `IFS` included. */
 export function setsNameAtRunTime(name: string, args: Word[]): boolean {
+  // `printf -v "$v"`, `printf -v"$v"`, `read -ra"$v"`: a name given to an option, spaced or attached.
   const v = args.findIndex(a => a.text === '-v')
-  if (name === 'printf') return v !== -1 && Boolean(args[v + 1]?.dynamic)
+  const isAttached = args.some(a => a.dynamic && /^-[a-zA-Z]*[va]/.test(a.text))
+  if (name === 'printf') return isAttached || (v !== -1 && Boolean(args[v + 1]?.dynamic))
+  if (name === 'read' && isAttached) return true
   if (!/^(read|mapfile|readarray|unset|local|readonly|declare|typeset|export)$/.test(name)) return false
   return args.some(a => a.dynamic && !a.text.startsWith('-') && !/^[A-Za-z_]\w*\+?=/.test(a.text))
 }
