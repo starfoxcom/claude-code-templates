@@ -119,6 +119,8 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
       // A body file this same command writes does not exist yet: what it writes was read from the
       // command text above. One written under another spelling of its path is left as a note: the
       // command text, here-doc included, is under the credit check.
+      // Unless another program rewrote it after that (`cat > b.md ...; cp x b.md`).
+      if (fromCommand && named) plan.unread.push(`${where} (another program in this command may write ${path})`)
       if (fromCommand) continue
       // Likewise a file a script whose code is in the command (`python - <<EOF`, `node -e`) may write: that
       // code is under the credit check.

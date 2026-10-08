@@ -749,3 +749,13 @@ test(REWRITE, { options: { mode: 'enforce' } }, async ($, on) => {
   }
   expect(seen.ran.length).toBeGreaterThan(0)
 })
+
+// A file the command writes with `>` and another program then rewrites: the here-doc is not what is sent.
+test('a body file written with > and then rewritten is refused', { options: { mode: 'enforce' } }, async ($, on) => {
+  world(on)
+  const command = "cat > b.md <<'EOF'\n## What\n- clean\nEOF\ncp other.md b.md\ngh pr create --title t --body-file b.md"
+  const result = await bash($, command)
+  expect(String((result as { deny?: string }).deny)).toContain('another program in this command may write b.md')
+  const before = "cp other.md b.md\ncat > b.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create --title t --body-file b.md"
+  expect((await bash($, before) as { deny?: string }).deny).toBeUndefined()
+})

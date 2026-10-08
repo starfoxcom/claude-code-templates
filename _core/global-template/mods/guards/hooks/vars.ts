@@ -399,7 +399,9 @@ export function psAssignment(st: Statement): PsAssignment | undefined {
   const f = value[0]
   const isBare = f !== undefined && !(f.literalStart || f.quoted || f.dynamic || f.list || f.expr)
   // A chained assignment (`$a = $b = 1`) is read as an assignment of its own, after the first.
-  const isCommand = isCall || (isBare && !/^(-?[0-9]|@)/.test(f.text)) || value.some(isOperator)
+  // A .NET static call (`[IO.File]::WriteAllText(...)`) runs too: it may write a file.
+  const isStatic = f !== undefined && /^\[[\w.]+\]::\w+\(/.test(f.text)
+  const isCommand = isCall || isStatic || (isBare && !/^(-?[0-9]|@)/.test(f.text)) || value.some(isOperator)
   const command = isCommand ? { ...st, words: value, inner: [], isCall: isCall || undefined } : undefined
   return { targets, op: w[at]?.text ?? '=', value, command }
 }

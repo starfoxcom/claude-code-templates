@@ -87,25 +87,35 @@ export function runsInlineCode(st: Statement): boolean {
   return st.heredocs.length > 0 && !st.hasDynamicBody
 }
 
-// Programs that only read the files they name, and git subcommands that leave the work tree as it is.
+// Programs that only read the files they name, with none of their options writing one, and shell keywords.
 const READERS = new Set(
   [
     'cat', 'type', 'get-content', 'gc', 'head', 'tail', 'wc', 'grep', 'egrep', 'rg', 'select-string', 'sls',
     'test-path', 'ls', 'dir', 'get-item', 'gi', 'get-childitem', 'gci', 'stat', 'echo', 'write-output',
-    'write-host', 'printf', 'gh',
+    'write-host', 'printf', 'for', 'select', 'case', 'foreach', 'while', 'until', 'elseif', 'switch', 'done',
+    'fi', 'esac', 'function', 'return', 'exit', 'break', 'continue', 'test', '[', '[[', 'true', 'false', ':',
   ],
 )
+// git subcommands that leave the work tree as it is, unless an output file is named (`git log --output=x`).
 const GIT_READS = /^(add|diff|status|log|show|commit|push|ls-files|rev-parse|branch|fetch|remote)$/
+// gh groups that only read files or send them: every other group (`release download`, `run download`,
+// `codespace cp`, `repo clone`, an extension) may write one.
+const GH_READS = /^(pr|issue|api|search|label|browse|status|auth|workflow|secret|variable|ruleset|cache)$/
 
 /** The file names (lowercased, folder dropped) a statement may write: every name in its words, unless its
  * program only reads (`cat b.md`, `git add b.md`). `Set-Content b.md`, `cp x b.md`, `tee b.md` and
- * `[IO.File]::WriteAllText('b.md', ...)` each name one. */
+ * `[IO.File]::WriteAllText('b.md', ...)` each name one. `*` when a word is built at run time (`cp x "$F"`),
+ * or a download names none: any file. */
 export function namedFiles(st: Statement): string[] {
   const { name, args } = programOf(st)
-  const sub = args.find(a => !a.text.startsWith('-'))?.text ?? ''
-  if (READERS.has(name) || (name === 'git' && GIT_READS.test(sub))) return []
-  if (name === 'gh' && /download/.test(args.map(a => a.text).join(' '))) return ['*']
-  return st.words.flatMap(w => w.text.split(/[\s(),;'"=]+/)).map(baseName).filter(Boolean)
+  const words = args.filter(a => !a.text.startsWith('-')).map(a => a.text)
+  const isOutput = args.some(a => /^(--output|-o)(=|$)/.test(a.text))
+  if (READERS.has(name) || (name === 'git' && GIT_READS.test(words[0] ?? '') && !isOutput)) return []
+  if (name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download')) return []
+  // A word split at quotes, parens, `=` and a PowerShell parameter's colon (`-Path:b.md`).
+  const names = st.words.flatMap(w => w.text.split(/[\s(),;'"=]+|^-\w+:/)).map(baseName).filter(Boolean)
+  const isAny = st.words.some(w => w.dynamic) || (name === 'gh' && words.includes('download'))
+  return isAny ? [...names, '*'] : names
 }
 
 /** A path's file name, lowercased: what `namedFiles` compares. */
