@@ -2,7 +2,7 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
-import { isPush, isPushOrPr, mergedNumber, targetFolder } from './command'
+import { isPush, isPushOrPr, mergedNumber, pushesBranch, targetFolder } from './command'
 import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
 import { redRounds, refusalText, ROUND_LIMIT, roundNodes, ROUNDS_FILE, ROUNDS_QUERY, TOUCHES_ROUNDS } from './rounds'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
@@ -274,16 +274,19 @@ async function prOfBranch(
   $: EngineInterface,
   cwd?: string,
   number?: string,
-): Promise<{ repo: string; number: number; headSha: string } | undefined> {
+): Promise<{ repo: string; number: number; headSha: string; state?: string; branch?: string } | undefined> {
   try {
-    const args = ['pr', 'view', ...(number ? [number] : []), '--json', 'number,url,headRefOid']
+    const args = ['pr', 'view', ...(number ? [number] : []), '--json', 'number,url,headRefOid,state,headRefName']
     const view = JSON.parse(await gh($, args, cwd)) as {
       number: number
       url: string
       headRefOid: string
+      state?: string
+      headRefName?: string
     }
     const repo = PR_URL.exec(view.url)?.[1]
-    return repo ? { repo, number: view.number, headSha: view.headRefOid } : undefined
+    const found = { repo, number: view.number, headSha: view.headRefOid, state: view.state, branch: view.headRefName }
+    return repo ? { ...found, repo } : undefined
   } catch {
     return undefined
   }
@@ -324,16 +327,18 @@ async function readResets($: EngineInterface): Promise<Record<string, string>> {
 
 async function redRoundsOf($: EngineInterface, pr: { repo: string; number: number }): Promise<number> {
   const [owner, name] = pr.repo.split('/')
-  const query = ['api', 'graphql', '-f', `query=${ROUNDS_QUERY}`, '-F', `owner=${owner}`, '-F', `name=${name}`]
+  // `-f` sends a string as is; `-F` would turn an all-digit owner or name into a number GraphQL refuses.
+  const query = ['api', 'graphql', '-f', `query=${ROUNDS_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`]
   const answer = await gh($, [...query, '-F', `number=${pr.number}`]).catch(() => '')
   return redRounds(roundNodes(answer), (await readResets($))[`${pr.repo}#${pr.number}`])
 }
 
-// A push to a PR past the limit: why it is refused. A PR GitHub cannot be asked about is not refused.
+// A push to a PR past the limit: why it is refused. Only the open PR of the folder the push runs in, and
+// only a push that updates that PR's branch; a PR GitHub cannot be asked about is not refused.
 async function roundRefusal($: EngineInterface, command: string, isPowerShell: boolean) {
   const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
-  const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
-  if (!pr) return undefined
+  const pr = await prOfBranch($, folder)
+  if (!pr || pr.state !== 'OPEN' || !pr.branch || !pushesBranch(command, pr.branch, isPowerShell)) return undefined
   const red = await redRoundsOf($, pr)
   return red >= ROUND_LIMIT ? `BLOCKED (ci-watch): ${refusalText(`${pr.repo}#${pr.number}`, red)}` : undefined
 }

@@ -42,11 +42,22 @@ export type Seen = {
   refusals?: number
   /** Each slash command registered, with its argument hint. */
   commands: { name: string; argumentHint?: string }[]
-  /** The check state of each of the PR's commits, oldest first (`c0`, `c1`, ...), as GitHub's GraphQL
-   * reports them; `null` for a commit with no checks. */
+  /** How each of the PR's commits came out, oldest first (`c0`, `c1`, ...), as `rollupOf` reports it to
+   * GitHub's GraphQL; `null` for a commit with no checks. */
   rollups: (string | null)[]
   /** Every gh call's words. */
   ghCalls: string[]
+  /** The PR's branch (default `feature/x`), and a folder where `gh pr view` finds no PR. */
+  branch?: string
+  noPrIn?: string
+}
+
+/** A commit's checks as GitHub reports them: one check of that result. A cancelled run turns the overall
+ * state red, as GitHub's does. */
+export function rollupOf(result: string | null) {
+  if (result === null) return null
+  const state = result === 'CANCELLED' ? 'FAILURE' : result
+  return { state, contexts: { nodes: [result === 'ERROR' ? { state: result } : { conclusion: result }] } }
 }
 
 export function world(on: On) {
@@ -103,11 +114,13 @@ export function world(on: On) {
     }
     if (e.argv[0] === 'gh') seen.ghCalls.push(args)
     if (args.includes('api graphql')) {
-      const nodes = seen.rollups.map((state, i) => ({
-        commit: { oid: `c${i}`, statusCheckRollup: state === null ? null : { state } },
-      }))
+      const nodes = seen.rollups.map((result, i) => ({ commit: { oid: `c${i}`, statusCheckRollup: rollupOf(result) } }))
       const stdout = JSON.stringify({ data: { repository: { pullRequest: { commits: { nodes } } } } })
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    if (args.includes('pr view') && seen.noPrIn !== undefined && (e as { cwd?: string }).cwd === seen.noPrIn) {
+      const stderr = 'no pull requests found'
+      return { value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (args.includes('pr checks')) seen.checksRead++
     if (args.includes('pr checks')) await seen.duringChecks?.()
@@ -128,6 +141,7 @@ export function world(on: On) {
           number: 7,
           url: 'https://github.com/o/r/pull/7',
           headRefOid: seen.head ?? 'a1',
+          headRefName: seen.branch ?? 'feature/x',
           state: seen.prState,
         })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }

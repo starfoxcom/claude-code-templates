@@ -1,11 +1,11 @@
 import { expect, test } from 'claude-code/testing'
 
-import { isPush } from '../hooks/command'
+import { isPush, pushesBranch } from '../hooks/command'
 import { redRounds, ROUND_LIMIT, type RoundNode } from '../hooks/rounds'
-import { world } from './world'
+import { rollupOf, world } from './world'
 
-const nodes = (states: (string | null)[]): RoundNode[] =>
-  states.map((state, i) => ({ commit: { oid: `c${i}`, statusCheckRollup: state === null ? null : { state } } }))
+const nodes = (results: (string | null)[]): RoundNode[] =>
+  results.map((result, i) => ({ commit: { oid: `c${i}`, statusCheckRollup: rollupOf(result) } }))
 
 const RED = 'FAILURE'
 const reds = (n: number) => Array.from({ length: n }, () => RED)
@@ -22,11 +22,43 @@ test('red rounds count back to a green round or the reset', () => {
   expect(redRounds(nodes(reds(8)), 'c7')).toBe(0)
 })
 
+// A quick second push cancels the first one's runs (`concurrency: cancel-in-progress`): GitHub shows that
+// commit red, but nothing in it failed.
+test('a commit whose runs a newer push cancelled is no round', () => {
+  expect(redRounds(nodes([RED, 'CANCELLED', RED, 'CANCELLED', RED]))).toBe(3)
+  expect(redRounds(nodes([...reds(3), ...Array.from({ length: 6 }, () => 'CANCELLED')]))).toBe(3)
+})
+
 test('only a push is held to the limit, not a PR create or a message naming a push', () => {
   expect(isPush('git push origin feature/x')).toBe(true)
   expect(isPush('git -C repo push -q origin x 2>&1 | tail -1')).toBe(true)
   expect(isPush('gh pr create --base develop --title t --body-file b.md')).toBe(false)
   expect(isPush('git commit -m "push the fix"')).toBe(false)
+})
+
+test("only a push that updates the PR's own branch adds to its rounds", () => {
+  for (const command of [
+    'git push',
+    'git push origin feature/x',
+    'git push -u origin feature/x',
+    'git push origin HEAD',
+    'git push -o ci.skip origin +feature/x',
+    'git push origin x:refs/heads/feature/x',
+    'git push --all origin',
+    'git add -A && git commit -m x && git push -q origin feature/x 2>&1 | tail -1',
+  ]) {
+    expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, true])
+  }
+  for (const command of [
+    'git push origin v1.3.0',
+    'git push --tags',
+    'git push origin --tags',
+    'git push origin HEAD:feature/new-direction',
+    'git push origin feature/other',
+    'git push origin --delete feature/x',
+  ]) {
+    expect([command, pushesBranch(command, 'feature/x')]).toEqual([command, false])
+  }
 })
 
 test(`a push to a PR past ${ROUND_LIMIT} red rounds is refused, one below passes`, async ($, on) => {
@@ -44,6 +76,31 @@ test(`a push to a PR past ${ROUND_LIMIT} red rounds is refused, one below passes
   }
   const created = await $.tool.call({ tool: 'Bash', command: 'gh pr create -t t --body-file b.md' } as never)
   expect(created).not.toHaveProperty('deny')
+})
+
+test("past the limit, a tag, another branch, another folder's push or a closed PR is not refused", async ($, on) => {
+  const { seen } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.rollups = reds(ROUND_LIMIT)
+  const deny = async (command: string) =>
+    ((await $.tool.call({ tool: 'Bash', command } as never)) as { deny?: string }).deny
+  expect(await deny('git push origin v1.3.0')).toBeUndefined()
+  expect(await deny('git push origin HEAD:feature/new-direction')).toBeUndefined()
+  // The other folder's branch has no PR yet: the session folder's PR is never asked about instead.
+  seen.noPrIn = '../wt'
+  expect(await deny('git -C ../wt push -u origin feature/b')).toBeUndefined()
+  seen.prState = 'CLOSED'
+  expect(await deny('git push origin feature/x')).toBeUndefined()
+  seen.prState = 'OPEN'
+  expect(await deny('git push origin feature/x')).toContain('endless round hunt')
+})
+
+test('owner and repo names go to GitHub as strings, so an all-digit one still counts', async ($, on) => {
+  const { seen } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  const query = seen.ghCalls.find(c => c.includes('api graphql')) ?? ''
+  expect(query).toContain('-f owner=o -f name=r -F number=7')
 })
 
 test('a command that is no push asks GitHub nothing', async ($, on) => {
