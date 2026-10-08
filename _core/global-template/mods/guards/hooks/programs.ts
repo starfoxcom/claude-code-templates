@@ -99,7 +99,7 @@ const READERS = new Set(
     'sleep', 'start-sleep', '',
     // These make, stamp or remove files and folders, or only print: none changes an existing file's text.
     'mktemp', 'mkdir', 'rm', 'rmdir', 'touch', 'date', 'basename', 'dirname', 'realpath', 'whoami', 'hostname',
-    'uname',
+    'uname', 'set', 'unset', 'shift', 'read',
   ],
 )
 // git subcommands that leave the work tree as it is, unless an output file is named (`git log --output=x`).
@@ -111,7 +111,7 @@ const GIT_READS = new RegExp(
 const PURE_CALL = new RegExp(
   String.raw`^(\[(system\.)?(math|string|io\.path|datetime|guid|convert|regex|text\.encoding|char|int|int32|` +
     String.raw`int64|double|bool|timespan|uri)\]::\w+|\$[\w:]+(\.\w+)*\.(trim|trimstart|trimend|tolower|` +
-    String.raw`toupper|replace|split|substring|contains|startswith|endswith|indexof|tostring|padleft|padright|` +
+    String.raw`toupper|split|substring|contains|startswith|endswith|indexof|tostring|padleft|padright|` +
     String.raw`join|format|equals|getbytes|getstring))\(`,
   'i',
 )
@@ -124,20 +124,41 @@ const GH_READS = /^(pr|issue|api|search|label|browse|status|auth|workflow|secret
 const GH_SWITCHES = (words: string[], args: Word[]) =>
   words[1] === 'checkout' ||
   args.some(a => a.text === '--checkout') ||
-  (words[1] === 'merge' && args.some(a => /^(-d|--delete-branch)$/.test(a.text)))
+  (words[1] === 'develop' && args.some(a => a.text === '-c')) ||
+  (words[1] === 'merge' && args.some(a => /^--delete-branch(=true)?$|^-[a-z]*d[a-z]*$/.test(a.text)))
+
+// Variables that make git, ssh or rg run a program of their choosing (`GIT_EXTERNAL_DIFF=./x git diff`).
+const RUN_VARS = /^(GIT_EXTERNAL_DIFF|GIT_SSH_COMMAND|GIT_SSH|GIT_ASKPASS|SSH_ASKPASS|RIPGREP_CONFIG_PATH)$/i
+
+/** Whether a statement makes a later or wrapped program run one of its own choosing: `env -S 'cp x b.md'`,
+ * or a variable in `RUN_VARS` set in front of a program, by `export`/`declare`, or as `$env:X = ...`. Read
+ * before any early return, since an assignment returns before `mayWriteFiles`. */
+export function setsRunner(st: Statement): boolean {
+  const { args } = programOf(st)
+  const lead = st.words.slice(0, Math.max(0, st.words.length - args.length - 1))
+  const isEnv = lead.some(w => w.text === 'env')
+  if (isEnv && lead.some(w => /^(-[a-zA-Z]*S|--split-string)/.test(w.text))) return true
+  // `NAME=v` as typed (not quoted text), or PowerShell's `$env:NAME` heading the statement.
+  return st.words.some((w, i) => {
+    const pair = w.literalStart ? null : /^([A-Za-z_]\w*)\+?=/.exec(w.text)
+    const ps = i === 0 ? /^\$env:(\w+)$/i.exec(w.text) : null
+    return RUN_VARS.test(pair?.[1] ?? ps?.[1] ?? '')
+  })
+}
 
 /** Whether a statement may write files beyond its own `>`: any program not known to write none (`Set-Content`,
  * `cp`, `tee`, `npm`, a .NET call, a function, `xargs cp`), git outside its read subcommands or with an
  * output file (`git log --output=x`), and gh outside its read and send groups (`gh release download`). */
 export function mayWriteFiles(st: Statement): boolean {
   const { name, args } = programOf(st)
-  const words = args.filter(a => !a.text.startsWith('-')).map(a => a.text)
+  // The words past options, without the value of gh's `-R`/`--repo`, which may sit before the action.
+  const words = args
+    .filter((a, i) => !a.text.startsWith('-') && !/^(-R|--repo)$/.test(args[i - 1]?.text ?? ''))
+    .map(a => a.text)
   // `-o` names an output file only on `diff`, `log` and `show`: on `push` it is a push option.
   const isLogLike = /^(diff|log|show)$/.test(words[0] ?? '')
   const isOutput = args.some(a => /^--output(=|$)/.test(a.text) || (a.text === '-o' && isLogLike))
-  // `env -S 'cp x b.md'` runs the program in its string.
-  const isSplit = st.words.some(w => w.text === 'env') && st.words.some(w => /^(-S|--split-string)/.test(w.text))
-  if (isSplit || args.some(a => RUNS.test(a.text))) return true
+  if (args.some(a => RUNS.test(a.text))) return true
   if (PURE_CALL.test(st.words[0]?.text ?? '')) return false
   if (READERS.has(name) || (name === 'git' && GIT_READS.test(words[0] ?? '') && !isOutput)) return false
   return !(name === 'gh' && GH_READS.test(words[0] ?? '') && !words.includes('download') && !GH_SWITCHES(words, args))

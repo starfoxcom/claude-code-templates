@@ -55,7 +55,7 @@ import {
   writesHistory,
 } from './gitwords'
 import { script } from './scripts'
-import { mayWriteFiles, programOf, runsInlineCode } from './programs'
+import { mayWriteFiles, programOf, runsInlineCode, setsRunner } from './programs'
 import { parse } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
 import { assignPsTargets, forgetOutVars, psAssignment, withWords } from './vars'
@@ -246,16 +246,18 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   plan.block ??= bypassOf(st, name, args)
   for (const what of builtReasons(st, name, args, r)) unreadCall(r, what)
   const moves = repoMoves(st, name, args)
+  r.mayRewrite ||= setsRunner(st)
   r.isRepoMoved ||= moves.movesLater
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
   if (!r.ps && name === 'trap') return readTrap(args, r)
   // A PowerShell assignment sets its variables; a command after its operator (`$r = git push`) is read in turn.
   if (assignment) assignPsTargets(st, assignment, r)
   if (assignment) return void (assignment.command && readStatement(assignment.command, prev, r, outer))
-  r.mayRewrite ||= mayWriteFiles(st)
   if (assign(st, name, args, r)) return
   if (moveTo(name, args, r)) return
   if (readScript(st, name, args, r)) return
+  // A wrapper shell (`bash -c`) is read above, its statements in turn; an assignment sets no file.
+  r.mayRewrite ||= mayWriteFiles(st)
   forget(st, name, r)
   // Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its
   // text is under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
@@ -367,9 +369,13 @@ function readScript(st: Statement, name: string, args: Word[], r: Reading): bool
   read(isKnown ? parse(e.text, inner.ps) : inner.statements, r, child)
   r.ps = ps
   if (inner.dynamic && !isKnown && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
+  // A script the reading cannot know may run any program; so may a cmd line split at `&` or `|`, or holding
+  // a word the shell fills in, since it is read as one statement.
+  if (inner.dynamic && !isKnown) r.mayRewrite = true
   // cmd fills in `%NAME%`, drops `^` and runs each part of a line split at `&` or `|`: unlike the shell.
   const line = inner.text ?? args.map(a => a.text).join(' ')
   if (name === 'cmd' && /[%^&|]/.test(line) && cmdWrites(line)) unreadCall(r, 'a cmd script built at run time')
+  if (name === 'cmd' && (/[%^&|]/.test(line) || args.some(a => a.dynamic))) r.mayRewrite = true
   return true
 }
 

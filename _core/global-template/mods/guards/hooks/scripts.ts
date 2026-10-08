@@ -26,15 +26,17 @@ export function script(st: Statement, name: string, args: Word[]): Script | unde
     const text = rest.length === 1 ? (rest[0]?.text ?? '') : rest.map(a => a.text).join(' ')
     return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic), text }
   }
+  // A `-c` after the script file is that script's own argument (`bash gen.sh -c cfg`).
+  const before = (i: number, end: number) => (end !== -1 && i > end ? -1 : i)
   if (SHELLS.test(name)) {
-    const i = args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a.text))
+    const file = args.findIndex(a => !a.text.startsWith('-'))
+    const i = before(args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a.text)), file)
     return i === -1 ? stdinScript(st, args) : of(i, false)
   }
-  if (/^(pwsh|powershell)$/.test(name))
-    return of(
-      args.findIndex(a => /^-(c|command)$/i.test(a.text)),
-      true,
-    )
+  if (/^(pwsh|powershell)$/.test(name)) {
+    const file = args.findIndex(a => /^-(f|file)$/i.test(a.text))
+    return of(before(args.findIndex(a => /^-(c|command)$/i.test(a.text)), file), true)
+  }
   if (name === 'cmd') {
     // Git Bash turns `/c` into a path, so it is typed `//c` there.
     const i = args.findIndex(a => /^\/{1,2}[ck]$/i.test(a.text))
