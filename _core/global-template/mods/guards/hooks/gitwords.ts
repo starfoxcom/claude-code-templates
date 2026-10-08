@@ -25,9 +25,9 @@ const BRANCH_NOT_CREATE = new RegExp(
 )
 
 // `git branch <name>` creates one (a rename or copy names the new one last); listing flags create none.
-export function branchesOf(rest: Word[]): string[] {
+export function branchesOf(rest: Word[]): Word[] {
   const flags = rest.filter(a => a.text.startsWith('-')).map(a => gitLong('branch', a.text))
-  const names = rest.filter(a => !a.text.startsWith('-')).map(a => a.text)
+  const names = rest.filter(a => !a.text.startsWith('-'))
   if (flags.some(f => /^-(m|M|c|C)$|^--(move|copy)$/.test(f))) return names.slice(-1)
   return flags.some(f => BRANCH_NOT_CREATE.test(f)) ? [] : names.slice(0, 1)
 }
@@ -63,10 +63,36 @@ export const mayBeFlag = (w: Word) =>
 
 // A git alias, a config include or another config file the command sets may turn any later git call into a
 // write that skips the hooks (`git -c alias.ci="commit --no-verify" ci`, `GIT_CONFIG_GLOBAL=x git commit`).
-const CONFIG_KEY = /^(--config-env=)?(alias|include|includeif)\./i
-const CONFIG_ENV = /^(\$env:)?GIT_CONFIG(_GLOBAL|_SYSTEM|_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+)?(=|$)/i
-export const setsGitConfig = (words: Word[], isGit: boolean) =>
-  words.some(w => CONFIG_ENV.test(w.text) || (isGit && CONFIG_KEY.test(w.text)))
+// Read only where git reads a setting: a `-c` or `--config-env` value, a `git config` key, and an assignment
+// to a config variable (in front of the program, or through `export`).
+const CONFIG_KEY = /^(alias|include|includeif)\./i
+const CONFIG_ENV = /^GIT_CONFIG(_GLOBAL|_SYSTEM|_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+)?(\+?=|$)/i
+const CONFIG_READS =
+  /^(--(get|get-all|get-regexp|get-urlmatch|get-color|get-colorbool|list|show-origin|show-scope)|-l|get|list)$/
+
+export function setsGitConfig(st: Statement, name: string, args: Word[], ps: boolean): boolean {
+  // PowerShell sets one through `$env:` or the `env:` drive.
+  if (ps) return st.words.some(w => /^\$?env:GIT_CONFIG/i.test(w.text)) && name !== 'git'
+  const lead = name ? st.words.slice(0, st.words.length - args.length - 1) : st.words
+  const exported = /^(export|declare|typeset|local|readonly)$/.test(name) ? args : []
+  if ([...lead, ...exported].some(w => CONFIG_ENV.test(w.text))) return true
+  return name === 'git' && gitSetsConfig(args)
+}
+
+function gitSetsConfig(args: Word[]): boolean {
+  let k = 0
+  for (; k < args.length && (args[k]?.text ?? '').startsWith('-'); k++) {
+    const t = args[k]?.text ?? ''
+    const attached = t.startsWith('--config-env=') ? t.slice(13) : undefined
+    const value = /^(-c|--config-env)$/.test(t) ? args[++k]?.text : attached
+    if (value !== undefined && CONFIG_KEY.test(value)) return true
+    if (value === undefined && GIT_GLOBAL_VALUES.test(t)) k++
+  }
+  if (args[k]?.text !== 'config') return false
+  const rest = args.slice(k + 1)
+  const isKey = (w: Word) => !w.text.startsWith('-') && CONFIG_KEY.test(w.text)
+  return !rest.some(w => CONFIG_READS.test(w.text)) && rest.some(isKey)
+}
 
 // git's global options that take the next word as their value, and the subcommands that write history or
 // run its hooks.

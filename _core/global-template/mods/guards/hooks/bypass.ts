@@ -87,35 +87,43 @@ const FLAGS: Record<string, Spec> = {
 // `--fixup=amend:`). Long options count as git reads them, shortened too. A flag's value is skipped, so
 // a message that starts with a dash (`-m "-n is fine"`) is never a flag.
 function messageReason(sub: string, rest: Word[]): string | undefined {
-  const spec = FLAGS[sub] ?? {}
-  const reuses = sub === 'commit' || sub === 'notes'
   for (let i = 0; i < rest.length; i++) {
     const text = gitLong(sub, rest[i]?.text ?? '')
     if (text === '--') break
-    if (text === '--no-verify' && (sub === 'commit' || sub === 'merge')) return HOOK_SKIP
-    if (/^--trailer(=|$)/.test(text) && (sub === 'commit' || sub === 'tag')) return TRAILER
-    if (/^--(reuse|reedit)-message(=|$)/.test(text) && reuses) return REUSE
-    // `--fixup=amend:<commit>` and `reword:` take that commit's whole message.
-    const fixup = text === '--fixup' ? rest[i + 1]?.text : /^--fixup=(.*)$/.exec(text)?.[1]
-    if (sub === 'commit' && /^(amend|reword):/.test(fixup ?? '')) return REUSE
-    if (text.startsWith('--')) {
-      const kind = spec[text.split('=')[0] ?? '']
-      if (kind && kind !== 'attached' && !text.includes('=')) i++
-      continue
-    }
-    if (!/^-[A-Za-z]/.test(text)) continue
-    for (let j = 1; j < text.length; j++) {
-      const letter = text[j] as string
-      if (letter === 'n' && sub === 'commit') return HOOK_SKIP
-      if ((letter === 'C' || letter === 'c') && reuses) return REUSE
-      const kind = spec[`-${letter}`]
-      if (!kind) continue
-      // A letter that takes a value takes the rest of the word, or the next word when it is last.
-      if (kind !== 'attached' && j === text.length - 1) i++
-      break
-    }
+    const isLong = text.startsWith('--')
+    if (!isLong && !/^-[A-Za-z]/.test(text)) continue
+    const read = isLong ? longReason(sub, text, rest[i + 1]?.text) : bundleReason(sub, text)
+    if (typeof read === 'string') return read
+    i += read
   }
   return undefined
+}
+
+const reuses = (sub: string) => sub === 'commit' || sub === 'notes'
+
+// A long option: why it is refused, or how many words after it its value takes.
+function longReason(sub: string, text: string, next: string | undefined): string | number {
+  if (text === '--no-verify' && (sub === 'commit' || sub === 'merge')) return HOOK_SKIP
+  if (/^--trailer(=|$)/.test(text) && (sub === 'commit' || sub === 'tag')) return TRAILER
+  if (/^--(reuse|reedit)-message(=|$)/.test(text) && reuses(sub)) return REUSE
+  // `--fixup=amend:<commit>` and `reword:` take that commit's whole message.
+  const fixup = text === '--fixup' ? next : /^--fixup=(.*)$/.exec(text)?.[1]
+  if (sub === 'commit' && /^(amend|reword):/.test(fixup ?? '')) return REUSE
+  const kind = FLAGS[sub]?.[text.split('=')[0] ?? '']
+  return kind && kind !== 'attached' && !text.includes('=') ? 1 : 0
+}
+
+// A bundle of short flags (`-anm`): why it is refused, or how many words after it its value takes. A letter
+// that takes a value takes the rest of the word, or the next word when it is last.
+function bundleReason(sub: string, text: string): string | number {
+  for (let j = 1; j < text.length; j++) {
+    const letter = text[j] as string
+    if (letter === 'n' && sub === 'commit') return HOOK_SKIP
+    if ((letter === 'C' || letter === 'c') && reuses(sub)) return REUSE
+    const kind = FLAGS[sub]?.[`-${letter}`]
+    if (kind) return kind !== 'attached' && j === text.length - 1 ? 1 : 0
+  }
+  return 0
 }
 
 // `git config core.hooksPath x` (or `--unset`): a setting that moves or drops the hooks. Reading it passes.

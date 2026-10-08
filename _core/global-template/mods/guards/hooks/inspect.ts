@@ -27,15 +27,11 @@ import { readPr } from './prbody'
 import type { PrCall } from './prbody'
 import {
   aloneOf,
-  CD_NAMES,
   folderNow,
   isSameFolder,
   landsAt,
-  moveFolder,
-  movePlace,
+  moveTo,
   placeHere,
-  POP_NAMES,
-  PUSH_NAMES,
   ranBefore,
   repoMoves,
   targetOf,
@@ -232,40 +228,13 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
   plan.block ??= bypassOf(st, name, args)
-  // In a git or gh call that writes, a word the shell splits at run time may become any options at all
-  // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read. Whether it
-  // writes is told from its subcommand, never from a write word inside a `$(...)` or a path.
-  // After a literal `--` every word is a path, whatever it splits into.
-  const ends = args.findIndex(a => !a.dynamic && a.text === '--')
-  const flags = ends === -1 ? args : args.slice(0, ends)
-  // PowerShell's `--%` passes the rest of the line raw, with `%NAME%` filled in from the environment.
-  const isRaw = r.ps && args.some(a => a.text === '--%')
-  // Raw mode hides even the subcommand (`git --% %S% -m x`), so any git or gh call in it is unread.
-  if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && writesHistory(name, args, r.ps))))
-    unreadCall(r, 'a word built at run time')
+  checkBuilt(st, name, args, r)
   const moves = repoMoves(st, name, args)
   r.isRepoMoved ||= moves.movesLater
-  // Once the command sets a git alias, include or config file, any git call may be a write the reading
-  // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
-  r.isConfigMoved ||= setsGitConfig(st.words, name === 'git')
-  if (r.isConfigMoved && name === 'git') unreadCall(r, 'a git setting built at run time')
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
   if (!r.ps && name === 'trap') return readTrap(args, r)
   if (assign(st, name, args, r)) return
-  if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
-    const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
-    const place = movePlace(r)
-    // `pushd -n`, `popd +1`: an option or a stack place the reading does not follow leaves it unknown.
-    const isStack = PUSH_NAMES.has(name) || POP_NAMES.has(name)
-    if (isStack && args.some(a => /^[-+]/.test(a.text))) place.folder = { isUnknown: true }
-    else {
-      // `popd` returns to the folder its `pushd` left; with none left the folder is unknown.
-      if (PUSH_NAMES.has(name)) place.folders.push(place.folder)
-      const popped = POP_NAMES.has(name) ? (place.folders.pop() ?? { isUnknown: true }) : undefined
-      place.folder = popped ?? moveFolder(place.folder, target)
-    }
-    return
-  }
+  if (moveTo(name, args, r)) return
   if (readScript(st, name, args, r)) return
   forget(st, name, r)
   // Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its
@@ -283,6 +252,26 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
   // The repo rules and the diff scan follow each write to where it runs, never to the first `cd`.
   if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
+}
+
+// The words of a git or gh call that the shell builds at run time, and the git settings the command
+// changes: what makes the call unread.
+function checkBuilt(st: Statement, name: string, args: Word[], r: Reading) {
+  // In a git or gh call that writes, a word the shell splits at run time may become any options at all
+  // (`--no-verify`, `--git-dir=...`, a flag the spec does not list): the call cannot be read. Whether it
+  // writes is told from its subcommand, never from a write word inside a `$(...)` or a path.
+  // After a literal `--` every word is a path, whatever it splits into.
+  const ends = args.findIndex(a => !a.dynamic && a.text === '--')
+  const flags = ends === -1 ? args : args.slice(0, ends)
+  // PowerShell's `--%` passes the rest of the line raw, with `%NAME%` filled in from the environment.
+  const isRaw = r.ps && args.some(a => a.text === '--%')
+  // Raw mode hides even the subcommand (`git --% %S% -m x`), so any git or gh call in it is unread.
+  if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && writesHistory(name, args, r.ps))))
+    unreadCall(r, 'a word built at run time')
+  // Once the command sets a git alias, include or config file, any git call may be a write the reading
+  // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
+  r.isConfigMoved ||= setsGitConfig(st, name, args, r.ps)
+  if (r.isConfigMoved && name === 'git') unreadCall(r, 'a git setting built at run time')
 }
 
 // A program named through a variable the command did not set (from outside it, `$(which git)`), with
@@ -545,7 +534,8 @@ function git(st: Statement, args: Word[], r: Reading): string | undefined {
       if (rest[0]?.text === 'add') walk(rest.slice(1), { '-b': 'branch', '-B': 'branch' }, r, '')
       return undefined
     case 'branch':
-      plan.branches.push(...branchesOf(rest))
+      // A name built at run time is unread, as `checkout -b` names it.
+      for (const w of branchesOf(rest)) take('branch', w, r, '')
       return undefined
   }
   return undefined

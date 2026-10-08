@@ -177,3 +177,20 @@ export function aloneOf(statements: Statement[]): Statement | undefined {
   }
   return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
 }
+
+/** A `cd`, `pushd` or `popd`: the folder it leads to, kept for the scope being read. True when it was one. */
+export function moveTo(name: string, args: Word[], r: Places): boolean {
+  if (!CD_NAMES.has(name) && !POP_NAMES.has(name)) return false
+  const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
+  const place = movePlace(r)
+  // `pushd -n`, `popd +1`: an option or a stack place the reading does not follow leaves it unknown.
+  const isStack = PUSH_NAMES.has(name) || POP_NAMES.has(name)
+  if (isStack && args.some(a => /^[-+]/.test(a.text))) place.folder = { isUnknown: true }
+  else {
+    // `popd` returns to the folder its `pushd` left; with none left the folder is unknown.
+    if (PUSH_NAMES.has(name)) place.folders.push(place.folder)
+    const popped = POP_NAMES.has(name) ? (place.folders.pop() ?? { isUnknown: true }) : undefined
+    place.folder = popped ?? moveFolder(place.folder, target)
+  }
+  return true
+}

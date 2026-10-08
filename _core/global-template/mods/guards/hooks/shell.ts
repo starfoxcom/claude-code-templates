@@ -77,8 +77,9 @@ const PS_IN_PLACE = /^(if|elseif|else|foreach|for|while|do|until|switch|try|catc
 const FN_PARENS = /^[(][ \t]*[)]/
 
 // A block the reader is inside: a Bash subshell, a branch (`cond`), a `case` arm, a `{ }` group or a body
-// that runs later (`fn`). `at`: where its scopes end; `chain`, `list`: see `Reader.levels`.
-type Level = { kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'; at: number; chain?: number; list: number }
+// that runs later (`fn`). `at`: where its scopes end; `chain`, `list`: see `Reader.levels`; `isOr`: the
+// list's last operator was `||`.
+type Level = { kind: 'sub' | 'cond' | 'arm' | 'group' | 'fn'; at: number; chain?: number; isOr?: boolean; list: number }
 
 const joined = (outer: string | undefined, inner: string) => [outer, inner].filter(Boolean).join('/')
 
@@ -285,12 +286,14 @@ class Reader {
     }
   }
 
-  // After `&&` the next statement runs only when the one before it succeeded: in a branch inside that one's.
-  // After `||` only when it failed: in a branch beside them.
+  // Bash reads a list left to right (`a || b && c` is `(a || b) && c`). After `&&` the next statement runs
+  // only when the list so far succeeded: in a branch inside the last one's, unless an `||` came before it,
+  // when that branch may not have run. After `||` it runs only when the list failed: in a branch beside them.
   private chain(op: string) {
     const lv = this.level
     lv.chain ??= this.scopes.length
-    if (op === '|') this.scopes.length = lv.chain
+    if (op === '|' || lv.isOr) this.scopes.length = lv.chain
+    lv.isOr = op === '|'
     this.scopes.push(`c${++this.opened}`)
     this.rescope()
   }
@@ -308,6 +311,7 @@ class Reader {
     }
     this.scopes.length = start
     lv.chain = undefined
+    lv.isOr = undefined
     lv.list = this.out.length
     this.rescope()
   }
