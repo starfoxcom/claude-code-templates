@@ -30,3 +30,8 @@ export type Plan = {
   /** Every `gh` statement in the command: the PR-body contract judges only a command with one. */
   ghCalls: number
 }
+
+export function emptyPlan(): Plan {
+  const lists = { texts: [], files: [], written: [], branches: [], targets: [], unread: [], notes: [], prs: [] }
+  return { ...lists, isWrite: false, ghCalls: 0 }
+}

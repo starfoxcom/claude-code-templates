@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { inspect } from '../hooks/inspect'
+import { readCommand } from '../hooks/inspect'
 import { checkAddedLines, checkBranch, checkText } from '../hooks/policy'
 import { parse } from '../hooks/shell'
 
@@ -13,7 +13,7 @@ const NAME = 'Cla' + 'ude'
 
 // The first problem in a command's message texts and new branch names, as the mod reads them.
 function verdict(command: string, mayName: boolean, powershell = false): string | undefined {
-  const plan = inspect(command, powershell)
+  const plan = readCommand(command, powershell)
   if (plan.block) return 'run-watch'
   for (const t of plan.texts) {
     const v = checkText(t.text, mayName || Boolean(t.creditOnly))
@@ -114,7 +114,7 @@ test('flags and expansions outside message text never trip it', () => {
 })
 
 test('body files are found in every spelling, and text built at run time is named as unread', () => {
-  const files = (c: string) => inspect(c, false).files.map(f => f.path)
+  const files = (c: string) => readCommand(c, false).files.map(f => f.path)
   expect(files('gh pr create --title t --body-file "C:/tmp/b.md"')).toEqual(['C:/tmp/b.md'])
   expect(files('gh pr create --title t --body-file=/tmp/b.md')).toEqual(['/tmp/b.md'])
   expect(files('git commit -F"/tmp/m.txt"')).toEqual(['/tmp/m.txt'])
@@ -123,7 +123,7 @@ test('body files are found in every spelling, and text built at run time is name
   expect(files('git commit -m "$(cat /tmp/m.txt)"')).toEqual(['/tmp/m.txt'])
   expect(files('gh api repos/o/r/issues/5/comments -F body=@-')).toEqual([])
   expect(files("gh issue create --template 'Bug report'")).toEqual([])
-  expect(inspect('git commit -m "$MSG"', false).unread).toEqual(['the commit message'])
+  expect(readCommand('git commit -m "$MSG"', false).unread).toEqual(['the commit message'])
   // A body fed on stdin that the shell fills in at run time.
   for (const fed of [
     'git commit -F - <<< "$MSG"',
@@ -131,10 +131,10 @@ test('body files are found in every spelling, and text built at run time is name
     'git commit -F - <<EOF\n$MSG\nEOF',
     'gh pr create --title t --body-file - <<EOF\n## What\n$(cat notes.md)\nEOF',
   ]) {
-    expect(inspect(fed, false).unread.length).toBe(1)
+    expect(readCommand(fed, false).unread.length).toBe(1)
   }
   // A quoted delimiter keeps the body literal: it is read, nothing is unread.
-  expect(inspect("git commit -F - <<'EOF'\nfix: costs $5\nEOF", false).unread).toEqual([])
+  expect(readCommand("git commit -F - <<'EOF'\nfix: costs $5\nEOF", false).unread).toEqual([])
   // The same, with the value built at run time attached to its flag.
   for (const attached of [
     'git commit -m"$MSG"',
@@ -144,22 +144,22 @@ test('body files are found in every spelling, and text built at run time is name
     'git commit -am"$MSG"',
     'git commit -sm"$MSG"',
   ]) {
-    const plan = inspect(attached, false)
+    const plan = readCommand(attached, false)
     // Unquoted, the value also splits into words that may be options: the call itself is unread too.
     expect([attached, plan.unread.length]).toEqual([attached, attached.includes('"') ? 1 : 2])
     expect(plan.targets[0]?.diff).toBe(attached.includes('-am') ? 'all' : 'cached')
   }
-  expect(inspect('gh pr comment 5 -b"$BODY"', false).unread.length).toBe(1)
+  expect(readCommand('gh pr comment 5 -b"$BODY"', false).unread.length).toBe(1)
   // A whole gh api field built at run time.
   // Unquoted, it also splits into words that may be options: the call itself is unread too.
   for (const field of ['-f "$KV"', '--field "$KV"', '-f$KV']) {
-    const unread = inspect(`gh api repos/o/r/issues/1/comments ${field}`, false).unread
+    const unread = readCommand(`gh api repos/o/r/issues/1/comments ${field}`, false).unread
     expect([field, unread.length]).toEqual([field, field.includes('"') ? 1 : 2])
   }
   // A positional built at run time is not taken for a flag.
-  expect(inspect('git commit -m "fix: x" -- -$FILES', false).unread).toEqual([])
-  expect(inspect(`git commit -m "$(cat <<'EOF'\nfix: x\nEOF\n)"`, false).unread).toEqual([])
-  const written = inspect("cat > /tmp/b.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md", false)
+  expect(readCommand('git commit -m "fix: x" -- -$FILES', false).unread).toEqual([])
+  expect(readCommand(`git commit -m "$(cat <<'EOF'\nfix: x\nEOF\n)"`, false).unread).toEqual([])
+  const written = readCommand("cat > /tmp/b.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md", false)
   expect(written.written.map(w => w.path)).toEqual(['/tmp/b.md'])
 })
 
@@ -174,9 +174,9 @@ test('a quoted value that starts with < or > is text, not a redirect', () => {
     expect(verdict(command, true)).toBe('credit')
   }
   // Unquoted redirects keep working, a quoted target included.
-  const written = inspect(`cat >"/tmp/b.md" <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md`, false)
+  const written = readCommand(`cat >"/tmp/b.md" <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md`, false)
   expect(written.written.map(w => w.path)).toEqual(['/tmp/b.md'])
-  expect(inspect('git commit -F - < "/tmp/m.txt"', false).files.map(f => f.path)).toEqual(['/tmp/m.txt'])
+  expect(readCommand('git commit -F - < "/tmp/m.txt"', false).files.map(f => f.path)).toEqual(['/tmp/m.txt'])
 })
 
 test('the whole command text of a write is checked for credit, whatever spelling the reading misses', () => {
@@ -194,7 +194,7 @@ test('the whole command text of a write is checked for credit, whatever spelling
     expect(verdict(command, true)).toBe('credit')
   }
   // A read-only command is not checked, and paths in a write never read as credit.
-  expect(inspect(`echo '${AI_TRAILER}'`, false).texts).toEqual([])
+  expect(readCommand(`echo '${AI_TRAILER}'`, false).texts).toEqual([])
   expect(
     verdict('git commit -F C:/Users/me/AppData/Local/Temp/session_01V8SAUxUZBbVPekZUHDL9FZ/m.txt', true),
   ).toBeUndefined()
@@ -206,7 +206,7 @@ test('the whole command text of a write is checked for credit, whatever spelling
 
 test('an attached-only flag value never swallows the next word', () => {
   const texts = (c: string) =>
-    inspect(c, false)
+    readCommand(c, false)
       .texts.filter(t => !t.creditOnly)
       .map(t => t.text)
   expect(texts("git commit -Sabc -m 'fix: x'")).toEqual(['fix: x'])
@@ -216,7 +216,7 @@ test('an attached-only flag value never swallows the next word', () => {
 })
 
 test('a stdin body through curl -d @- or a here-doc the line goes on past is read', () => {
-  const plan = inspect(
+  const plan = readCommand(
     `curl -X POST https://api.github.com/repos/o/r/issues/1/comments -d @- <<'EOF'\n{"body":"ok"}\nEOF`,
     false,
   )
@@ -227,7 +227,7 @@ test('a stdin body through curl -d @- or a here-doc the line goes on past is rea
     `gh pr create --title t --body-file - <<'EOF' | tee log\nbody\nEOF`,
     `gh pr create --title t --body-file - <<'EOF' ; echo done\nbody\nEOF`,
   ]) {
-    const p = inspect(command, false)
+    const p = readCommand(command, false)
     expect(p.unread).toEqual([])
     expect(p.texts.some(t => !t.creditOnly && (t.text === 'fix: x' || t.text === 'body'))).toBe(true)
   }
@@ -238,9 +238,9 @@ test('cmd with the command as one quoted word, and a message flag left without i
     expect(verdict(command, true)).toBe('credit')
   }
   expect(verdict(`cmd /c "git commit -m '${AI_TRAILER}'"`, true, true)).toBe('credit')
-  expect(inspect(`git commit -F <(printf 'fix: x')`, false).unread).toEqual(['the commit message'])
-  expect(inspect(`gh pr create --title t --body-file >(cat)`, false).unread).toEqual(['the PR text'])
-  expect(inspect('git commit -m', false).unread).toEqual(['the commit message'])
+  expect(readCommand(`git commit -F <(printf 'fix: x')`, false).unread).toEqual(['the commit message'])
+  expect(readCommand(`gh pr create --title t --body-file >(cat)`, false).unread).toEqual(['the PR text'])
+  expect(readCommand('git commit -m', false).unread).toEqual(['the commit message'])
 })
 
 test('a commit checks the lines it adds for credit lines, not quoted rules', () => {
@@ -249,14 +249,14 @@ test('a commit checks the lines it adds for credit lines, not quoted rules', () 
   expect(checkAddedLines(diff(AI_TRAILER))).toBeDefined()
   expect(checkAddedLines(diff(`- \`${AI_TRAILER}\` (or any AI email)`))).toBeUndefined()
   expect(checkAddedLines(diff(`const AI_TRAILER = 'Co-' + 'Authored-By: x'`))).toBeUndefined()
-  expect(inspect("git commit -am 'x'", false).targets[0]?.diff).toBe('all')
-  expect(inspect("git commit -m 'x'", false).targets[0]?.diff).toBe('cached')
+  expect(readCommand("git commit -am 'x'", false).targets[0]?.diff).toBe('all')
+  expect(readCommand("git commit -m 'x'", false).targets[0]?.diff).toBe('cached')
   // An `a` inside a signing key or an untracked-files mode is that flag's value, not `-a`.
   for (const flag of ['-Sabc', '-S0xA1a', '-unormal', '-uall']) {
-    expect(inspect(`git commit ${flag} -m 'x'`, false).targets[0]?.diff).toBe('cached')
+    expect(readCommand(`git commit ${flag} -m 'x'`, false).targets[0]?.diff).toBe('cached')
   }
-  expect(inspect("git commit -sam 'x'", false).targets[0]?.diff).toBe('all')
-  expect(inspect("git commit --all -m 'x'", false).targets[0]?.diff).toBe('all')
+  expect(readCommand("git commit -sam 'x'", false).targets[0]?.diff).toBe('all')
+  expect(readCommand("git commit --all -m 'x'", false).targets[0]?.diff).toBe('all')
 })
 
 test('the shell reading keeps quoted separators and here-docs in their statement', () => {
@@ -271,7 +271,7 @@ test('the shell reading keeps quoted separators and here-docs in their statement
 
 test('Bash keeps backslashes inside double quotes unless they escape $ ` " \\ or a newline', () => {
   // Found in the shadow logs: Windows body-file paths in double quotes lost every backslash.
-  const files = (c: string) => inspect(c, false).files.map(f => f.path)
+  const files = (c: string) => readCommand(c, false).files.map(f => f.path)
   expect(files('gh pr create --title t --body-file "C:\\a\\b.md"')).toEqual(['C:\\a\\b.md'])
   expect(files('gh api graphql -F body=@"C:\\Temp\\s.md"')).toEqual(['C:\\Temp\\s.md'])
   const word = (c: string) => parse(c, false)[0]?.words[1]?.text
@@ -282,7 +282,7 @@ test('Bash keeps backslashes inside double quotes unless they escape $ ` " \\ or
 
 test('review, merge and close flags that are switches never swallow the body', () => {
   const body = `fix: x\n\n${AI_TRAILER}`
-  const texts = (c: string) => inspect(c, false).texts.map(t => t.text)
+  const texts = (c: string) => readCommand(c, false).texts.map(t => t.text)
   for (const command of [
     `gh pr review 5 -a -b '${body}'`,
     `gh pr review 5 -r -b '${body}'`,
@@ -332,8 +332,8 @@ test('git and gh behind a shell keyword, a wrapper, a subshell or another shell 
   ]) {
     expect(verdict(command, true, true)).toBe('credit')
   }
-  expect(inspect('command -v git', false).isWrite).toBe(false)
-  expect(inspect('if git diff --quiet; then echo clean; fi', false).isWrite).toBe(false)
+  expect(readCommand('command -v git', false).isWrite).toBe(false)
+  expect(readCommand('if git diff --quiet; then echo clean; fi', false).isWrite).toBe(false)
 })
 
 test('a global repo flag before the gh subcommand is skipped with its value', () => {
@@ -345,8 +345,8 @@ test('a global repo flag before the gh subcommand is skipped with its value', ()
   ]) {
     expect(verdict(command, true)).toBe('credit')
   }
-  expect(inspect('gh -R o/r pr comment 5 -b x', false).targets[0]?.repo).toBe('r')
-  expect(inspect('gh -R o/r pr view 5', false).isWrite).toBe(false)
+  expect(readCommand('gh -R o/r pr comment 5 -b x', false).targets[0]?.repo).toBe('r')
+  expect(readCommand('gh -R o/r pr view 5', false).isWrite).toBe(false)
 })
 
 test('gh api reads its method in every spelling and a here-doc fed to --input', () => {
@@ -359,8 +359,8 @@ test('gh api reads its method in every spelling and a here-doc fed to --input', 
   ]) {
     expect(verdict(command, true)).toBe('credit')
   }
-  expect(inspect('gh api -X GET search/issues -f q=is:open', false).isWrite).toBe(false)
-  expect(inspect('gh api repos/o/r/pulls/5', false).isWrite).toBe(false)
+  expect(readCommand('gh api -X GET search/issues -f q=is:open', false).isWrite).toBe(false)
+  expect(readCommand('gh api repos/o/r/pulls/5', false).isWrite).toBe(false)
 })
 
 test('text piped in, set in a variable, or written to a file earlier in the command is read', () => {
@@ -386,7 +386,7 @@ test('text piped in, set in a variable, or written to a file earlier in the comm
   ]) {
     expect(verdict(command, true, true)).toBe('credit')
   }
-  const plan = (c: string, ps = false) => inspect(c, ps)
+  const plan = (c: string, ps = false) => readCommand(c, ps)
   expect(plan('git commit -F - < /tmp/m.txt').files.map(f => f.path)).toEqual(['/tmp/m.txt'])
   expect(plan('cat /tmp/b.md | gh pr create --title t --body-file -').files.map(f => f.path)).toEqual(['/tmp/b.md'])
   expect(plan('F=/tmp/b.md; gh pr create --title t --body-file "$F"').files.map(f => f.path)).toEqual(['/tmp/b.md'])
@@ -408,7 +408,7 @@ test('text piped in, set in a variable, or written to a file earlier in the comm
 // Where each write lands, for the repo rules and the diff scan: the folder it runs in, never the first one
 // the command moved to; unknown when git is pointed at another repo or the folder is built at run time.
 test('each write lands in the folder it runs in', () => {
-  const at = (command: string, ps = false) => inspect(command, ps).targets.map(t => t.folder)
+  const at = (command: string, ps = false) => readCommand(command, ps).targets.map(t => t.folder)
   const home = [{ isUnknown: false }]
   expect(at("pushd ../lib && npm run build && popd && git commit -am 'fix: x'")).toEqual(home)
   expect(at("git -C ../other fetch && git commit -m 'fix: x'")).toEqual(home)
@@ -433,5 +433,5 @@ test('each write lands in the folder it runs in', () => {
   ]
   for (const command of elsewhere) expect([command, at(command).at(-1)]).toEqual([command, { isUnknown: true }])
   expect(at("$env:GIT_DIR = 'x'; git commit -m x", true)).toEqual([{ isUnknown: true }])
-  expect(inspect('git commit -am x; git commit -m y', false).targets.map(t => t.diff)).toEqual(['all', 'cached'])
+  expect(readCommand('git commit -am x; git commit -m y', false).targets.map(t => t.diff)).toEqual(['all', 'cached'])
 })
