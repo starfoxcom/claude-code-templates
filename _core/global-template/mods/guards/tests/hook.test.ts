@@ -569,6 +569,24 @@ const SCRIPT_THEN_API = [
   'gh api graphql --input su.json',
 ].join('\n')
 
+// A written file is found where its writer ran, whatever spelling and folder it is named from later.
+test('a body file written in another folder is read from its writer, by where it lands', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on)
+  const written = (body: string, named: string) =>
+    `cd sub && cat > b.md <<'EOF'\n## What\n${body}\nEOF\ncd .. && gh pr create -t t -F ${named}`
+  const clean = await bash($, written('- add it', 'sub/b.md'))
+  expect((clean as { deny?: string }).deny).toBeUndefined()
+  expect(seen.files.get(LOG)).toBeUndefined()
+  // Read from the writer with every check, not only the credit check on the command text.
+  const named = await bash($, written(`- made with ${'Cla' + 'ude'}`, './sub/../sub/b.md'))
+  expect(String((named as { deny?: string }).deny)).toContain('file ./sub/../sub/b.md')
+  // `b.md` from the session folder is another file: missing, so refused, never noted as written.
+  const other = await bash($, written('- add it', 'b.md'))
+  expect(String((other as { deny?: string }).deny)).toContain('could not read the body file')
+})
+
 test('a body file a script in the same command writes is noted, never missing', {
   options: { mode: 'enforce' },
 }, async ($, on) => {

@@ -1,5 +1,6 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
+import { foldDots } from './folders'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
 import { inspect } from './inspect'
 import type { Folder, Plan, Target } from './inspect'
@@ -102,7 +103,9 @@ function textReason(text: string, where: string, rules: TextRules, creditOnly = 
 // The body files the command reads: the first reason to block, or undefined. Files that cannot be read
 // for a known cause are named unread instead.
 async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRules, isBash: boolean) {
-  const written = new Set(plan.written.map(p => osPath(p, session, isBash).toLowerCase()))
+  // Each written file where its writer ran, `.` and `..` folded in on both sides.
+  const placed = (path: string, folder: Folder) => foldDots(fileAt(path, folder, session, isBash)).toLowerCase()
+  const written = new Set(plan.written.filter(w => !isUnplaced(w.path, w.folder)).map(w => placed(w.path, w.folder)))
   for (const { where, path, written: fromCommand, folder, scripted } of plan.files) {
     const full = fileAt(path, folder, session, isBash)
     if (isUnplaced(path, folder)) {
@@ -119,7 +122,7 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
       if (fromCommand) continue
       // Likewise a file a script whose code is in the command (`python - <<EOF`, `node -e`) may write: that
       // code is under the credit check.
-      if (written.has(full.toLowerCase()) || scripted) {
+      if (written.has(foldDots(full).toLowerCase()) || scripted) {
         plan.notes.push(`${where} (written by this command, ${scripted ? 'by its script' : 'under another spelling'})`)
         continue
       }

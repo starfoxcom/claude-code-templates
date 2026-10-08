@@ -25,7 +25,7 @@ import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
-import { folderNow, isSameFolder, moveFolder, movePlace, placeHere, repoMoves, targetOf } from './folders'
+import { folderNow, isSameFolder, moveFolder, movePlace, placeHere, repoMoves, targetOf, writerOf } from './folders'
 import type { Folder, Here, Place, Target } from './folders'
 import {
   branchesOf,
@@ -49,13 +49,8 @@ import {
   COMMIT,
   CURL,
   GH_API,
-  GH_BODY,
-  GH_CLOSE,
-  GH_DESC,
-  GH_MERGE,
-  GH_RELEASE,
-  GH_REVIEW,
   GH_WRITES,
+  ghSpec,
   gitLong,
   MESSAGE,
   NOTES,
@@ -76,7 +71,7 @@ export type Plan = {
    * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading. */
   files: { where: string; path: string; written?: boolean; folder?: Folder; scripted?: boolean }[]
   /** Files the command itself writes (`> file`). */
-  written: string[]
+  written: { path: string; folder: Folder }[]
   branches: string[]
   /** Each write statement's folder, repo and commit lines, for the repo rules and the diff scan. */
   targets: Target[]
@@ -232,8 +227,10 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const st = withProgram(withWords(typed, r), r)
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
   const writes = st.writes.map(path => knownPath(path, r) ?? path)
-  plan.written.push(...writes)
   const at = placeHere(r).folder
+  plan.written.push(...writes.map(path => ({ path, folder: at })))
+  // Kept in the order written, so a file's last writer is the last one found for it.
+  for (const path of writes) r.writers.delete(norm(path))
   for (const path of writes) r.writers.set(norm(path), { st, ps: r.ps, scope, vars: varsIn(path, r), folder: at })
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
@@ -422,8 +419,8 @@ function varsIn(path: string, r: Reading): (Var | undefined)[] {
 // A body file named here, matched to the statement that wrote it so far, if any.
 function pushFile(r: Reading, where: string, path: string) {
   const entry = { where, path }
-  const writer = r.writers.get(norm(path))
-  if (writer && isSameFolder(path, writer.folder, r)) r.matched.set(entry, writer)
+  const writer = writerOf(path, r.writers, r)
+  if (writer) r.matched.set(entry, writer)
   r.plan.files.push(entry)
 }
 
@@ -558,14 +555,6 @@ function ghApi(st: Statement, args: Word[], r: Reading): string | undefined {
   const hasFields = plan.files.length + plan.texts.length + r.stdin > before
   if (r.method === 'GET' || (!hasFields && !/^(POST|PATCH|PUT)$/.test(r.method ?? ''))) return undefined
   return write(r, st, 'the GitHub API call')
-}
-
-function ghSpec(group: string, action: string): Spec {
-  if (group === 'release') return GH_RELEASE
-  if (group === 'gist' || group === 'repo') return GH_DESC
-  if (group === 'pr' && action === 'review') return GH_REVIEW
-  if (group === 'pr' && action === 'merge') return GH_MERGE
-  return action === 'close' || action === 'reopen' ? GH_CLOSE : GH_BODY
 }
 
 function gh(st: Statement, args: Word[], r: Reading): string | undefined {

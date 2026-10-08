@@ -160,7 +160,7 @@ test('body files are found in every spelling, and text built at run time is name
   expect(inspect('git commit -m "fix: x" -- -$FILES', false).unread).toEqual([])
   expect(inspect(`git commit -m "$(cat <<'EOF'\nfix: x\nEOF\n)"`, false).unread).toEqual([])
   const written = inspect("cat > /tmp/b.md <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md", false)
-  expect(written.written).toEqual(['/tmp/b.md'])
+  expect(written.written.map(w => w.path)).toEqual(['/tmp/b.md'])
 })
 
 test('a quoted value that starts with < or > is text, not a redirect', () => {
@@ -175,7 +175,7 @@ test('a quoted value that starts with < or > is text, not a redirect', () => {
   }
   // Unquoted redirects keep working, a quoted target included.
   const written = inspect(`cat >"/tmp/b.md" <<'EOF'\nbody\nEOF\ngh pr create --title t --body-file /tmp/b.md`, false)
-  expect(written.written).toEqual(['/tmp/b.md'])
+  expect(written.written.map(w => w.path)).toEqual(['/tmp/b.md'])
   expect(inspect('git commit -F - < "/tmp/m.txt"', false).files.map(f => f.path)).toEqual(['/tmp/m.txt'])
 })
 
