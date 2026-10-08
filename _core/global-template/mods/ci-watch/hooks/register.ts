@@ -17,6 +17,8 @@ const SETTLE_POLLS = 2
 // asks GitHub about its PR every RECHECK_MS instead of every poll.
 const OWN_HEAD_MS = 60 * 60_000
 const RECHECK_MS = 10 * 60_000
+/** Whether a head that shows now was pushed by someone else: the session's last push is past the hour. */
+const isForeign = (watch: Watch, now: number) => now - (watch.pushedAt ?? watch.startedAt) >= OWN_HEAD_MS
 const HINT = '[help | settings | set | stop | phone]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
@@ -58,11 +60,15 @@ function reconcile(current: Watch[], polled: Watch[]): Watch[] {
     const incidentPending = isNoteMemorys ? w.incidentPending : p.incidentPending
     // A note made meanwhile (another poll of this load noted and sent it) is kept, or it would be made again.
     const incident = isNoteMemorys ? (w.incident ?? p.incident) : p.incident
+    // A push made meanwhile marked the watch as the session's own: the poll's copy predates it.
+    const isPushedSince = (w.pushedAt ?? 0) > (p.pushedAt ?? 0)
     const isKept =
       Boolean(p.wakePending) === Boolean(w.wakePending) &&
       Boolean(p.incidentPending) === Boolean(incidentPending) &&
-      p.incident === incident
-    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident }
+      p.incident === incident &&
+      !isPushedSince
+    const pushed = isPushedSince ? { pushedAt: w.pushedAt, isSilent: undefined } : {}
+    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident, ...pushed }
   })
 }
 
@@ -320,8 +326,9 @@ async function startWatch(
   const startedAt = await $.clock.now()
   if (same && !isAsked) {
     // GitHub may not name the pushed commit yet: the head that shows within the hour is this session's.
-    const pushed = { ...same, pushedAt: startedAt }
+    const pushed = { ...same, pushedAt: startedAt, isSilent: undefined }
     live.watches = live.watches.map(w => (w === same ? pushed : w))
+    live.generation++
     await save($)
     return pushed
   }
@@ -339,7 +346,7 @@ async function startWatch(
 // watch, and its new commit is caught here. Past OWN_HEAD_MS the new head is someone else's push: the
 // restarted watch keeps the row current and wakes no session.
 async function recheckSettled($: EngineInterface, watch: Watch, now: number): Promise<Watch | undefined> {
-  const isOwn = now - (watch.pushedAt ?? watch.startedAt) < OWN_HEAD_MS
+  const isOwn = !isForeign(watch, now)
   const key = watch.id ?? `${watch.repo}#${watch.number}`
   if (!isOwn && now - (live.rechecked.get(key) ?? -Infinity) < RECHECK_MS) return watch
   if (!isOwn) live.rechecked.set(key, now)
@@ -430,6 +437,7 @@ async function poll($: EngineInterface): Promise<void> {
             quietSince: undefined,
             incident: undefined,
             incidentPending: undefined,
+            isSilent: isForeign(current, now) || undefined,
           }
         : current
     let checks: Record<string, string> | undefined
