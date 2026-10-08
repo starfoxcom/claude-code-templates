@@ -238,7 +238,10 @@ function setPair(r: VarState, name: string, value: Word, isAppend: boolean, expo
 function assignPs(w: Word[], r: VarState): boolean {
   const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
   if (spaced && w[1]?.text === '=') {
-    setVar(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined)
+    // A bare word there is a command that runs (`$m = Get-Date`), not text; a quoted one or a number is.
+    const value = w.length === 3 ? w[2] : undefined
+    const isCommand = value && !value.dynamic && !value.literalStart && /^[A-Za-z][\w.-]*$/.test(value.text)
+    setVar(r, spaced[1] ?? '', isCommand ? undefined : value)
     return true
   }
   const isCompound = spaced !== null && /^([-+*/%]|\?\?)=$/.test(w[1]?.text ?? '')
