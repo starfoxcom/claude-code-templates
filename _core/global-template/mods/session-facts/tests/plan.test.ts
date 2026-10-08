@@ -1,7 +1,7 @@
 import type { On, SessionRateLimit } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { parseSharedPlan, planPart, SHARED_PLAN_MAX_AGE_MS, sharedPlanText } from '../hooks/plan'
+import { parseSharedPlan, planPart, SHARED_PLAN_MAX_AGE_MS, sharedPlanText, wakePart } from '../hooks/plan'
 
 // 2026-10-02 16:00:00 UTC, which is 09:00 at a UTC-7 host.
 const NOW = Date.UTC(2026, 9, 2, 16, 0, 0)
@@ -124,4 +124,29 @@ test("a subagent's tool results never carry the line", async ($, on) => {
   await $.prompt.submit({ text: 'hello' } as never)
   usage.isReplied = true
   expect((await $.tool.call({ ...(read as object), agentId: 'a1' } as never)).context).toBeUndefined()
+})
+
+// The phone draws no row: the line the State line copies is where the person reads a scheduled wake.
+test("the line names the pause and this session's own arm while they are ahead", () => {
+  const HOUR = 60 * 60_000
+  // NOW is Fri 09:00 at the UTC-7 host.
+  expect(wakePart(NOW, 420)).toBe('')
+  expect(wakePart(NOW, 420, NOW + HOUR)).toBe(' | paused until Fri 10:00')
+  expect(wakePart(NOW, 420, undefined, NOW + 2 * HOUR)).toBe(' | armed: resumes Fri 11:00')
+  expect(wakePart(NOW, 420, NOW + HOUR, NOW + 2 * HOUR)).toBe(' | paused until Fri 10:00 | armed: resumes Fri 11:00')
+  // An arm at the pause's own time is that wake, named once; a wake that passed is no longer ahead.
+  expect(wakePart(NOW, 420, NOW + HOUR, NOW + HOUR)).toBe(' | paused until Fri 10:00')
+  expect(wakePart(NOW, 420, NOW, NOW - 1)).toBe('')
+})
+
+test("the prompt's line carries usage-guard's pause and this session's arm", async ($, on) => {
+  const { files, seen } = host(on)
+  const GUARD = 'C:/Users/me/.claude/mods-data/usage-guard'
+  files.set(`${GUARD}/pause.json`, JSON.stringify({ status: 'active', wakeAt: NOW + 60 * 60_000 }))
+  files.set(`${GUARD}/arms/sess-b.json`, JSON.stringify({ kind: 'clock', resetsAt: '', wakeAt: NOW + 2 * 60 * 60_000 }))
+  files.set(`${GUARD}/arms/another.json`, JSON.stringify({ kind: 'clock', resetsAt: '', wakeAt: NOW + 30 * 60_000 }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'hello' } as never)
+  expect(seen[0]).toContain('| paused until Fri 10:00 | armed: resumes Fri 11:00 |')
+  expect(seen[0]).not.toContain('09:30')
 })
