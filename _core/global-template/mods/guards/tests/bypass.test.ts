@@ -527,3 +527,67 @@ test('a tag or merge message that reads like a flag is a message', () => {
   expect(inspect("git merge -m 'x' --no-verify feature", false).block).toContain('skipping git hooks')
   expect(inspect("git tag -a v1 -m x --trailer 'R: a'", false).block).toContain('--trailer')
 })
+
+// A value the shell builds at run time, wherever it stands: an array, an append, an indirect or special
+// expansion, a name set by a command the reading does not follow, a word that may turn into a flag.
+const RUN_TIME_UNREAD: [string, string][] = [
+  ['MSG=("$OUT"); git commit -m "$MSG"', 'the commit message'],
+  ['ARGS=(--no-verify); git commit -m x "${ARGS[@]}"', 'the commit message'],
+  ["M='fix: x'; M+=\" $OUT\"; git commit -m \"$M\"", 'the commit message'],
+  ['X=OUT; git commit -m "${!X}"', 'the commit message'],
+  ['git commit -m "${X:-$OUT}"', 'the commit message'],
+  ['declare -n R=OUT; git commit -m "$R"', 'the commit message'],
+  ["M=a; printf -v M '%s' \"$OUT\"; git commit -m \"$M\"", 'the commit message'],
+  ['M=a; read -r M < f; git commit -m "$M"', 'the commit message'],
+  ['for M in "$OUT"; do git commit -m "$M"; done', 'the commit message'],
+  ['M=a; unset M; git commit -m "$M"', 'the commit message'],
+  ['(case $x\nin a) M=b;; esac); git commit -m "$M"', 'the commit message'],
+  ['git commit -m x $NV', 'the commit message'],
+  ['git commit -m x "$@"', 'the commit message'],
+  ['git $C -m x', 'a git subcommand built at run time'],
+  ['gh pr $A -t t -b x', 'a gh subcommand built at run time'],
+  ['git -c "$K" commit -m x', 'a git setting built at run time'],
+  ['A=create; gh pr $A -t t -b "$OUT"', 'the PR text'],
+  ['git checkout -b "$B"', 'the new branch name'],
+]
+
+for (const [command, what] of RUN_TIME_UNREAD) {
+  test(`unread: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, false).unread).toContain(what)
+  })
+}
+
+// Set in the command, the value fills in every word, so the route it spells is refused.
+const FILLED_REFUSED: [string, string][] = [
+  ["NV=--no-verify; git commit -m 'fix: x' $NV", 'skipping git hooks'],
+  ["C=commit; git $C -m 'fix: x' --no-verify", 'skipping git hooks'],
+  ['K=core.hooksPath=/x; git -c "$K" commit -m x', 'skipping git hooks'],
+  ['V=0; LEFTHOOK=$V git commit -m x', 'disabling lefthook'],
+  ['LEFTHOOK=$V git commit -m x', 'disabling lefthook'],
+  ['LEFTHOOK+=0 git commit -m x', 'disabling lefthook'],
+  ['case $x in $(git commit --no-verify -m x)) ;; esac', 'skipping git hooks'],
+]
+
+for (const [command, reason] of FILLED_REFUSED) {
+  test(`refused: ${JSON.stringify(command)}`, () => {
+    expect(inspect(command, false).block).toContain(reason)
+  })
+}
+
+test('ordinary words built at run time that cannot turn into a flag pass', () => {
+  const read = (c: string, ps = false) => inspect(c, ps)
+  const messages = (c: string) => read(c).texts.filter(t => !t.creditOnly && t.where === 'the commit message')
+  expect(messages('M=a; M+=b; git commit -m "$M"').map(t => t.text)).toEqual(['ab'])
+  expect(messages("M='fix: x'; echo \"$M\"; git commit -m \"$M\"").map(t => t.text)).toEqual(['fix: x'])
+  for (const command of [
+    'F=src/a.ts; git commit -m x "$F"',
+    'git commit -m x -- "$F"',
+    'git commit -m x "src/$F"',
+    'gh api "repos/$R/pulls"',
+    "B=feature/x; git checkout -b \"$B\"",
+  ]) {
+    expect([command, read(command).unread, read(command).block]).toEqual([command, [], undefined])
+  }
+  expect(read('$env:LEFTHOOK=1; git commit -m x', true).block).toBeUndefined()
+  expect(read('$env:LEFTHOOK = $v; git commit -m x', true).block).toContain('disabling lefthook')
+})

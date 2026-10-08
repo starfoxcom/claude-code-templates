@@ -3,7 +3,7 @@
 // and the ones it opens, and gone once it closes. A child shell (`bash -c`) sees only exported values.
 // Pure.
 
-import type { Word } from './shell'
+import type { Statement, Word } from './shell'
 
 /** A variable's value: `literal` when it is known, `scope` where it was set, `exported` when a child shell
  * sees it too, `file` the file whose text it holds (`$(cat b.md)`). */
@@ -107,9 +107,13 @@ export type Expanded = { text: string; unresolved: boolean; files: string[]; isF
 
 /** A value with its variables replaced by what the command set them to. */
 export function expand(text: string, r: VarState): Expanded {
-  let isOther = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`'))
+  // Only `$NAME` and a plain `${NAME}` are filled in: any other `${...}` (`${!X}`, `${X:-y}`, `${X[@]}`)
+  // and Bash's special parameters (`$@`, `$1`) are built at run time.
+  const special = r.ps ? /\$\{(?![A-Za-z_]\w*\})/ : /\$\{(?![A-Za-z_]\w*\})|\$[@*#?$!0-9-]/
+  let isOther = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`')) || special.test(text)
   const files: string[] = []
-  const out = text.replace(SUBSTITUTION, ' ').replace(/\$\{?([A-Za-z_]\w*)\}?/g, (_, name: string) => {
+  const out = text.replace(SUBSTITUTION, ' ').replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (_, b, n) => {
+    const name = (b ?? n) as string
     const v = lookup(r, name)
     if (v?.literal) return v.text
     if (v?.file) files.push(v.file)
@@ -135,4 +139,116 @@ export function expandBody(body: string, r: VarState): { text: string; unresolve
     return part
   })
   return { text, unresolved }
+}
+
+/** The statement with each word the shell fills in from variables the command set read with its value:
+ * a word of known parts becomes literal, split at blanks where the shell splits it (`$F`, not `"$F"`).
+ * A word with any other part, or one that would split into a glob, stays as typed. */
+export function withWords(st: Statement, r: VarState): Statement {
+  let changed = false
+  const words = st.words.flatMap((w, i) => {
+    // A PowerShell statement starting with a variable assigns to it or calls a member, unless `&` runs it.
+    if (!w.dynamic || (r.ps && i === 0 && !st.isCall)) return [w]
+    const e = expand(w.text, r)
+    const splits = !r.ps && w.splits === true
+    if (e.unresolved || (splits && /[*?[]/.test(e.text))) return [w]
+    changed = true
+    if (!splits) return [{ ...w, text: e.text, dynamic: false }]
+    return e.text.split(/[ \t\n]+/).filter(Boolean).map(text => ({ text, dynamic: false, bodies: [] }))
+  })
+  return changed ? { ...st, words } : st
+}
+
+// Programs that print their words and set no variable.
+const PRINTS = /^(git|gh|echo|cat|type|get-content|gc|write-output|write-host)$/
+
+/** A statement that may set a variable in a way the reading does not follow (`read M`, `for M in`,
+ * `printf -v M`, `unset M`, `mapfile M`): every name it spells as a word is unknown after it. */
+export function forget(st: Statement, name: string, r: VarState) {
+  if (PRINTS.test(name)) return
+  for (const w of st.words) {
+    const m = (r.ps ? /^\$?([A-Za-z_]\w*)$/ : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
+    if (m && !w.dynamic) setVar(r, m[1] ?? '', undefined)
+  }
+}
+
+/** What a child shell gets besides the exported values: the assignments in front of it (`M=x bash -c`,
+ * `env M=x bash -c`), filled in where they are typed, and nothing of what `env -i` or `env -u M` clears. */
+export function inherit(st: Statement, args: Word[], r: VarState, child: string) {
+  const lead = st.words.slice(0, st.words.length - args.length - 1)
+  const isEnv = lead.some(w => w.text === 'env')
+  const clear = (name: string) => store(r, name, { text: '', literal: true, scope: child }, true)
+  for (let i = 0; i < lead.length; i++) {
+    const t = lead[i]?.text ?? ''
+    if (isEnv && /^(-i|-|--ignore-environment)$/.test(t)) for (const name of r.vars.keys()) clear(name)
+    const unset = isEnv ? /^(?:-u|--unset=?)(.*)$/.exec(t) : null
+    if (unset) clear(unset[1] || (lead[++i]?.text ?? ''))
+    const m = /^([A-Za-z_]\w*)(\+?)=/.exec(t)
+    if (!m || unset) continue
+    // An append in front of a child shell (`M+=x bash -c`) is left unknown.
+    const value = m[2] ? undefined : { ...(lead[i] as Word), text: t.slice(m[0].length) }
+    setVar(r, m[1] ?? '', value, true, child)
+  }
+}
+
+/** Variables set earlier in the command (`MSG='...'`, `$m = @'...'@`, `read -r -d '' BODY <<'EOF'`): a
+ * message that names one is read with its value. True for an assignment statement. */
+export function assign(st: Statement, name: string, args: Word[], r: VarState): boolean {
+  if (r.ps) return assignPs(st.words, r)
+  const pairs = name === '' ? st.words : /^(export|declare|local|readonly|typeset)$/.test(name) ? args : null
+  if (pairs) {
+    // `export M=x`, `declare -x M`: a child shell sees it too; `export -n M` takes that away.
+    const flags = args.filter(a => a.text.startsWith('-')).map(a => a.text).join('')
+    const isExport = name === 'export' ? !/n/.test(flags) : /x/.test(flags)
+    // `declare -n` (a reference), `-i`, `-l`, `-u` (the value changed), `-a`/`-A` (an array): unknown.
+    const changes = name !== 'export' && /[nilauA]/.test(flags)
+    for (const a of pairs) {
+      const m = /^([A-Za-z_]\w*)(\+?)=/.exec(a.text)
+      if (m) setPair(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) }, Boolean(m[2]), isExport, changes)
+      else if (name === 'export')
+        for (const v of r.vars.get(a.text.toLowerCase()) ?? []) v.exported = isExport
+    }
+    return true
+  }
+  if (name === 'read' && st.heredocs.length > 0) {
+    const names = args.filter(a => /^[A-Za-z_]\w*$/.test(a.text))
+    const body = st.heredocs[0] ?? ''
+    const e = st.hasDynamicBody ? expandBody(body, r) : { text: body, unresolved: false }
+    // With one name it holds the text read (all of it here, which is more than the line it reads); with
+    // several the text is split among them, so each is unknown.
+    const held = { text: e.unresolved ? body : e.text, literal: !e.unresolved, scope: r.scope }
+    if (names.length === 1) store(r, names[0]?.text ?? '', held)
+    else for (const n of names) setVar(r, n.text, undefined)
+    return true
+  }
+  return false
+}
+
+// One `NAME=value` or `NAME+=value`: an append keeps a known value known only when both parts are.
+function setPair(r: VarState, name: string, value: Word, isAppend: boolean, exported: boolean, changes: boolean) {
+  if (changes) return setVar(r, name, undefined, exported)
+  if (!isAppend) return setVar(r, name, value, exported)
+  const old = lookup(r, name)
+  const isKnown = old?.literal && !value.dynamic
+  setVar(r, name, isKnown ? { ...value, text: `${old.text}${value.text}` } : undefined, exported)
+}
+
+// PowerShell: `$m = ...`; `$p += @{...}`, `$p.Body = ...`, `$p['Body'] = ...`, `$p.Add(...)`: a value
+// changed after it was typed is no longer known.
+function assignPs(w: Word[], r: VarState): boolean {
+  const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
+  if (spaced && w[1]?.text === '=') {
+    setVar(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined)
+    return true
+  }
+  const isCompound = spaced !== null && /^([-+*/%]|\?\?)=$/.test(w[1]?.text ?? '')
+  const member = isCompound ? spaced : /^\$(\w+)[.[]/.exec(w[0]?.text ?? '')
+  const changed = member ? lookup(r, member[1] ?? '') : undefined
+  if (changed) {
+    changed.text += `\n${w.map(x => x.text).join(' ')}`
+    changed.literal = false
+  } else if (isCompound) setVar(r, spaced?.[1] ?? '', undefined)
+  const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
+  if (joined) setVar(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
+  return Boolean(joined) || isCompound
 }

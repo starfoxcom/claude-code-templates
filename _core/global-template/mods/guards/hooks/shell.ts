@@ -13,6 +13,8 @@ export type Word = {
   bodies: string[]
   /** Its first character came from quotes or an escape, so a leading `<` or `>` is text, not a redirect. */
   literalStart?: boolean
+  /** Holds an expansion outside quotes, which the shell splits into words at blanks (`$F`, not `"$F"`). */
+  splits?: boolean
 }
 
 export type Statement = {
@@ -149,7 +151,9 @@ class Reader {
     const here = top?.depth === this.depth ? top : undefined
     const isCommand = words.every(x => KEYWORDS.has(x.text))
     if (text === 'case' && isCommand) this.cases.push({ state: 'head', at: words.length, depth: this.depth })
-    else if (text === 'in' && here?.state === 'head' && words.length === here.at + 2) here.state = 'pattern'
+    // `in` after the subject, on its line or a line of its own (`case $x` newline `in`).
+    else if (text === 'in' && here?.state === 'head' && (words.length === here.at + 2 || words.length === 0))
+      here.state = 'pattern'
     else if (text === 'esac' && words.length === 0 && here && here.state !== 'head') {
       this.cases.pop()
       return true
@@ -172,24 +176,37 @@ class Reader {
     if (c === '(') this.i++
     let nest = 0
     let quote = ''
-    for (; this.i < this.n; this.i++) {
+    // A `$(...)` or backtick in a pattern runs: its commands are read, as statements of the arm.
+    const runs: Word = { text: '', dynamic: false, bodies: [] }
+    while (this.i < this.n) {
       const d = this.command[this.i]
-      if (quote && d === quote) quote = ''
-      else if (d === '\\' && quote !== "'") this.i++
-      else if (quote) continue
-      else if (d === "'" || d === '"') quote = d
-      else if (d === '(') nest++
-      else if (d === ')' && nest-- === 0) break
+      if (quote !== "'" && d === '$' && this.at(1) === '(') this.substitution(runs)
+      else if (quote !== "'" && d === '`') this.backtick(runs)
+      else if (this.patternChar(d, quote, nest)) break
+      else {
+        if (quote && d === quote) quote = ''
+        else if (d === '\\' && quote !== "'") this.i++
+        else if (!quote && (d === "'" || d === '"')) quote = d
+        else if (!quote && d === '(') nest++
+        else if (!quote && d === ')') nest--
+        this.i++
+      }
     }
     this.i++
     top.state = 'body'
     return true
   }
 
+  // The `)` that ends a case pattern: outside quotes, with every paren the pattern opened closed.
+  private patternChar(d: string | undefined, quote: string, nest: number): boolean {
+    return d === ')' && !quote && nest === 0
+  }
+
   private endStatement(pipeNext = false) {
     this.endWord()
     this.redirectNext = null
-    if (this.st.words.length > 0 || this.st.heredocs.length > 0) this.out.push(this.st)
+    const st = this.st
+    if (st.words.length > 0 || st.heredocs.length > 0 || st.inner.length > 0) this.out.push(st)
     this.st = fresh(pipeNext)
     if (this.depth > 0) this.st.isNested = true
     if (this.scopes.length > 0) this.st.scope = this.scopes.join('/')
@@ -358,6 +375,8 @@ class Reader {
       this.substitution(w)
       return true
     }
+    // `X=(a b)` and `X+=(c)`: an array, whose value the reading does not keep.
+    if (c === '(' && this.word && /^[A-Za-z_]\w*\+?=$/.test(this.word.text)) return this.arrayValue(this.word)
     // `(` and `)` outside quotes open and close a subshell; the commands inside are statements.
     if (c !== '(' && c !== ')') return false
     this.i++
@@ -369,6 +388,29 @@ class Reader {
     if (c === '(') this.scopes.push(++this.opened)
     else this.scopes.pop()
     this.endStatement()
+    return true
+  }
+
+  // The `( ... )` of an array assignment at `i`, read into the word up to its own `)`, with quotes and
+  // nested parens skipped and a `$(...)` or backtick in it read as commands that run. Its value is unknown.
+  private arrayValue(w: Word): boolean {
+    w.dynamic = true
+    let quote = ''
+    let nest = 0
+    while (this.i < this.n) {
+      const d = this.command[this.i] ?? ''
+      if (quote !== "'" && d === '$' && this.at(1) === '(') this.substitution(w)
+      else if (quote !== "'" && d === '`') this.backtick(w)
+      else {
+        w.text += d
+        this.i++
+        if (d === '\\' && quote !== "'") w.text += this.command[this.i++] ?? ''
+        else if (quote && d === quote) quote = ''
+        else if (!quote && (d === "'" || d === '"')) quote = d
+        else if (!quote && d === '(') nest++
+        else if (!quote && d === ')' && --nest === 0) break
+      }
+    }
     return true
   }
 
@@ -426,8 +468,11 @@ class Reader {
     if ((c === "'" || c === '"' || c === this.esc) && w.text === '') w.literalStart = true
     if (c === "'") return this.singleQuoted(w)
     if (c === '"') return this.doubleQuoted(w)
+    // `$NAME`, `${...}`, `$(...)` and Bash's special parameters (`$@`, `$1`, `$?`) outside quotes.
+    const isExpansion = c === '$' && this.expands(this.at(1))
+    if (isExpansion || (c === '`' && !this.powershell)) w.splits = true
     if (c === '$' && this.at(1) === '(') return this.substitution(w)
-    if (c === '$' && /[A-Za-z_{]/.test(this.at(1))) w.dynamic = true
+    if (isExpansion) w.dynamic = true
     if (c === '`' && !this.powershell) return this.backtick(w)
     if (c === this.esc && this.i + 1 < this.n) {
       w.text += this.at(1)
@@ -436,6 +481,11 @@ class Reader {
     }
     w.text += c
     this.i++
+  }
+
+  // A `$` followed by `next` starts an expansion: a name, `{`, `(`, and in Bash a special parameter.
+  private expands(next: string): boolean {
+    return /[A-Za-z_{(]/.test(next) || (!this.powershell && /[@*#?$!0-9-]/.test(next))
   }
 
   private singleQuoted(w: Word) {
@@ -461,7 +511,7 @@ class Reader {
       else if (d === '$' && this.at(1) === '(') this.substitution(w)
       else if (d === '`' && !this.powershell) this.backtick(w)
       else {
-        if (d === '$' && /[A-Za-z_{]/.test(this.at(1))) w.dynamic = true
+        if (d === '$' && this.expands(this.at(1))) w.dynamic = true
         w.text += d
         this.i++
       }
@@ -518,7 +568,7 @@ export function programOf(st: Statement): { name: string; args: Word[] } {
   const words = st.words
   let k = 0
   for (;;) {
-    while (k < words.length && /^[A-Za-z_]\w*=/.test(words[k]?.text ?? '')) k++
+    while (k < words.length && /^[A-Za-z_]\w*\+?=/.test(words[k]?.text ?? '')) k++
     const head = words[k]
     if (!head || head.dynamic || !WRAPPERS.has(head.text)) break
     const values = WRAPPERS.get(head.text)
