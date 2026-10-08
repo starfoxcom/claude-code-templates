@@ -704,3 +704,48 @@ test('a body file read before the command writes it again is the file as it was'
   const plan = inspect(twice, false)
   expect(plan.texts.filter(t => t.where.startsWith('the commit message')).map(t => t.text)).toContain('fix: first')
 })
+
+// A git write whose flags are not walked (push, rebase, am) takes any run-time word as a possible flag,
+// before or after a `--`; a PowerShell list is several words, never one.
+test('a run-time word on push or rebase is unread, quoted or not, past a -- too', () => {
+  const unread = [
+    'git push origin main "$NV"',
+    'set -- --no-verify; git push origin main "$@"',
+    'git push origin "${A[@]}"',
+    'git push -o -- origin $REF',
+    'git rebase -X "$S" main',
+    'git cherry-pick "$C"',
+  ]
+  const word = expect.arrayContaining(['a word built at run time'])
+  for (const command of unread) expect([command, inspect(command, false).unread]).toEqual([command, word])
+  for (const command of ['git push origin main', 'git push -u origin HEAD', 'git push origin "feature/$B"']) {
+    expect([command, inspect(command, false).unread]).toEqual([command, []])
+  }
+})
+
+test('a PowerShell list is several words: as a value, a variable or a word of a write', () => {
+  expect(inspect("$a = '--no-verify','--quiet'; git commit -m 'fix: x' $a", true).unread).not.toEqual([])
+  expect(inspect("$a = @('--no-verify'); git commit -m 'fix: x' $a", true).unread).not.toEqual([])
+  expect(inspect('git push origin $a', true).unread).toContain('a word built at run time')
+  expect(inspect("git commit -m 'x','--no-verify'", true).unread).toContain('a flag value built at run time')
+  expect(inspect("git push origin 'main','--no-verify'", true).unread).toContain('a word built at run time')
+  // A comma inside quotes is text.
+  expect(inspect("git commit -m 'fix: a, b'", true).unread).toEqual([])
+  expect(inspect("$m = 'fix: a, b'; git commit -m $m", true).unread).toEqual([])
+})
+
+test('the classic --rename-section with a run-time target is refused', () => {
+  expect(inspect('git config --rename-section x $B', false).block).toContain('built at run time')
+  expect(inspect('git config --rename-section alias.a alias.b', false).block).toBeUndefined()
+})
+
+test('a relative body file is the written one only when named in the same known folder', () => {
+  const body = "cat > m.md <<'EOF'\nfix: x\nEOF\n"
+  const message = (command: string) => inspect(command, false).files.find(f => f.where === 'the commit message')
+  expect(message(`${body}git commit -F m.md`)?.written).toBe(true)
+  expect(message(`${body}cd "$REPO" && git commit -F m.md`)?.written).toBeUndefined()
+  expect(message(`${body}cd sub && git commit -F m.md`)?.written).toBeUndefined()
+  expect(message(`${body}git -C sub commit -F m.md`)?.written).toBeUndefined()
+  expect(message(`cd sub && ${body}git commit -F m.md`)?.written).toBe(true)
+  expect(message("cat > /tmp/m.md <<'EOF'\nfix: x\nEOF\ncd sub && git commit -F /tmp/m.md")?.written).toBe(true)
+})
