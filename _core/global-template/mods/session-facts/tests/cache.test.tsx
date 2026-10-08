@@ -94,7 +94,9 @@ function world(on: On, env: Record<string, string> = {}) {
     if (usage.isDown) throw new Error('usage is down')
     return { value: { startedAt: 0, context: { tokens: 250_000, window: 500_000 }, rateLimits: [] } }
   })
-  on('settings.read', () => ({ value: { pluginConfigs: {} } }) as never)
+  // The merged settings; a test adds keys (`autoCompactEnabled`).
+  const settings: Record<string, unknown> = {}
+  on('settings.read', () => ({ value: { pluginConfigs: {}, ...settings } }) as never)
   // The data folder, keyed with forward slashes; the pause file is never there.
   const files = new Map<string, string>()
   on('session.id', () => ({ value: 's1' }))
@@ -129,7 +131,7 @@ function world(on: On, env: Record<string, string> = {}) {
   on('turn.complete', () => ({ text: '' }))
   on('classic.Stop', () => ({}) as never)
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { clock, reply, transcript, files, compactions, hold, usage }
+  return { clock, reply, transcript, files, compactions, hold, usage, settings }
 }
 
 // A streaming event runs only as it is read.
@@ -250,6 +252,7 @@ test('an unreadable transcript keeps the setting', async ($, on) => {
 })
 
 const MEMORY = 'C:/Users/me/.claude/mods-data/session-facts/s1.json'
+const MARKER = MEMORY.replace('.json', '.compact.json')
 
 test('parseMemory: the saved facts, or nothing for a torn or foreign file', () => {
   const check = { at: NOW, resent: 9, miss: 'early' }
@@ -463,14 +466,51 @@ test('a conversation under the minimum is never compacted on idle', async ($, on
 })
 
 test("the engine's own idle compaction runs first: the mod stays out", async ($, on) => {
-  const { clock, compactions } = world(on)
+  const { clock, compactions, files } = world(on)
   await start($)
   await turn($)
   await clock.advance(54 * MINUTE + 30_000)
+  const startedAt = clock.now()
   await $.session.compact(COMPACTION)
+  // The marker a module left running by a hot reload reads, written as the compaction starts.
+  expect(JSON.parse(files.get(MARKER) ?? '{}')).toEqual({ startedAt })
   await clock.advance(4 * MINUTE)
   expect(compactions).toHaveLength(1)
 })
+
+test('a precompute or subagent compaction writes no marker', async ($, on) => {
+  const { files } = world(on)
+  await start($)
+  await turn($)
+  await $.session.compact({ ...(COMPACTION as object), trigger: 'precompute' } as never)
+  await $.session.compact({ ...(COMPACTION as object), agentId: 'a1' } as never)
+  expect(files.get(MARKER)).toBeUndefined()
+})
+
+// The person's off switches: the mod's own setting, the engine's variables and auto-compact in /config.
+const OFF_SWITCHES: [string, (w: ReturnType<typeof world>) => void, Record<string, string>?][] = [
+  [
+    'the setting off',
+    w => {
+      w.files.set('plugin.json', JSON.stringify({ userConfig: { idleCompact: { type: 'boolean' } } }))
+      w.files.set('C:/Users/me/.claude/mods-data/session-facts/settings.json', '{"idleCompact":false}')
+    },
+  ],
+  ['DISABLE_AUTO_COMPACT set', () => {}, { DISABLE_AUTO_COMPACT: '1' }],
+  ['DISABLE_COMPACT set', () => {}, { DISABLE_COMPACT: 'true' }],
+  ['auto-compact off in the settings', w => void (w.settings.autoCompactEnabled = false)],
+  ['auto-compact off in /config', w => w.files.set('C:/Users/me/.claude.json', '{"autoCompactEnabled":false}')],
+]
+for (const [name, set, env] of OFF_SWITCHES) {
+  test(`with ${name}, an idle conversation is never compacted`, async ($, on) => {
+    const w = world(on, env)
+    set(w)
+    await start($)
+    await turn($)
+    await w.clock.advance(56 * MINUTE)
+    expect(w.compactions).toEqual([])
+  })
+}
 
 test('a compaction still running past the grace minute is never joined by a second one', async ($, on) => {
   const { clock, compactions, hold } = world(on)
@@ -523,7 +563,7 @@ test('a compaction another module started since the reply keeps this one out', a
   await turn($)
   await clock.advance(54 * MINUTE + 30_000)
   // What the hook of a module loaded by a hot reload writes as its compaction starts.
-  files.set(MEMORY.replace('.json', '.compact.json'), JSON.stringify({ startedAt: NOW + 54 * MINUTE }))
+  files.set(MARKER, JSON.stringify({ startedAt: NOW + 54 * MINUTE }))
   await clock.advance(2 * MINUTE)
   expect(compactions).toEqual([])
 })
