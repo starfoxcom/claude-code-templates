@@ -33,7 +33,8 @@ const GIT_FILES =
 // is out of every text reading's reach, as it always was here.
 const RUNNERS = new RegExp(
   '\\b(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|eval|iex|invoke-expression|source|exec|xargs|env|wsl|' +
-    'sudo|trap|alias)\\b',
+    'sudo|doas|trap|alias|flock|watch|parallel|script|find|ssh|nohup|timeout|nice|time|stdbuf|setsid|' +
+    'start-process|start|saps|runas)\\b',
   'i',
 )
 
@@ -51,10 +52,16 @@ const PROGRAM_WORD = /(?:^|[;&|\n({])[ \t]*(?:[A-Za-z_]\w*=\S*[ \t]+)*(?![A-Za-z
  * quotes around a name that is git or gh (`'git'`, `g''it`, PowerShell's `& "C:/Git/cmd/git.exe"`). */
 function hidesProgram(code: string, powershell: boolean): boolean {
   const masked = code.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
+  // PowerShell's `& (...)` or `. (...)` runs whatever the expression resolves to (`& (gcm g?t)`).
+  if (powershell && /(?:^|[;|\n{])[ \t]*[&.][ \t]*\(/.test(masked)) return true
   for (const m of masked.matchAll(PROGRAM_WORD)) {
     const at = (m.index ?? 0) + m[0].length - (m[1] as string).length
     const word = code.slice(at, at + (m[1] as string).length)
-    const built = powershell ? /^["']?\$|`/.test(word) : /[$`\\]/.test(word)
+    const bare = m[1] as string
+    // Bash builds a name from a brace expansion or a glob too (`{gi,commi}t`, `/usr/bin/g[i]t`); `[` and
+    // `[[` alone are the test commands.
+    const isPattern = !powershell && /[*?[{]/.test(bare) && bare !== '[' && bare !== '[['
+    const built = isPattern || (powershell ? /^["']?\$|`/.test(word) : /[$`\\]/.test(word))
     const base = (word.replace(/['"]/g, '').split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
     if (built || (/['"]/.test(word) && (base === 'git' || base === 'gh'))) return true
   }
