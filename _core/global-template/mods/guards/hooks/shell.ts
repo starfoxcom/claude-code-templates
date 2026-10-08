@@ -4,6 +4,8 @@
 // It is a safety net for commands written the ordinary way, not a shell: text the shell builds at run
 // time is marked `dynamic` and named as unread, never guessed at.
 
+import { ansiBody, plain, PS_ESCAPES, sliceWord } from './quoting'
+
 export type Word = {
   /** The word as the program receives it: quotes removed, escapes applied. */
   text: string
@@ -27,20 +29,18 @@ export type Word = {
   literals?: number[]
 }
 
-/** The word from `from` on (the value of `NAME=value`, `--opt=value`), its plain `$` kept where they are. */
-export function sliceWord(w: Word, from: number): Word {
-  const literals = w.literals?.map(at => at - from).filter(at => at >= 0)
-  return { ...w, text: w.text.slice(from), literals }
-}
-
 export type Statement = {
   words: Word[]
   /** Here-doc, here-string and `<<<` bodies fed to this statement. */
   heredocs: string[]
   /** Files this statement writes through `>` / `>>`. */
   writes: string[]
+  /** The word of each `writes` entry that holds an expansion, at the same index; none for a literal one. */
+  writeWords?: (Word | undefined)[]
   /** Files fed to this statement through `<`. */
   reads: string[]
+  /** The word of each `reads` entry that holds an expansion, at the same index. */
+  readWords?: (Word | undefined)[]
   /** Its input comes from the statement before it, through a pipe. */
   pipeIn: boolean
   /** Commands run inside a `$(...)` of its words (`PR=$(gh pr create ...)`); they run before it. */
@@ -163,8 +163,8 @@ class Reader {
     const w = this.word
     this.word = null
     if (this.redirectNext) {
-      if (this.redirectNext === 'write') this.st.writes.push(w.text)
-      if (this.redirectNext === 'read') this.st.reads.push(w.text)
+      if (this.redirectNext === 'write') this.redirect(false, w)
+      if (this.redirectNext === 'read') this.redirect(true, w)
       if (this.redirectNext === 'text') {
         this.st.heredocs.push(w.text)
         if (w.dynamic) this.st.hasDynamicBody = true
@@ -178,9 +178,13 @@ class Reader {
       if (!bare[3]) this.redirectNext = bare[2] === '<' ? 'read' : 'write'
       return
     }
+    // A redirect joined to its target, which may hold an expansion (`>"$F"`, `<$IN`), never a process
+    // substitution or a here-string (`<(...)`, `<<<"$X"`).
     const attached = REDIRECT_ATTACHED.exec(w.text)
-    if (attached && isPlain && /^[\d<>]/.test(w.text)) {
-      ;(attached[1] === '<' ? this.st.reads : this.st.writes).push(attached[2] ?? '')
+    const isJoined = !w.literalStart && (!w.dynamic || !/^[(<]/.test(attached?.[2] ?? ''))
+    if (attached && isJoined && /^[\d<>]/.test(w.text)) {
+      const target = attached[2] ?? ''
+      this.redirect(attached[1] === '<', sliceWord(w, w.text.length - target.length))
       return
     }
     if (isPlain && this.caseWord(w.text)) return
@@ -195,6 +199,13 @@ class Reader {
     if (isPlain && !this.powershell && this.st.words.every(x => KEYWORDS.has(x.text))) this.keyword(w.text)
     this.continues = false
     this.st.words.push(w)
+  }
+
+  // A `<` or `>` target. One holding an expansion is kept whole, so it is filled in as the shell does.
+  private redirect(isRead: boolean, w: Word) {
+    const paths = isRead ? this.st.reads : this.st.writes
+    if (w.dynamic) (isRead ? (this.st.readWords ??= []) : (this.st.writeWords ??= []))[paths.length] = w
+    paths.push(w.text)
   }
 
   // `case`, its `in` and `esac` where the shell reads them as its own words. True for an `esac`, which
@@ -631,7 +642,11 @@ class Reader {
     const w = this.startWord()
     if (w.text === '') w.literalStart = true
     if (q === "'") plain(w, body)
-    else w.text += body
+    // In `@"..."@` a backtick escapes the character after it, as in `"..."`.
+    else for (let k = 0; k < body.length; k++) {
+      if (body[k] !== '`' || k + 1 >= body.length) w.text += body[k]
+      else plain(w, PS_ESCAPES[body[++k] ?? ''] ?? body[k] ?? '')
+    }
     if (q === '"' && /\$/.test(body)) w.dynamic = true
     this.i = close === -1 ? this.n : close + 3
     return true
@@ -670,6 +685,15 @@ class Reader {
     if (c === "'" || c === '"') w.quoted = true
     if (c === "'") return this.singleQuoted(w)
     if (c === '"') return this.doubleQuoted(w)
+    // Bash's `$'...'`: a quoted string with backslash escapes, no expansion.
+    if (c === '$' && !this.powershell && this.at(1) === "'") {
+      if (w.text === '') w.literalStart = true
+      w.quoted = true
+      const body = ansiBody(this.command.slice(this.i + 2))
+      plain(w, body.text)
+      this.i += 2 + body.length
+      return
+    }
     // `$NAME`, `${...}`, `$(...)` and Bash's special parameters (`$@`, `$1`, `$?`) outside quotes.
     const isExpansion = c === '$' && this.expands(this.at(1))
     // PowerShell passes a variable as one argument; only Bash splits it.
@@ -729,17 +753,11 @@ class Reader {
   // dropped whole): "C:\Users\me" stays as typed.
   private escapeInDouble(w: Word, d: string) {
     const nx = this.at(1)
-    if (this.powershell) plain(w, ({ n: '\n', t: '\t' } as Record<string, string>)[nx] ?? nx)
+    if (this.powershell) plain(w, PS_ESCAPES[nx] ?? nx)
     else if ('$`"\\'.includes(nx)) plain(w, nx)
     else if (nx !== '\n') w.text += d + nx
     this.i += 2
   }
-}
-
-// Adds text the shell passes on as typed, noting where a `$` or a backtick in it sits.
-function plain(w: Word, text: string) {
-  for (let k = 0; k < text.length; k++) if (/[$`]/.test(text[k] ?? '')) (w.literals ??= []).push(w.text.length + k)
-  w.text += text
 }
 
 // PowerShell computes an unquoted word that goes on past a quoted part (`'--x'.Trim()`, `'a'+'b'`) or past a

@@ -1,12 +1,21 @@
 // Shells that run a script given on their command line or fed to them: `bash -c '...'`, `bash <<'EOF'`,
 // `powershell -Command "..."`, `cmd /c ...`. The script is read as commands of its own. Pure.
 
+import { joinWords } from './quoting'
 import { parse } from './shell'
 import type { Statement, Word } from './shell'
 
-/** A script a shell runs. `text`: the script as typed, when it is one command line; `isBody`: a here-doc
- * fed to the shell, filled in as one. */
-export type Script = { statements: Statement[]; ps: boolean; dynamic: boolean; text?: string; isBody?: boolean }
+/** A script a shell runs. `text`: the script as typed, when it is one command line, with `literals` where
+ * a `$` in it was typed as plain text (`Word.literals`); `isBody`: a here-doc fed to the shell, filled in as
+ * one. */
+export type Script = {
+  statements: Statement[]
+  ps: boolean
+  dynamic: boolean
+  text?: string
+  literals?: number[]
+  isBody?: boolean
+}
 
 const SHELLS = /^(bash|sh|zsh|dash|ksh)$/
 // How many following words a shell option takes as values: one per `o`/`O` in a bundle (`-euo pipefail`,
@@ -56,8 +65,8 @@ export function script(st: Statement, name: string, args: Word[]): Script | unde
   const of = (i: number, ps: boolean, from = false) => {
     const rest = args.slice(from ? i : i + 1)
     if (i === -1 || rest.length === 0) return undefined
-    const text = rest.length === 1 ? (rest[0]?.text ?? '') : rest.map(a => a.text).join(' ')
-    return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic), text }
+    const { text, literals } = joinWords(rest)
+    return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic), text, literals }
   }
   if (SHELLS.test(name)) {
     // bash takes its `-c` script from the first word that is no option or option value (`-co pipefail 'x'`);
@@ -76,7 +85,8 @@ export function script(st: Statement, name: string, args: Word[]): Script | unde
     // `cmd /c "git commit -m \"...\""`: the command as one quoted word is read as a command line.
     if (words.length === 1) {
       const text = words[0]?.text ?? ''
-      return { statements: parse(text, false), ps: false, dynamic: words[0]?.dynamic ?? false, text }
+      const literals = words[0]?.literals
+      return { statements: parse(text, false), ps: false, dynamic: words[0]?.dynamic ?? false, text, literals }
     }
     return {
       statements: [{ words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }],

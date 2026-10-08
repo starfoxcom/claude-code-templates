@@ -460,3 +460,57 @@ test('each unread kind has its own way out', () => {
   expect(wayOut('a bash script built at run time')).toContain('Write the script out')
   expect(wayOut('the commit message')).toBeUndefined()
 })
+
+// Plain `$` stay where they were typed through every cut of a word, into scripts, `eval`, paths and written
+// files; `$'...'` and `@"..."@` read as their shells read them; a splat is no branch name; and each shell
+// keeps its own variables.
+test('plain dollars follow every cut, quoting style and shell', () => {
+  const read = (command: string, ps = false) => inspect(command, ps)
+  const texts = (command: string, ps = false) => read(command, ps).texts.filter(t => !t.creditOnly).map(t => t.text)
+  for (const [command, ps] of [
+    ['git commit -m\'$ \'"$OUT"', false],
+    ['git commit -am\'$ \'"$OUT"', false],
+    ['gh api repos/o/r/issues -f body=\'$ 5.0\'"$OUT"', false],
+    ["export m='fix: x'; pwsh -Command 'git commit -m \"note $m\"'", false],
+    ['git switch -c @a', true],
+  ] as const) {
+    expect([command, read(command, ps).unread]).toEqual([command, expect.arrayContaining([expect.anything()])])
+  }
+  for (const [command, ps, text] of [
+    ['F=x; git commit -m\'$ \'"$F"', false, '$ x'],
+    ['F=notes.md; git commit -m"docs: document \\$PATH in $F"', false, 'docs: document $PATH in notes.md'],
+    ['F=notes.md; gh api repos/o/r/issues -f body="document \\$PATH in $F"', false, 'document $PATH in notes.md'],
+    ["export M='fix: x'; X=-q; bash -c \"M='other'; git commit -m \\\"\\$M\\\" $X\"", false, 'other'],
+    ["export M='fix: x'; X=-q; eval \"M='other'; git commit -m \\\"\\$M\\\" $X\"", false, 'other'],
+    ["acme=x; F=y; git commit -m $'acme rocks\\n'\"$F\"", false, 'acme rocks\ny'],
+    ["git commit -m $'a\\x41\\101\\u0042\\'\\\\'", false, "aAAB'\\"],
+    ['$m = @"\n`$PATH and `$x\n"@; git commit -m $m', true, '$PATH and $x'],
+  ] as const) {
+    expect([command, read(command, ps).unread, texts(command, ps)]).toEqual([
+      command,
+      [],
+      expect.arrayContaining([text]),
+    ])
+  }
+  expect(texts("export M='fix: x'; X=-q; bash -c \"M='other'; git commit -m \\\"\\$M\\\" $X\"")).not.toContain('fix: x')
+  // Left whole for the glob rule, the word keeps its plain `$` where they were typed.
+  expect(texts("A='fix: x'; F=y; git commit -m'$A [wip] '$F")).toContain('$A [wip] y')
+  // A path typed with a plain `$` names that very file.
+  expect(read("x=b; gh api graphql -F query=@'$x.md'").files.map(f => f.path)).toEqual(['$x.md'])
+  const written = read("x=b; cat > '$x.md' <<'EOF'\nclean\nEOF\ngh pr create -t t -F b.md").files
+  expect(written.map(f => [f.path, f.written])).toEqual([['b.md', undefined]])
+  // A PowerShell splat may hand git a start point after the branch name.
+  const splat = read("$a = @('feat','HEAD~1'); git checkout -b @a; gh pr create -t t --body-file b.md", true)
+  expect([splat.unread, splat.files.map(f => f.named)]).toEqual([['the new branch name'], [true]])
+})
+
+// A redirect joined to a target that holds a variable (`>"$F"`, `<$IN`) is read as one, filled in.
+test('a redirect joined to a variable target writes or feeds that file', () => {
+  const files = (command: string) => inspect(command, false).files.map(f => [f.path, f.written ?? false])
+  for (const w of ['cat >"$F" <<\'EOF\'\nx\nEOF', 'echo hi >$F', 'printf x 1>"$F"']) {
+    const command = `F=b.md; ${w}\ngh pr create -t t -F b.md`
+    expect([command, files(command)]).toEqual([command, [['b.md', true]]])
+  }
+  expect(files('F=m.txt; git commit -F - <"$F"')).toEqual([['m.txt', false]])
+  expect(inspect('git commit -F - <"$IN"', false).unread).toEqual(['the commit message'])
+})

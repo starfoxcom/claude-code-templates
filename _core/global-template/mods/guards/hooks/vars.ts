@@ -3,12 +3,13 @@
 // and the ones it opens, and gone once it closes. A child shell (`bash -c`) sees only exported values.
 // Pure.
 
-import { PS_OPERATOR, sliceWord } from './shell'
+import { sliceWord } from './quoting'
+import { PS_OPERATOR } from './shell'
 import type { Statement, Word } from './shell'
 
 /** A variable's value: `literal` when it is known, `scope` where it was set, `exported` when a child shell
  * sees it too, `file` the file whose text it holds (`$(cat b.md)`). */
-export type Var = { text: string; literal: boolean; scope: string; exported?: boolean; file?: string }
+export type Var = { text: string; literal: boolean; scope: string; exported?: boolean; file?: string; ps?: boolean }
 
 /** What the reading knows of variables at the statement it reads. */
 export type VarState = {
@@ -107,8 +108,9 @@ export function store(r: VarState, name: string, v: Var, exported = false) {
   if (r.isLater) (r.volatile ??= new Set()).add(key)
   // Set in a branch: known inside it, and unknown where the branch sits, first, so the value inside wins.
   const base = branchBase(v.scope)
-  if (base !== v.scope) put(r, key, { text: '', literal: false, scope: base, exported: exported || v.exported })
-  put(r, key, v, exported)
+  const ps = r.ps || undefined
+  if (base !== v.scope) put(r, key, { text: '', literal: false, scope: base, exported: exported || v.exported, ps })
+  put(r, key, { ...v, ps }, exported)
 }
 
 function put(r: VarState, key: string, v: Var, exported = false) {
@@ -126,6 +128,9 @@ export function lookup(r: VarState, name: string): Var | undefined {
   const stack = r.vars.get(keyOf(r, name)) ?? []
   for (let i = stack.length - 1; i >= 0; i--) {
     const v = stack[i] as Var
+    // A variable of the other shell (Bash's `m` read as PowerShell's `$m` in `pwsh -Command`) is another one:
+    // the child sees it only in its environment, which the reading leaves unknown.
+    if (Boolean(v.ps) !== r.ps) continue
     const isInside = v.scope === '' || r.scope === v.scope || r.scope.startsWith(`${v.scope}/`)
     // Past a child shell on the way in, only an exported value is still there.
     const isSeen = v.exported || !/(^|\/)p\d+/.test(r.scope.slice(v.scope.length))
@@ -149,7 +154,7 @@ const PLAIN_BACKTICK = ''
  * backtick in it was typed as plain text (`Word.literals`), passed on as is. */
 export function expand(typed: string, r: VarState, literals: number[] = []): Expanded {
   const chars = typed.split('')
-  for (const at of literals) chars[at] = chars[at] === '`' ? PLAIN_BACKTICK : PLAIN
+  for (const at of literals) if (/[$`]/.test(chars[at] ?? '')) chars[at] = chars[at] === '`' ? PLAIN_BACKTICK : PLAIN
   const text = literals.length > 0 ? chars.join('') : typed
   // Only `$NAME` and a plain `${NAME}` are filled in: any other `${...}` (`${!X}`, `${X:-y}`, `${X[@]}`)
   // and Bash's special parameters (`$@`, `$1`) are built at run time.
@@ -477,4 +482,18 @@ export function setsEnvAtRunTime(name: string, args: Word[]): boolean {
   if (!/^(export|declare|typeset)$/.test(name)) return false
   if (name !== 'export' && args.some(a => !a.dynamic && /^-[a-zA-Z]*[pfF]/.test(a.text))) return false
   return args.some(a => a.dynamic && !/^[A-Za-z_]\w*[+]?=/.test(a.text))
+}
+
+/** The values of the variables a path names, as they stand where the path is written. */
+export function varsIn(path: string, r: VarState): (Var | undefined)[] {
+  return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
+}
+
+/** A path as the command will use it: variables set earlier filled in; undefined when part of it is built at
+ * run time in a way the reading does not know. A path given as text, or a word with no expansion, is
+ * literal. */
+export function knownPath(path: string | Word, r: VarState): string | undefined {
+  if (typeof path === 'string' || !path.dynamic) return typeof path === 'string' ? path : path.text
+  const e = expand(path.text, r, path.literals)
+  return e.unresolved ? undefined : e.text
 }
