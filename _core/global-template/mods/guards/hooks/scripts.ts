@@ -119,13 +119,18 @@ function psScript(
 
 // The text `Invoke-Expression` runs: past its `-Command` (any prefix, or `-Command:'...'`), or, with none,
 // what comes down the pipe: the statement before, read whole when it is one value.
-export function psEvalWords(st: Statement, args: Word[], prev?: Statement): Word[] {
+export function psEvalWords(st: Statement, args: Word[], prev?: Statement): Word[] | undefined {
   const [first] = args
   const command = /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?(?::(.+))?$/i.exec(first?.text ?? '')
   const value = command?.[1]
   if (first && value) return [sliceWord(first, first.text.length - value.length), ...args.slice(1)]
   if (command) return args.slice(1)
   if (args.length > 0 || !st.pipeIn || !prev) return args
-  if (prev.words.length === 1) return prev.words
-  return [{ text: prev.words.map(w => w.text).join(' '), dynamic: true, bodies: [] }]
+  // A value (`'...' | iex`, `$c | iex`), or `echo`/`Write-Output` of values; any other program's output is
+  // text the reading cannot know (undefined).
+  const isValue = (w: Word) => Boolean(w.quotedStart) || (w.dynamic && /^\$\w+$/.test(w.text))
+  const [head, ...rest] = prev.words
+  if (head && prev.words.length === 1 && isValue(head)) return prev.words
+  const isPrint = /^(echo|write-output|write)$/i.test(head?.text ?? '') && !head?.quotedStart
+  return isPrint && rest.length > 0 && rest.every(isValue) ? rest : undefined
 }

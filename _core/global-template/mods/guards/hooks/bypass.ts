@@ -54,8 +54,18 @@ const GIT_ENV_NAME = /^GIT_CONFIG_(PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\+?=/i
 const RUNNERS = /^(npx|pnpx|bunx|pnpm|yarn|bun|npm|pipx|uvx|uv)$/
 const MANAGER_TOOL = /^((@evilmartians\/)?lefthook|husky|pre-commit|pre_commit)(@\S*)?$/
 
-/** What the reading keeps between statements: a hook manager's switch was set (`export HUSKY=0`). */
-export type HookState = { hooksOff?: boolean }
+/** What the reading keeps between statements: a hook manager's switch was set (`export HUSKY=0`), a git
+ * call that runs hooks was read, and the functions the command defines (a prefix on one reaches its body). */
+export type HookState = { hooksOff?: boolean; isHooked?: boolean; functions?: Set<string> }
+
+/** A switch set anywhere in the command reaches every hooked git call in it: a trap action, a function or
+ * a loop body may run after the switch though it is read before. */
+export const hooksOffReason = (state: HookState) => (state.hooksOff && state.isHooked ? HOOKS_OFF : undefined)
+
+/** The functions a command defines (`f() {`, `function f`), by its text. */
+export const functionsOf = (command: string) =>
+  new Set([...command.matchAll(/(?:^|[\s;&|{(])(?:function\s+([\w-]+)|([A-Za-z_][\w-]*)\s*\(\s*\))/g)]
+    .map(m => (m[1] ?? m[2] ?? '').toLowerCase()))
 // Shells and `eval`, whose commands the reading reads (`HUSKY=0 bash -c '...'`).
 const CHILDREN = /^(bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval)$/
 
@@ -227,7 +237,8 @@ function envReason(st: Statement, name: string, args: Word[], state: HookState):
   const applied = ASSIGNS.test(name) ? [...lead, ...args] : lead
   const isHooked = name === 'git' && HOOKED.has(gitParts(args).sub)
   // A prefix reaches only its program, unless that program is a shell that runs more of them.
-  const isSet = Boolean(assigned) || ASSIGNS.test(name) || !name || CHILDREN.test(name)
+  const isSet = Boolean(assigned) || ASSIGNS.test(name) || !name || CHILDREN.test(name) || state.functions?.has(name)
+  state.isHooked ||= isHooked
   for (const { text, dynamic } of assigned ? [assigned] : applied) {
     const isOff = HOOKS_OFF_SET.test(text) || (dynamic && HOOKS_OFF_NAME.test(text))
     if (isOff && isSet) state.hooksOff = true

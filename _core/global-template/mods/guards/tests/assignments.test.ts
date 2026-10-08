@@ -598,3 +598,39 @@ test('switches reach git calls, iex reads its input, and deferred or run-time na
   }
   expect(read("M='fix: x'; trap 'git commit -m \"$M\"' EXIT").unread).toEqual([])
 })
+
+// A hook switch reaches a hooked call the shell runs after it whatever the reading order; `iex` reads only a
+// value piped in; attached and PowerShell spellings of a set are counted; `coproc` runs in a subshell; a
+// writer is fed with no value a later set may have changed.
+test('switches in any order, piped iex, attached sets, coproc and late writers', () => {
+  const read = (command: string, ps = false) => inspect(command, ps)
+  for (const command of [
+    "trap 'git commit -m x' EXIT; export HUSKY=0",
+    'f() { git commit -m x; }; export HUSKY=0; f',
+    'f() { git commit -m x; }; HUSKY=0 f',
+    'for i in 1 2; do git commit -m x; export HUSKY=0; done',
+  ]) {
+    expect([command, read(command).block]).toEqual([command, expect.stringContaining('git hooks off')])
+  }
+  expect(read('HUSKY=0 npm ci && git commit -m x').block).toBeUndefined()
+  expect(read("Write-Output 'git commit --no-verify -m x' | iex", true).block).toContain('skipping git hooks')
+  const named = (before: string, ps = false) =>
+    read(`${before}; gh pr create -t t --body-file b.md`, ps).files.map(f => f.named).at(-1)
+  expect(named('gc fix.ps1 | iex', true)).toBe(true)
+  expect(named('Get-Clipboard | iex', true)).toBe(true)
+  expect(named('coproc { trap "$X" EXIT; sleep 1; }')).toBe(true)
+  for (const [command, ps] of [
+    ["M='fix: x'; printf -vM '%s' \"$OUT\"; git commit -m \"$M\"", false],
+    ['M=a; read -ra"$V" <<< "$OUT"; git commit -m "$M"', false],
+    ["$m = 'fix: x'; function f { git commit -m $m }; sv m $outside; f", true],
+    ["$m = 'fix: x'; function f { git commit -m $m }; ${m} = $outside; f", true],
+    ["$m = 'fix: x'; function f { git commit -m $m }; $m, $n = $a, $b; f", true],
+    ['coproc { M=x; }; git commit -m "$M"', false],
+  ] as const) {
+    expect([command, read(command, ps).unread]).toEqual([command, expect.arrayContaining(['the commit message'])])
+  }
+  const ifs = read('printf -v"$V" y; F=a--no-verify; git push origin $F')
+  expect([ifs.block, ifs.unread]).not.toEqual([undefined, []])
+  const late = read("M='A'; f() { echo \"$M\" > b.md; }; f; M=ok; gh pr create -t t -F b.md")
+  expect(late.texts.map(t => t.text)).not.toContain('ok')
+})
