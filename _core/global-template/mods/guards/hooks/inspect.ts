@@ -27,7 +27,7 @@ import { readPr } from './prbody'
 import type { PrCall } from './prbody'
 import { moveFolder, movePlace, placeHere, repoMoves, targetOf } from './folders'
 import type { Folder, Here, Place, Target } from './folders'
-import { branchesOf, isCommitAll, isUnknownSetting, TAG_READS } from './gitwords'
+import { branchesOf, isCommitAll, isSplat, isUnknownSetting, lineOf, mayBeFlag, splitsAt, TAG_READS } from './gitwords'
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, setVar, within, withWords } from './vars'
@@ -151,11 +151,18 @@ export function inspect(command: string, powershell: boolean): Plan {
   // A body file this same command writes is read from the statement that writes it. What another
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
   // so that is noted, not refused.
-  for (const f of [...plan.files]) {
+  // By position, so a file a writer reads (`cat a.md > b.md` after `cat > a.md`) is fed in turn; each
+  // writer once per path, so one that reads its own file ends.
+  const fed = new Map<Writer, Set<string>>()
+  for (let i = 0; i < plan.files.length; i++) {
+    const f = plan.files[i] as Plan['files'][number]
     // The writer it had where it was named: one after it writes over a file the command already read.
     const writer = r.matched.get(f)
     if (!writer) continue
     f.written = true
+    const paths = fed.get(writer) ?? new Set<string>()
+    if (paths.has(norm(f.path))) continue
+    fed.set(writer, paths.add(norm(f.path)))
     const before = plan.unread.length
     const named = plan.files.length
     const at = { ...r, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
@@ -223,7 +230,9 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   // After a literal `--` every word is a path, whatever it splits into.
   const ends = args.findIndex(a => !a.dynamic && a.text === '--')
   const flags = ends === -1 ? args : args.slice(0, ends)
-  if (/^(git|gh)$/.test(name) && flags.some(splitsAt) && RAW_WRITES.some(re => re.test(line)))
+  // PowerShell's `--%` passes the rest of the line raw, with `%NAME%` filled in from the environment.
+  const isRaw = r.ps && args.some(a => a.text === '--%')
+  if (/^(git|gh)$/.test(name) && (flags.some(splitsAt) || isRaw) && RAW_WRITES.some(re => re.test(line)))
     unreadCall(r, 'a word built at run time')
   const moves = repoMoves(st, name, args)
   r.isRepoMoved ||= moves.movesLater
@@ -417,23 +426,11 @@ function pushFile(r: Reading, where: string, path: string) {
   r.plan.files.push(entry)
 }
 
-// A word the shell splits into more words at run time, which may carry options.
-const splitsAt = (w: Word | undefined) => Boolean((w?.dynamic && w.splits) || w?.list || w?.expr)
-
-// A call as the write patterns read it. A `;`, `&`, `|` or line break inside a quoted word is text there,
-// never the end of the call (`git -c 'x=!f() { a; }; f' push`).
-const lineOf = (name: string, args: Word[]) => [name, ...args.map(a => a.text.replace(/[|;&\n]/g, ' '))].join(' ')
-
 // A call whose own words are built at run time: a write, since what it does cannot be read.
 function unreadCall(r: Reading, what: string) {
   r.plan.isWrite = true
   if (!r.plan.unread.includes(what)) r.plan.unread.push(what)
 }
-
-// A word built at run time that the program may read as a flag: split by the shell, or starting with an
-// expansion or a dash.
-const mayBeFlag = (w: Word) =>
-  w.list === true || w.expr === true || (w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text)))
 
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
 function write(r: Reading, st: Statement, where: string): string {
@@ -462,7 +459,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
   while (k < args.length) {
     const t = args[k]?.text ?? ''
     if (t === '-C') {
-      if (splitsAt(args[k + 1])) unreadCall(r, 'a git option built at run time')
+      if (splitsAt(args[k + 1]) || isSplat(args[k + 1], r.ps)) unreadCall(r, 'a git option built at run time')
       r.at.dir = args[k + 1]
       k += 2
     } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env)$/.test(t)) {
@@ -470,7 +467,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
       if ((t === '-c' || t === '--config-env') && isUnknownSetting(args[k + 1])) {
         unreadCall(r, 'a git setting built at run time')
       }
-      if (splitsAt(args[k + 1])) unreadCall(r, 'a git option built at run time')
+      if (splitsAt(args[k + 1]) || isSplat(args[k + 1], r.ps)) unreadCall(r, 'a git option built at run time')
       k += 2
     } else if (t.startsWith('-')) k++
     else break
@@ -490,16 +487,14 @@ function gitCommit(st: Statement, rest: Word[], r: Reading): string {
 function git(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
   const k = gitSubcommand(args, r)
-  if (args[k]?.dynamic) return void unreadCall(r, 'a git subcommand built at run time')
+  if (args[k]?.dynamic || isSplat(args[k], r.ps)) return void unreadCall(r, 'a git subcommand built at run time')
   const sub = args[k]?.text ?? ''
   const rest = args.slice(k + 1)
   // A write whose flags are not walked (push, rebase, am): any word built at run time may be one, even
   // after a `--` (`push -o -- $REF` gives `-o` the `--`, and push reads flags after its refspecs).
   const isWalked = /^(commit|tag|merge|commit-tree|notes)$/.test(sub)
   const isUnwalkedWrite = !isWalked && RAW_WRITES.some(re => re.test(lineOf('git', args)))
-  // A PowerShell splat (`@a`) hands over the items of a list the reading does not walk.
-  const isSplat = (w: Word) => r.ps && /^@\w/.test(w.text)
-  if (isUnwalkedWrite && rest.some(w => mayBeFlag(w) || isSplat(w))) unreadCall(r, 'a word built at run time')
+  if (isUnwalkedWrite && rest.some(w => mayBeFlag(w) || isSplat(w, r.ps))) unreadCall(r, 'a word built at run time')
   switch (sub) {
     case 'commit':
       return gitCommit(st, rest, r)
@@ -576,6 +571,9 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
   plan.ghCalls++
   const { gi, ai } = ghWords(args, r)
+  // A splat up to the action word may hand over the subcommand or global options.
+  if (args.slice(0, (ai === -1 ? gi : ai) + 1).some(w => isSplat(w, r.ps)))
+    return void unreadCall(r, 'a gh subcommand built at run time')
   // The subcommand, or a `gh api` endpoint that may turn into a flag, built at run time.
   const isApi = args[gi]?.text === 'api'
   if (args[gi]?.dynamic || (args[ai] && (isApi ? mayBeFlag(args[ai]) : args[ai]?.dynamic)))

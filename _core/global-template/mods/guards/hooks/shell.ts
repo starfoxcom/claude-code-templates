@@ -547,11 +547,11 @@ class Reader {
 }
 
 // PowerShell computes an unquoted word that goes on past a quoted part (`'--x'.Trim()`, `'a'+'b'`) or past a
-// variable (`$o.Trim()`, `$a[0]`), or opens with a cast (`[string]'x'`). Inside double quotes it is text.
+// variable (`$o.Trim()`, `${o}[0]`), or opens with a cast (`[string]'x'`). Inside double quotes it is text.
 function isExpression(w: Word, c: string): boolean {
   if (c === '[' && w.text === '' && !w.quoted) return true
   if (w.quoted && c !== "'" && c !== '"') return true
-  return /[.[(+*]/.test(c) && /\$[A-Za-z_][\w:]*$/.test(w.text)
+  return /[.[(+*]/.test(c) && /\$([A-Za-z_][\w:]*|\{[^}]*\})$/.test(w.text)
 }
 
 export function parse(command: string, powershell: boolean): Statement[] {

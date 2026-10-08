@@ -788,3 +788,38 @@ test('a $(mktemp) file is a full path, so a folder change keeps it the written o
   expect(message(`F=$(mktemp -p .)\n${body}cd sub && git commit -F "$F"`)?.written).toBeUndefined()
   expect(message(`F=$(mktemp m.XXXX)\n${body}cd sub && git commit -F "$F"`)?.written).toBeUndefined()
 })
+
+// A PowerShell splat may hand over a subcommand or global options, and `--%` passes the rest raw.
+test('a PowerShell splat up to the subcommand, or raw mode, makes a write unread', () => {
+  const unread = [
+    "$a = @('-c','core.hooksPath=/dev/null'); git @a commit -m 'fix: x'",
+    'git @a push origin main',
+    'gh @a pr create -t t --body-file b.md',
+    'gh pr @a',
+    'git -C @a commit -m x',
+    'git -c @a commit -m x',
+    'git --git-dir @a commit -m x',
+    'git --% commit -m x %NV%',
+    'git push origin main --% %NV%',
+  ]
+  for (const command of unread) expect([command, inspect(command, true).unread]).not.toEqual([command, []])
+  // After the action word a splat is read entry by entry.
+  expect(inspect("$p = @{ title = 't' }; gh pr create @p", true).unread).toEqual([])
+})
+
+test('a braced variable with a member or an index is computed, never filled in', () => {
+  for (const tail of ['.Trim()', '[0]', '.Substring(1)']) {
+    const command = `$o = '--no-verify'; git push origin main \${o}${tail}`
+    expect([command, inspect(command, true).unread]).toEqual([command, ['a word built at run time']])
+  }
+})
+
+test('a file a fed writer reads is fed in turn, wherever the command runs', () => {
+  const command = "cat > a.md <<'EOF'\nthe body\nEOF\ncat a.md > /tmp/b.md\ngh pr create -t t --body-file /tmp/b.md"
+  const plan = inspect(command, false)
+  expect(plan.texts.some(t => t.text.includes('the body') && !t.creditOnly)).toBe(true)
+  expect(plan.files.find(f => f.path === 'a.md')?.written).toBe(true)
+  expect(inspect(`cd sub && ${command}`, false).files.find(f => f.path === 'a.md')?.written).toBe(true)
+  // A writer that reads its own file is fed once.
+  expect(inspect('cat m.md >> m.md; git commit -F m.md', false).files.length).toBeLessThan(5)
+})

@@ -1,5 +1,6 @@
-// How git's own words are read where they decide what a call does: tag and branch flags that list
-// instead of creating, a commit that takes the working tree, a `-c` setting that may move the hooks. Pure.
+// How the words of a git or gh call are read where they decide what it does: tag and branch flags that
+// list instead of creating, a commit that takes the working tree, a `-c` setting that may move the hooks,
+// and words built at run time that may become flags. Pure.
 
 import type { Word } from './shell'
 import { COMMIT, gitLong } from './specs'
@@ -41,3 +42,20 @@ export function isCommitAll(text: string): boolean {
   }
   return false
 }
+
+// A word the shell splits into more words at run time, which may carry options.
+export const splitsAt = (w: Word | undefined) => Boolean((w?.dynamic && w.splits) || w?.list || w?.expr)
+
+// A PowerShell splat (`@a`) hands over the items of a list: any words at all.
+export const isSplat = (w: Word | undefined, ps: boolean) => Boolean(ps && w && /^@\w/.test(w.text))
+
+// A call as the write patterns read it. A `;`, `&`, `|` or line break inside a quoted word is text there,
+// never the end of the call (`git -c 'x=!f() { a; }; f' push`).
+export const lineOf = (name: string, args: Word[]) =>
+  [name, ...args.map(a => a.text.replace(/[|;&\n]/g, ' '))].join(' ')
+
+// A word built at run time that the program may read as a flag: split by the shell, or starting with an
+// expansion or a dash.
+export const mayBeFlag = (w: Word) =>
+  w.list === true || w.expr === true || (w.dynamic && (w.splits === true || /^[-$`(]/.test(w.text)))
+
