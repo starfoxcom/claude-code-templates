@@ -81,6 +81,18 @@ const REDIRECT_ALONE = /^[\d*&]?(?:>>?|<)$/
 // inside a word is plain (`git@github.com:o/r.git`); a word that starts with one (`@`, `@{u}`, `@args`) is not.
 const LITERAL = /^[\w./:+^~,=-][\w./:+^~,=@-]*$/
 
+// A group of short flags split the way git reads it: `-fd` is `-f -d`, and an `o` takes the rest of the
+// group as its value (`-oci.skip`), or the next word when it ends the group (`-fo ci.skip`).
+function shortFlags(token: string): string[] {
+  if (!/^-[A-Za-z]{2,}/.test(token)) return [token]
+  const flags: string[] = []
+  for (let i = 1; i < token.length; i++) {
+    flags.push(`-${token[i]}`)
+    if (token[i] === 'o' && i + 1 < token.length) return [...flags, token.slice(i + 1)]
+  }
+  return flags
+}
+
 /** Each push's words, to the end of its statement, without redirects or a trailing comment; `isUnread` when
  * one of them is no plain name, so where it pushes cannot be read for sure. */
 function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnread: boolean }[] {
@@ -99,7 +111,7 @@ function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnr
         continue
       }
       isUnread ||= !LITERAL.test(token)
-      args.push(token)
+      args.push(...shortFlags(token))
     }
     return { args, isUnread }
   })
