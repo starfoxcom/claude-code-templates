@@ -22,6 +22,15 @@ export type Word = {
   expr?: boolean
   /** PowerShell: holds a quoted part, so an unquoted character after it makes the word an expression. */
   quoted?: boolean
+  /** Where in `text` a `$` or a backtick was typed as plain text (in single quotes, or escaped): the shell
+   * passes it on as is, so it starts no expansion. */
+  literals?: number[]
+}
+
+/** The word from `from` on (the value of `NAME=value`, `--opt=value`), its plain `$` kept where they are. */
+export function sliceWord(w: Word, from: number): Word {
+  const literals = w.literals?.map(at => at - from).filter(at => at >= 0)
+  return { ...w, text: w.text.slice(from), literals }
 }
 
 export type Statement = {
@@ -621,7 +630,8 @@ class Reader {
     const body = this.command.slice(this.i + open[0].length, end).replace(/\r$/, '')
     const w = this.startWord()
     if (w.text === '') w.literalStart = true
-    w.text += body
+    if (q === "'") plain(w, body)
+    else w.text += body
     if (q === '"' && /\$/.test(body)) w.dynamic = true
     this.i = close === -1 ? this.n : close + 3
     return true
@@ -671,7 +681,7 @@ class Reader {
     if (isExpansion) w.dynamic = true
     if (c === '`' && !this.powershell) return this.backtick(w)
     if (c === this.esc && this.i + 1 < this.n) {
-      w.text += this.at(1)
+      plain(w, this.at(1))
       this.i += 2
       return
     }
@@ -693,7 +703,7 @@ class Reader {
         j += 2
         continue
       }
-      w.text += this.command[j]
+      plain(w, this.command[j] ?? '')
       j++
     }
     this.i = j + 1
@@ -719,11 +729,17 @@ class Reader {
   // dropped whole): "C:\Users\me" stays as typed.
   private escapeInDouble(w: Word, d: string) {
     const nx = this.at(1)
-    if (this.powershell) w.text += ({ n: '\n', t: '\t', '`': '`' } as Record<string, string>)[nx] ?? nx
-    else if ('$`"\\'.includes(nx)) w.text += nx
+    if (this.powershell) plain(w, ({ n: '\n', t: '\t' } as Record<string, string>)[nx] ?? nx)
+    else if ('$`"\\'.includes(nx)) plain(w, nx)
     else if (nx !== '\n') w.text += d + nx
     this.i += 2
   }
+}
+
+// Adds text the shell passes on as typed, noting where a `$` or a backtick in it sits.
+function plain(w: Word, text: string) {
+  for (let k = 0; k < text.length; k++) if (/[$`]/.test(text[k] ?? '')) (w.literals ??= []).push(w.text.length + k)
+  w.text += text
 }
 
 // PowerShell computes an unquoted word that goes on past a quoted part (`'--x'.Trim()`, `'a'+'b'`) or past a

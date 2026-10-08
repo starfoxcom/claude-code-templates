@@ -109,7 +109,8 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
   for (const { where, path, written: fromCommand, folder, scripted, named } of plan.files) {
     const full = fileAt(path, folder, session, isBash)
     if (isUnplaced(path, folder)) {
-      if (!fromCommand || named) plan.unread.push(where)
+      const rewrites = named ? `, and another program in this command may write ${path}` : ''
+      if (!fromCommand || named) plan.unread.push(`${where} (in a folder unknown before it runs${rewrites})`)
       continue
     }
     let text: string
@@ -132,7 +133,7 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
       const isTmpGuess = isBash && live.isWindows && /^\/tmp(?:\/|$)/.test(path.replace(/\\/g, '/'))
       // The refusal names the way out: the file may exist where Git Bash put it, under another folder.
       if (isTmpGuess) {
-        plan.unread.push(`${where} (Git Bash's /tmp did not map to a folder the guard reads: give its Windows path)`)
+        plan.unread.push(`${where} (Git Bash's /tmp did not map to a folder the guard reads)`)
         continue
       }
       return `could not read the body file ${full} for ${where}. Write the file first, or check the path.`
@@ -220,6 +221,27 @@ async function checkPr($: Engine, plan: Plan, session: string, repo: string | un
 // The way out for each kind of unread entry; a message's is the last.
 const WAYS_OUT: [RegExp, string][] = [
   [
+    /in a folder unknown before it runs, and another program/,
+    'Give the body file its full path, and write it in an earlier command.',
+  ],
+  [
+    /in a folder unknown before it runs\)$/,
+    'Give the body file its full path, or run the command in a folder named out (`cd <path>`).',
+  ],
+  [/Git Bash's \/tmp did not map/, "Give the body file's Windows path."],
+  [
+    /^an environment variable named at run time/,
+    'Type the name of each environment variable the command sets (`export NAME=value`, `$env:NAME = ...`).',
+  ],
+  [
+    /^a cmd script built at run time/,
+    'Give `cmd /c` one plain command, with no `%NAME%`, `^`, `&` or `|`: run each command in a call of its own.',
+  ],
+  [
+    /^a \w+ script built at run time/,
+    'Write the script out, with no variable or `$(...)` in it, or run its git and gh calls on their own.',
+  ],
+  [
     /folder or repo built at run time/,
     'Run it in a folder named out (`cd <path>` or `git -C <path>`), with no git folder or repo set at run time.',
   ],
@@ -240,8 +262,11 @@ const WAYS_OUT: [RegExp, string][] = [
   ],
 ]
 
+/** The way out for an unread entry of its own kind; undefined for a message, which gets the shared one. */
+export const wayOut = (where: string) => WAYS_OUT.find(([kind]) => kind.test(where))?.[1]
+
 function unreadReason(where: string): string {
-  const way = WAYS_OUT.find(([kind]) => kind.test(where))?.[1]
+  const way = wayOut(where)
   if (way) return `${where} cannot be read. ${way}`
   return (
     `${where} is built in a way the guard cannot read (a variable set outside this command, another ` +

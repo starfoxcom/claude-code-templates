@@ -56,7 +56,7 @@ import {
 } from './gitwords'
 import { script } from './scripts'
 import { mayWriteFiles, programOf, runsInlineCode, setsRunner } from './programs'
-import { parse } from './shell'
+import { parse, sliceWord } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
 import { assignPsTargets, forgetOutVars, psAssignment, withWords } from './vars'
 import type { Var, VarState } from './vars'
@@ -322,7 +322,7 @@ function readEval(st: Statement, args: Word[], r: Reading) {
     if (!m) continue
     names.push(m[1] ?? '')
     // An append (`M+=x eval ...`) is left unknown.
-    setVar(r, m[1] ?? '', m[2] ? undefined : { ...w, text: w.text.slice(m[0].length) })
+    setVar(r, m[1] ?? '', m[2] ? undefined : sliceWord(w, m[0].length))
   }
   readInPlace(parse(e.text, r.ps), r, 'e', st.isDeferred)
   for (const name of names) setVar(r, name, undefined)
@@ -486,8 +486,12 @@ function gitSubcommand(args: Word[], r: Reading): number {
       }
       if (splitsAt(args[k + 1]) || isSplat(args[k + 1], r.ps)) unreadCall(r, 'a git option built at run time')
       k += 2
-    } else if (t.startsWith('-')) k++
-    else break
+    } else if (t.startsWith('-')) {
+      // The joined `--config-env=<key>=<variable>` is judged as the spaced one is.
+      const joined = t.startsWith('--config-env=') ? sliceWord(args[k] as Word, '--config-env='.length) : undefined
+      if (isUnknownSetting(joined)) unreadCall(r, 'a git setting built at run time')
+      k++
+    } else break
   }
   return k
 }
@@ -558,7 +562,7 @@ function ghWords(args: Word[], r: Reading): { gi: number; ai: number } {
     if (t === '-R' || t === '--repo') {
       const value = args[++i]
       if (value) take('repo', value, r, '')
-    } else if (t.startsWith('--repo=')) take('repo', { ...(args[i] as Word), text: t.slice(7) }, r, '')
+    } else if (t.startsWith('--repo=')) take('repo', sliceWord(args[i] as Word, 7), r, '')
     else if (t.startsWith('-')) continue
     else if (gi === -1) gi = i
     else ai = i
@@ -655,7 +659,7 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string, sub?: string)
       const eq = full.indexOf('=')
       const kind = spec[eq === -1 ? full : full.slice(0, eq)]
       if (!kind || kind === 'attached') continue
-      const value = eq === -1 ? args[++i] : { ...w, text: full.slice(eq + 1) }
+      const value = eq === -1 ? args[++i] : sliceWord(w, t.length - (full.length - eq - 1))
       if (value) take(kind, value, r, where)
       else missing(kind, r, where)
       continue
@@ -711,7 +715,7 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
     case 'file': {
       if (value.text === '-') return void r.stdin++
       if (!value.dynamic) return void pushFile(r, where, value.text)
-      const e = expand(value.text, r)
+      const e = expand(value.text, r, value.literals)
       if (!e.unresolved) return void pushFile(r, where, e.text)
       // A file this command writes under the same spelling (`F=$(mktemp); cat > "$F"`), with every
       // variable in it unchanged since: the same file.
@@ -777,7 +781,7 @@ function message(value: Word, r: Reading, where: string) {
   for (const body of value.bodies) plan.texts.push({ where, text: body })
   plan.texts.push({ where, text: value.text, creditOnly: true })
   if (held(value, r, where)) return
-  const e = expand(value.text, r)
+  const e = expand(value.text, r, value.literals)
   plan.texts.push({ where, text: e.text })
   // Variables that hold a file's text (`BODY=$(cat b.md)`): the file is read instead.
   if (e.isFilesOnly) for (const path of e.files) pushFile(r, where, path)
