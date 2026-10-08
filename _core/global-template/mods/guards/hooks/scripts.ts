@@ -1,7 +1,7 @@
 // Shells that run a script given on their command line or fed to them: `bash -c '...'`, `bash <<'EOF'`,
 // `powershell -Command "..."`, `cmd /c ...`. The script is read as commands of its own. Pure.
 
-import { joinWords } from './quoting'
+import { joinWords, sliceWord } from './quoting'
 import { parse } from './shell'
 import type { Statement, Word } from './shell'
 
@@ -115,4 +115,17 @@ function psScript(
     else if (p === 'version' && name === 'powershell') i++
   }
   return undefined
+}
+
+// The text `Invoke-Expression` runs: past its `-Command` (any prefix, or `-Command:'...'`), or, with none,
+// what comes down the pipe: the statement before, read whole when it is one value.
+export function psEvalWords(st: Statement, args: Word[], prev?: Statement): Word[] {
+  const [first] = args
+  const command = /^-c(?:o(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?)?(?::(.+))?$/i.exec(first?.text ?? '')
+  const value = command?.[1]
+  if (first && value) return [sliceWord(first, first.text.length - value.length), ...args.slice(1)]
+  if (command) return args.slice(1)
+  if (args.length > 0 || !st.pipeIn || !prev) return args
+  if (prev.words.length === 1) return prev.words
+  return [{ text: prev.words.map(w => w.text).join(' '), dynamic: true, bodies: [] }]
 }

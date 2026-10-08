@@ -53,12 +53,13 @@ import {
   writesAsAny,
   writesHistory,
 } from './gitwords'
-import { script } from './scripts'
+import { psEvalWords, script } from './scripts'
 import { mayWriteFiles, programOf, runsInlineCode, setsRunner } from './programs'
 import { joinWords, sliceWord } from './quoting'
 import { parse } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
-import { assignPsTargets, forgetOutVars, knownPath, psAssignment, varsIn, withWords } from './vars'
+import { assignPsTargets, forgetOutVars, knownPath, psAssignment, setCounts, setsNameAtRunTime } from './vars'
+import { varsIn, withWords } from './vars'
 import type { Var, VarState } from './vars'
 import {
   COMMIT,
@@ -118,6 +119,8 @@ type Reading = VarState & {
   ranScript?: boolean
   /** A statement runs `eval` or `Invoke-Expression`. */
   hasEval?: boolean
+  /** A hook manager's switch was set for what follows (`export HUSKY=0`). */
+  hooksOff?: boolean
 }
 
 export function inspect(command: string, powershell: boolean): Plan {
@@ -141,6 +144,7 @@ export function inspect(command: string, powershell: boolean): Plan {
     ps: powershell,
     vars: new Map(),
     isIfsSet: /\bIFS\b/.test(command),
+    sets: setCounts(command, powershell),
     scope: '',
     opened: 0,
     writers: [],
@@ -190,7 +194,12 @@ export function inspect(command: string, powershell: boolean): Plan {
 
 // `outer`: where commands from a `$(...)` or a `bash -c` script run; their own subshells nest inside it.
 function read(statements: Statement[], r: Reading, outer?: string) {
-  statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r, outer))
+  statements.forEach((st, idx) => {
+    const was = r.isDeferredRead
+    r.isDeferredRead = was || st.isDeferred
+    readStatement(st, statements[idx - 1], r, outer)
+    r.isDeferredRead = was
+  })
 }
 
 function readStatement(typed: Statement, prev: Statement | undefined, r: Reading, outer?: string) {
@@ -220,12 +229,13 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
     r.writers.push({ st, ps: r.ps, scope, vars: varsIn(path, r), folder: at, path: norm(path) })
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
-  plan.block ??= bypassOf(st, name, args)
+  plan.block ??= bypassOf(st, name, args, r)
   for (const what of builtReasons(st, name, args, r)) unreadCall(r, what)
   const moves = repoMoves(st, name, args)
   r.mayRewrite ||= setsRunner(st)
   r.isRepoMoved ||= moves.movesLater
-  if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r)
+  if (!r.ps && setsNameAtRunTime(name, args)) r.isSourced = true
+  if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r, prev)
   if (!r.ps && name === 'trap') return readTrap(args, r)
   // A PowerShell assignment sets its variables; a command after its operator (`$r = git push`) is read in turn.
   if (assignment) assignPsTargets(st, assignment, r)
@@ -281,8 +291,9 @@ function readWrite(st: Statement, prev: Statement | undefined, name: string, arg
 // `eval` and `Invoke-Expression` run their words as a command in this same shell: read here, with the
 // variables set earlier filled in. Words built in a way the reading cannot follow hide the command, so
 // they are refused when their text names a history write.
-function readEval(st: Statement, args: Word[], r: Reading) {
+function readEval(st: Statement, typed: Word[], r: Reading, prev?: Statement) {
   r.hasEval = true
+  const args = r.ps ? psEvalWords(st, typed, prev) : typed
   const { text, literals } = joinWords(args)
   const e = args.some(a => a.dynamic) ? expand(text, r, literals) : { text, unresolved: false }
   if (e.unresolved) {
@@ -317,8 +328,10 @@ function readTrap(args: Word[], r: Reading) {
   const e = action.dynamic ? expand(action.text, r, action.literals) : { text: action.text, unresolved: false }
   if (!e.unresolved) return readInPlace(parse(e.text, false), r, 'c', true)
   if (evalWrites(parse(action.text, false), false)) r.plan.block ??= TRAP
-  // An `EXIT` trap runs once every command is done; any other may run before any of them and set anything.
-  if (args.slice(k + 1).every(a => !a.dynamic && /^(EXIT|SIGEXIT|0)$/i.test(a.text))) return
+  // An `EXIT` trap of the command's own shell runs once every command is done; one set in a subshell or a
+  // child shell runs as that ends, and any other may run before any command and set anything.
+  const isTop = !/(^|\/)(\d+|s\d+|p\d+)(\/|$)/.test(r.scope)
+  if (isTop && args.slice(k + 1).every(a => !a.dynamic && /^(EXIT|SIGEXIT|0)$/i.test(a.text))) return
   r.mayRewrite = true
   r.isSourced = true
 }
