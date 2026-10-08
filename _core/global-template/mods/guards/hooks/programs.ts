@@ -201,5 +201,7 @@ function gitMayWrite(args: Word[]): boolean {
 function isNewBranch(sub: string, rest: Word[]): boolean {
   const [flag, name, more] = rest
   const flags = sub === 'checkout' ? /^-[bB]$/ : sub === 'switch' ? /^(-[cC]|--create|--force-create)$/ : null
-  return Boolean(flags?.test(flag?.text ?? '') && name && !name.dynamic && !name.text.startsWith('-') && !more)
+  // A PowerShell splat, list or expression (`@a`, `'f','HEAD~1'`) may hand git a start point too.
+  const isOne = name && !name.dynamic && !name.list && !name.expr && !/^[-@]/.test(name.text)
+  return Boolean(flags?.test(flag?.text ?? '') && isOne && !more)
 }

@@ -56,9 +56,10 @@ import {
 } from './gitwords'
 import { script } from './scripts'
 import { mayWriteFiles, programOf, runsInlineCode, setsRunner } from './programs'
-import { parse, sliceWord } from './shell'
+import { joinWords, sliceWord } from './quoting'
+import { parse } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
-import { assignPsTargets, forgetOutVars, psAssignment, withWords } from './vars'
+import { assignPsTargets, forgetOutVars, knownPath, psAssignment, varsIn, withWords } from './vars'
 import type { Var, VarState } from './vars'
 import {
   COMMIT,
@@ -236,7 +237,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const st = env?.statement ?? filled
   if (env && env.name === undefined) r.isEnvUnknown = true
   // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
-  const writes = st.writes.map(path => knownPath(path, r) ?? path)
+  const writes = st.writes.map((path, i) => knownPath(st.writeWords?.[i] ?? path, r) ?? path)
   const at = placeHere(r).folder
   plan.written.push(...writes.map(path => ({ path, folder: at })))
   for (const path of writes)
@@ -306,8 +307,8 @@ function readWrite(st: Statement, prev: Statement | undefined, name: string, arg
 // they are refused when their text names a history write.
 function readEval(st: Statement, args: Word[], r: Reading) {
   r.hasEval = true
-  const text = args.map(a => a.text).join(' ')
-  const e = args.some(a => a.dynamic) ? expand(text, r) : { text, unresolved: false }
+  const { text, literals } = joinWords(args)
+  const e = args.some(a => a.dynamic) ? expand(text, r, literals) : { text, unresolved: false }
   if (e.unresolved) {
     if (evalWrites(parse(text, r.ps), r.ps)) r.plan.block ??= EVAL
     // Text the reading cannot know may run any program.
@@ -358,8 +359,8 @@ function readScript(st: Statement, name: string, args: Word[], r: Reading): bool
   if (!inner) return false
   // A script held in a variable set earlier in the command, or a here-doc that names one, is read with
   // its value.
-  const fill = inner.isBody ? expandBody : expand
-  const e = inner.dynamic && inner.text !== undefined ? fill(inner.text, r) : undefined
+  const text = inner.dynamic ? inner.text : undefined
+  const e = text === undefined ? undefined : inner.isBody ? expandBody(text, r) : expand(text, r, inner.literals)
   const isKnown = e !== undefined && !e.unresolved
   const ps = r.ps
   const writes = r.writes
@@ -392,8 +393,18 @@ function readSplats(args: Word[], r: Reading, where: string) {
   }
 }
 
+// The files fed through `<`, read for `where`: one built at run time in a way the reading does not know
+// names it unread.
+function readFiles(st: Statement, r: Reading, where: string) {
+  for (const [i, path] of st.reads.entries()) {
+    const full = knownPath(st.readWords?.[i] ?? path, r)
+    if (full === undefined) r.plan.unread.push(where)
+    else pushFile(r, where, full)
+  }
+}
+
 function readStdin(st: Statement, prev: Statement | undefined, r: Reading, where: string) {
-  if (st.reads.length > 0) for (const path of st.reads) pushFile(r, where, path)
+  if (st.reads.length > 0) readFiles(st, r, where)
   else if (st.pipeIn && prev) feed(prev, r, where)
   else r.plan.unread.push(where)
 }
@@ -406,7 +417,7 @@ function feed(st: Statement, r: Reading, where: string) {
   if (/^(cat|type|get-content|gc)$/.test(name)) {
     const paths = args.filter(a => !a.text.startsWith('-'))
     for (const p of paths) take('file', p, r, where)
-    for (const path of st.reads) pushFile(r, where, path)
+    readFiles(st, r, where)
     if (paths.length + st.reads.length + st.heredocs.length === 0) plan.unread.push(where)
     return
   }
@@ -419,11 +430,6 @@ function feed(st: Statement, r: Reading, where: string) {
   // Another program's output: its words are checked for credit, the output itself cannot be read.
   for (const w of st.words) plan.texts.push({ where, text: w.text, creditOnly: true })
   plan.unread.push(where)
-}
-
-// The values of the variables a path names, as they stand where the path is written.
-function varsIn(path: string, r: Reading): (Var | undefined)[] {
-  return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
 }
 
 // A body file named here, matched to the statements that wrote it so far, if any.
@@ -682,7 +688,7 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string, sub?: string)
         if (!kind) continue
         if (kind === 'attached') break
         const attached = t.slice(j + 1)
-        const value = attached ? { ...w, text: attached } : args[++i]
+        const value = attached ? sliceWord(w, j + 1) : args[++i]
         if (value) take(kind, value, r, where)
         else missing(kind, r, where)
         break
@@ -737,35 +743,28 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       r.method = value.text.toUpperCase()
       return
     case 'branch':
-      if (value.dynamic) unreadCall(r, 'the new branch name')
+      // A PowerShell splat or list hands git several words: a start point after the name, perhaps.
+      if (value.dynamic || isMany || value.list) unreadCall(r, 'the new branch name')
       else plan.branches.push(value.text)
       return
     case 'field': {
       const eq = value.text.indexOf('=')
       // A whole field built at run time (`-f "$KV"`): its value cannot be read.
       if (eq === -1 && value.dynamic) return void (where && plan.unread.push(where))
-      const v = eq === -1 ? '' : value.text.slice(eq + 1)
-      if (v === '@-') return void r.stdin++
-      if (v.startsWith('@')) return filePath(v.slice(1), r, where)
-      return message({ ...value, text: v }, r, where)
+      const v = sliceWord(value, eq === -1 ? value.text.length : eq + 1)
+      if (v.text === '@-') return void r.stdin++
+      if (v.text.startsWith('@')) return filePath(sliceWord(v, 1), r, where)
+      return message(v, r, where)
     }
     case 'data':
       if (value.text === '@-') return void r.stdin++
-      if (value.text.startsWith('@')) return filePath(value.text.slice(1), r, where)
+      if (value.text.startsWith('@')) return filePath(sliceWord(value, 1), r, where)
       return message(value, r, where)
   }
 }
 
-// A path as the command will use it: variables set earlier filled in; undefined when part of it is built
-// at run time in a way the reading does not know.
-function knownPath(path: string, r: Reading): string | undefined {
-  if (!/[$`]/.test(path)) return path
-  const e = expand(path, r)
-  return e.unresolved ? undefined : e.text
-}
-
 // A body file named after `@` in a field (`-F query=@$q`): read from its full path, or named unread.
-function filePath(path: string, r: Reading, where: string) {
+function filePath(path: Word, r: Reading, where: string) {
   const full = knownPath(path, r)
   if (full === undefined) return void r.plan.unread.push(where)
   pushFile(r, where, full)
