@@ -81,10 +81,23 @@ const REDIRECT_ALONE = /^[\d*&]?(?:>>?|<)$/
 // inside a word is plain (`git@github.com:o/r.git`); a word that starts with one (`@`, `@{u}`, `@args`) is not.
 const LITERAL = /^[\w./:+^~,=-][\w./:+^~,=@-]*$/
 
+// The options `git push` takes, without an `=<value>`. Any other word that starts with `-` (an unknown
+// option, `--`, an abbreviation git would expand) cannot be read for sure.
+const PUSH_FLAGS = new Set([
+  ...['-v', '--verbose', '-q', '--quiet', '-n', '--dry-run', '--porcelain', '--progress', '--no-progress'],
+  ...['-f', '--force', '--force-with-lease', '--no-force-with-lease', '--force-if-includes'],
+  ...['--no-force-if-includes', '-u', '--set-upstream', '--all', '--branches', '--mirror', '--tags'],
+  ...['--follow-tags', '--no-follow-tags', '-d', '--delete', '--prune', '--atomic', '--no-atomic'],
+  ...['--signed', '--no-signed', '--verify', '--no-verify', '--thin', '--no-thin', '-4', '--ipv4'],
+  ...['-6', '--ipv6', '-o', '--push-option', '--repo', '--receive-pack', '--exec'],
+  ...['--recurse-submodules', '--no-recurse-submodules'],
+])
+const isKnownFlag = (word: string) => !word.startsWith('-') || PUSH_FLAGS.has(word.replace(/=[\s\S]*/, ''))
+
 // A group of short flags split the way git reads it: `-fd` is `-f -d`, and an `o` takes the rest of the
 // group as its value (`-oci.skip`), or the next word when it ends the group (`-fo ci.skip`).
 function shortFlags(token: string): string[] {
-  if (!/^-[A-Za-z]{2,}/.test(token)) return [token]
+  if (!/^-[A-Za-z0-9]{2,}/.test(token)) return [token]
   const flags: string[] = []
   for (let i = 1; i < token.length; i++) {
     flags.push(`-${token[i]}`)
@@ -110,8 +123,10 @@ function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnr
         if (REDIRECT_ALONE.test(token)) i++
         continue
       }
-      isUnread ||= !LITERAL.test(token)
-      args.push(...shortFlags(token))
+      // In PowerShell a comma splits a word into several arguments.
+      const flags = shortFlags(token)
+      isUnread ||= !LITERAL.test(token) || (isPowerShell && token.includes(',')) || !flags.every(isKnownFlag)
+      args.push(...flags)
     }
     return { args, isUnread }
   })
