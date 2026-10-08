@@ -8,6 +8,7 @@ import {
   IDLE_COMPACT_MIN_TOKENS,
   idleCompactAt,
   idleCompactMin,
+  isIdleCompactDue,
   nextLifetime,
   parseMemory,
   PREPARE_DIR,
@@ -149,6 +150,8 @@ const live: {
   cacheCheck?: CacheCheck
   // The context size Claude Code's idle compaction starts at.
   idleCompactMinTokens: number
+  // The reply the mod's own idle compaction last ran for: once per reply.
+  idleTriedFor?: number
   // The model of the last response and whether a compaction ran since: either starts the cache over.
   lastModel?: string
   isWindowFresh: boolean
@@ -228,9 +231,20 @@ async function refreshBudgets($: EngineInterface): Promise<void> {
       cacheWarnMinutes: live.cacheWarnMinutes,
     }
     await update($, budgets, () => next)
+    await idleCompact($, next)
   } catch {
     // The row keeps its last reading.
   }
+}
+
+// Claude Code 2.1.293 no longer compacts an idle conversation itself (mods NOTES, 2026-10-07): a minute
+// past its time, with no compaction since the last reply, the mod does, once per reply. The engine
+// refuses it while a turn runs; the next reply then starts the count over.
+async function idleCompact($: EngineInterface, shown: Budgets): Promise<void> {
+  const { idleCompactAt: idleAt, cacheExpiresAt: expiresAt } = shown
+  if (!isIdleCompactDue(await $.clock.now(), idleAt, expiresAt, live.lastResponseAt, live.idleTriedFor)) return
+  live.idleTriedFor = live.lastResponseAt
+  await $.session.compact().catch(() => undefined)
 }
 
 // The first request after a prompt is the one a cold cache makes pay for the whole conversation.
