@@ -108,10 +108,12 @@ function world(on: On, env: Record<string, string> = {}) {
   })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
-  // Each compaction the engine runs, by its trigger.
+  // Each compaction the engine runs, by its trigger; one waits on `hold.until` when a test sets it.
   const compactions: string[] = []
-  on('session.compact', ($, e) => {
+  const hold: { until?: Promise<void> } = {}
+  on('session.compact', async ($, e) => {
     compactions.push(String(e.trigger))
+    await hold.until
     return { messages: [{ role: 'user', text: 'SUMMARY', toolUses: [] }], tokensAfter: 40_000 } as never
   })
   // turn.step streams: the stand-in for the model answers with no chunks, at the usage the test set.
@@ -124,7 +126,7 @@ function world(on: On, env: Record<string, string> = {}) {
   on('turn.complete', () => ({ text: '' }))
   on('classic.Stop', () => ({}) as never)
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
-  return { clock, reply, transcript, files, compactions }
+  return { clock, reply, transcript, files, compactions, hold }
 }
 
 // A streaming event runs only as it is read.
@@ -454,5 +456,39 @@ test('a conversation under the minimum is never compacted on idle', async ($, on
   await start($)
   await turn($)
   await clock.advance(70 * MINUTE)
+  expect(compactions).toEqual([])
+})
+
+test("the engine's own idle compaction runs first: the mod stays out", async ($, on) => {
+  const { clock, compactions } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(54 * MINUTE + 30_000)
+  await $.session.compact(COMPACTION)
+  await clock.advance(4 * MINUTE)
+  expect(compactions).toHaveLength(1)
+})
+
+test('a compaction still running past the grace minute is never joined by a second one', async ($, on) => {
+  const { clock, compactions, hold } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(54 * MINUTE + 30_000)
+  let release = () => {}
+  hold.until = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const running = $.session.compact(COMPACTION)
+  await clock.advance(4 * MINUTE)
+  expect(compactions).toHaveLength(1)
+  release()
+  await running
+})
+
+test('a session resumed past the idle time is in use again: no compaction', async ($, on) => {
+  const { clock, files, compactions } = world(on)
+  files.set(MEMORY, JSON.stringify({ lastResponseAt: NOW - 55 * MINUTE, lifetimeMs: HOUR, isLifetimeRead: true }))
+  await start($)
+  await clock.advance(2 * MINUTE)
   expect(compactions).toEqual([])
 })
