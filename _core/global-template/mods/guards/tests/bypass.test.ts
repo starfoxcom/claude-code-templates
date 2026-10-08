@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { readCommand } from '../hooks/inspect'
+import { inspect, readCommand } from '../hooks/inspect'
 
 // Each route around the check, refused: `[command, part of the reason, PowerShell]`.
 const REFUSED: [string, string, boolean?][] = [
@@ -276,9 +276,15 @@ for (const [command, reason] of HIDDEN_REFUSED) {
   })
 }
 
+// Through `inspect`, the entry the hook calls: a hook manager named alone is no write, so the plain rule
+// never holds it; only its `uninstall` is refused.
 test('lefthook run or installed through a runner, and a backtick read, pass', () => {
-  for (const command of ['npx lefthook install', 'npx lefthook run pre-commit', 'echo `date`']) {
+  for (const command of ['npx lefthook install', 'npx lefthook run pre-commit', 'echo `date`', 'npm i -D husky']) {
     expect([command, readCommand(command, false).block]).toEqual([command, undefined])
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+  for (const command of ['npx lefthook uninstall', 'pre-commit uninstall']) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('git hooks off')])
   }
 })
 

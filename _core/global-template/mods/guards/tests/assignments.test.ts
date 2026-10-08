@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { readCommand } from '../hooks/inspect'
+import { inspect, readCommand } from '../hooks/inspect'
 import { notPlain } from '../hooks/plain'
 import { wayOut } from '../hooks/register'
 
@@ -577,8 +577,11 @@ test('switches reach git calls, iex reads its input, and deferred or run-time na
     'SKIP=eslint pre-commit run --all-files',
     'SKIP=1 make test',
     'skip=0; ls',
+    'pre-commit run --all-files',
+    'pytest tests/test_pre_commit.py',
   ]) {
     expect([command, read(command).block]).toEqual([command, undefined])
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
   }
   for (const command of [
     'SKIP=x git commit -m y',
