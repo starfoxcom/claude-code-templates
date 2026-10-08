@@ -630,3 +630,49 @@ test('a backslash here-doc, a mktemp body file, a plain setting and pushd/popd p
   expect([popped.unread, popped.files[0]?.folder]).toEqual([[], { isUnknown: false }])
   expect(read('git config --get core.hooksPath').block).toBeUndefined()
 })
+
+// A value the shell splits at run time, a config word built at run time, a file matched to the wrong
+// writer, and a folder moved by a stack option or inside a subshell.
+test('a value that may split into more options is unread', () => {
+  for (const [command, what] of [
+    ["git -c user.name=$N commit -m 'fix: x'", 'a git option built at run time'],
+    ['git -C $DIR commit -m x', 'a git option built at run time'],
+    ["git commit --date $D -m 'fix: x'", 'the commit message'],
+    ['gh pr create -t t --body-file b.md --base $B', 'the PR text'],
+  ]) {
+    expect(inspect(command as string, false).unread).toContain(what)
+  }
+  expect(inspect('gh pr create -t t --body-file b.md --base "$B"', false).unread).toEqual([])
+})
+
+test('a git config word built at run time where the key stands, or beside a hooks key, is refused', () => {
+  for (const command of ['git config $SCOPE core.hooksPath /dev/null', 'git config --unset $K', 'git config $K /x']) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('built at run time')])
+  }
+  expect(inspect('git config user.email "$E"', false).block).toBeUndefined()
+})
+
+test('each body file is read from the writer it was named after', () => {
+  const plan = (c: string, ps = false) => inspect(c, ps)
+  const two = plan(
+    "F=$(mktemp); cat > \"$F\" <<'EOF'\nfix: first\nEOF\ngit commit -F \"$F\"\n" +
+      "F=$(mktemp); cat > \"$F\" <<'EOF'\n## What\nEOF\ngh pr create -t t --body-file \"$F\"",
+  )
+  const texts = two.texts.filter(t => t.where.startsWith('the commit message')).map(t => t.text)
+  expect(texts).toContain('fix: first')
+  // No tracked variable in the spelling, or one changed in place: not the same file.
+  expect(plan("set -- a.md b.md; cat > \"$1\" <<'EOF'\nx\nEOF\nshift; git commit -F \"$1\"").unread).toEqual([
+    'the commit message',
+  ])
+  expect(plan("$f = 'b.md'; 'fix: x' > $f; $f += '.2'; gh pr create -t t --body-file $f", true).unread).toEqual([
+    'the PR text',
+  ])
+})
+
+test('a folder moved by a stack option, or inside a subshell, is read as the shell moves it', () => {
+  const folder = (c: string) => inspect(c, false).files[0]?.folder
+  expect(folder('pushd docs; popd +1; git commit -F msg.txt')).toEqual({ isUnknown: true })
+  expect(folder('pushd -n docs; git commit -F msg.txt')).toEqual({ isUnknown: true })
+  expect(folder('pushd docs; (popd; make); git commit -F msg.txt')).toEqual({ path: 'docs', isUnknown: false })
+  expect(folder('(cd sub && make); git commit -F m.txt')).toEqual({ isUnknown: false })
+})

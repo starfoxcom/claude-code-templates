@@ -25,6 +25,8 @@ import { bypassOf, EVAL } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import type { PrCall } from './prbody'
+import { moveFolder, movePlace, placeHere } from './folders'
+import type { Folder, Place } from './folders'
 import { script } from './scripts'
 import { parse, programOf, runsInlineCode } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, setVar, within, withWords } from './vars'
@@ -83,8 +85,7 @@ export type Plan = {
   ghCalls: number
 }
 
-/** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
-export type Folder = { path?: string; isUnknown: boolean }
+export type { Folder } from './folders'
 
 // The statement that writes a file, where it runs, and the values of the variables its path names there.
 type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[] }
@@ -92,16 +93,16 @@ type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefine
 // The reading's working state while it walks one command.
 type Reading = VarState & {
   plan: Plan
-  /** The folder each `cd` so far leads to. */
-  folder: Folder
+  /** The folder each `cd` so far leads to, and the `pushd` stack, by the scope that moved them. */
+  places: Map<string, Place>
+  /** Body files matched to the statement that wrote them under the same spelling. */
+  matched: Map<object, Writer>
   /** A `git -C <dir>` on the statement being read: its folder, for this statement only. */
   statementDir?: Word
   /** `$(...)` substitutions and child shells read so far, which number their scopes. */
   opened: number
   /** The statement that writes each file (`> file`), by normalized path, with where it runs. */
   writers: Map<string, Writer>
-  /** The folders `pushd` and `Push-Location` left, most recent last. */
-  folders: Folder[]
   /** Message routes read from stdin so far (`-F -`, `--body-file -`, `--input -`, `body=@-`). */
   stdin: number
   /** Write statements found so far. */
@@ -131,13 +132,13 @@ export function inspect(command: string, powershell: boolean): Plan {
   }
   const r: Reading = {
     plan,
-    folder: { isUnknown: false },
+    places: new Map([['', { folder: { isUnknown: false }, folders: [] }]]),
+    matched: new Map(),
     ps: powershell,
     vars: new Map(),
     scope: '',
     opened: 0,
     writers: new Map(),
-    folders: [],
     stdin: 0,
     writes: 0,
   }
@@ -151,7 +152,7 @@ export function inspect(command: string, powershell: boolean): Plan {
   // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
   // so that is noted, not refused.
   for (const f of [...plan.files]) {
-    const writer = r.writers.get(norm(f.path))
+    const writer = r.matched.get(f) ?? r.writers.get(norm(f.path))
     if (!writer) continue
     f.written = true
     const before = plan.unread.length
@@ -215,9 +216,16 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
     const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
     if (!plan.cwd && !plan.isCwdUnknown && target) setCwd(plan, target)
-    // `popd` returns to the folder its `pushd` left; with none left the folder is unknown.
-    if (PUSH_NAMES.has(name)) r.folders.push(r.folder)
-    r.folder = POP_NAMES.has(name) ? (r.folders.pop() ?? { isUnknown: true }) : moveFolder(r.folder, target)
+    const place = movePlace(r)
+    // `pushd -n`, `popd +1`: an option or a stack place the reading does not follow leaves it unknown.
+    const isStack = PUSH_NAMES.has(name) || POP_NAMES.has(name)
+    if (isStack && args.some(a => /^[-+]/.test(a.text))) place.folder = { isUnknown: true }
+    else {
+      // `popd` returns to the folder its `pushd` left; with none left the folder is unknown.
+      if (PUSH_NAMES.has(name)) place.folders.push(place.folder)
+      const popped = POP_NAMES.has(name) ? (place.folders.pop() ?? { isUnknown: true }) : undefined
+      place.folder = popped ?? moveFolder(place.folder, target)
+    }
     return
   }
   if (readScript(st, name, args, r)) return
@@ -229,7 +237,8 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   r.statementDir = undefined
   readWrite(st, prev, name, args, r)
   // Each body file keeps the folder in effect where it is named: `cd a && ... && cd b` moves it on.
-  const folder = r.statementDir ? moveFolder(r.folder, r.statementDir) : r.folder
+  const here = placeHere(r).folder
+  const folder = r.statementDir ? moveFolder(here, r.statementDir) : here
   for (const f of plan.files.slice(before)) {
     f.folder ??= folder
     if (r.ranScript) f.scripted = true
@@ -263,15 +272,6 @@ function readWrite(st: Statement, prev: Statement | undefined, name: string, arg
 }
 
 const POP_NAMES = new Set(['popd', 'pop-location'])
-
-// The folder after a `cd`: a literal target composes onto it, anything else (`$DIR`, `-`, `popd`, no
-// target) leaves it unknown.
-function moveFolder(folder: Folder, target: Word | undefined): Folder {
-  if (folder.isUnknown || !target || target.dynamic || target.text === '-') return { isUnknown: true }
-  const dir = target.text.replace(/\\/g, '/')
-  if (/^([a-zA-Z]:)?\/|^~/.test(dir) || folder.path === undefined) return { path: dir, isUnknown: false }
-  return { path: `${folder.path.replace(/\/$/, '')}/${dir}`, isUnknown: false }
-}
 
 // `eval` and `Invoke-Expression` run their words as a command in this same shell: read here, with the
 // variables set earlier filled in. Words built in a way the reading cannot follow hide the command, so
@@ -381,6 +381,9 @@ function varsIn(path: string, r: Reading): (Var | undefined)[] {
   return [...path.matchAll(/\$\{?([A-Za-z_]\w*)\}?/g)].map(m => lookup(r, m[1] ?? ''))
 }
 
+// A word the shell splits into more words at run time, which may carry options.
+const splitsAt = (w: Word | undefined) => Boolean(w?.dynamic && w.splits)
+
 // A call whose own words are built at run time: a write, since what it does cannot be read.
 function unreadCall(r: Reading, what: string) {
   r.plan.isWrite = true
@@ -433,6 +436,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
   while (k < args.length) {
     const t = args[k]?.text ?? ''
     if (t === '-C') {
+      if (splitsAt(args[k + 1])) unreadCall(r, 'a git option built at run time')
       if (!plan.cwd && !plan.isCwdUnknown) setCwd(plan, args[k + 1])
       r.statementDir = args[k + 1]
       k += 2
@@ -441,6 +445,7 @@ function gitSubcommand(args: Word[], r: Reading): number {
       if ((t === '-c' || t === '--config-env') && isUnknownSetting(args[k + 1])) {
         unreadCall(r, 'a git setting built at run time')
       }
+      if (splitsAt(args[k + 1])) unreadCall(r, 'a git option built at run time')
       k += 2
     } else if (t.startsWith('-')) k++
     else break
@@ -683,6 +688,8 @@ function missing(kind: Kind, r: Reading, where: string) {
 
 function take(kind: Kind, value: Word, r: Reading, where: string) {
   const { plan } = r
+  // A value the shell splits at run time may carry more options (`--base $B` with `B='main -F x'`).
+  if (splitsAt(value) && /^(skip|repo|method)$/.test(kind)) unreadCall(r, where || 'a flag value built at run time')
   switch (kind) {
     case 'text':
       return message(value, r, where)
@@ -695,8 +702,12 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
       // variable in it unchanged since: the same file.
       const writer = r.writers.get(norm(value.text))
       const now = varsIn(value.text, r)
-      if (writer && writer.vars.length === now.length && writer.vars.every((v, i) => v === now[i]))
-        return void plan.files.push({ where, path: value.text })
+      const isTracked = now.length > 0 && now.every(Boolean) && !/\$[({@*#?$!0-9-]|`|\$env:/i.test(value.text)
+      if (writer && isTracked && writer.vars.length === now.length && writer.vars.every((v, i) => v === now[i])) {
+        const entry = { where, path: value.text }
+        r.matched.set(entry, writer)
+        return void plan.files.push(entry)
+      }
       // `-F <(cat <<'EOF' ... EOF)` hands over the here-doc's text; any other path built at run time
       // names a file the reading cannot know.
       if (!held(value, r, where, '<')) plan.unread.push(where)
