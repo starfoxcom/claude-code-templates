@@ -60,6 +60,7 @@ import { joinWords, sliceWord } from './quoting'
 import { parse } from './shell'
 import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
 import { assignPsTargets, forgetOutVars, knownPath, psAssignment, setCounts, setsNameAtRunTime } from './vars'
+import { psSetsUnknown } from './vars'
 import { varsIn, withWords } from './vars'
 import type { Var, VarState } from './vars'
 import {
@@ -240,7 +241,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   const moves = repoMoves(st, name, args)
   r.mayRewrite ||= setsRunner(st)
   r.isRepoMoved ||= moves.movesLater
-  if (!r.ps && setsNameAtRunTime(name, args)) r.isSourced = true
+  if (r.ps ? psSetsUnknown(st, name, args) : setsNameAtRunTime(name, args)) r.isSourced = true
   if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r, prev)
   if (!r.ps && name === 'trap') return readTrap(args, r)
   // A PowerShell assignment sets its variables; a command after its operator (`$r = git push`) is read in turn.
