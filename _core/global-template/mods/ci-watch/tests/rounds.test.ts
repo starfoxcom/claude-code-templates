@@ -1,63 +1,40 @@
 import { expect, test } from 'claude-code/testing'
 
 import { isPush, pushesBranch } from '../hooks/command'
-import { redRounds, ROUND_LIMIT, roundNodes, type RoundNode } from '../hooks/rounds'
-import { rollupOf, world } from './world'
-
-const nodes = (results: (string | null)[]): RoundNode[] =>
-  results.map((result, i) => ({ commit: { oid: `c${i}`, statusCheckRollup: rollupOf(result) } }))
+import { type PrRounds, recordRound, redStreak, ROUND_LIMIT } from '../hooks/rounds'
+import { type Seen, world } from './world'
 
 const RED = 'FAILURE'
 const reds = (n: number) => Array.from({ length: n }, () => RED)
 const path = 'C:/Users/me/.claude/mods-data/ci-watch/rounds.json'
 
-// Newest first, back to the last round that passed or the user's reset; commits with no checks or with
-// checks still running are not rounds.
-test('red rounds count back to a green round or the reset', () => {
-  expect(redRounds(nodes([]))).toBe(0)
-  expect(redRounds(nodes(reds(6)))).toBe(6)
-  expect(redRounds(nodes([...reds(3), 'SUCCESS', ...reds(2)]))).toBe(2)
-  expect(redRounds(nodes([RED, null, RED, 'ERROR', 'PENDING']))).toBe(3)
-  expect(redRounds(nodes(reds(8)), { sha: 'c4' })).toBe(3)
-  expect(redRounds(nodes(reds(8)), { sha: 'c7' })).toBe(0)
+// The rounds ci-watch saw settle on the PR, oldest first: any result but SUCCESS had a failed check.
+function seed(seen: Seen, results: string[]) {
+  seen.isReadable = true
+  const rounds = results.map((result, i) => ({ sha: `c${i}`, red: result !== 'SUCCESS' }))
+  seen.files.set(path, JSON.stringify({ 'o/r#7': { rounds } }))
+}
+
+// Newest first, back to the last round that passed; the user's reset empties the list.
+test('red rounds count back to a green round', () => {
+  const of = (results: boolean[]) =>
+    results.reduce<PrRounds>((pr, red, i) => recordRound(pr, `c${i}`, red), { rounds: [] })
+  expect(redStreak(undefined)).toBe(0)
+  expect(redStreak(of([true, true, true, true, true, true]))).toBe(6)
+  expect(redStreak(of([true, true, true, false, true, true]))).toBe(2)
+  expect(redStreak(of([true, false]))).toBe(0)
+  expect(redStreak({ rounds: [] })).toBe(0)
 })
 
-// The reset at c5, then `git reset --hard c2` and a new commit d1 force-pushed: c5 leaves the PR, and c2..c0
-// ran their checks before the reset.
-test('a history rewritten after the reset does not bring back the rounds before it', () => {
-  const at = (s: number) => `2026-10-08T10:00:0${s}Z`
-  const ran = (oid: string, startedAt: string): RoundNode => ({
-    commit: { oid, statusCheckRollup: { state: 'FAILURE', contexts: { nodes: [{ conclusion: RED, startedAt }] } } },
-  })
-  const rewritten = [ran('c0', at(0)), ran('c1', at(1)), ran('c2', at(2)), ran('d1', at(8))]
-  expect(redRounds(rewritten, { sha: 'c5', at: Date.parse(at(5)) })).toBe(1)
-  expect(redRounds(rewritten, { sha: 'c5' })).toBe(4)
-  // A status context reports its own time; a commit with no time is read as before.
-  const contexts = { nodes: [{ state: 'ERROR', createdAt: at(1) }] }
-  const status: RoundNode = { commit: { oid: 's', statusCheckRollup: { state: 'ERROR', contexts } } }
-  expect(redRounds([status, ...nodes(reds(2))], { at: Date.parse(at(5)) })).toBe(2)
-})
-
-// GitHub lists commits by date; a rebased fix keeps its old date. The rounds are read in push order, back
-// along the first parents from the head, so the green fix still ends the streak.
-test('rounds follow the push order, not the dates GitHub lists them by', () => {
-  const at = (oid: string, parent: string | undefined, result: string) => ({
-    commit: { oid, parents: { nodes: parent ? [{ oid: parent }] : [] }, statusCheckRollup: rollupOf(result) },
-  })
-  const listed = [at('a', 'r3', 'SUCCESS'), at('r1', undefined, RED), at('r2', 'r1', RED), at('r3', 'r2', RED)]
-  const nodes = [...listed, at('r4', 'a', RED), at('r5', 'r4', RED), at('r6', 'r5', RED)]
-  const answer = (headRefOid: string) =>
-    JSON.stringify({ data: { repository: { pullRequest: { headRefOid, commits: { nodes } } } } })
-  expect(redRounds(roundNodes(answer('r6')))).toBe(3)
-  // With no head to start from, the list's own order is kept.
-  expect(roundNodes(answer('gone')).map(n => n.commit?.oid)).toEqual(nodes.map(n => n.commit.oid))
-})
-
-// A quick second push cancels the first one's runs (`concurrency: cancel-in-progress`): GitHub shows that
-// commit red, but nothing in it failed.
-test('a commit whose runs a newer push cancelled is no round', () => {
-  expect(redRounds(nodes([RED, 'CANCELLED', RED, 'CANCELLED', RED]))).toBe(3)
-  expect(redRounds(nodes([...reds(3), ...Array.from({ length: 6 }, () => 'CANCELLED')]))).toBe(3)
+// A re-run of a head already counted replaces its round; the list keeps the newest fifty.
+test('a re-run replaces its round, and the list stays bounded', () => {
+  const twice = recordRound(recordRound({ rounds: [] }, 'a', true), 'a', false)
+  expect(twice).toEqual({ rounds: [{ sha: 'a', red: false }] })
+  let many = { rounds: [] as { sha: string; red: boolean }[] }
+  for (let i = 0; i < 80; i++) many = recordRound(many, `c${i}`, true)
+  expect(many.rounds).toHaveLength(50)
+  expect(redStreak(many)).toBe(50)
+  expect(redStreak({ rounds: 'x' } as never)).toBe(0)
 })
 
 test('only a push is held to the limit, not a PR create or a message naming a push', () => {
@@ -128,10 +105,10 @@ test("only a push that updates the PR's own branch adds to its rounds", () => {
 test(`a push to a PR past ${ROUND_LIMIT} red rounds is refused, one below passes`, async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  seen.rollups = ['SUCCESS', ...reds(ROUND_LIMIT - 1)]
+  seed(seen, ['SUCCESS', ...reds(ROUND_LIMIT - 1)])
   const below = await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   expect(below).not.toHaveProperty('deny')
-  seen.rollups = ['SUCCESS', ...reds(ROUND_LIMIT)]
+  seed(seen, ['SUCCESS', ...reds(ROUND_LIMIT)])
   for (const tool of ['Bash', 'PowerShell']) {
     const past = (await $.tool.call({ tool, command: 'git push origin feature/x' } as never)) as { deny?: string }
     expect(past.deny).toContain('endless round hunt')
@@ -145,7 +122,7 @@ test(`a push to a PR past ${ROUND_LIMIT} red rounds is refused, one below passes
 test("past the limit, a tag, another branch, another folder's push or a closed PR is not refused", async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  seen.rollups = reds(ROUND_LIMIT)
+  seed(seen, reds(ROUND_LIMIT))
   const deny = async (command: string) =>
     ((await $.tool.call({ tool: 'Bash', command } as never)) as { deny?: string }).deny
   expect(await deny('git push origin v1.3.0')).toBeUndefined()
@@ -168,18 +145,10 @@ test('an instance a newer load has replaced judges no push', async ($, on) => {
   // This instance takes the owner file on its first push, then a hot reload's newer one takes it over.
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   seen.files.set('C:/Users/me/.claude/mods-data/ci-watch/s1.owner', 'a-newer-instance')
-  seen.rollups = reds(ROUND_LIMIT)
+  seed(seen, reds(ROUND_LIMIT))
   seen.ghCalls = []
   expect(await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)).not.toHaveProperty('deny')
   expect(seen.ghCalls).toEqual([])
-})
-
-test('owner and repo names go to GitHub as strings, so an all-digit one still counts', async ($, on) => {
-  const { seen } = world(on)
-  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
-  const query = seen.ghCalls.find(c => c.includes('api graphql')) ?? ''
-  expect(query).toContain('-f owner=o -f name=r -F number=7')
 })
 
 test('a command that is no push asks GitHub nothing', async ($, on) => {
@@ -221,28 +190,40 @@ test("a plain read of the count's file passes", async ($, on) => {
 test('/ci-watch rounds tells the count; a reset not typed by the user changes nothing', async ($, on) => {
   const { seen } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  seen.rollups = reds(7)
+  seed(seen, reds(7))
   const ask = async (args: string) =>
     ((await $.command.run({ command: 'ci-watch', args } as never)) as { text: string }).text
   expect(await ask('rounds')).toContain('o/r#7: 7 fix round(s) in a row')
   expect(await ask('rounds 7')).toContain('o/r#7: 7 fix round(s) in a row')
   expect(await ask('rounds reset 7')).toBe('Only the user resets the fix-round count.')
-  expect(seen.files.has(path)).toBe(false)
+  expect(JSON.parse(seen.files.get(path) ?? '{}')['o/r#7'].rounds).toHaveLength(7)
   expect(await ask('rounds again')).toContain('/ci-watch rounds')
 })
 
-test("the user's reset clears the count from the head it was typed on", async ($, on) => {
+test("the user's reset clears the count", async ($, on) => {
   const { seen } = world(on)
   seen.isReadable = true
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
-  seen.rollups = reds(7)
+  seed(seen, reds(7))
   seen.head = 'c6'
   const typed = { command: 'ci-watch', args: 'rounds reset 7', origin: { kind: 'composer' } }
   const answer = (await $.command.run(typed as never)) as { text: string }
   expect(answer.text).toContain('Reset the fix-round count of o/r#7')
-  expect(JSON.parse(seen.files.get(path) ?? '{}')).toEqual({ 'o/r#7': { sha: 'c6', at: 1_000 } })
+  expect(JSON.parse(seen.files.get(path) ?? '{}')).toEqual({ 'o/r#7': { rounds: [] } })
   expect(await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)).not.toHaveProperty('deny')
-  seen.rollups = reds(13)
+  seed(seen, reds(ROUND_LIMIT))
   const past = (await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)) as { deny?: string }
   expect(past.deny).toContain('6 fix rounds in a row')
+})
+
+// A watch that settles is a round: the session's own pushes fill the count, with no history read.
+test('each settled watch of a pushed head adds a round; an unreadable count file reads as none', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  seen.files.set(path, 'not json')
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let i = 0; i < 6; i++) await clock.advance(30_000)
+  expect(JSON.parse(seen.files.get(path) ?? '{}')['o/r#7']).toEqual({ rounds: [{ sha: 'a1', red: true }] })
 })

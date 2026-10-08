@@ -4,12 +4,11 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Watch } from '../types'
 import { isPush, isPushOrPr, mergedNumber, pushesBranch, targetFolder } from './command'
 import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
-import { FILE_WRITERS, namesRounds, redRounds, refusalText, ROUND_LIMIT, roundNodes, ROUNDS_FILE } from './rounds'
-import { ROUNDS_OWN, ROUNDS_QUERY, writesRounds } from './rounds'
-import type { Reset } from './rounds'
+import { FILE_WRITERS, namesRounds, recordRound, redStreak, refusalText, ROUND_LIMIT, ROUNDS_FILE } from './rounds'
+import { ROUNDS_OWN, writesRounds } from './rounds'
+import type { PrRounds } from './rounds'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
-
 
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
 const PENDING = new Set(['pending'])
@@ -318,22 +317,30 @@ async function roundsPath($: EngineInterface): Promise<string> {
   return `${path.slice(0, path.lastIndexOf('/'))}/${ROUNDS_FILE}`
 }
 
-async function readResets($: EngineInterface): Promise<Record<string, Reset>> {
-  try {
-    const resets = JSON.parse(String(await $.fs.read(await roundsPath($))))
-    return resets && typeof resets === 'object' ? (resets as Record<string, Reset>) : {}
-  } catch {
-    return {}
+async function readRounds($: EngineInterface): Promise<Record<string, PrRounds>> {
+  const all = await $.fs.read(await roundsPath($)).then(text => JSON.parse(String(text))).catch(() => undefined)
+  return all && typeof all === 'object' ? (all as Record<string, PrRounds>) : {}
+}
+
+async function writeRounds($: EngineInterface, key: string, pr: PrRounds): Promise<void> {
+  const path = await roundsPath($)
+  await ensureDir($, path.slice(0, path.lastIndexOf('/')))
+  await $.fs.write(path, JSON.stringify({ ...(await readRounds($)), [key]: pr }))
+}
+
+// Each watch that settled on a pushed head is one round: red when a check failed. A watch that ran out of
+// time says nothing about the checks and is no round. A failed write leaves the count as it was.
+async function recordRounds($: EngineInterface, settled: readonly Watch[]): Promise<void> {
+  for (const w of settled) {
+    if (w.outcome !== 'failed' && w.outcome !== 'passed') continue
+    const key = `${w.repo}#${w.number}`
+    const pr = recordRound((await readRounds($))[key], w.headSha, w.outcome === 'failed')
+    await writeRounds($, key, pr).catch(() => undefined)
   }
 }
 
-async function redRoundsOf($: EngineInterface, pr: { repo: string; number: number }): Promise<number> {
-  const [owner, name] = pr.repo.split('/')
-  // `-f` sends a string as is; `-F` would turn an all-digit owner or name into a number GraphQL refuses.
-  const query = ['api', 'graphql', '-f', `query=${ROUNDS_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`]
-  const answer = await gh($, [...query, '-F', `number=${pr.number}`]).catch(() => '')
-  return redRounds(roundNodes(answer), (await readResets($))[`${pr.repo}#${pr.number}`])
-}
+const redRoundsOf = async ($: EngineInterface, pr: { repo: string; number: number }) =>
+  redStreak((await readRounds($))[`${pr.repo}#${pr.number}`])
 
 // A push to a PR past the limit: why it is refused. Only the open PR of the folder the push runs in, and
 // only a push that updates that PR's branch; a PR GitHub cannot be asked about is not refused.
@@ -372,7 +379,6 @@ async function watchPushed($: EngineInterface, command: string, isPowerShell: bo
   if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
 }
 
-
 // `/ci-watch rounds [reset] [<pr>]`. A reset counts only when the user typed it (at the prompt or from the
 // phone): a command a plugin or the session runs never clears the limit.
 async function roundsCommand($: EngineInterface, args: string, origin: { kind: string }): Promise<string> {
@@ -386,11 +392,8 @@ async function roundsCommand($: EngineInterface, args: string, origin: { kind: s
     return `${key}: ${red} fix round(s) in a row without every check green; pushes are refused at ${ROUND_LIMIT}.`
   }
   if (origin.kind !== 'composer' && origin.kind !== 'bridge') return 'Only the user resets the fix-round count.'
-  const path = await roundsPath($)
-  await ensureDir($, path.slice(0, path.lastIndexOf('/')))
-  const reset: Reset = { sha: pr.headSha, at: await $.clock.now() }
-  await $.fs.write(path, JSON.stringify({ ...(await readResets($)), [key]: reset }))
-  return `Reset the fix-round count of ${key}: rounds after ${pr.headSha.slice(0, 7)} count from zero.`
+  await writeRounds($, key, { rounds: [] })
+  return `Reset the fix-round count of ${key}: the next round counts from zero.`
 }
 
 // A push that moves no commit (tags, "Everything up-to-date") keeps the watch on that head, settled or
@@ -528,6 +531,7 @@ async function poll($: EngineInterface): Promise<void> {
     changed = true
     if (next.outcome) settled.push(next)
   }
+  await recordRounds($, settled)
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
   const toWake = settled.filter(w => live.watches.includes(w))
