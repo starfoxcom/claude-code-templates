@@ -128,6 +128,17 @@ test('the answer and the slim line name the wake, what it waits for, and the rea
   expect(armLineText(long, PHOENIX)).toBe(`⏰ resumes Fri 10:30 · after the 5-hour reset · "${'y'.repeat(39)}…"`)
 })
 
+// The person judges from the line whether one more step fits before the limit.
+test('the slim line shows how much of each plan window is used', () => {
+  const arm = { kind: 'seven_day', resetsAt: '', wakeAt: at('2026-10-02T17:30:00.000Z') }
+  const limits = [
+    { kind: 'five_hour', percentUsed: 5, resetsAt: '' },
+    { kind: 'seven_day', percentUsed: 95.5, resetsAt: '' },
+  ]
+  const line = '⏰ resumes Fri 10:30 · after the weekly reset · used 5-hour 5%, weekly 95.5%'
+  expect(armLineText(arm, PHOENIX, limits)).toBe(line)
+})
+
 test('a saved arm keeps its reason across a restart, and an adopted one hands it on', () => {
   const saved = JSON.stringify({ kind: 'clock', resetsAt: RESET, wakeAt: at(RESET), reason: 'r' })
   expect(parseSavedArm(saved)?.reason).toBe('r')
