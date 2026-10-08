@@ -118,10 +118,10 @@ Each mod keeps its files under `~/.claude/mods-data/<mod>/` (or under `$CLAUDE_C
 | Mod | Files |
 |---|---|
 | `compact-handoff` | hand-off files: one per session in `on` mode, plus `<session>-precompute.md` when the engine writes a summary ahead of time; newest 20, at most 14 days, in `shadow` mode |
-| `ci-watch` | `<session>.json` (the watches) and `<session>.owner` (which loaded copy of the mod polls); a settled watch is dropped after an hour, or at once when the PR is merged or closed; both files are swept two days after their session last wrote them |
+| `ci-watch` | `<session>.json` (the watches) and `<session>.owner` (which loaded copy of the mod polls); a settled watch is dropped after an hour, or at once when the PR is merged or closed; another session's two files are swept two days after it last wrote them, by `scripts/sweep.cjs`; `settings.json` (its settings) is never swept |
 | `guards` | `decisions.jsonl` (256 KB, one rotation), `stats.json` (per-day totals, last 30 days), `loaded.json`; `pr-body.json` and `names.json` are yours to write (see [PR-body contract](#pr-body-contract-guards-opt-in) and [Banned names](#banned-names-guards-opt-in)) |
 | `shared-pc` | the seat, line and requests, changed only through `bin/pcctl.cjs` under a lock |
-| `tasks` | `<session>.json`, the task list mirror (50 tasks kept; files older than 14 days swept) |
+| `tasks` | `<session>.json`, the task list mirror (50 tasks kept), and `<session>.alive`, stamped each minute while the session runs; another session's two files are swept 14 days after it last wrote them, by `scripts/sweep.cjs`; `settings.json` (its settings) is never swept |
 | `usage-guard` | `pause.json` (the shared pause), `card.json` (the card every session draws), `claims/` (one empty folder per session and per project per pause, so each wraps up and each project stops once; swept after 14 days), `settings.json` (its settings, written by its pane and `/usage-guard set`), `arms/<session>.json` (a session's standing arm, kept for a restart; `null` once disarmed or run) |
 | `runners` | `runners.json` (optional): your own runner list, read at session start; the last reading lives in the session |
 | `session-facts` | `<session>.json`: the last reply's time, the prompt-cache lifetime and the last cache check, so the countdown survives a reload; files of other sessions are swept two days after they were last written. `plan.json`: the newest plan figures any session recorded, for a fresh session's first line |
@@ -141,6 +141,8 @@ claude plugin validate <mod>   # reads the manifest and hooks module as the engi
 claude plugin test <mod>       # runs every *.test.ts / *.test.tsx under the mod against the engine
 node --test shared-pc/test-helper/pcctl.spec.cjs   # shared-pc's Node helper
 node --test compact-handoff/test-helper/helper.spec.cjs   # compact-handoff's Node helper
+node --test ci-watch/test-helper/sweep.spec.cjs   # ci-watch's data-folder sweep
+node --test tasks/test-helper/sweep.spec.cjs   # tasks' data-folder sweep
 ```
 
 Validation reports one warning per mod (no `author` field); that is expected.
