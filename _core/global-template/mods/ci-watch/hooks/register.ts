@@ -4,7 +4,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Watch } from '../types'
 import { isPush, isPushOrPr, mergedNumber, pushesBranch, targetFolder } from './command'
 import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
-import { redRounds, refusalText, ROUND_LIMIT, roundNodes, ROUNDS_FILE, ROUNDS_QUERY, TOUCHES_ROUNDS } from './rounds'
+import { FILE_WRITERS, namesRounds, redRounds, refusalText, ROUND_LIMIT, roundNodes, ROUNDS_FILE } from './rounds'
+import { ROUNDS_OWN, ROUNDS_QUERY, writesRounds } from './rounds'
 import type { Reset } from './rounds'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
@@ -344,8 +345,33 @@ async function roundRefusal($: EngineInterface, command: string, isPowerShell: b
   return red >= ROUND_LIMIT ? `BLOCKED (ci-watch): ${refusalText(`${pr.repo}#${pr.number}`, red)}` : undefined
 }
 
-const ROUNDS_OWN =
-  "BLOCKED (ci-watch): the fix-round count's file is the user's: only `/ci-watch rounds reset` writes it."
+// After a `gh pr merge` (`merged`: its PR number, 0 for the branch's PR, so every finished watch is a
+// candidate). A watch is dropped only once GitHub says its PR is merged or closed: `--auto` only queues the
+// merge, and a refused merge leaves the PR open, and either way the watch still has to wake the session.
+async function forgetMerged($: EngineInterface, merged: number): Promise<void> {
+  const candidates = live.watches.filter(w => (merged ? w.number === merged : w.outcome))
+  const gone: Watch[] = []
+  for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
+  if (gone.length === 0) return
+  live.watches = live.watches.filter(w => !gone.includes(w))
+  live.generation++
+  await save($)
+}
+
+// After a push or `gh pr create`: `gh pr create` prints the new PR's URL; otherwise ask about the branch in
+// the folder the command ran in.
+async function watchPushed($: EngineInterface, command: string, isPowerShell: boolean, output: unknown) {
+  const created = PR_URL.exec(JSON.stringify(output ?? ''))
+  if (created) {
+    const [, repo, number] = created
+    await startWatch($, repo!, Number(number), await headOf($, repo!, Number(number)))
+    return
+  }
+  const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
+  const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
+  if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
+}
+
 
 // `/ci-watch rounds [reset] [<pr>]`. A reset counts only when the user typed it (at the prompt or from the
 // phone): a command a plugin or the session runs never clears the limit.
@@ -695,10 +721,8 @@ export const register: Register = (on, options) => {
   })
 
   // The other common tools carry a finished watch into the running turn too.
-  on('tool.call', { tool: ['Read', 'Edit', 'Write', 'Grep', 'Glob'] }, async ($, e, next) => {
-    const input = e as { tool?: unknown; file_path?: unknown }
-    const isWrite = input.tool === 'Edit' || input.tool === 'Write'
-    if (isWrite && TOUCHES_ROUNDS.test(String(input.file_path ?? ''))) return { deny: ROUNDS_OWN }
+  on('tool.call', { tool: ['Read', 'Grep', 'Glob', ...FILE_WRITERS] }, async ($, e, next) => {
+    if (writesRounds(e)) return { deny: ROUNDS_OWN }
     await startPolling($)
     if (await isRetired($)) return next(e)
     const result = await next(e)
@@ -711,7 +735,7 @@ export const register: Register = (on, options) => {
     const command = String((e as { command?: unknown }).command ?? '')
     const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
     // Held by every instance, retired or not: no instance lets the count's file be written.
-    if (TOUCHES_ROUNDS.test(command)) return { deny: ROUNDS_OWN }
+    if (namesRounds(command)) return { deny: ROUNDS_OWN }
     await startPolling($)
     if (await isRetired($)) return next(e)
     // Only the live instance judges a push, with the newest code: an older one left by a hot reload never
@@ -725,31 +749,8 @@ export const register: Register = (on, options) => {
     const result = isPlain ? answered : { ...answered, context: [...(answered.context ?? []), ...notes] }
     if (result.deny !== undefined || result.isError) return result
     const merged = mergedNumber(command, isPowerShell)
-    if (merged !== undefined) {
-      // No number: the branch's PR, so every finished watch is a candidate. A watch is dropped only once
-      // GitHub says its PR is merged or closed: `--auto` only queues the merge, and a refused merge
-      // leaves the PR open, and either way the watch still has to wake the session.
-      const candidates = live.watches.filter(w => (merged ? w.number === merged : w.outcome))
-      const gone: Watch[] = []
-      for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
-      if (gone.length > 0) {
-        live.watches = live.watches.filter(w => !gone.includes(w))
-        live.generation++
-        await save($)
-      }
-      return result
-    }
-    if (!isPushOrPr(command, isPowerShell)) return result
-    // `gh pr create` prints the new PR's URL; otherwise ask about the branch in the folder the command ran in.
-    const created = PR_URL.exec(JSON.stringify(result.result ?? ''))
-    if (created) {
-      const [, repo, number] = created
-      await startWatch($, repo!, Number(number), await headOf($, repo!, Number(number)))
-      return result
-    }
-    const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
-    const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
-    if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
+    if (merged !== undefined) await forgetMerged($, merged)
+    else if (isPushOrPr(command, isPowerShell)) await watchPushed($, command, isPowerShell, result.result)
     return result
   })
 

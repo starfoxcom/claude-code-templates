@@ -154,7 +154,8 @@ export function world(on: On) {
     seen.prompts.push(e.text)
     return { text: e.text }
   })
-  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } as never }))
+  const answer = () => ({ result: { stdout: '', stderr: '', interrupted: false } as never })
+  on('tool.call', { tool: ['Bash', 'PowerShell'] }, answer)
   // The engine's own band beneath the plugins: empty.
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   return { seen, clock }
