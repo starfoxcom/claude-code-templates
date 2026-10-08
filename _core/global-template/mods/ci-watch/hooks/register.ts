@@ -263,7 +263,7 @@ async function headOf($: EngineInterface, repo: string, number: number): Promise
   }
 }
 
-// The fix-round limit (rounds.ts). The resets live beside the session files, shared by every session.
+// The fix-round limit (rounds.ts). Each PR's rounds live beside the session files, shared by every session.
 async function roundsPath($: EngineInterface): Promise<string> {
   const path = await statePath($)
   return `${path.slice(0, path.lastIndexOf('/'))}/${ROUNDS_FILE}`

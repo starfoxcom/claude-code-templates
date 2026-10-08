@@ -77,10 +77,11 @@ const STATEMENT_END = /[;|\n]|(?<![<>])&(?!>)/
 // A redirect word, and the few that are read for sure: output joined or thrown away. Any other (`> log`,
 // `>& log`, `<<< y`, a here-doc) may take the next word as its target, so the push cannot be read for sure.
 const REDIRECT = /^[\d*&]?(?:>>?|<)/
-const KNOWN_REDIRECTS = new Set([
-  ...['2>&1', '*>&1', '>/dev/null', '2>/dev/null', '&>/dev/null'],
-  ...['>$null', '2>$null', '*>$null'],
-])
+// Output thrown away is read for sure whether its target is joined (`2>/dev/null`) or the next word
+// (`> $null`).
+const NULL_OPS = ['>', '1>', '2>', '>>', '1>>', '2>>', '&>', '&>>', '*>', '*>>']
+const NULL_TARGETS = ['/dev/null', '$null']
+const KNOWN_REDIRECTS = new Set(['2>&1', '*>&1', ...NULL_OPS.flatMap(op => NULL_TARGETS.map(to => op + to))])
 // A word read for sure: a plain name, with nothing the shell fills in when it runs (quotes, `$`, `(`). `@`
 // inside a word is plain (`git@github.com:o/r.git`); a word that starts with one (`@`, `@{u}`, `@args`) is not.
 const LITERAL = /^[\w./:+^~,=-][\w./:+^~,=@-]*$/
@@ -124,7 +125,9 @@ function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnr
       const token = tokens[i] ?? ''
       if (token.startsWith('#')) break
       if (REDIRECT.test(token)) {
-        isUnread ||= !KNOWN_REDIRECTS.has(token)
+        const isSpacedNull = NULL_OPS.includes(token) && NULL_TARGETS.includes(tokens[i + 1] ?? '')
+        if (isSpacedNull) i++
+        isUnread ||= !isSpacedNull && !KNOWN_REDIRECTS.has(token)
         continue
       }
       // In PowerShell a comma splits a word into several arguments. An option that takes the next word as
@@ -146,9 +149,10 @@ function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnr
 export function pushesBranch(command: string, branch: string, isPowerShell = false): boolean {
   for (const { args, isUnread } of pushes(command, isPowerShell)) {
     // An option's value is no option of its own (`-o -d` sends the push option `-d`).
+    // A word that cannot be read may undo a delete (`--no-delete`, `--push-opt -d`), so it is judged first.
+    if (isUnread) return true
     const options = args.filter((a, i) => a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
     if (options.some(a => a === '--delete' || a === '-d')) continue
-    if (isUnread) return true
     const plain = args.filter((a, i) => !a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
     const refs = plain.slice(1).map(ref => ref.replace(/^\+/, ''))
     const isEvery = options.includes('--all') || options.includes('--mirror')
