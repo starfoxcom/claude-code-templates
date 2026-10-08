@@ -261,6 +261,10 @@ function psTokens(command: string): Scan {
     if (word === undefined) return
     if (word === '' || word.includes('"') || (/\s/.test(word) && word.endsWith('\\')))
       bad ??= 'a word Windows PowerShell passes on changed (empty, holding ", or ending in \\)'
+    // Windows PowerShell splits an unquoted word that starts with `-` at its first `.` (`--no-verify.` reaches
+    // git as `--no-verify .`).
+    if (!quoted && word.startsWith('-') && word.includes('.'))
+      bad ??= 'a word that starts with - and holds a dot, which Windows PowerShell splits at the dot (quote it)'
     tokens.push({ word, quoted })
     word = undefined
     quoted = false
