@@ -322,10 +322,13 @@ async function readRounds($: EngineInterface): Promise<Record<string, PrRounds>>
   return all && typeof all === 'object' ? (all as Record<string, PrRounds>) : {}
 }
 
-async function writeRounds($: EngineInterface, key: string, pr: PrRounds): Promise<void> {
+// The PR's rounds changed by `change`, applied to the file as read right before the write, with nothing
+// awaited between the two: a reset another session wrote meanwhile is the state the change starts from.
+async function updateRounds($: EngineInterface, key: string, change: (pr?: PrRounds) => PrRounds) {
   const path = await roundsPath($)
   await ensureDir($, path.slice(0, path.lastIndexOf('/')))
-  await $.fs.write(path, JSON.stringify({ ...(await readRounds($)), [key]: pr }))
+  const all = await readRounds($)
+  await $.fs.write(path, JSON.stringify({ ...all, [key]: change(all[key]) }))
 }
 
 // Each watch that settled on a pushed head is one round: red when a check failed. A watch that ran out of
@@ -333,9 +336,8 @@ async function writeRounds($: EngineInterface, key: string, pr: PrRounds): Promi
 async function recordRounds($: EngineInterface, settled: readonly Watch[]): Promise<void> {
   for (const w of settled) {
     if (w.outcome !== 'failed' && w.outcome !== 'passed') continue
-    const key = `${w.repo}#${w.number}`
-    const pr = recordRound((await readRounds($))[key], w.headSha, w.outcome === 'failed')
-    await writeRounds($, key, pr).catch(() => undefined)
+    const red = w.outcome === 'failed'
+    await updateRounds($, `${w.repo}#${w.number}`, pr => recordRound(pr, w.headSha, red)).catch(() => undefined)
   }
 }
 
@@ -392,7 +394,7 @@ async function roundsCommand($: EngineInterface, args: string, origin: { kind: s
     return `${key}: ${red} fix round(s) in a row without every check green; pushes are refused at ${ROUND_LIMIT}.`
   }
   if (origin.kind !== 'composer' && origin.kind !== 'bridge') return 'Only the user resets the fix-round count.'
-  await writeRounds($, key, { rounds: [] })
+  await updateRounds($, key, () => ({ rounds: [] }))
   return `Reset the fix-round count of ${key}: the next round counts from zero.`
 }
 

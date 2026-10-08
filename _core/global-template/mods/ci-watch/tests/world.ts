@@ -21,7 +21,7 @@ export type Seen = {
   duringMkdir?: () => unknown
   /** `gh pr checks` fails (network, auth) with nothing on stdout. */
   isChecksDown?: boolean
-  /** Folder makes and file writes, in order. */
+  /** Folder makes, file writes and reads of the rounds file, in order. */
   order: string[]
   /** Every write fails (a folder that cannot be made). */
   isWriteDown?: boolean
@@ -81,6 +81,7 @@ export function world(on: On) {
   on('fs.read', async ($, e) => {
     const path = e.path.replaceAll('\\', '/')
     if (path.endsWith('/plugin.json') && seen.manifest !== undefined) return { value: seen.manifest }
+    if (path.endsWith('/rounds.json')) seen.order.push(`read ${path}`)
     const text = seen.isReadable ? seen.files.get(path) : undefined
     if (text === undefined) throw new Error('ENOENT')
     // The read already holds the old text when the change lands.
