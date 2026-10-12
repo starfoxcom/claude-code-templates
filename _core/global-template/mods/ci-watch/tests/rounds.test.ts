@@ -152,7 +152,7 @@ test(`a push to a PR past ${ROUND_LIMIT} red rounds is refused, one below passes
     const past = (await $.tool.call({ tool, command: 'git push origin feature/x' } as never)) as { deny?: string }
     expect(past.deny).toContain('endless round hunt')
     expect(past.deny).toContain('o/r#7 has had 6 fix rounds in a row')
-    expect(past.deny).toContain('/ci-watch rounds reset 7')
+    expect(past.deny).toContain('/ci-watch rounds reset o/r#7')
     expect(past.deny).toContain('`git -C <path> push ...`')
   }
   const created = await $.tool.call({ tool: 'Bash', command: 'gh pr create -t t --body-file b.md' } as never)
@@ -247,6 +247,30 @@ test("the user's reset clears the count", async ($, on) => {
   seed(seen, reds(ROUND_LIMIT))
   const past = (await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)) as { deny?: string }
   expect(past.deny).toContain('6 fix rounds in a row')
+})
+
+// A push into another folder can be another repo's PR: the refusal names its full key, and the reset by
+// that key clears that PR's count, never the session folder's PR with the same number.
+test("a push refused in another repo's folder is reset by its full key", async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  seen.repoIn = { '../b': 'o/b' }
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  const red = (n: number) => ({ rounds: reds(n).map((_, i) => ({ sha: `c${i}`, red: true })) })
+  seen.files.set(path, JSON.stringify({ 'o/b#7': red(ROUND_LIMIT), 'o/r#7': red(3) }))
+  const push = { tool: 'Bash', command: 'git -C ../b push origin feature/x' }
+  const refused = (await $.tool.call(push as never)) as { deny?: string }
+  expect(refused.deny).toContain('/ci-watch rounds reset o/b#7')
+  const ask = async (args: string) =>
+    ((await $.command.run({ command: 'ci-watch', args, origin: { kind: 'composer' } } as never)) as { text: string })
+      .text
+  expect(await ask('rounds o/b#7')).toContain(`o/b#7: ${ROUND_LIMIT} fix round(s) in a row`)
+  expect(await ask('rounds reset o/b#7')).toBe('Reset the fix-round count of o/b#7: the next round counts from zero.')
+  const counts = JSON.parse(seen.files.get(path) ?? '{}') as Record<string, PrRounds>
+  expect(counts['o/b#7']?.rounds).toEqual([])
+  expect(counts['o/r#7']?.rounds).toHaveLength(3)
+  expect(await $.tool.call(push as never)).not.toHaveProperty('deny')
+  expect(await ask('rounds again o/b#7')).toContain('/ci-watch rounds')
 })
 
 // A watch that settles is a round: the session's own pushes fill the count, with no history read.

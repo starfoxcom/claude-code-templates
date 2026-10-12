@@ -21,8 +21,9 @@ export const HELP = [
   '  /ci-watch settings  open the settings pane',
   '  /ci-watch set       change a setting: set <name> <value>; alone, list them',
   '  /ci-watch phone     the same as text, for phone chats',
-  `  /ci-watch rounds    the fix rounds in a row without green checks on this branch's PR (or rounds <pr>);`,
-  `                      pushes are refused at ${ROUND_LIMIT}, until you type: rounds reset <pr>`,
+  `  /ci-watch rounds    the fix rounds in a row without green checks on this branch's PR (or rounds <pr>,`,
+  `                      a number or owner/name#N); pushes are refused at ${ROUND_LIMIT}, until you type:`,
+  '                      rounds reset <pr>',
   '  /ci-watch help      this list',
 ].join('\n')
 
@@ -223,13 +224,16 @@ async function gh($: EngineInterface, args: readonly string[], cwd?: string): Pr
 }
 
 // The branch's PR, or the PR `number` names, in the repo of the folder.
+// `inRepo` (owner/name) looks the PR up in that repo instead of the folder's.
 async function prOfBranch(
   $: EngineInterface,
   cwd?: string,
   number?: string,
+  inRepo?: string,
 ): Promise<{ repo: string; number: number; headSha: string; state?: string; branch?: string } | undefined> {
   try {
-    const args = ['pr', 'view', ...(number ? [number] : []), '--json', 'number,url,headRefOid,state,headRefName']
+    const where = [...(number ? [number] : []), ...(inRepo ? ['--repo', inRepo] : [])]
+    const args = ['pr', 'view', ...where, '--json', 'number,url,headRefOid,state,headRefName']
     const view = JSON.parse(await gh($, args, cwd)) as {
       number: number
       url: string
@@ -333,15 +337,19 @@ async function watchPushed($: EngineInterface, command: string, isPowerShell: bo
   if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
 }
 
-// `/ci-watch rounds [reset] [<pr>]`. A reset counts only when the user typed it (at the prompt or from the
-// phone): a command a plugin or the session runs never clears the limit.
+// `/ci-watch rounds [reset] [<pr>]`, the PR as a number in this folder's repo or as `owner/name#N` in any
+// (the key a refusal names: a push into another folder may be another repo's PR). A reset counts only when
+// the user typed it (at the prompt or from the phone): a command a plugin or the session runs never clears
+// the limit.
 async function roundsCommand($: EngineInterface, args: string, origin: { kind: string }): Promise<string> {
-  const match = /^rounds(\s+reset)?(?:\s+#?(\d+))?\s*$/.exec(args)
+  const match = /^rounds(\s+reset)?(?:\s+(?:([\w.-]+\/[\w.-]+)#|#)?(\d+))?\s*$/.exec(args)
   if (!match) return HELP
-  const pr = await prOfBranch($, undefined, match[2])
-  if (!pr) return match[2] ? `No PR #${match[2]} in this folder's repo.` : "This folder's branch has no PR."
+  const [, reset, repo, number] = match
+  const pr = await prOfBranch($, undefined, number, repo)
+  if (!pr && number) return repo ? `No PR ${repo}#${number}.` : `No PR #${number} in this folder's repo.`
+  if (!pr) return "This folder's branch has no PR."
   const key = `${pr.repo}#${pr.number}`
-  if (!match[1]) {
+  if (!reset) {
     const red = await redRoundsOf($, pr)
     return `${key}: ${red} fix round(s) in a row without every check green; pushes are refused at ${ROUND_LIMIT}.`
   }
