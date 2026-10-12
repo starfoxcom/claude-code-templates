@@ -16,7 +16,7 @@ name: Attribution
 #   name.
 #
 # A pull request cannot weaken the check on itself: `pull_request_target`
-# runs this file as `main` holds it; the identity list comes from `main` and
+# runs this file as the protected base branch holds it; the identity list comes from `main` and
 # the patterns (`ATTRIBUTION` in
 # `_core/global-template/hooks/no-ai-attribution.py`) from `develop`. Nothing
 # from the PR runs: its commits are fetched as objects and read raw, and its
@@ -82,12 +82,13 @@ jobs:
           # shapes, dingbats and emoji (with their joiner, presentation
           # selector and keycap mark). Left out: letters of other alphabets,
           # invisible and direction characters, math and technical symbols,
-          # and the ordinal indicators.
+          # the ordinal indicators, and emoji drawn as letters (flags, boxed
+          # and squared letters), which could spell a name.
           ACCEPTED = [(0x20, 0x7E), (0xA0, 0xA5), (0xA7, 0xA9), (0xAB, 0xAC), (0xAE, 0xB9), (0xBB, 0xBF),
                       (0xD7, 0xD7), (0xF7, 0xF7), (0x2009, 0x2009), (0x2010, 0x2027), (0x202F, 0x202F),
-                      (0x2030, 0x2046), (0x20A0, 0x20C0), (0x20E3, 0x20E3), (0x2122, 0x2122),
-                      (0x2190, 0x21FF), (0x231A, 0x231B), (0x23E9, 0x23F3), (0x23F8, 0x23FA),
-                      (0x2500, 0x257F), (0x25A0, 0x25FF), (0x2600, 0x27BF), (0x2B05, 0x2B07),
+                      (0x2030, 0x2046), (0x2049, 0x2049), (0x20A0, 0x20C0), (0x20E3, 0x20E3), (0x2122, 0x2122),
+                      (0x2190, 0x21FF), (0x231A, 0x231B), (0x2328, 0x2328), (0x23CF, 0x23CF), (0x23E9, 0x23F3), (0x23F8, 0x23FA),
+                      (0x2500, 0x257F), (0x2934, 0x2935), (0x25A0, 0x25FF), (0x2600, 0x27BF), (0x2B05, 0x2B07),
                       (0x2B1B, 0x2B1C), (0x2B50, 0x2B50), (0x2B55, 0x2B55), (0xFE0F, 0xFE0F),
                       (0x1F300, 0x1F6FF), (0x1F780, 0x1FAFF)]
           # Read as the patterns see them: the emoji joiner, presentation
@@ -99,7 +100,7 @@ jobs:
                    0x2012: "-", 0x2013: "-", 0x2014: "-", 0x2015: "-", 0x2016: "ll", 0x2018: "'", 0x2019: "'",
                    0x201A: ",", 0x201B: "'", 0x201C: "''", 0x201D: "''", 0x201F: "''", 0x2024: ".",
                    0x2025: "..", 0x2026: "...", 0x202F: " ", 0x2032: "'", 0x2033: "''", 0x2034: "'''",
-                   0x2035: "'", 0x2036: "''", 0x2037: "'''", 0x2039: "<", 0x203A: ">", 0x203C: "!!",
+                   0x2035: "'", 0x2036: "''", 0x2037: "'''", 0x2039: "<", 0x203A: ">", 0x203C: "!!", 0x2049: "!?",
                    0x2041: "/", 0x2043: "-", 0x2044: "/", 0x20A8: "Rs", 0x20B6: "lt", 0x2571: "/",
                    0x2573: "X", 0x2768: "(", 0x2769: ")", 0x276E: "<", 0x276F: ">", 0x2772: "(",
                    0x2773: ")", 0x2774: "{", 0x2775: "}", 0x2795: "+", 0x2796: "-"}
@@ -155,7 +156,10 @@ jobs:
                   hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside English text, common "
                               "symbols and emoji")
                   continue
-              views = [view.translate(PLAIN).replace(":robot:", "\U0001F916") for view in views]
+              # A number sign that counts as a word character (a footnote "¹", a
+              # dingbat digit) reads as a space, so it cannot glue onto a word.
+              views = [re.sub(r"(?![A-Za-z0-9_])\w", " ", view.translate(PLAIN)).replace(":robot:", "\U0001F916")
+                       for view in views]
               # The title (and an edited merge message, the body) ends the merge
               # commit, so a co-author line there with an address faces the list.
               if where.startswith("the PR "):
