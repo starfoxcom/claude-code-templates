@@ -158,6 +158,9 @@ jobs:
                   continue
               # A number sign that counts as a word character (a footnote "¹", a
               # dingbat digit) reads as a space, so it cannot glue onto a word.
+              # The text as written is scanned too: a symbol read as a letter
+              # ("×" as "x") must not glue onto a word either.
+              written = views
               views = [re.sub(r"(?![A-Za-z0-9_])\w", " ", view.translate(PLAIN)).replace(":robot:", "\U0001F916")
                        for view in views]
               # The title (and an edited merge message, the body) ends the merge
@@ -167,7 +170,7 @@ jobs:
                            for ident in sorted({i.strip() for v in views for i in CO_AUTHOR.findall(v)})
                            if "@" in ident and ident not in KNOWN and ident != "a listed contributor"]
               hit = next(filter(None, (hook.ATTRIBUTION.search(v) or hook.ATTRIBUTION.search(hook.strip_paths(v))
-                                       for v in views)), None)
+                                       for v in written + views)), None)
               if hit:
                   hits.append(f"AI attribution in {where}: '{hit.group(0).strip()}'")
           for line in hits:
