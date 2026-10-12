@@ -305,6 +305,14 @@ jobs:
                       LOOKALIKE[source] = read
               if len(group) == 1 and ord(group) not in LOOKALIKE:
                   LOOKALIKE[ord(group)] = read
+          # Unicode's chains once more, through the shapes and the "l" strokes:
+          # Hangul "\u1196" is filed under two "\u30fc", read as "--", and
+          # "\u3162" under "\u30fc\u4e28", read as "-l".
+          for source, target in PROTOTYPE.items():
+              if source > 0x7F and source not in LOOKALIKE:
+                  read = "".join(LOOKALIKE.get(ord(c), ELL.get(ord(c), c)) for c in target)
+                  if read.isascii() and read.strip():
+                      LOOKALIKE[source] = read
 
           ELLS = "".join(map(chr, ELL)) + "l"
           CAPS_WORD = re.compile(r"(?:[^\W\d_]|[" + re.escape(ELLS) + r"])+")
