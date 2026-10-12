@@ -377,8 +377,9 @@ jobs:
           # What the renderer leaves for the browser to draw or arrange, so the
           # page's text does not hold it plainly: math (TeX drops spaces and
           # braces), diagrams and maps, ruby text over letters, and a text
-          # direction set by hand (GitHub's own is "auto"), which can swap
-          # the order of two pieces.
+          # direction set by hand (GitHub's own is "auto", on a block), which
+          # can swap the order of two pieces: an inline tag with its own
+          # direction is drawn as one piece, ordered by the line around it.
           UNREADABLE = [("holds math", re.compile(r"<math-renderer")),
                         # A lone <rp> survives and browsers hide it.
                         ("holds ruby text", re.compile(r"<r(?:uby|p|t)\b")),
@@ -387,7 +388,9 @@ jobs:
                         # Inside a tag: the page's text shows quotes unescaped
                         # (`mkdtemp(dir="/tmp")`).
                         ("sets its own text direction",
-                         re.compile(r'<[A-Za-z][\w-]*\s[^>]*\bdir="(?!auto")')),
+                         re.compile(r'<[A-Za-z][\w-]*\s[^>]*\bdir="(?!auto")'
+                                    r'|<(?!(?:p|div|ul|ol|li|h[1-6]|blockquote)\b)[A-Za-z][\w-]*\s[^>]*\bdir=',
+                                    re.I)),
                         # Markup the browser draws in another order than the
                         # page holds: a table foot or a head after the body, a
                         # details block whose summary is not first, a table or
@@ -675,19 +678,86 @@ jobs:
                   views += [code, fold(code)]
               return views, readings(views), problem
 
+          # Direction classes the shown-order view leaves out: the explicit
+          # marks (refused elsewhere) and the boundary neutrals, which draw
+          # nothing.
+          UNORDERED = {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI", "BN"}
+
           def visual(text):
-              """The text in shown order: each run of right-to-left characters
-              reversed, as a left-to-right line draws it."""
-              out, run = [], []
-              for c in text:
-                  if unicodedata.bidirectional(c) in ("R", "AL", "AN", "NSM"):
-                      run.append(c)
+              """The text in shown order, each line as a left-to-right paragraph
+              draws it."""
+              return "\n".join(map(visual_line, text.split("\n")))
+
+          def visual_line(line):
+              """A line reordered as Unicode's bidirectional algorithm (UAX #9)
+              draws a left-to-right paragraph with no explicit marks: rules
+              W1 to W7, N1 and N2 resolve each character's direction, I1 and
+              L1 its level, and L2 reverses each run from the highest level
+              down. Spaces and punctuation between two right-to-left letters
+              join them, and digits after an Arabic letter draw to its left."""
+              chars = [c for c in line if unicodedata.bidirectional(c) not in UNORDERED]
+              kinds = [unicodedata.bidirectional(c) for c in chars]
+              n, strong = len(kinds), "L"
+              for i in range(n):
+                  if kinds[i] == "NSM":
+                      kinds[i] = kinds[i - 1] if i else "L"
+                  if kinds[i] in ("L", "R", "AL"):
+                      strong = kinds[i]
+                  elif kinds[i] == "EN" and strong == "AL":
+                      kinds[i] = "AN"
+              kinds = ["R" if kind == "AL" else kind for kind in kinds]
+              for i in range(1, n - 1):
+                  if ((kinds[i] == "ES" and kinds[i - 1] == kinds[i + 1] == "EN")
+                          or (kinds[i] == "CS" and kinds[i - 1] == kinds[i + 1] in ("EN", "AN"))):
+                      kinds[i] = kinds[i - 1]
+              i = 0
+              while i < n:
+                  j = i
+                  while j < n and kinds[j] == "ET":
+                      j += 1
+                  if j > i and ((i and kinds[i - 1] == "EN") or (j < n and kinds[j] == "EN")):
+                      kinds[i:j] = ["EN"] * (j - i)
+                  i = max(j, i + 1)
+              kinds = ["ON" if kind in ("ES", "ET", "CS") else kind for kind in kinds]
+              strong = "L"
+              for i in range(n):
+                  if kinds[i] in ("L", "R"):
+                      strong = kinds[i]
+                  elif kinds[i] == "EN" and strong == "L":
+                      kinds[i] = "L"
+              side = lambda kind: "L" if kind == "L" else "R"
+              i = 0
+              while i < n:
+                  j = i
+                  while j < n and kinds[j] in ("B", "S", "WS", "ON"):
+                      j += 1
+                  if j > i:
+                      before = side(kinds[i - 1]) if i else "L"
+                      after = side(kinds[j]) if j < n else "L"
+                      kinds[i:j] = [before if before == after else "L"] * (j - i)
+                  i = max(j, i + 1)
+              levels = [{"L": 0, "R": 1}.get(kind, 2) for kind in kinds]
+              kinds = [unicodedata.bidirectional(c) for c in chars]
+              trailing = True
+              for i in reversed(range(n)):
+                  if kinds[i] in ("B", "S"):
+                      levels[i], trailing = 0, True
+                  elif kinds[i] == "WS" and trailing:
+                      levels[i] = 0
                   else:
-                      out.extend(reversed(run))
-                      run = []
-                      out.append(c)
-              out.extend(reversed(run))
-              return "".join(out)
+                      trailing = False
+              for level in range(max(levels, default=0), 0, -1):
+                  i = 0
+                  while i < n:
+                      if levels[i] >= level:
+                          j = i
+                          while j < n and levels[j] >= level:
+                              j += 1
+                          chars[i:j], levels[i:j] = chars[i:j][::-1], levels[i:j][::-1]
+                          i = j
+                      else:
+                          i += 1
+              return "".join(chars)
 
           def readings(views):
               """Each view, and each in shown order where right-to-left runs
