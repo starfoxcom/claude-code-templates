@@ -216,7 +216,8 @@ class GuardHookTest(unittest.TestCase):
                 self.assert_denied(self.attr(f"git commit -m 'docs: x' -m '{line}'"))
 
     def test_colon_after_a_plain_phrase_passes(self):
-        for line in ("Made with: love", "Generated files: see below", "Created by: Jane Doe"):
+        for line in ("Made with: love", "Generated files: see below", "Created by: Jane Doe",
+                     "Generated: AI model card", "Made: cursor hover state"):
             with self.subTest(line=line):
                 self.assert_passes(self.attr(f"git commit -m 'docs: x' -m '{line}'"))
 

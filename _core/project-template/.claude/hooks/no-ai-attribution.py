@@ -74,7 +74,7 @@ ATTRIBUTION = re.compile(
         + r"(?:with|by|using|via)" + _Z + r":?" + _Z + AN + AI + r"\b",
         # Trailer forms with a colon: "Assisted-by: <AI>:<model>", "Made-with: Cursor".
         r"\b(?:generated|written|created|made|authored|produced|assisted)" + _Z
-        + r"(?:with|by|using|via)?" + _Z + r":[ \t]*" + AN + r"(?:" + AI + r"|cursor)\b",
+        + r"(?:with|by|using|via)" + _Z + r":[ \t]*" + AN + r"(?:" + AI + r"|cursor)\b",
         # A line or quoted message that ends "via Claude Code" / "by Claude".
         # Not "with" / "using": "compatible with Claude Code" is a mention.
         r"\b(?:by|via)" + _Z + CLAUDE + r"(?:" + _Z + r"code)?(?=[\s.!)\]]*(?:$|['\"`]))",
