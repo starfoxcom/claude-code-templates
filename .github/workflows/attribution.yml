@@ -578,8 +578,13 @@ jobs:
               elif not is_markdown:
                   code = emojified(text).replace("`", "")
                   views += [code, fold(code)]
+              return views, readings(views), problem
+
+          def readings(views):
+              """Each view with look-alike letters read as Latin, then also
+              through the ASCII look-alike pairs (twins)."""
               looks = [view.translate(LOOKALIKE) for view in views]
-              return views, looks + [twin for view in looks for twin in twins(view)], problem
+              return looks + [twin for view in looks for twin in twins(view)]
 
           def listed_names(text):
               """The name and address of each co-author trailer in the text that
@@ -596,12 +601,16 @@ jobs:
               """The views with each listed co-author's name and address, where
               they follow that trailer's "Co-authored-by:", read as a neutral
               placeholder: the list judges people, never their names (a listed
-              "Ai Tanaka" passes). Nowhere else is a name taken out."""
+              "Ai Tanaka" passes). Nowhere else is a name taken out. Taken
+              from the plain views, as written and folded, before the
+              look-alike readings, which would rewrite it ("Al" as "AI")."""
               for ident in {m.group(1).strip() for m in TRAILER.finditer(text)} & KNOWN:
                   name, _, address = ident.partition(" <")
-                  person = re.compile(r"(co-authored-by:[ \t]*)" + re.escape(name)
-                                      + r"[ \t]*<?" + re.escape(address.rstrip(">")) + r">?", re.I)
-                  views = [person.sub(r"\1a listed contributor", view) for view in views]
+                  address = address.rstrip(">")
+                  for name, address in {(name, address), (fold(name), fold(address))}:
+                      person = re.compile(r"(co-authored-by:[ \t]*)" + re.escape(name)
+                                          + r"[ \t]*<?" + re.escape(address) + r">?", re.I)
+                      views = [person.sub(r"\1a listed contributor", view) for view in views]
               return views
 
           def loose(ident):
@@ -689,7 +698,8 @@ jobs:
               if problem:
                   hits.append(f"{where} {problem}, so it cannot be checked")
                   continue
-              for view in credited(plain + looks, text):
+              credit = credited(plain, text)
+              for view in credit + readings(credit):
                   hit = (hook.ATTRIBUTION.search(view)
                          or hook.ATTRIBUTION.search(hook.strip_paths(view)))
                   if hit:
