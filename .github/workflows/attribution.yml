@@ -387,7 +387,7 @@ jobs:
           # fails the check, so the next layout attribute fails closed.
           ATTRIBUTES = {"alias", "align", "alt", "aria-describedby", "aria-hidden", "aria-label", "checked",
                         "class", "colspan", "controls", "d", "data-canonical-src", "data-catalyst-inline",
-                        "data-component", "data-error-text", "data-footnote-backref",
+                        "data-animated-image", "data-component", "data-error-text", "data-footnote-backref",
                         "data-footnote-backref-idx", "data-footnote-ref", "data-footnotes",
                         "data-hovercard-type", "data-hovercard-url", "data-id", "data-line-number",
                         "data-octo-click", "data-octo-dimensions", "data-paste-markdown-skip",
