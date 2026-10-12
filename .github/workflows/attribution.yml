@@ -376,21 +376,13 @@ jobs:
 
           # What the renderer leaves for the browser to draw or arrange, so the
           # page's text does not hold it plainly: math (TeX drops spaces and
-          # braces), diagrams and maps, ruby text over letters, and a text
-          # direction set by hand (GitHub's own is "auto", on a block), which
-          # can swap the order of two pieces: an inline tag with its own
-          # direction is drawn as one piece, ordered by the line around it.
+          # braces), diagrams and maps, ruby text over letters (a text
+          # direction set by hand is judged in render()).
           UNREADABLE = [("holds math", re.compile(r"<math-renderer")),
                         # A lone <rp> survives and browsers hide it.
                         ("holds ruby text", re.compile(r"<r(?:uby|p|t)\b")),
                         ("holds a diagram drawn in the browser",
                          re.compile(r'<[A-Za-z][\w-]*\s[^>]*\bclass="[^"]*\brender-needs-enrichment\b')),
-                        # Inside a tag: the page's text shows quotes unescaped
-                        # (`mkdtemp(dir="/tmp")`).
-                        ("sets its own text direction",
-                         re.compile(r'<[A-Za-z][\w-]*\s[^>]*\bdir="(?!auto")'
-                                    r'|<(?!(?:p|div|ul|ol|li|h[1-6]|blockquote)\b)[A-Za-z][\w-]*\s[^>]*\bdir=',
-                                    re.I)),
                         # Markup the browser draws in another order than the
                         # page holds: a table foot or a head after the body, a
                         # details block whose summary is not first, a table or
@@ -464,6 +456,21 @@ jobs:
                   number, rest = divmod(number - 1, 26)
                   letters = chr(97 + rest) + letters
               return letters
+
+          # The tags GitHub's renderer marks dir="auto": a direction on any
+          # other tag, or any other direction, is set by hand and can swap
+          # the order of two pieces (an inline tag with its own direction is
+          # drawn as one piece, ordered by the line around it).
+          DIRECTED = {"p", "div", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
+
+          def own_direction(inside):
+              """The value of a tag's dir attribute, lowercased, or None. Only an
+              attribute name counts: a "dir=" inside another attribute's
+              quoted value (a link's "?dir=desc") is not one."""
+              for name, value in re.findall(r'([\w:.-]+)(?:\s*=\s*("[^"]*"|\'[^\']*\'|[^\s"\'>]*))?', inside):
+                  if name.lower() == "dir":
+                      return value.strip("\"'").lower()
+              return None
 
           VOID = {"area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"}
 
@@ -597,11 +604,16 @@ jobs:
               views = list(dict.fromkeys(views + [TAG.sub("", drawn(page))]))
               shown_texts = [html.unescape(view) + "\n\n" + "\n\n".join(extras) for view in views]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
+              tags = list(re.finditer(r"<([A-Za-z][\w-]*)([^>]*)>", page))
+              if not problem and any(own_direction(t.group(2)) not in (None, "auto")
+                                     or (own_direction(t.group(2)) and t.group(1).lower() not in DIRECTED)
+                                     for t in tags):
+                  problem = "sets its own text direction"
               # Each block GitHub marks dir="auto" takes its direction from the
               # first strong letter of its own text, line breaks included; as
               # in the browser, a nested element with its own dir (a nested
               # list, a quoted paragraph) is skipped and judged on its own.
-              for m in re.finditer(r'<([A-Za-z][\w-]*)\b[^>]*\bdir="auto"', page, re.I):
+              for m in (t for t in tags if own_direction(t.group(2)) == "auto"):
                   stack, parts, last = [], [], m.start()
                   for t in re.finditer(r"<(/?)([A-Za-z][\w-]*)([^>]*)>", page[m.start():]):
                       at = m.start() + t.start()
@@ -616,7 +628,7 @@ jobs:
                           if not stack:
                               break
                       elif not closing and tag not in VOID:
-                          stack.append((tag, bool(stack) and bool(re.search(r"\bdir=", inside, re.I))))
+                          stack.append((tag, bool(stack) and own_direction(inside) is not None))
                   block = html.unescape("".join(parts)).replace("\n", " ")
                   if mixed_direction(block) and not problem:
                       problem = "lays out a right-to-left block holding Latin words, whose order differs"
