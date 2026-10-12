@@ -14,7 +14,8 @@ name: Attribution
 #   name, with no list of AI names to keep current.
 # - a commit cannot be read plainly (any encoding but UTF-8, a repeated
 #   author, committer or encoding line), or a text cannot: a word mixing
-#   alphabets, right-to-left letters next to left-to-right ones, direction
+#   alphabets or using a letter outside modern use, right-to-left letters
+#   next to left-to-right ones, direction
 #   marks or a direction set by hand, characters newer than the runner's
 #   Unicode, math, ruby text, or diagrams drawn in the browser.
 #
@@ -79,16 +80,19 @@ jobs:
           git show origin/main:.github/attribution-identities.txt > "$RUNNER_TEMP/attribution-identities.txt"
 
       # Unicode's own data, pinned to 17.0.0 by checksum: which script each
-      # letter belongs to, and which letters look like others (UTS #39).
-      - name: Fetch the Unicode script and look-alike tables
+      # letter belongs to, which letters look like others, and which are in
+      # modern use (UTS #39).
+      - name: Fetch the Unicode script, look-alike and letter-status tables
         run: |
           mkdir -p "$RUNNER_TEMP/ucd"
           cd "$RUNNER_TEMP/ucd"
           curl -sSfL -o Scripts.txt https://www.unicode.org/Public/17.0.0/ucd/Scripts.txt
           curl -sSfL -o confusables.txt https://www.unicode.org/Public/17.0.0/security/confusables.txt
+          curl -sSfL -o IdentifierStatus.txt https://www.unicode.org/Public/17.0.0/security/IdentifierStatus.txt
           sha256sum -c - <<'SUMS'
           9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf  Scripts.txt
           091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a  confusables.txt
+          617228a16da13850bf8af28b6cd08f5e9b6595d2eb60404fe6eee2c85b4e4a35  IdentifierStatus.txt
           SUMS
 
       # The PR's text reaches the script through the environment, never the
@@ -146,6 +150,9 @@ jobs:
                     encoding="utf-8") as listed:
               KNOWN = {line.strip() for line in listed if line.strip() and not line.startswith("#")}
           CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*$", re.I | re.M)
+          # The trailer exactly as GitHub reads it, one line: the only form
+          # unlisted() may remove.
+          TRAILER = re.compile(r"^[ \t]*co-authored-by:[ \t]*(.*?)[ \t]*$", re.I | re.M)
 
           FILLERS = "\u115f\u1160\u2800\u3164\uffa0"
           # Direction overrides and marks show letters in another order than
@@ -211,8 +218,11 @@ jobs:
               # A target's marks dropped: Unicode reads a stroke letter as its
               # base letter plus a stroke ("ø" as "o" + U+0338), and NFD
               # leaves the stroke on, so "ø" reads as "o".
+              # A hook is spelled as an apostrophe ("\u0187" as "C'").
               target = "".join(c for c in (chr(int(code, 16)) for code in fields[0].split())
                                if unicodedata.category(c) not in ("Mn", "Me"))
+              if any(c.isalpha() for c in target):
+                  target = target.replace("'", "")
               if source > 0x7F and target.isascii() and target.strip():
                   # Unicode files I and l under one prototype, "l".
                   upper = chr(source).isupper() and target == "l"
@@ -254,6 +264,22 @@ jobs:
               ell, caps = text.translate(ELL), CAPS_WORD.sub(capitals, text)
               return [ell, caps] + [view.replace("0", "O").replace("rn", "m")
                                     for view in (text, ell, caps)]
+
+          # Letters in modern use (UTS #39 Identifier_Status Allowed), the
+          # allow-list for letters: one outside it (a small capital, a hooked
+          # or barred variant, an archaic form) is one no ordinary text needs
+          # and a reader may take for a Latin letter. Han ideographs are
+          # exempt: rare ones appear in names, and none draws like a Latin one.
+          MODERN = set()
+          for first, last, fields in ucd_rows("IdentifierStatus.txt"):
+              if fields[0] == "Allowed":
+                  MODERN.update(range(first, last + 1))
+
+          def odd_letter(text):
+              """A letter outside modern use, once compatibility forms are
+              folded (so "1\u00ba", fullwidth letters and ligatures pass)."""
+              return next((c for c in fold(text) if unicodedata.category(c).startswith("L")
+                           and ord(c) not in MODERN and SCRIPT.get(ord(c)) != "Han"), None)
 
           def mixed_alphabets(text):
               """A word whose letters come from scripts no language mixes in
@@ -322,7 +348,7 @@ jobs:
               The list judges people, so a listed name in another script (an
               Arabic name beside a Latin email) never meets the text checks;
               any other co-author line stays and is read."""
-              return CO_AUTHOR.sub(lambda m: "" if m.group(1).strip() in KNOWN else m.group(0), text)
+              return TRAILER.sub(lambda m: "" if m.group(1).strip() in KNOWN else m.group(0), text)
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
@@ -361,8 +387,11 @@ jobs:
               # lacks. Mixing is judged before folding, which turns the micro
               # sign (Common) into a Greek letter.
               word = next(filter(None, map(mixed_alphabets, plain[0:1] + plain[3:4])), None)
+              letter = next(filter(None, map(odd_letter, plain)), None)
               if word:
                   problem = f"mixes alphabets in '{word}'"
+              elif letter:
+                  problem = f"uses '{letter}' (U+{ord(letter):04X}), a letter outside modern use"
               elif any(map(unknown, plain)):
                   problem = "holds characters the runner's Unicode does not know"
               elif any(map(mixed_direction, plain)):
