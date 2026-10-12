@@ -213,18 +213,43 @@ jobs:
                   # Unicode files I and l under one prototype, "l".
                   upper = chr(source).isupper() and target == "l"
                   LOOKALIKE[source] = "I" if upper else target
+          # Letters the table leaves out but whose Unicode name says which Latin
+          # letter they draw: small capitals, boxed and regional-indicator
+          # letters ("LATIN LETTER SMALL CAPITAL M", "NEGATIVE SQUARED LATIN
+          # CAPITAL LETTER A"). Turned, reversed and other variants keep their own.
+          NAMED = re.compile(r"(?:LATIN|^REGIONAL INDICATOR SYMBOL).*\b(SMALL LETTER|LETTER|CAPITAL) ([A-Z])$")
+          for code in SCRIPT:
+              name = unicodedata.name(chr(code), "")
+              named = NAMED.search(name)
+              if code > 0x7F and code not in LOOKALIKE and named and not name.startswith("TAG "):
+                  letter = named.group(2)
+                  LOOKALIKE[code] = letter.lower() if named.group(1) == "SMALL LETTER" else letter
           # Every look-alike of "l" read as "l": a capital I, "|" or "1" in
           # place of an "l", after LOOKALIKE has read the rest.
           ELL = {source: "l" for source, _, fields in ucd_rows("confusables.txt")
                  if fields[0] == "006C"}
 
+          ELLS = "".join(map(chr, ELL)) + "l"
+          CAPS_WORD = re.compile(r"(?:[^\W\d_]|[" + re.escape(ELLS) + r"])+")
+
+          def capitals(match):
+              """An all-capitals word with each "l" look-alike read as "I", as
+              the font shows it: "Al", "GEMlNl". Lowercase words keep their l."""
+              word = match.group(0)
+              rest = [c for c in word if c not in ELLS]
+              if rest and all(c.isupper() for c in rest):
+                  return "".join("I" if c in ELLS else c for c in word)
+              return word
+
           def twins(text):
               """The text read through Unicode's look-alike pairs within ASCII
-              itself: "I", "|" or "1" as "l", "0" as "O", and "rn" as "m" (the
-              form LOOKALIKE gives every "m" look-alike); each alone and
-              together, since reading "AI" as "Al" hides the other."""
-              ell = text.translate(ELL)
-              return [ell] + [view.replace("0", "O").replace("rn", "m") for view in (text, ell)]
+              itself: "I", "|" or "1" as "l" (and "l" as "I" in an all-capitals
+              word), "0" as "O", and "rn" as "m" (the form LOOKALIKE gives every
+              "m" look-alike); each alone and together, since reading "AI" as
+              "Al" hides the other."""
+              ell, caps = text.translate(ELL), CAPS_WORD.sub(capitals, text)
+              return [ell, caps] + [view.replace("0", "O").replace("rn", "m")
+                                    for view in (text, ell, caps)]
 
           def mixed_alphabets(text):
               """A word whose letters come from scripts no language mixes in
