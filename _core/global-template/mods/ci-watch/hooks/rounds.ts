@@ -1,8 +1,9 @@
 // The fix-round limit: once a PR has had ROUND_LIMIT pushed rounds in a row whose checks did not all pass
 // (both reviews included), a further push to it is refused until the user resets the count. A round is a
-// watch of a pushed head that settled: what ci-watch itself saw, never rebuilt from the branch's history (a
-// merge, amend or rebase reshapes that), so pushes from another machine are not counted. Pure, no engine
-// access.
+// watch of a pushed head that settled (the session's own push, or a PR it asked to watch; never a head
+// someone else pushed, which ci-watch follows silently): what ci-watch itself saw, never rebuilt from the
+// branch's history (a merge, amend or rebase reshapes that), so pushes from another machine are not
+// counted. Pure, no engine access.
 
 export const ROUND_LIMIT = 6
 

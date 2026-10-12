@@ -299,7 +299,8 @@ async function updateRounds($: EngineInterface, key: string, change: (pr?: PrRou
 // time says nothing about the checks and is no round. A failed write leaves the count as it was.
 async function recordRounds($: EngineInterface, settled: readonly Watch[]): Promise<void> {
   for (const w of settled) {
-    if (w.outcome !== 'failed' && w.outcome !== 'passed') continue
+    // A silent watch follows a head someone else pushed: no round of this session's.
+    if (w.isSilent || (w.outcome !== 'failed' && w.outcome !== 'passed')) continue
     const red = w.outcome === 'failed'
     await updateRounds($, `${w.repo}#${w.number}`, pr => recordRound(pr, w.headSha, red)).catch(() => undefined)
   }
