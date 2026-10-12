@@ -144,12 +144,16 @@ jobs:
                              and unicodedata.category(c) not in ("Cf", "Mn", "Me"))
               return unicodedata.normalize("NFKC", text)
 
+          # Scripts that one word of East Asian text mixes as a matter of course.
+          EAST_ASIAN = {"CJK", "HIRAGANA", "KATAKANA", "KATAKANA-HIRAGANA", "HANGUL"}
+
           def mixed_alphabets(text):
-              """A word of four letters or more that mixes Latin with another
-              alphabet (a Cyrillic letter standing in for a Latin one)."""
+              """A word of four letters or more that mixes alphabets (a
+              Cyrillic or Greek letter standing in for a Latin one), East
+              Asian scripts counting as one."""
               for word in re.findall(r"[^\W\d_]{4,}", fold(text)):
                   alphabets = {unicodedata.name(c, "?").split()[0] for c in word}
-                  if "LATIN" in alphabets and len(alphabets) > 1:
+                  if len({"CJK" if a in EAST_ASIAN else a for a in alphabets}) > 1:
                       return word
               return None
 
