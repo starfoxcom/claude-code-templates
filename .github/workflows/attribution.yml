@@ -19,8 +19,9 @@ name: Attribution
 # - `pull_request_target` runs this file as the default branch (`main`)
 #   holds it, never the PR's copy, so editing the workflow in a PR changes
 #   nothing for it.
-# - The identity list is read from the protected base branch's current tip,
-#   and the patterns are the shipped hook's own (`ATTRIBUTION` in
+# - The identity list is read from protected `main`'s current tip (one list
+#   for PRs into either branch, so a release reads the same names), and the
+#   patterns are the shipped hook's own (`ATTRIBUTION` in
 #   `_core/global-template/hooks/no-ai-attribution.py`), read from protected
 #   `develop`'s; neither comes from the pull request.
 # That trigger is safe only while nothing from the PR runs: its commits are
@@ -69,12 +70,10 @@ jobs:
       # checkout: a re-run after the maintainer lists someone reads the new
       # list.
       - name: Read the hook's patterns and the identity list
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git fetch --no-tags origin develop "$BASE_REF"
+          git fetch --no-tags origin develop main
           git show origin/develop:_core/global-template/hooks/no-ai-attribution.py > "$RUNNER_TEMP/attribution_hook.py"
-          git show "origin/$BASE_REF:.github/attribution-identities.txt" > "$RUNNER_TEMP/attribution-identities.txt"
+          git show origin/main:.github/attribution-identities.txt > "$RUNNER_TEMP/attribution-identities.txt"
 
       # The PR's text reaches the script through the environment, never the
       # script's own text, so a title or body cannot run as code.
@@ -84,6 +83,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'EOF'
@@ -120,8 +120,8 @@ jobs:
               stamp = re.compile(r" \d+ [+-]\d{4}$")
               return stamp.sub("", fields["author"]), stamp.sub("", fields["committer"]), message
 
-          # Who may author, commit or co-author: the identities listed in the
-          # base branch's `.github/attribution-identities.txt`, exactly. An AI
+          # Who may author, commit or co-author: the identities listed in
+          # `main`'s `.github/attribution-identities.txt`, exactly. An AI
           # account of any name fails without a list of AI names to keep
           # current, and a new contributor is listed once the maintainer has
           # read their pull request.
@@ -144,23 +144,36 @@ jobs:
                              and unicodedata.category(c) not in ("Cf", "Mn", "Me"))
               return unicodedata.normalize("NFKC", text)
 
-          # Scripts that one word of East Asian text mixes as a matter of course.
-          EAST_ASIAN = {"CJK", "HIRAGANA", "KATAKANA", "KATAKANA-HIRAGANA", "HANGUL"}
+          # Cyrillic, Greek and Armenian letters that look like Latin ones
+          # (a subset of Unicode's confusables list, TR39), each before
+          # its Latin twin: a short word of them reads as Latin.
+          LOOKALIKES = (
+              "\u0410A\u0412B\u0415E\u041aK\u041cM\u041dH\u041eO\u0420P"
+              "\u0421C\u0422T\u0423Y\u0425X\u0405S\u0406I\u0408J\u04aeY"
+              "\u04c0I\u051aQ\u051cW\u0430a\u0435e\u043eo\u0440p\u0441c"
+              "\u0443y\u0445x\u0455s\u0456i\u0458j\u04bbh\u0501d\u051bq"
+              "\u051dw\u04cfl\u04afy\u043ak\u0391A\u0392B\u0395E\u0396Z"
+              "\u0397H\u0399I\u039aK\u039cM\u039dN\u039fO\u03a1P\u03a4T"
+              "\u03a5Y\u03a7X\u03f9C\u037fJ\u03bfo\u03b1a\u03b9i\u03bak"
+              "\u03bdv\u03c1p\u03c5u\u03c7x\u03f2c\u03f3j\u0585o\u057du"
+              "\u0570h\u0578n\u0566q\u054fS\u0555O")
+          SKELETON = str.maketrans(LOOKALIKES[0::2], LOOKALIKES[1::2])
+
+          FOREIGN = set(LOOKALIKES[0::2])
 
           def mixed_alphabets(text):
-              """A word of four letters or more that mixes alphabets (a
-              Cyrillic or Greek letter standing in for a Latin one), East
-              Asian scripts counting as one."""
-              for word in re.findall(r"[^\W\d_]{4,}", fold(text)):
-                  alphabets = {unicodedata.name(c, "?").split()[0] for c in word}
-                  if len({"CJK" if a in EAST_ASIAN else a for a in alphabets}) > 1:
+              """A word that mixes Latin letters with letters that only look
+              Latin (a Cyrillic or Greek one standing in for its twin)."""
+              for word in re.findall(r"[^\W\d_]+", fold(text)):
+                  if FOREIGN & set(word) and any("LATIN" in unicodedata.name(c, "") for c in word):
                       return word
               return None
 
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
               renderer: tags dropped, entities decoded, and the alt and title
-              texts kept. Any failure stops the check."""
+              texts kept; and whether it holds math with TeX commands, which
+              cannot be read plainly. Any failure stops the check."""
               request = urllib.request.Request(
                   "https://api.github.com/markdown",
                   data=json.dumps({"text": text, "mode": "gfm",
@@ -170,21 +183,30 @@ jobs:
               with urllib.request.urlopen(request, timeout=60) as reply:
                   page = reply.read().decode("utf-8")
               extras = re.findall(r'\b(?:alt|title|aria-label)="([^"]*)"', page)
-              return html.unescape(re.sub(r"<[^>]*>", "", page) + "\n" + "\n".join(extras))
+              maths = re.findall(r"<math-renderer[^>]*>(.*?)</math-renderer>", page, re.S)
+              shown_text = html.unescape(re.sub(r"<[^>]*>", "", page) + "\n" + "\n".join(extras))
+              return shown_text, any("\\" in html.unescape(m) for m in maths)
+
+          ROBOT = "\U0001F916"
 
           def shown(text, is_markdown):
-              """The text as written and folded, and for Markdown also as
-              GitHub renders it, folded, and with math markup dropped
-              (`$\text\{Gen\}$` shows as Gen)."""
-              views = [text, fold(text)]
+              """The views of a text, and whether it holds math with TeX
+              commands. Views: as written and folded, with the robot
+              shortcode as its emoji (GitHub shows it in commit messages
+              too), and for Markdown as GitHub's renderer shows it, folded;
+              then each with look-alike letters read as Latin."""
+              views = [text, fold(text), fold(text.replace(":robot:", ROBOT))]
+              has_math = False
               if is_markdown and text.strip():
-                  rendered = fold(render(text))
-                  views += [rendered, re.sub(r"\\[A-Za-z]+|[{}$]", "", rendered)]
-              return views
+                  rendered, has_math = render(text)
+                  views += [rendered, fold(rendered)]
+              return views + [view.translate(SKELETON) for view in views], has_math
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
                    ("the PR body", os.environ.get("PR_BODY", ""), True)]
+          # The merge commit's title names the branch.
+          branch = [("the branch name", os.environ.get("HEAD_REF", ""), False)]
           # The title becomes the merge commit's message, and an edited
           # merge message can carry the body: their co-authors face the list.
           for where, text, _ in texts:
@@ -192,6 +214,7 @@ jobs:
                   if ident.strip() not in KNOWN:
                       hits.append(f"{where}'s co-author '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
+          texts += branch
           # Each commit the PR adds: what its base already holds is not its own.
           span = f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"
           for sha in git("rev-list", span).decode().split():
@@ -206,13 +229,19 @@ jobs:
               texts.append((f"commit {sha[:7]}'s message", message, False))
 
           for where, text, is_markdown in texts:
-              word = mixed_alphabets(text)
-              if word or OVERRIDES.search(text):
-                  why = f"mixes alphabets in '{word}'" if word else "reorders its letters"
+              views, has_math = shown(text, is_markdown)
+              # Judged on every view but the look-alike readings (which mix
+              # alphabets by design): an entity can spell what the raw text lacks.
+              plain_views = views[:len(views) // 2]
+              word = next(filter(None, map(mixed_alphabets, plain_views)), None)
+              if word or has_math or any(OVERRIDES.search(view) for view in plain_views):
+                  why = (f"mixes alphabets in '{word}'" if word
+                         else "holds math with TeX commands" if has_math else "reorders its letters")
                   hits.append(f"{where} {why}, so it cannot be checked")
                   continue
-              for view in shown(text, is_markdown):
-                  hit = hook.ATTRIBUTION.search(hook.strip_paths(view))
+              for view in views:
+                  hit = (hook.ATTRIBUTION.search(view)
+                         or hook.ATTRIBUTION.search(hook.strip_paths(view)))
                   if hit:
                       hits.append(f"AI attribution in {where}: '{hit.group(0).strip()}'")
                       break
