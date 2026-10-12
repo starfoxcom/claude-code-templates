@@ -675,9 +675,25 @@ jobs:
                   views += [code, fold(code)]
               return views, readings(views), problem
 
+          def visual(text):
+              """The text in shown order: each run of right-to-left characters
+              reversed, as a left-to-right line draws it."""
+              out, run = [], []
+              for c in text:
+                  if unicodedata.bidirectional(c) in ("R", "AL", "AN", "NSM"):
+                      run.append(c)
+                  else:
+                      out.extend(reversed(run))
+                      run = []
+                      out.append(c)
+              out.extend(reversed(run))
+              return "".join(out)
+
           def readings(views):
-              """Each view with look-alike letters read as Latin, then also
+              """Each view, and each in shown order where right-to-left runs
+              draw reversed, with look-alike letters read as Latin, then also
               through the ASCII look-alike pairs (twins)."""
+              views = views + [order for order in map(visual, views) if order not in views]
               looks = [view.translate(LOOKALIKE) for view in views]
               return looks + [twin for view in looks for twin in twins(view)]
 
