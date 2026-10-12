@@ -317,23 +317,26 @@ jobs:
                             r'|<(?:table|img)\b[^>]*\balign="(?:left|right)"'))]
 
           # Every tag the renderer keeps, and how it lays text out: an inline
-          # tag joins the text on each side, a block or break tag (and an
-          # image) starts a new line. A tag in neither list cannot be laid
-          # out plainly, so it fails the check.
-          INLINE = {"a", "b", "code", "del", "em", "i", "ins", "kbd", "mark", "path", "q", "s",
-                    "samp", "span", "strike", "strong", "sub", "sup", "svg", "tt", "var"}
+          # tag (an image and a task checkbox included, drawn in the line)
+          # joins the text on each side, a block or break tag starts a new
+          # line. A tag in neither list cannot be laid out plainly, so it
+          # fails the check.
+          INLINE = {"a", "b", "code", "del", "em", "i", "img", "input", "ins", "kbd", "mark",
+                    "path", "picture", "q", "s", "samp", "source", "span", "strike", "strong",
+                    "sub", "sup", "svg", "themed-picture", "tt", "var"}
           BLOCK = {"blockquote", "br", "dd", "details", "div", "dl", "dt", "h1", "h2", "h3", "h4",
-                   "h5", "h6", "hr", "img", "input", "li", "markdown-accessiblity-table", "ol", "p",
-                   "picture", "pre", "section", "source", "summary", "table", "tbody", "td", "th",
-                   "thead", "themed-picture", "tr", "ul"}
+                   "h5", "h6", "hr", "li", "markdown-accessiblity-table", "ol", "p", "pre",
+                   "section", "summary", "table", "tbody", "td", "th", "thead", "tr", "ul"}
           TAG = re.compile(r"</?([A-Za-z][\w-]*)[^>]*>")
 
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
-              renderer: inline tags dropped, block tags as line breaks,
-              entities decoded, the alt and title texts kept, and every link
-              and image address decoded; and what in it cannot be read
-              plainly, if anything. Any failure stops the check."""
+              renderer, twice: laid out (inline tags dropped, block tags as
+              line breaks) and with every tag dropped, so a tag filed in the
+              wrong list cannot open a gap. Entities decoded, the alt and
+              title texts kept, and every link and image address decoded.
+              Also what in it cannot be read plainly, if anything. Any
+              failure stops the check."""
               request = urllib.request.Request(
                   "https://api.github.com/markdown",
                   data=json.dumps({"text": text, "mode": "gfm",
@@ -347,12 +350,14 @@ jobs:
               extras = ([html.unescape(label) for label in labels]
                         + [urllib.parse.unquote(html.unescape(url)) for url in addresses])
               laid_out = TAG.sub(lambda m: "\n" if m.group(1).lower() in BLOCK else "", page)
-              shown_text = html.unescape(laid_out) + "\n" + "\n".join(extras)
+              joined = TAG.sub("", page)
+              shown_texts = [html.unescape(view) + "\n" + "\n".join(extras)
+                             for view in (laid_out, joined)]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
               if odd and not problem:
                   problem = f"holds HTML the check cannot lay out (<{odd[0]}>)"
-              return shown_text, problem
+              return shown_texts, problem
 
           ROBOT = "\U0001F916"
 
@@ -366,8 +371,8 @@ jobs:
               views = [text, fold(text), fold(text.replace(":robot:", ROBOT))]
               problem = None
               if is_markdown and text.strip():
-                  rendered, problem = render(text)
-                  views += [rendered, fold(rendered)]
+                  (rendered, joined), problem = render(text)
+                  views += [rendered, fold(rendered), joined, fold(joined)]
               looks = [view.translate(LOOKALIKE) for view in views]
               return views, looks + [twin for view in looks for twin in twins(view)], problem
 
@@ -415,11 +420,13 @@ jobs:
                       hits.append(f"commit {sha[:7]}'s {role} '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
               texts.append((f"commit {sha[:7]}'s message", unlisted(message), False))
-          # A squash merge joins the messages into one.
+          # A squash merge joins the messages into one, oldest first, each as
+          # a "* " bullet; rev-list lists them newest first.
           messages = [text for where, text, _ in texts if where.endswith("'s message")
                       and where.startswith("commit ")]
           if len(messages) > 1:
-              texts.append(("the commit messages joined", "\n\n".join(messages), False))
+              squash = "\n\n".join("* " + message for message in reversed(messages))
+              texts.append(("the commit messages joined", squash, False))
 
           for where, text, is_markdown in texts:
               plain, looks, problem = shown(text, is_markdown)
