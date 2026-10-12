@@ -477,13 +477,15 @@ test("a same-head push made while a poll reads a silent watch's checks makes it 
   seen.bucket = 'pending'
   while (!seen.ghCalls.some(call => call.includes('state,headRefOid'))) await clock.advance(POLL_MS)
   await clock.advance(10 * 60_000)
-  const views = () => seen.ghCalls.filter(call => call.includes('headRefName')).length
+  // The push's own PR lookup (the poll's lookups name other fields).
+  const views = () => seen.ghCalls.filter(call => call.includes('number,url,headRefOid')).length
   // Inside the poll's checks read: the push starts beside it and gets as far as its own PR lookup.
   seen.duringChecks = async () => {
     seen.duringChecks = undefined
     const before = views()
     void $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
-    while (views() === before) await moment(0)
+    for (let tries = 0; views() === before && tries < 100; tries++) await moment(0)
+    expect(views()).toBe(before + 1)
   }
   while (seen.duringChecks) await clock.advance(POLL_MS)
   seen.bucket = 'pass'
