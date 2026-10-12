@@ -3,19 +3,25 @@ name: Attribution
 # The server-side backstop to the local attribution guards. The local hook and
 # the guards mod catch AI credit written the ordinary way from a session; a
 # commit made elsewhere, or a write that slipped past them, reaches this check.
-# It fails a pull request when one of its commits (message, author or
-# committer), its title or its body carries AI attribution: an AI
-# Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
-# session link, the robot emoji, or an AI account as author or committer.
-# Plain mentions of the product pass. What it cannot read, it refuses: a
-# commit stored in any encoding but UTF-8 fails.
+# It fails a pull request when:
+# - one of its commits' messages, its title or its body carries AI
+#   attribution: an AI Co-Authored-By, an Anthropic noreply address, a
+#   "generated with" line, a session link or the robot emoji. Plain mentions
+#   of the product pass. The title and body are also read as GitHub renders
+#   them.
+# - a commit's author, committer or co-author is not listed in
+#   `.github/attribution-identities.txt`: an AI account fails whatever its
+#   name, with no list of AI names to keep current.
+# - a commit cannot be read plainly (any encoding but UTF-8, a repeated
+#   author, committer or encoding line).
 #
 # A pull request cannot weaken the check on itself:
 # - `pull_request_target` runs this file as the base branch holds it, never
 #   the PR's copy, so editing the workflow in a PR changes nothing for it.
-# - The patterns are the shipped hook's own (`ATTRIBUTION` in
+# - The identity list comes from the base branch's checkout, and the patterns
+#   are the shipped hook's own (`ATTRIBUTION` in
 #   `_core/global-template/hooks/no-ai-attribution.py`), read from protected
-#   `develop`, never from the pull request.
+#   `develop`; neither comes from the pull request.
 # That trigger is safe only while nothing from the PR runs: its commits are
 # fetched as objects and read raw with `git cat-file`, never checked out, and
 # its text reaches the script through the environment. Keep it that way. No
@@ -95,53 +101,36 @@ jobs:
               fields = {}
               for line in head.split("\n"):
                   key, _, value = line.partition(" ")
-                  if key:  # a line starting with a space continues a signature
-                      fields.setdefault(key, value)
+                  if not key:  # a line starting with a space continues a signature
+                      continue
+                  if key in fields and key in ("author", "committer", "encoding"):
+                      sys.exit(f"::error::commit {sha[:7]} has two {key} lines, so it cannot be checked.")
+                  fields.setdefault(key, value)
               encoding = fields.get("encoding", "UTF-8")
               if encoding.lower().replace("-", "") != "utf8":
                   sys.exit(f"::error::commit {sha[:7]} is stored as {encoding}: only UTF-8 commits can be checked.")
               stamp = re.compile(r" \d+ [+-]\d{4}$")
               return stamp.sub("", fields["author"]), stamp.sub("", fields["committer"]), message
 
-          # An AI account as author or committer: any [bot] account but the
-          # non-AI ones below, a name ending "(aider)", or a name or login made
-          # only of AI tool words ("Claude Sonnet 4", "copilot-swe-agent",
-          # "Devin AI"), with a tool's name or at least two words. A person
-          # whose name or login only starts with one passes ("Claude Monet",
-          # "devinsmith", a person named just Devin).
-          PLAIN_BOTS = {"dependabot[bot]", "github-actions[bot]", "renovate[bot]"}
-          TOOLS = {"claude", "anthropic", "opus", "sonnet", "haiku", "fable", "copilot", "openai",
-                   "codex", "chatgpt", "gpt", "gemini", "cursor", "jules", "aider", "llm"}
-          WORDS = TOOLS | {"ai", "agent", "assistant", "bot", "cli", "code", "coding", "developer",
-                           "devin", "github", "google", "labs", "amazon", "q", "swe"}
-
-          def only_tool_words(text):
-              # Version numbers ("4", "4o") drop out; the rest must split into WORDS.
-              kept = [t for t in re.split(r"[^a-z0-9]+", text.lower()) if t and not t[0].isdigit()]
-              letters = re.sub(r"[^a-z]", "", "".join(kept))
-              states = [set() for _ in range(len(letters) + 1)]
-              states[0].add((False, 0))
-              for i in range(len(letters)):
-                  for has_tool, count in states[i]:
-                      for word in WORDS:
-                          if letters.startswith(word, i):
-                              states[i + len(word)].add((has_tool or word in TOOLS, min(count + 1, 2)))
-              return any(has_tool or count == 2 for has_tool, count in states[-1])
-
-          def ai_account(ident):
-              name, _, email = ident.partition(" <")
-              login = re.fullmatch(r"\d+\+(.+)@users\.noreply\.github\.com>", email, re.I)
-              for who in filter(None, [name.strip(), login and login.group(1)]):
-                  lower = who.lower()
-                  if ("[bot]" in lower and lower not in PLAIN_BOTS
-                          or re.search(r"\(aider\)$", lower) or only_tool_words(lower)):
-                      return who
-              return None
+          # Who may author, commit or co-author: the identities listed in the
+          # base branch's `.github/attribution-identities.txt`, exactly. An AI
+          # account of any name fails without a list of AI names to keep
+          # current, and a new contributor is listed once the maintainer has
+          # read their pull request.
+          with open(".github/attribution-identities.txt", encoding="utf-8") as listed:
+              KNOWN = {line.strip() for line in listed if line.strip() and not line.startswith("#")}
+          CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*$", re.I | re.M)
 
           def shown(text):
               """The text as written, and as GitHub renders it: tags and
-              comments dropped, entities decoded."""
-              return [text, html.unescape(re.sub(r"<!--.*?-->|<[^>]*>", "", text, flags=re.S))]
+              comments dropped and entities decoded, then Markdown's marks
+              dropped too (backslash escapes, code-span backticks, strikes,
+              link brackets, with each link's text and address kept)."""
+              rendered = html.unescape(re.sub(r"<!--.*?-->|<[^>]*>", "", text, flags=re.S))
+              plain = re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", rendered)
+              plain = re.sub(r"!?\[([^\]]*)\]\(([^)]*)\)", r"\1 \2", plain)
+              plain = re.sub(r"[`~\[\]\u00ad\u200b-\u200d\u2060\ufeff]", "", plain)
+              return [text, rendered, plain]
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", "")),
@@ -150,24 +139,28 @@ jobs:
           span = f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"
           for sha in git("rev-list", span).decode().split():
               author, committer, message = read_commit(sha)
-              for role, ident in (("author", author), ("committer", committer)):
+              people = [("author", author), ("committer", committer)]
+              people += [("co-author", ident) for ident in CO_AUTHOR.findall(message)]
+              for role, ident in people:
                   texts.append((f"commit {sha[:7]}'s {role}", ident))
-                  who = ai_account(ident)
-                  if who:
-                      hits.append(f"commit {sha[:7]}'s {role}: '{who}' is an AI account")
+                  if ident.strip() not in KNOWN:
+                      hits.append(f"commit {sha[:7]}'s {role} '{ident}' is not listed in "
+                                  ".github/attribution-identities.txt")
               texts.append((f"commit {sha[:7]}'s message", message))
 
           for where, text in texts:
               for view in shown(text):
                   hit = hook.ATTRIBUTION.search(hook.strip_paths(view))
                   if hit:
-                      hits.append(f"{where}: '{hit.group(0).strip()}'")
+                      hits.append(f"AI attribution in {where}: '{hit.group(0).strip()}'")
                       break
           for line in hits:
-              print(f"::error::AI attribution in {line}")
+              print(f"::error::{line}")
           if hits:
               print("Commits, PRs, issues, comments and releases belong to the maintainer: remove the "
-                    "attribution (reword the commits, edit the title or body) and push again.")
+                    "attribution (reword the commits, edit the title or body) and push again. A new "
+                    "contributor's own identity is added to .github/attribution-identities.txt by the "
+                    "maintainer, once they have read the pull request.")
               sys.exit(1)
           print(f"No AI attribution in {len(texts)} texts.")
           EOF
