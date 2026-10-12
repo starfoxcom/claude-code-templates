@@ -7,7 +7,8 @@ name: Attribution
 # committer), its title or its body carries AI attribution: an AI
 # Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
 # session link, the robot emoji, or an AI account as author or committer.
-# Plain mentions of the product pass.
+# Plain mentions of the product pass. What it cannot read, it refuses: a
+# commit stored in any encoding but UTF-8 fails.
 #
 # A pull request cannot weaken the check on itself:
 # - `pull_request_target` runs this file as the base branch holds it, never
@@ -16,9 +17,9 @@ name: Attribution
 #   `_core/global-template/hooks/no-ai-attribution.py`), read from protected
 #   `develop`, never from the pull request.
 # That trigger is safe only while nothing from the PR runs: its commits are
-# fetched as objects and read with `git log`, never checked out, and its text
-# reaches the script through the environment. Keep it that way. No manual
-# trigger.
+# fetched as objects and read raw with `git cat-file`, never checked out, and
+# its text reaches the script through the environment. Keep it that way. No
+# manual trigger.
 
 on:
   pull_request_target:
@@ -44,7 +45,7 @@ jobs:
     timeout-minutes: 5
     steps:
       # The base branch, never the PR's head.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -72,46 +73,96 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           python3 - <<'EOF'
-          import importlib.util, os, re, subprocess, sys
+          import html, importlib.util, os, re, subprocess, sys
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
           hook = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(hook)
 
-          # An AI account as a commit's author or committer: a bot login or
-          # the tool's name alone. A person named Claude with a surname passes.
-          TOOL = (r"(?:" + hook.CLAUDE + "|" + hook.ANTHROPIC
-                  + r"|copilot|codex|chat\W?gpt|gemini|cursor|devin)")
-          IDENTITY = re.compile(
-              r"\b" + TOOL + r"[\w-]*\[bot\]"
-              + r"|^\s*" + TOOL + r"(?:[\s-]+(?:code|agent|ai|bot))?\s*<"
-              + r"|\+" + TOOL + r"[\w-]*@users\.noreply\.github\.com",
-              re.I)
-
           def git(*args):
-              return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+              return subprocess.run(["git", *args], check=True, capture_output=True).stdout
 
-          # Each commit the PR adds: what its base already holds is not its own.
-          # One read per field, so no character in a message can pass for a
-          # separator and hide text from the scan.
-          texts = [("the PR title", os.environ.get("PR_TITLE", ""), False),
-                   ("the PR body", os.environ.get("PR_BODY", ""), False)]
-          for sha in git("rev-list", f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}").split():
-              author = git("show", "-s", "--format=%an <%ae>", sha)
-              committer = git("show", "-s", "--format=%cn <%ce>", sha)
-              message = git("show", "-s", "--format=%B", sha)
-              texts += [(f"commit {sha[:7]}'s author", author, True),
-                        (f"commit {sha[:7]}'s committer", committer, True),
-                        (f"commit {sha[:7]}'s message", message, False)]
+          def read_commit(sha):
+              """A commit's author, committer and message, parsed from its raw
+              object: git's formatter re-encodes a commit that names another
+              encoding, which can blank every field. Only plain UTF-8 passes."""
+              try:
+                  raw = git("cat-file", "commit", sha).decode("utf-8")
+              except UnicodeDecodeError:
+                  sys.exit(f"::error::commit {sha[:7]} is not valid UTF-8, so it cannot be checked.")
+              head, _, message = raw.partition("\n\n")
+              fields = {}
+              for line in head.split("\n"):
+                  key, _, value = line.partition(" ")
+                  if key:  # a line starting with a space continues a signature
+                      fields.setdefault(key, value)
+              encoding = fields.get("encoding", "UTF-8")
+              if encoding.lower().replace("-", "") != "utf8":
+                  sys.exit(f"::error::commit {sha[:7]} is stored as {encoding}: only UTF-8 commits can be checked.")
+              stamp = re.compile(r" \d+ [+-]\d{4}$")
+              return stamp.sub("", fields["author"]), stamp.sub("", fields["committer"]), message
+
+          # An AI account as author or committer: any [bot] account but the
+          # non-AI ones below, a name ending "(aider)", or a name or login made
+          # only of AI tool words ("Claude Sonnet 4", "copilot-swe-agent",
+          # "Devin AI"), with a tool's name or at least two words. A person
+          # whose name or login only starts with one passes ("Claude Monet",
+          # "devinsmith", a person named just Devin).
+          PLAIN_BOTS = {"dependabot[bot]", "github-actions[bot]", "renovate[bot]"}
+          TOOLS = {"claude", "anthropic", "opus", "sonnet", "haiku", "fable", "copilot", "openai",
+                   "codex", "chatgpt", "gpt", "gemini", "cursor", "jules", "aider", "llm"}
+          WORDS = TOOLS | {"ai", "agent", "assistant", "bot", "cli", "code", "coding", "developer",
+                           "devin", "github", "google", "labs", "amazon", "q", "swe"}
+
+          def only_tool_words(text):
+              # Version numbers ("4", "4o") drop out; the rest must split into WORDS.
+              kept = [t for t in re.split(r"[^a-z0-9]+", text.lower()) if t and not t[0].isdigit()]
+              letters = re.sub(r"[^a-z]", "", "".join(kept))
+              states = [set() for _ in range(len(letters) + 1)]
+              states[0].add((False, 0))
+              for i in range(len(letters)):
+                  for has_tool, count in states[i]:
+                      for word in WORDS:
+                          if letters.startswith(word, i):
+                              states[i + len(word)].add((has_tool or word in TOOLS, min(count + 1, 2)))
+              return any(has_tool or count == 2 for has_tool, count in states[-1])
+
+          def ai_account(ident):
+              name, _, email = ident.partition(" <")
+              login = re.fullmatch(r"\d+\+(.+)@users\.noreply\.github\.com>", email, re.I)
+              for who in filter(None, [name.strip(), login and login.group(1)]):
+                  lower = who.lower()
+                  if ("[bot]" in lower and lower not in PLAIN_BOTS
+                          or re.search(r"\(aider\)$", lower) or only_tool_words(lower)):
+                      return who
+              return None
+
+          def shown(text):
+              """The text as written, and as GitHub renders it: tags and
+              comments dropped, entities decoded."""
+              return [text, html.unescape(re.sub(r"<!--.*?-->|<[^>]*>", "", text, flags=re.S))]
 
           hits = []
-          for where, text, is_identity in texts:
-              hit = hook.ATTRIBUTION.search(hook.strip_paths(text))
-              if not hit and is_identity:
-                  hit = IDENTITY.search(text)
-              if hit:
-                  hits.append(f"{where}: '{hit.group(0).strip()}'")
+          texts = [("the PR title", os.environ.get("PR_TITLE", "")),
+                   ("the PR body", os.environ.get("PR_BODY", ""))]
+          # Each commit the PR adds: what its base already holds is not its own.
+          span = f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"
+          for sha in git("rev-list", span).decode().split():
+              author, committer, message = read_commit(sha)
+              for role, ident in (("author", author), ("committer", committer)):
+                  texts.append((f"commit {sha[:7]}'s {role}", ident))
+                  who = ai_account(ident)
+                  if who:
+                      hits.append(f"commit {sha[:7]}'s {role}: '{who}' is an AI account")
+              texts.append((f"commit {sha[:7]}'s message", message))
+
+          for where, text in texts:
+              for view in shown(text):
+                  hit = hook.ATTRIBUTION.search(hook.strip_paths(view))
+                  if hit:
+                      hits.append(f"{where}: '{hit.group(0).strip()}'")
+                      break
           for line in hits:
               print(f"::error::AI attribution in {line}")
           if hits:
