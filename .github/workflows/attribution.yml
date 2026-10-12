@@ -7,8 +7,9 @@ name: Attribution
 # - one of its commits' messages, its title or its body carries AI
 #   attribution: an AI Co-Authored-By, an Anthropic noreply address, a
 #   "generated with" line, a session link or the robot emoji. Plain mentions
-#   of the product pass. The title and body are also read as GitHub renders
-#   them.
+#   of the product pass. Each text is also read as GitHub shows it: the body
+#   rendered as Markdown, the title and commit messages with their code spans
+#   and emoji drawn.
 # - a commit's author, committer or co-author is not listed in
 #   `.github/attribution-identities.txt`: an AI account fails whatever its
 #   name, with no list of AI names to keep current.
@@ -444,35 +445,51 @@ jobs:
               parts.append(page[last:])
               return re.sub(r'(<[^>]*\bdata-line-number="([^"]*)"[^>]*>)', r"\1\2 ", "".join(parts))
 
-          def closed(page):
-              """The page as shown before any closed details is opened: what
-              follows each one's summary dropped."""
-              frames, parts, last = [], [], 0
+          # Each details block can be opened or closed by a click, so every
+          # combination is read; past this many blocks the check refuses.
+          MOST_DETAILS = 6
+
+          def collapsed(page, opened):
+              """The page with each details block, in page order, open or
+              closed as `opened` says: a closed one's content after its
+              summary dropped."""
+              frames, parts, last, seen = [], [], 0, 0
               for m in re.finditer(r"<(/?)(details|summary)\b([^>]*)>", page):
                   if not any(hiding for _, hiding in frames):
                       parts.append(page[last:m.start()])
                   parts.append(m.group(0))
                   last = m.end()
-                  closing, tag, inside = m.groups()
+                  closing, tag, _ = m.groups()
                   if tag == "details" and closing:
                       frames = frames[:-1]
                   elif tag == "details":
-                      names = re.findall(r"[\w:.-]+", re.sub(r'"[^"]*"', "", inside))
-                      frames.append(["open" in (name.lower() for name in names), False])
+                      frames.append([opened[seen], False])
+                      seen += 1
                   elif closing and frames:
                       frames[-1][1] = not frames[-1][0]
               if not any(hiding for _, hiding in frames):
                   parts.append(page[last:])
               return "".join(parts)
 
+          STRUCK = re.compile(r"<(del|s|strike)\b[^>]*>(?:(?!<\1\b)[\s\S])*?</\1>")
+
+          def unstruck(page):
+              """The page with struck-through text dropped: a reader skips it,
+              so the words on each side read as one sentence."""
+              while True:
+                  page, count = STRUCK.subn("", page)
+                  if not count:
+                      return page
+
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
-              renderer, with list markers and line numbers written in: laid
-              out (inline tags dropped, block tags as line breaks), with every
-              tag dropped, so a tag filed in the wrong list cannot open a gap,
-              laid out with each image as its alt text in place (a broken
-              image shows it there), and both of those again with closed
-              details' content dropped. Entities decoded, the alt and
+              renderer, with what its stylesheets draw written in: laid out
+              (inline tags dropped, block tags as line breaks) and laid out
+              with each image as its alt text in place (a broken image shows
+              it there), for every open/closed state of its details blocks,
+              with and without struck text; and with every tag dropped, so a
+              tag filed in the wrong list cannot open a gap. Entities
+              decoded, the alt and
               title texts kept, and every link and image address decoded.
               Also what in it cannot be read plainly, if anything. Any
               failure stops the check."""
@@ -496,15 +513,23 @@ jobs:
                                 lambda m: "".join(re.findall(r'\balt="([^"]*)"', m.group(0))[:1]),
                                 page)
 
-              # A hidden list item is no list item: closed details' content
-              # goes before the markers are counted.
-              page_drawn, closed_drawn = drawn(page), drawn(closed(page))
-              shown_texts = [html.unescape(view) + "\n" + "\n".join(extras)
-                             for view in (TAG.sub(layout, page_drawn), TAG.sub("", page_drawn),
-                                          TAG.sub(layout, pictured(page_drawn)),
-                                          TAG.sub(layout, closed_drawn),
-                                          TAG.sub(layout, pictured(closed_drawn)))]
+              # Every open/closed combination of the details blocks, all open
+              # first, each with and without struck text. A hidden list item
+              # is no list item: closed content goes before the markers are
+              # counted.
+              count = len(re.findall(r"<details\b", page))
+              combos = [tuple(not k >> i & 1 for i in range(count))
+                        for k in range(2 ** min(count, MOST_DETAILS))]
+              views = []
+              for opened in combos if count <= MOST_DETAILS else combos[:1]:
+                  base = collapsed(page, opened)
+                  for marked in (drawn(base), drawn(unstruck(base))):
+                      views += [TAG.sub(layout, marked), TAG.sub(layout, pictured(marked))]
+              views = list(dict.fromkeys(views + [TAG.sub("", drawn(page))]))
+              shown_texts = [html.unescape(view) + "\n" + "\n".join(extras) for view in views]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
+              if count > MOST_DETAILS and not problem:
+                  problem = f"holds more than {MOST_DETAILS} collapsible sections"
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
               if odd and not problem:
                   problem = f"holds HTML the check cannot lay out (<{odd[0]}>)"
@@ -513,23 +538,45 @@ jobs:
                   problem = f"holds an HTML attribute the check cannot lay out ({loose[0]})"
               return shown_texts, problem
 
-          ROBOT = "\U0001F916"
+          def emoji_list():
+              """GitHub's own emoji list: each shortcode's characters, or
+              nothing for a custom one (such as :octocat:, an image)."""
+              request = urllib.request.Request(
+                  "https://api.github.com/emojis",
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                           "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(request, timeout=60) as reply:
+                  table = json.load(reply)
+              emoji = {}
+              for name, url in table.items():
+                  code = re.search(r"/unicode/([0-9a-f-]+)\.png", url)
+                  emoji[name] = "".join(chr(int(part, 16)) for part in
+                                        code.group(1).split("-")) if code else ""
+              return emoji
+
+          # Titles and commit messages show every shortcode as its emoji,
+          # and some draw letters (:a: and :o2: as A and O).
+          EMOJI = emoji_list()
+
+          def emojified(text):
+              """The text with each known shortcode as its emoji."""
+              return re.sub(r":([\w+-]+):", lambda m: EMOJI.get(m.group(1), m.group(0)), text)
 
           def shown(text, is_markdown):
               """The plain views of a text, its look-alike readings, and what
               in it cannot be read plainly. Plain views: as written and
-              folded, with the robot shortcode as its emoji (GitHub shows it
-              in commit messages too), and for Markdown as GitHub's renderer
-              shows it, folded; a commit message also without backticks, as
-              GitHub shows its code spans. Readings: each with look-alike letters read
+              folded, with every shortcode as its emoji, and for Markdown as
+              GitHub's renderer shows it, folded; plain text (a title or a
+              commit message) also without backticks, as GitHub shows its
+              code spans. Readings: each with look-alike letters read
               as Latin, then also through the ASCII look-alike pairs (twins)."""
-              views = [text, fold(text), fold(text.replace(":robot:", ROBOT))]
+              views = [text, fold(text), fold(emojified(text))]
               problem = None
               if is_markdown and text.strip():
                   rendered, problem = render(text)
                   views += [form for view in rendered for form in (view, fold(view))]
               elif not is_markdown:
-                  code = text.replace("`", "")
+                  code = emojified(text).replace("`", "")
                   views += [code, fold(code)]
               looks = [view.translate(LOOKALIKE) for view in views]
               return views, looks + [twin for view in looks for twin in twins(view)], problem
@@ -573,7 +620,9 @@ jobs:
               return views
 
           hits = []
-          texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
+          # GitHub shows a title as plain text with its code spans and
+          # emoji drawn, never as Markdown.
+          texts = [("the PR title", os.environ.get("PR_TITLE", ""), False),
                    ("the PR body", os.environ.get("PR_BODY", ""), True)]
           # The merge commit's message, whole: its title names the head as
           # "owner/branch" (for a fork, the owner is the contributor's
@@ -613,7 +662,7 @@ jobs:
               # an account; prose about the key ("`Co-authored-by:` lines are
               # checked", "@owner" included) is left to the scan. Folded views are skipped:
               # folding drops a listed name's accents.
-              if is_markdown:
+              if where.startswith("the PR "):
                   for ident in sorted({loose(ident) for view in plain[0:1] + plain[3::2]
                                        for ident in CO_AUTHOR.findall(view)
                                        if re.search(r"[^\s@<>]@[^\s@<>]+\.[^\s@<>]", ident)}
