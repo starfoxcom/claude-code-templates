@@ -7,10 +7,14 @@ export const PENDING = new Set(['pending'])
 export const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
 
+// The same watch on the same head, whatever object holds it now: a push or a reconcile made while a poll
+// or a command waited on gh or the disk replaces the object, never the watch.
+export const isSameRun = (a: Watch, b: Watch) =>
+  a.id === b.id && a.repo === b.repo && a.number === b.number && a.headSha === b.headSha
+
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
 // stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. So is
 // an incident's note, while the watch is still unsettled on the same head (the poll drops it otherwise).
-// The polled copy itself is kept whenever nothing differs: the poll finds its settled watches by identity.
 export function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   const same = (a: Watch, b: Watch) =>
     a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
@@ -21,11 +25,15 @@ export function reconcile(current: Watch[], polled: Watch[]): Watch[] {
     const incidentPending = isNoteMemorys ? w.incidentPending : p.incidentPending
     // A note made meanwhile (another poll of this load noted and sent it) is kept, or it would be made again.
     const incident = isNoteMemorys ? (w.incident ?? p.incident) : p.incident
+    // A push made meanwhile marked the watch as the session's own: the poll's copy predates it.
+    const isPushedSince = (w.pushedAt ?? 0) > (p.pushedAt ?? 0)
     const isKept =
       Boolean(p.wakePending) === Boolean(w.wakePending) &&
       Boolean(p.incidentPending) === Boolean(incidentPending) &&
-      p.incident === incident
-    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident }
+      p.incident === incident &&
+      !isPushedSince
+    const pushed = isPushedSince ? { pushedAt: w.pushedAt, isSilent: undefined } : {}
+    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident, ...pushed }
   })
 }
 

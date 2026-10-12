@@ -4,6 +4,13 @@ import type { SessionRateLimit } from 'claude-code'
 // of its own until its first response; meanwhile it borrows the newest figures another session
 // recorded, while they are recent. Kept free of the engine so it tests alone.
 
+/** `Fri 10:00` in the host's zone. */
+export function shortLocal(epochMs: number, offsetMinutes: number): string {
+  const local = new Date(epochMs - offsetMinutes * 60_000)
+  const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][local.getUTCDay()]
+  return `${day} ${local.toISOString().slice(11, 16)}`
+}
+
 export const SHARED_PLAN_FILE = 'plan.json'
 export const SHARED_PLAN_MAX_AGE_MS = 30 * 60_000
 
@@ -56,4 +63,17 @@ export function planPart(
   if (hasReplied) return { text: '', isOwn: true }
   if (!shared) return { text: ' | plan used: unknown until the first response', isOwn: false }
   return { text: ` | plan used: ${usageList(shared.limits)} (another session's, at ${borrowedAt})`, isOwn: false }
+}
+
+/** usage-guard's scheduled wakes, for the State line: the phone draws no row, so the line is where the
+ * person reads them. The shared pause and this session's own arm, each only while still ahead. The pause
+ * alone does not wake a session that saved no work, so an arm is always named. One at or before the pause's
+ * wake joins it (usage-guard moves an arm that fires inside a pause to the pause's wake, also after a later
+ * limit extends the pause): it resumes with the pause, and its time is not named twice. */
+export function wakePart(now: number, offsetMinutes: number, pausedUntil?: number, armAt?: number): string {
+  const paused = pausedUntil !== undefined && pausedUntil > now
+  const armed = armAt !== undefined && armAt > now
+  const when = paused && armed && armAt <= pausedUntil ? 'with the pause' : armed && shortLocal(armAt, offsetMinutes)
+  const pause = paused ? ` | paused until ${shortLocal(pausedUntil, offsetMinutes)}` : ''
+  return pause + (armed ? ` | armed: resumes ${when}` : '')
 }

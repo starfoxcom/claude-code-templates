@@ -1,6 +1,8 @@
+import type { SessionRateLimit } from 'claude-code'
+
 import type { ArmedWake } from '../types'
 import type { Pause } from './plan'
-import { armFor, limitName, reasonText } from './plan'
+import { armFor, LIMIT_NAMES, limitName, reasonText } from './plan'
 
 // What the person reads: the cards, the notes, the command's help, and the local time they all show.
 
@@ -26,11 +28,14 @@ export function formatLocal(ms: number, zone: Zone): string {
   return `${day} ${local.toISOString().slice(0, 16).replace('T', ' ')} (${zone.name})`
 }
 
-/** The arm's slim line: the wake as weekday and minute, what it waits for, and the start of its reason. */
-export function armLineText(arm: ArmedWake, zone: Zone): string {
+/** The arm's slim line: the wake as weekday and minute, what it waits for, how much of each plan window is
+ * used (so the person can judge one more step before the limit), and the start of its reason. */
+export function armLineText(arm: ArmedWake, zone: Zone, limits: readonly SessionRateLimit[] = []): string {
   const [day, , minute] = formatLocal(arm.wakeAt, zone).split(' ')
+  const used = limits.map(limit => `${LIMIT_NAMES[limit.kind] ?? limit.kind} ${limit.percentUsed}%`).join(', ')
+  const usage = used ? ` · used ${used}` : ''
   const reason = !arm.reason ? '' : ` · "${arm.reason.length > 40 ? `${arm.reason.slice(0, 39)}…` : arm.reason}"`
-  return `⏰ resumes ${day} ${minute} · ${armFor(arm.kind)}${reason}`
+  return `⏰ resumes ${day} ${minute} · ${armFor(arm.kind)}${usage}${reason}`
 }
 
 /** Plain /usage-guard's answer: the pause or its absence, then a standing arm and the last compaction. */
