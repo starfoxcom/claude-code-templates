@@ -95,14 +95,16 @@ export const HELP = [
   '  /task-list help      this list',
 ].join('\n')
 const SWEEP_DAYS = 14
+// A list with nothing left to carry over (handed over, or no open task) goes sooner.
+const DONE_SWEEP_DAYS = 7
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
 const UNCOUNTED_TOOLS = new Set([...TASK_TOOLS, 'ToolSearch', 'TaskStop', 'TaskOutput', 'SendMessage'])
 const UNLINK_SCRIPT =
   'const fs=require("fs"),p=require("path");const [d,...names]=process.argv.slice(1);' +
   'for(const n of names){try{fs.unlinkSync(p.join(d,n))}catch{}}'
-// Other sessions' lists and alive stamps not written for SWEEP_DAYS go, never the settings; a session
-// resumed after SWEEP_DAYS keeps its own list
-// (`node <plugin root>/scripts/sweep.cjs <folder> <this session's id> <days>`; test-helper/sweep.spec.cjs runs it).
+// Other sessions' lists and alive stamps not written for SWEEP_DAYS go (a done list after DONE_SWEEP_DAYS),
+// never the settings; a session resumed after SWEEP_DAYS keeps its own list (`node <plugin root>/
+// scripts/sweep.cjs <folder> <this session's id> <days> <doneDays>`; test-helper/sweep.spec.cjs runs it).
 export const SWEEP_SCRIPT = 'scripts/sweep.cjs'
 
 const live: {
@@ -662,7 +664,8 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
     const dir = await dataDir($)
     // Done before this session's list is read, so the two never race.
-    const sweep = ['node', `${$.plugin.root}/${SWEEP_SCRIPT}`, dir, await $.session.id(), String(SWEEP_DAYS)]
+    const days = [String(SWEEP_DAYS), String(DONE_SWEEP_DAYS)]
+    const sweep = ['node', `${$.plugin.root}/${SWEEP_SCRIPT}`, dir, await $.session.id(), ...days]
     await $.process.run(sweep, { timeoutMs: 20_000 }).catch(() => undefined)
     await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)

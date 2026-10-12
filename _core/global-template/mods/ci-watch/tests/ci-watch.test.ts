@@ -352,6 +352,227 @@ test('a merge drops the watch only once GitHub says the PR is merged', async ($,
   expect(watched()).toEqual([])
 })
 
+// An open PR is unfinished work: its settled watch stays on the row, however long ago it settled, until
+// the PR is merged or closed.
+test('a settled watch stays until its PR is merged or closed, not for a set time', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  const watched = () => (JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }).watches
+  for (let i = 0; i < 6; i++) await clock.advance(30_000)
+  expect(watched().map(w => w.outcome)).toEqual(['failed'])
+  await clock.advance(3 * HOUR)
+  for (let i = 0; i < 3; i++) await clock.advance(30_000)
+  expect(watched().map(w => [w.number, w.outcome])).toEqual([[7, 'failed']])
+  // A long-settled watch asks GitHub every ten minutes, so the close shows within that.
+  seen.prState = 'CLOSED'
+  await clock.advance(10 * 60_000 + POLL_MS)
+  expect(watched()).toEqual([])
+})
+
+// Past the hour after this session's push, a new head is someone else's: the row follows it, no wake.
+test("a head pushed long after the session's own push updates the row and wakes no one", async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(1)
+  await clock.advance(2 * HOUR)
+  seen.head = 'b2'
+  seen.bucket = 'pass'
+  await clock.advance(10 * 60_000 + 4 * POLL_MS)
+  const [watch] = (JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }).watches
+  expect([watch?.headSha, watch?.outcome, watch?.isSilent]).toEqual(['b2', 'passed', true])
+  expect(seen.prompts).toHaveLength(1)
+})
+
+// The session's own push hours later still wakes it, even when GitHub names the new commit only later.
+test('an own push hours later wakes the session for its new head', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  await clock.advance(2 * HOUR)
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.head = 'b2'
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(2)
+  expect(seen.prompts[1]).toContain('with no failure')
+})
+
+// A silent watch still running when the session pushes becomes the session's own again.
+test('an own push onto a silent watch still running wakes the session', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  await clock.advance(2 * HOUR)
+  seen.head = 'b2'
+  seen.bucket = 'pending'
+  await clock.advance(10 * 60_000 + 2 * POLL_MS)
+  // GitHub still names `b2` when the push asks; `b3` shows a poll later.
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.head = 'b3'
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(2)
+  expect(seen.prompts[1]).toContain('with no failure')
+})
+
+// A running watch whose head moves past the hour after the session's push follows someone else's commit.
+test("a head that moves past the hour onto a running watch is someone else's: no wake", async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await clock.advance(50 * 60_000)
+  seen.head = 'b2'
+  await clock.advance(15 * 60_000)
+  seen.head = 'b3'
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(0)
+})
+
+// A running watch saved by the version before pushes were stamped: its first head move keeps the push's
+// time as the stamp, so a second move, past the hour after that push, is still someone else's.
+test("a watch saved with no push stamp keeps its push time across a head move", async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  const unstamped: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 1_000, checks: {}, stablePolls: 0 }
+  seen.files.set(STATE, JSON.stringify({ watches: [unstamped] }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await clock.advance(50 * 60_000)
+  seen.head = 'b2'
+  await clock.advance(50 * 60_000)
+  seen.head = 'b3'
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(0)
+})
+
+// The session pushes the head a silent watch (someone else's commit) is running on, while a poll reads
+// that watch's checks: the push makes the watch the session's own, so its settlement wakes the session.
+// (The push finds the watch only after its last wait, so no poll can swap the object between its lookup
+// and its stamp; the test kit cannot pause inside the clock read to show the old window.)
+test("a same-head push made while a poll reads a silent watch's checks makes it the session's own", async (
+  $,
+  on,
+) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'pass'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(1)
+  await clock.advance(2 * HOUR)
+  // Someone else's commit: the watch follows it silently.
+  seen.head = 'b2'
+  seen.bucket = 'pending'
+  while (!seen.ghCalls.some(call => call.includes('state,headRefOid'))) await clock.advance(POLL_MS)
+  await clock.advance(10 * 60_000)
+  // The push's own PR lookup (the poll's lookups name other fields).
+  const views = () => seen.ghCalls.filter(call => call.includes('number,url,headRefOid')).length
+  // Inside the poll's checks read: the push starts beside it and gets as far as its own PR lookup.
+  seen.duringChecks = async () => {
+    seen.duringChecks = undefined
+    const before = views()
+    void $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+    for (let tries = 0; views() === before && tries < 100; tries++) await moment(0)
+    expect(views()).toBeGreaterThan(before)
+  }
+  while (seen.duringChecks) await clock.advance(POLL_MS)
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(2)
+})
+
+// A push made while a poll reads the saved file stays the session's own: the poll does not undo its mark.
+test('an own push made mid-poll keeps the session its wake', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  await clock.advance(2 * HOUR)
+  // Wait for a poll that asks GitHub about the PR, so the next such poll is ten minutes on.
+  seen.ghCalls = []
+  while (!seen.ghCalls.some(call => call.includes('state,headRefOid'))) await clock.advance(POLL_MS)
+  await clock.advance(10 * 60_000 - 2 * POLL_MS)
+  // In that poll, after it read the saved file: the session pushes, and GitHub names the new head at once.
+  seen.duringStateRead = async () => {
+    seen.duringStateRead = undefined
+    await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+    seen.head = 'b2'
+    seen.bucket = 'pass'
+  }
+  for (let poll = 0; poll < 6; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(2)
+})
+
+// A push that leaves the head where it was (nothing new to send, or GitHub still naming the old head),
+// made while the poll that settles the watch waits on gh: the settlement still wakes the session once.
+test('a same-head push made while a poll settles the watch keeps its wake', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
+  seen.duringChecks = () => {
+    seen.duringChecks = undefined
+    return $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  }
+  await clock.advance(POLL_MS)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(1)
+})
+
+// The same push, landing later in that poll: while it reads the saved file again right before waking.
+test('a same-head push made while the settling poll checks the file before waking keeps its wake', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
+  // The poll reads the file once at its start, and once more before it wakes.
+  let reads = 0
+  seen.duringStateRead = () => {
+    if (++reads < 2) return undefined
+    seen.duringStateRead = undefined
+    return $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  }
+  await clock.advance(POLL_MS)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  expect(reads).toBe(2)
+  expect(seen.prompts).toHaveLength(1)
+})
+
+test('a watch settled long ago asks GitHub about its PR every ten minutes, not every poll', async ($, on) => {
+  const { seen, clock } = world(on)
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'fail'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  await clock.advance(2 * HOUR)
+  seen.ghCalls = []
+  await clock.advance(HOUR)
+  const rechecks = seen.ghCalls.filter(call => call.includes('state,headRefOid'))
+  expect(rechecks.length).toBeGreaterThanOrEqual(5)
+  expect(rechecks.length).toBeLessThanOrEqual(7)
+})
+
 test('a merge names its PR, or 0 for the branch PR; other commands are not merges', () => {
   expect(mergedNumber('gh pr merge 1278 --merge --delete-branch')).toBe(1278)
   expect(mergedNumber('gh pr merge --merge #42')).toBe(42)
