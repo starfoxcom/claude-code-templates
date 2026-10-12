@@ -53,6 +53,30 @@ export type AdoptOffer = {
   arm: ArmedWake
 }
 
+/**
+ * The work a session saved at a pause's wrap-up, filed inside its `work-<reset>-<session>` claim folder
+ * so a later session in the project can offer it if that session is closed when the reset comes.
+ */
+export type SavedWork = {
+  session: string
+  /** The project folder the session ran in. */
+  root: string
+  /** The pause's reset key (`resetKey`): the claims of that pause are named with it. */
+  key: string
+  resetsAt: string
+  wakeAt: number
+  kinds?: string[]
+  /** The person kept the work for this session: opened again, it resumes it by itself. */
+  isKept?: boolean
+}
+
+/** Saved work a closed session never resumed, offered here. */
+export type SavedOffer = {
+  record: SavedWork
+  /** When it came due: the pause's wake. */
+  dueAt: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'usage-guard': {
@@ -61,8 +85,13 @@ declare module 'claude-code' {
       armed: ArmedWake | null
       /** What the last press on the arm card did, shown in its place until dismissed. */
       armNote: string | null
-      /** A closed session's arm that never ran, offered here; then what the press did. */
-      adopt: { offer: AdoptOffer | null; text: string | null; note: string | null } | null
+      /** A closed session's arm that never ran, or its saved work, offered here; then what the press did. */
+      adopt: {
+        offer: AdoptOffer | null
+        saved?: SavedOffer | null
+        text: string | null
+        note: string | null
+      } | null
     }
   }
 }
