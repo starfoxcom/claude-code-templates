@@ -341,20 +341,21 @@ jobs:
                     "sub", "sup", "svg", "themed-picture", "tt", "var"}
           BLOCK = {"blockquote", "br", "dd", "details", "div", "dl", "dt", "h1", "h2", "h3", "h4",
                    "h5", "h6", "hr", "li", "markdown-accessiblity-table", "ol", "p", "pre",
-                   "section", "summary", "table", "tbody", "td", "th", "thead", "tr", "ul"}
+                   "section", "summary", "table", "tbody", "td", "th", "thead", "tr", "ul", "video"}
           TAG = re.compile(r"</?([A-Za-z][\w-]*)[^>]*>")
           # Every attribute the renderer keeps on ordinary content. Any other
           # (a cell's rowspan or valign, which move it below later text)
           # fails the check, so the next layout attribute fails closed.
           ATTRIBUTES = {"align", "alt", "aria-describedby", "aria-hidden", "aria-label", "checked",
-                        "class", "colspan", "d", "data-canonical-src", "data-catalyst-inline",
+                        "class", "colspan", "controls", "d", "data-canonical-src", "data-catalyst-inline",
                         "data-component", "data-error-text", "data-footnote-backref",
                         "data-footnote-backref-idx", "data-footnote-ref", "data-footnotes",
                         "data-hovercard-type", "data-hovercard-url", "data-id", "data-octo-click",
                         "data-octo-dimensions", "data-permission-text",
                         "data-snippet-clipboard-copy-content", "data-url", "dir", "disabled",
-                        "height", "href", "id", "is", "media", "name", "open", "rel", "role", "src",
-                        "srcset", "start", "style", "tabindex", "target", "title", "type", "version",
+                        "height", "href", "id", "is", "media", "muted", "name", "open", "playsinline",
+                        "poster", "rel", "role", "src", "srcset", "start", "style", "tabindex",
+                        "target", "title", "type", "version",
                         "viewbox", "width"}
 
           def attribute_names(page):
@@ -364,6 +365,19 @@ jobs:
                   names.update(name.lower() for name in
                                re.findall(r"([\w:.-]+)", re.sub(r'"[^"]*"', "", inside)))
               return names
+
+          def nested_start(page):
+              """Whether an ordered list inside a list item sets its first
+              number. GitHub's stylesheet draws nested markers as letters
+              (lower-roman, lower-alpha), so the number would pick the letter."""
+              depth = 0
+              for m in re.finditer(r"<(/?)(li|ol)\b([^>]*)>", page):
+                  closing, tag, inside = m.groups()
+                  if tag == "li":
+                      depth += -1 if closing else 1
+                  elif not closing and depth and re.search(r'\bstart="', inside):
+                      return True
+              return False
 
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
@@ -393,6 +407,8 @@ jobs:
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
               if odd and not problem:
                   problem = f"holds HTML the check cannot lay out (<{odd[0]}>)"
+              if nested_start(page) and not problem:
+                  problem = "numbers a nested list, whose markers draw as letters"
               loose = sorted(attribute_names(page) - ATTRIBUTES)
               if loose and not problem:
                   problem = f"holds an HTML attribute the check cannot lay out ({loose[0]})"
