@@ -770,6 +770,7 @@ jobs:
               # lacks. Mixing is judged before folding, which turns the micro
               # sign (Common) into a Greek letter.
               judged = masked(plain, listed_names(text))
+              rendered_body = is_markdown and len(judged) > 3
               word = next(filter(None, map(mixed_alphabets, judged[0:1] + judged[3:4])), None)
               letter = next(filter(None, map(odd_letter, judged)), None)
               if word:
@@ -778,12 +779,13 @@ jobs:
                   problem = f"uses '{letter}' (U+{ord(letter):04X}), a letter outside modern use"
               elif any(map(unknown, judged)):
                   problem = "holds characters the runner's Unicode does not know"
-              # A body's Markdown source is never shown: only its rendering.
-              elif any(map(mixed_direction, judged[3:] if len(judged) > 3 and is_markdown else judged)):
+              # A body's Markdown source is never shown, only its rendering,
+              # whose direction render() judges per block on the page itself.
+              elif not rendered_body and any(map(mixed_direction, judged)):
                   problem = "mixes right-to-left and left-to-right letters, whose display order differs"
               elif any(OVERRIDES.search(view) for view in judged):
                   problem = "holds direction marks that reorder its letters"
-              elif any(CONTROLS.search(view) for view in judged):
+              elif any(CONTROLS.search(view) for view in (judged[3:] if rendered_body else judged)):
                   problem = "holds control characters, some of which draw as a blank"
               if problem:
                   hits.append(f"{where} {problem}, so it cannot be checked")
