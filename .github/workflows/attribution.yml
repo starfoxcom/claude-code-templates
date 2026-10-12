@@ -75,6 +75,19 @@ jobs:
           git show origin/develop:_core/global-template/hooks/no-ai-attribution.py > "$RUNNER_TEMP/attribution_hook.py"
           git show origin/main:.github/attribution-identities.txt > "$RUNNER_TEMP/attribution-identities.txt"
 
+      # Unicode's own data, pinned to 17.0.0 by checksum: which script each
+      # letter belongs to, and which letters look like others (UTS #39).
+      - name: Fetch the Unicode script and look-alike tables
+        run: |
+          mkdir -p "$RUNNER_TEMP/ucd"
+          cd "$RUNNER_TEMP/ucd"
+          curl -sSfL -o Scripts.txt https://www.unicode.org/Public/17.0.0/ucd/Scripts.txt
+          curl -sSfL -o confusables.txt https://www.unicode.org/Public/17.0.0/security/confusables.txt
+          sha256sum -c - <<'SUMS'
+          9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf  Scripts.txt
+          091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a  confusables.txt
+          SUMS
+
       # The PR's text reaches the script through the environment, never the
       # script's own text, so a title or body cannot run as code.
       - name: Scan the commits, title and body
@@ -134,38 +147,59 @@ jobs:
           # Direction overrides show letters in another order than stored.
           OVERRIDES = re.compile("[\u202a-\u202e\u2066-\u2069]")
 
-          def fold(text):
-              """Compatibility forms folded (fullwidth letters, ligatures)
-              and every invisible or combining mark dropped. Decomposed
-              first, so an accent cannot shelter the letter it sits on.
-              Letters borrowed from another alphabet are mixed_alphabets'."""
-              text = unicodedata.normalize("NFKD", text)
+          def bare(text):
+              """Every invisible or combining mark dropped. Decomposed first,
+              so an accent cannot shelter the letter it sits on."""
+              text = unicodedata.normalize("NFD", text)
               text = "".join(c for c in text if c not in FILLERS
                              and unicodedata.category(c) not in ("Cf", "Mn", "Me"))
-              return unicodedata.normalize("NFKC", text)
+              return unicodedata.normalize("NFC", text)
 
-          # Cyrillic, Greek and Armenian letters that look like Latin ones
-          # (a subset of Unicode's confusables list, TR39), each before
-          # its Latin twin: a short word of them reads as Latin.
-          LOOKALIKES = (
-              "\u0410A\u0412B\u0415E\u041aK\u041cM\u041dH\u041eO\u0420P"
-              "\u0421C\u0422T\u0423Y\u0425X\u0405S\u0406I\u0408J\u04aeY"
-              "\u04c0I\u051aQ\u051cW\u0430a\u0435e\u043eo\u0440p\u0441c"
-              "\u0443y\u0445x\u0455s\u0456i\u0458j\u04bbh\u0501d\u051bq"
-              "\u051dw\u04cfl\u04afy\u043ak\u0391A\u0392B\u0395E\u0396Z"
-              "\u0397H\u0399I\u039aK\u039cM\u039dN\u039fO\u03a1P\u03a4T"
-              "\u03a5Y\u03a7X\u03f9C\u037fJ\u03bfo\u03b1a\u03b9i\u03bak"
-              "\u03bdv\u03c1p\u03c5u\u03c7x\u03f2c\u03f3j\u0585o\u057du"
-              "\u0570h\u0578n\u0566q\u054fS\u0555O")
-          SKELETON = str.maketrans(LOOKALIKES[0::2], LOOKALIKES[1::2])
+          def fold(text):
+              """Bare text with compatibility forms folded (fullwidth letters,
+              ligatures). Letters borrowed from another script are
+              mixed_alphabets' and LOOKALIKE's."""
+              return unicodedata.normalize("NFKC", bare(text))
 
-          FOREIGN = set(LOOKALIKES[0::2])
+          UCD = os.path.join(os.environ["RUNNER_TEMP"], "ucd")
+
+          def ucd_rows(name):
+              """(first, last, fields) for each data line of a UCD file."""
+              with open(os.path.join(UCD, name), encoding="utf-8") as data:
+                  for line in data:
+                      line = line.split("#", 1)[0].strip()
+                      if line:
+                          span, *fields = [part.strip() for part in line.split(";")]
+                          first, _, last = span.partition("..")
+                          yield int(first, 16), int(last or first, 16), fields
+
+          SCRIPT = {}
+          for first, last, fields in ucd_rows("Scripts.txt"):
+              SCRIPT.update(dict.fromkeys(range(first, last + 1), fields[0]))
+          # Script sets one word may mix (UTS #39 "Highly Restrictive"); Common
+          # and Inherited letters (digits, marks, punctuation) belong to any.
+          NEUTRAL = {"Common", "Inherited", "Unknown"}
+          ALLOWED_MIXES = [{"Latin", "Han", "Hiragana", "Katakana"},
+                           {"Latin", "Han", "Bopomofo"}, {"Latin", "Han", "Hangul"}]
+
+          # Unicode's look-alike table, kept to letters outside ASCII that
+          # stand for ASCII ones (a Cyrillic or Greek "a" read as Latin "a"),
+          # so plain Latin text reads unchanged.
+          LOOKALIKE = {}
+          for source, _, fields in ucd_rows("confusables.txt"):
+              target = "".join(chr(int(code, 16)) for code in fields[0].split())
+              if source > 0x7F and target.isascii() and target.strip():
+                  # Unicode files I and l under one prototype, "l".
+                  upper = chr(source).isupper() and target == "l"
+                  LOOKALIKE[source] = "I" if upper else target
 
           def mixed_alphabets(text):
-              """A word that mixes Latin letters with letters that only look
-              Latin (a Cyrillic or Greek one standing in for its twin)."""
-              for word in re.findall(r"[^\W\d_]+", fold(text)):
-                  if FOREIGN & set(word) and any("LATIN" in unicodedata.name(c, "") for c in word):
+              """A word whose letters come from scripts no language mixes in
+              one word (a Cyrillic or Greek letter inside a Latin word), by
+              Unicode's script data."""
+              for word in re.findall(r"[^\W\d_]+", bare(text)):
+                  scripts = {SCRIPT.get(ord(c), "Unknown") for c in word} - NEUTRAL
+                  if len(scripts) > 1 and not any(scripts <= mix for mix in ALLOWED_MIXES):
                       return word
               return None
 
@@ -200,7 +234,7 @@ jobs:
               if is_markdown and text.strip():
                   rendered, has_math = render(text)
                   views += [rendered, fold(rendered)]
-              return views + [view.translate(SKELETON) for view in views], has_math
+              return views + [view.translate(LOOKALIKE) for view in views], has_math
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
@@ -233,7 +267,9 @@ jobs:
               # Judged on every view but the look-alike readings (which mix
               # alphabets by design): an entity can spell what the raw text lacks.
               plain_views = views[:len(views) // 2]
-              word = next(filter(None, map(mixed_alphabets, plain_views)), None)
+              # Mixing is judged on the text and its rendering before folding,
+              # which turns the micro sign (Common) into a Greek letter.
+              word = next(filter(None, map(mixed_alphabets, plain_views[0:1] + plain_views[3:4])), None)
               if word or has_math or any(OVERRIDES.search(view) for view in plain_views):
                   why = (f"mixes alphabets in '{word}'" if word
                          else "holds math with TeX commands" if has_math else "reorders its letters")
