@@ -152,7 +152,7 @@ jobs:
               KNOWN = {line.strip() for line in listed if line.strip() and not line.startswith("#")}
           CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*$", re.I | re.M)
           # The trailer exactly as GitHub reads it, one line: the only form
-          # unlisted() may remove.
+          # whose listed name is masked for the readability judgements.
           TRAILER = re.compile(r"^[ \t]*co-authored-by:[ \t]*(.*?)[ \t]*$", re.I | re.M)
 
           FILLERS = "\u115f\u1160\u2800\u3164\uffa0"
@@ -241,10 +241,23 @@ jobs:
                       and not name.startswith("TAG ")):
                   letter = named.group(2)
                   LOOKALIKE[code] = letter.lower() if named.group(1) == "SMALL LETTER" else letter
+          # Unicode's chains: a letter filed under a non-ASCII prototype that
+          # itself reads as ASCII (Cyrillic "\u0442" under the small capital
+          # "\u1d1b", read as "T") reads as that.
+          for source, _, fields in ucd_rows("confusables.txt"):
+              if source > 0x7F and source not in LOOKALIKE:
+                  target = "".join(c for c in (chr(int(code, 16)) for code in fields[0].split())
+                                   if unicodedata.category(c) not in ("Mn", "Me"))
+                  read = "".join(LOOKALIKE.get(ord(c), c) for c in target)
+                  if read.isascii() and any(c.isalnum() for c in read):
+                      LOOKALIKE[source] = read
           # Every look-alike of "l" read as "l": a capital I, "|" or "1" in
           # place of an "l", after LOOKALIKE has read the rest.
+          # Unicode files the vertical stroke "\u4e28" (and Hangul "\u3163", the radical
+          # "\u2f01") apart from "l", but inside a Latin word they draw alike.
           ELL = {source: "l" for source, _, fields in ucd_rows("confusables.txt")
-                 if fields[0] == "006C"}
+                 if fields[0] in ("006C", "4E28")}
+          ELL[0x4E28] = "l"
 
           ELLS = "".join(map(chr, ELL)) + "l"
           CAPS_WORD = re.compile(r"(?:[^\W\d_]|[" + re.escape(ELLS) + r"])+")
@@ -314,7 +327,9 @@ jobs:
                         ("lays its text out of order", re.compile(
                             r'<tfoot\b|<tbody\b(?:(?!</table>)[\s\S])*?<thead\b'
                             r'|<details\b[^>]*>(?!\s*<summary\b)'
-                            r'|<(?:table|img)\b[^>]*\balign="(?:left|right)"'))]
+                            r'|<(?:table|img)\b[^>]*\balign="(?:left|right)"')),
+                        # A list whose markers the browser draws as letters.
+                        ("draws list markers as letters", re.compile(r'<(?:ol|ul|li)\b[^>]*\btype="'))]
 
           # Every tag the renderer keeps, and how it lays text out: an inline
           # tag (an image and a task checkbox included, drawn in the line)
@@ -376,17 +391,26 @@ jobs:
               looks = [view.translate(LOOKALIKE) for view in views]
               return views, looks + [twin for view in looks for twin in twins(view)], problem
 
-          def unlisted(text):
-              """The text with each co-author trailer naming a listed identity
-              reduced to a placeholder name. The list judges people, so a
+          def listed_names(text):
+              """The name and address of each co-author trailer in the text that
+              names a listed identity exactly."""
+              parts = []
+              for m in TRAILER.finditer(text):
+                  ident = m.group(1).strip()
+                  if ident in KNOWN:
+                      name, _, address = ident.partition(" <")
+                      parts += [name, "<" + address, address.rstrip(">")]
+              return [part for part in parts if part]
+
+          def masked(views, names):
+              """The views with listed people's names and addresses blanked, for
+              the readability judgements only: the list judges people, so a
               listed name in another script (an Arabic name beside a Latin
-              email) never meets the text checks; the line itself stays, so
-              the Markdown around it parses as GitHub parses it."""
-              def placeholder(m):
-                  if m.group(1).strip() not in KNOWN:
-                      return m.group(0)
-                  return m.group(0)[:m.start(1) - m.start()] + "a listed contributor"
-              return TRAILER.sub(placeholder, text)
+              email) never fails them. The scan and the renderer read the
+              text whole, as GitHub does."""
+              for name in sorted(names, key=len, reverse=True):
+                  views = [view.replace(name, " ") for view in views]
+              return views
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
@@ -398,7 +422,7 @@ jobs:
           head = os.environ.get("HEAD_LABEL", "").replace(":", "/", 1)
           merge = (f"Merge pull request #{os.environ.get('PR_NUMBER', '')} from {head}\n\n"
                    f"{os.environ.get('PR_TITLE', '')}")
-          branch = [("the merge commit's message", unlisted(merge), False)]
+          branch = [("the merge commit's message", merge, False)]
           # The title becomes the merge commit's message, and an edited
           # merge message can carry the body: their co-authors face the list.
           for where, text, _ in texts:
@@ -406,7 +430,6 @@ jobs:
                   if ident.strip() not in KNOWN:
                       hits.append(f"{where}'s co-author '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
-          texts = [(where, unlisted(text), is_markdown) for where, text, is_markdown in texts]
           texts += branch
           # Each commit the PR adds: what its base already holds is not its own.
           # Its people face the list; a listed identity is the maintainer's call.
@@ -419,7 +442,7 @@ jobs:
                   if ident.strip() not in KNOWN:
                       hits.append(f"commit {sha[:7]}'s {role} '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
-              texts.append((f"commit {sha[:7]}'s message", unlisted(message), False))
+              texts.append((f"commit {sha[:7]}'s message", message, False))
           # A squash merge joins the messages into one, oldest first, each as
           # a "* " bullet; rev-list lists them newest first.
           messages = [text for where, text, _ in texts if where.endswith("'s message")
@@ -434,17 +457,18 @@ jobs:
               # mix alphabets by design): an entity can spell what the raw text
               # lacks. Mixing is judged before folding, which turns the micro
               # sign (Common) into a Greek letter.
-              word = next(filter(None, map(mixed_alphabets, plain[0:1] + plain[3:4])), None)
-              letter = next(filter(None, map(odd_letter, plain)), None)
+              judged = masked(plain, listed_names(text))
+              word = next(filter(None, map(mixed_alphabets, judged[0:1] + judged[3:4])), None)
+              letter = next(filter(None, map(odd_letter, judged)), None)
               if word:
                   problem = f"mixes alphabets in '{word}'"
               elif letter:
                   problem = f"uses '{letter}' (U+{ord(letter):04X}), a letter outside modern use"
-              elif any(map(unknown, plain)):
+              elif any(map(unknown, judged)):
                   problem = "holds characters the runner's Unicode does not know"
-              elif any(map(mixed_direction, plain)):
+              elif any(map(mixed_direction, judged)):
                   problem = "mixes right-to-left and left-to-right letters, whose display order differs"
-              elif any(OVERRIDES.search(view) for view in plain):
+              elif any(OVERRIDES.search(view) for view in judged):
                   problem = "holds direction marks that reorder its letters"
               if problem:
                   hits.append(f"{where} {problem}, so it cannot be checked")
