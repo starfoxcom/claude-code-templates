@@ -14,9 +14,9 @@ name: Attribution
 #   name, with no list of AI names to keep current.
 # - a commit cannot be read plainly (any encoding but UTF-8, a repeated
 #   author, committer or encoding line), or a text cannot: a word mixing
-#   alphabets, direction marks or a direction set by hand, characters newer
-#   than the runner's Unicode, math, ruby text, or diagrams drawn in the
-#   browser.
+#   alphabets, right-to-left letters next to left-to-right ones, direction
+#   marks or a direction set by hand, characters newer than the runner's
+#   Unicode, math, ruby text, or diagrams drawn in the browser.
 #
 # A pull request cannot weaken the check on itself:
 # - `pull_request_target` runs this file as the default branch (`main`)
@@ -159,6 +159,15 @@ jobs:
               nor folded; unassigned invisible ones draw nothing at all."""
               return any(unicodedata.category(c) == "Cn" for c in text)
 
+          def mixed_direction(text):
+              """Whether the text holds right-to-left letters (Arabic, Hebrew)
+              and left-to-right ones together. GitHub sets each block's
+              direction from its first strong letter, so a line that starts
+              right-to-left shows its Latin words in reverse order, which no
+              view reads. Text in one direction passes."""
+              classes = {unicodedata.bidirectional(c) for c in text}
+              return bool(classes & {"R", "AL"}) and "L" in classes
+
           def bare(text):
               """Every invisible or combining mark dropped. Decomposed first,
               so an accent cannot shelter the letter it sits on."""
@@ -208,6 +217,14 @@ jobs:
           # place of an "l", after LOOKALIKE has read the rest.
           ELL = {source: "l" for source, _, fields in ucd_rows("confusables.txt")
                  if fields[0] == "006C"}
+
+          def twins(text):
+              """The text read through Unicode's look-alike pairs within ASCII
+              itself: "I", "|" or "1" as "l", "0" as "O", and "rn" as "m" (the
+              form LOOKALIKE gives every "m" look-alike); each alone and
+              together, since reading "AI" as "Al" hides the other."""
+              ell = text.translate(ELL)
+              return [ell] + [view.replace("0", "O").replace("rn", "m") for view in (text, ell)]
 
           def mixed_alphabets(text):
               """A word whose letters come from scripts no language mixes in
@@ -261,14 +278,14 @@ jobs:
               folded, with the robot shortcode as its emoji (GitHub shows it
               in commit messages too), and for Markdown as GitHub's renderer
               shows it, folded. Readings: each with look-alike letters read
-              as Latin, then also with every "l" look-alike as "l"."""
+              as Latin, then also through the ASCII look-alike pairs (twins)."""
               views = [text, fold(text), fold(text.replace(":robot:", ROBOT))]
               problem = None
               if is_markdown and text.strip():
                   rendered, problem = render(text)
                   views += [rendered, fold(rendered)]
               looks = [view.translate(LOOKALIKE) for view in views]
-              return views, looks + [view.translate(ELL) for view in looks], problem
+              return views, looks + [twin for view in looks for twin in twins(view)], problem
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
@@ -310,6 +327,8 @@ jobs:
                   problem = f"mixes alphabets in '{word}'"
               elif any(map(unknown, plain)):
                   problem = "holds characters the runner's Unicode does not know"
+              elif any(map(mixed_direction, plain)):
+                  problem = "mixes right-to-left and left-to-right letters, whose display order differs"
               elif any(OVERRIDES.search(view) for view in plain):
                   problem = "holds direction marks that reorder its letters"
               if problem:
