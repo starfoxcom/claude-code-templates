@@ -595,16 +595,26 @@ jobs:
               shown_texts = [html.unescape(view) + "\n\n" + "\n\n".join(extras) for view in views]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
               # Each block GitHub marks dir="auto" takes its direction from the
-              # first strong letter of its whole text, line breaks and nested
-              # lists included: judged on the page itself, markers aside.
-              for m in re.finditer(r'<([A-Za-z][\w-]*)\b[^>]*\bdir="auto"', page):
-                  depth, end = 0, len(page)
-                  for t in re.finditer(r"<(/?)" + re.escape(m.group(1)) + r"\b[^>]*>", page[m.start():]):
-                      depth += -1 if t.group(1) else 1
-                      if not depth:
-                          end = m.start() + t.end()
-                          break
-                  block = html.unescape(TAG.sub(" ", page[m.start():end])).replace("\n", " ")
+              # first strong letter of its own text, line breaks included; as
+              # in the browser, a nested element with its own dir (a nested
+              # list, a quoted paragraph) is skipped and judged on its own.
+              for m in re.finditer(r'<([A-Za-z][\w-]*)\b[^>]*\bdir="auto"', page, re.I):
+                  stack, parts, last = [], [], m.start()
+                  for t in re.finditer(r"<(/?)([A-Za-z][\w-]*)([^>]*)>", page[m.start():]):
+                      at = m.start() + t.start()
+                      if stack and not any(own for _, own in stack[1:]):
+                          parts.append(page[last:at])
+                      parts.append(" ")
+                      last = m.start() + t.end()
+                      closing, tag, inside = t.group(1), t.group(2).lower(), t.group(3)
+                      if closing and any(name == tag for name, _ in stack):
+                          while stack.pop()[0] != tag:
+                              pass
+                          if not stack:
+                              break
+                      elif not closing and tag not in VOID:
+                          stack.append((tag, bool(stack) and bool(re.search(r"\bdir=", inside, re.I))))
+                  block = html.unescape("".join(parts)).replace("\n", " ")
                   if mixed_direction(block) and not problem:
                       problem = "lays out a right-to-left block holding Latin words, whose order differs"
               if count > MOST_DETAILS and not problem:
