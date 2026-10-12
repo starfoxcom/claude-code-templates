@@ -335,8 +335,11 @@ jobs:
                         # A lone <rp> survives and browsers hide it.
                         ("holds ruby text", re.compile(r"<r(?:uby|p|t)\b")),
                         ("holds a diagram drawn in the browser",
-                         re.compile(r'class="[^"]*\brender-needs-enrichment\b')),
-                        ("sets its own text direction", re.compile(r'\bdir="(?!auto")')),
+                         re.compile(r'<[A-Za-z][\w-]*\s[^>]*\bclass="[^"]*\brender-needs-enrichment\b')),
+                        # Inside a tag: the page's text shows quotes unescaped
+                        # (`mkdtemp(dir="/tmp")`).
+                        ("sets its own text direction",
+                         re.compile(r'<[A-Za-z][\w-]*\s[^>]*\bdir="(?!auto")')),
                         # Markup the browser draws in another order than the
                         # page holds: a table foot or a head after the body, a
                         # details block whose summary is not first, a table or
