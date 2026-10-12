@@ -17,7 +17,7 @@ import type { Card, CardButton } from './texts'
 import { applyValues, type Live, newLive } from './live'
 import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, COMMAND_TEXT, formatLocal, HELP } from './texts'
 import { armedText, joinedPauseText, pausedText, questionText, READ_ZONE, statusText } from './texts'
-import { UNCONFIRMED_NOTICE, zoneOf } from './texts'
+import { finishStepText, nothingToSaveText, savingText, UNCONFIRMED_NOTICE, zoneOf } from './texts'
 import { ARM_TOOL, ARM_TOOL_NAME, type ArmRequest, parseArmArgs, planWake, toolRequest, untilText } from './wake'
 
 const CHECK_EVERY_MS = 60_000
@@ -169,31 +169,17 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   const resumeAt = localTime(pause.wakeAt)
   setStatus($, `Plan limit near: paused until ${resumeAt}`)
   await showCard($, `paused:${pause.resetsAt}`, pausedText(pause, localTime(pause.wakeAt)))
-  if (live.workSession !== (await $.session.id())) {
-    await notice(
-      $,
-      `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, so this session does not ` +
-        `wake by itself at ${resumeAt}; /usage-guard arm 5h|week sets it to. /usage-guard cancel skips the ` +
-        'automatic resume of the sessions that saved work.',
-    )
-    return
-  }
-  await claim($, `work-${resetKey(pause)}-${await $.session.id()}`)
-  await notice(
-    $,
-    `${limitName(pause)} plan usage at ${pause.percentUsed}%: saving work now. Work resumes on its own at ` +
-      `${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`,
-  )
+  const sessionId = await $.session.id()
+  if (live.workSession !== sessionId) return notice($, nothingToSaveText(pause, resumeAt))
+  const work = `work-${resetKey(pause)}-${sessionId}`
+  await claim($, work)
+  await notice($, savingText(pause, resumeAt))
   // Mid-turn, the wrap-up never starts beside the running turn: the turn is told to finish its
   // step, and turn.complete runs the wrap-up once it has ended.
   if (live.isTurnRunning) {
     live.pendingWrapUp = pause
-    const note =
-      `[usage-guard] Plan usage at ${pause.percentUsed}%. Finish the current step and end this turn ` +
-      `now; the wrap-up runs right after.`
-    await $.session
-      .append({ message: { type: 'user', content: [{ type: 'text', text: note }] } })
-      .catch(() => undefined)
+    const text = finishStepText(pause)
+    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } }).catch(() => undefined)
     return
   }
   await startWrapUp($, pause)

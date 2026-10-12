@@ -70,6 +70,31 @@ export function joinedPauseText(pause: Pause, wakeText: string): string {
   )
 }
 
+/** At a pause, in a session that changed nothing: it does not wake by itself. */
+export function nothingToSaveText(pause: Pause, resumeAt: string): string {
+  return (
+    `${limitName(pause)} plan usage at ${pause.percentUsed}%: nothing to save here, so this session does not ` +
+    `wake by itself at ${resumeAt}; /usage-guard arm 5h|week sets it to. /usage-guard cancel skips the ` +
+    'automatic resume of the sessions that saved work.'
+  )
+}
+
+/** At a pause, in the session that worked: it saves its work and resumes it at the wake. */
+export function savingText(pause: Pause, resumeAt: string): string {
+  return (
+    `${limitName(pause)} plan usage at ${pause.percentUsed}%: saving work now. Work resumes on its own at ` +
+    `${resumeAt}. To skip the automatic resume, run /usage-guard cancel.`
+  )
+}
+
+/** Told to a turn still running at a pause: the wrap-up waits for it to end. */
+export function finishStepText(pause: Pause): string {
+  return (
+    `[usage-guard] Plan usage at ${pause.percentUsed}%. Finish the current step and end this turn ` +
+    'now; the wrap-up runs right after.'
+  )
+}
+
 /** The answer to `/usage-guard arm`: the wake's full date and how far off it is, so a wrong one shows. */
 export function armedText(arm: ArmedWake, wakeText: string, untilText: string): string {
   const reason = arm.reason ? ` ${reasonText(arm.reason)}` : ''
