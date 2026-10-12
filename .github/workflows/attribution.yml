@@ -82,27 +82,29 @@ jobs:
           # shapes, dingbats and emoji (with their joiner, presentation
           # selector and keycap mark). Left out: letters of other alphabets,
           # invisible and direction characters, math and technical symbols,
-          # the ordinal indicators, and emoji drawn as letters (flags, boxed
-          # and squared letters), which could spell a name.
+          # the ordinal indicators, emoji drawn as letters (flags, boxed and
+          # squared letters), which could spell a name, and the symbols Unicode
+          # reads as letters (× ‖ ₨ ₶ ╳), which could glue onto one.
           ACCEPTED = [(0x20, 0x7E), (0xA0, 0xA5), (0xA7, 0xA9), (0xAB, 0xAC), (0xAE, 0xB9), (0xBB, 0xBF),
-                      (0xD7, 0xD7), (0xF7, 0xF7), (0x2009, 0x2009), (0x2010, 0x2027), (0x202F, 0x202F),
-                      (0x2030, 0x2046), (0x2049, 0x2049), (0x20A0, 0x20C0), (0x20E3, 0x20E3), (0x2122, 0x2122),
+                      (0xF7, 0xF7), (0x2009, 0x2009), (0x2010, 0x2015), (0x2017, 0x2027), (0x202F, 0x202F),
+                      (0x2030, 0x2046), (0x2049, 0x2049), (0x20A0, 0x20A7), (0x20A9, 0x20B5), (0x20B7, 0x20C0),
+                      (0x20E3, 0x20E3), (0x2122, 0x2122),
                       (0x2190, 0x21FF), (0x231A, 0x231B), (0x2328, 0x2328), (0x23CF, 0x23CF), (0x23E9, 0x23F3), (0x23F8, 0x23FA),
-                      (0x2500, 0x257F), (0x2934, 0x2935), (0x25A0, 0x25FF), (0x2600, 0x27BF), (0x2B05, 0x2B07),
+                      (0x2500, 0x2572), (0x2574, 0x257F), (0x2934, 0x2935), (0x25A0, 0x25FF), (0x2600, 0x27BF), (0x2B05, 0x2B07),
                       (0x2B1B, 0x2B1C), (0x2B50, 0x2B50), (0x2B55, 0x2B55), (0xFE0F, 0xFE0F),
                       (0x1F300, 0x1F6FF), (0x1F780, 0x1FAFF)]
           # Read as the patterns see them: the emoji joiner, presentation
-          # selector and keycap mark draw nothing between letters, and each
-          # accepted symbol Unicode's look-alike table (confusables.txt
-          # 17.0.0) files under ASCII reads as that ASCII.
-          PLAIN = {0x200D: None, 0xFE0F: None, 0x20E3: None,
-                   0x00A0: " ", 0x00B4: "'", 0x00B8: ",", 0x00D7: "x", 0x2009: " ", 0x2010: "-", 0x2011: "-",
-                   0x2012: "-", 0x2013: "-", 0x2014: "-", 0x2015: "-", 0x2016: "ll", 0x2018: "'", 0x2019: "'",
+          # selector and keycap mark (and a soft hyphen an entity spells) draw
+          # nothing between letters, and each accepted symbol Unicode's
+          # look-alike table (confusables.txt 17.0.0) files under ASCII reads
+          # as that ASCII.
+          PLAIN = {0x200D: None, 0xFE0F: None, 0x20E3: None, 0x00AD: None,
+                   0x00A0: " ", 0x00B4: "'", 0x00B8: ",", 0x2009: " ", 0x2010: "-", 0x2011: "-",
+                   0x2012: "-", 0x2013: "-", 0x2014: "-", 0x2015: "-", 0x2018: "'", 0x2019: "'",
                    0x201A: ",", 0x201B: "'", 0x201C: "''", 0x201D: "''", 0x201F: "''", 0x2024: ".",
                    0x2025: "..", 0x2026: "...", 0x202F: " ", 0x2032: "'", 0x2033: "''", 0x2034: "'''",
                    0x2035: "'", 0x2036: "''", 0x2037: "'''", 0x2039: "<", 0x203A: ">", 0x203C: "!!", 0x2049: "!?",
-                   0x2041: "/", 0x2043: "-", 0x2044: "/", 0x20A8: "Rs", 0x20B6: "lt", 0x2571: "/",
-                   0x2573: "X", 0x2768: "(", 0x2769: ")", 0x276E: "<", 0x276F: ">", 0x2772: "(",
+                   0x2041: "/", 0x2043: "-", 0x2044: "/", 0x2571: "/", 0x2768: "(", 0x2769: ")", 0x276E: "<", 0x276F: ">", 0x2772: "(",
                    0x2773: ")", 0x2774: "{", 0x2775: "}", 0x2795: "+", 0x2796: "-"}
 
           def foreign(text):
@@ -151,7 +153,10 @@ jobs:
               text = TRAILER.sub(lambda m: m.group(1) + ("a listed contributor" if m.group(2) in KNOWN
                                                          else m.group(2)) + m.group(3), text)
               views = [text, html.unescape(text)]
-              odd = next(filter(None, map(foreign, views)), None)
+              # Characters are checked on entities that end in ";", as GitHub
+              # decodes them: a link's "&ethernet=on" stays as written.
+              strict = html.unescape(re.sub(r"&(?=[A-Za-z][A-Za-z0-9]*(?![A-Za-z0-9;]))", "&amp;", text))
+              odd = next(filter(None, map(foreign, [text, strict])), None)
               if odd:
                   hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside English text, common "
                               "symbols and emoji")
