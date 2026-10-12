@@ -338,6 +338,9 @@ jobs:
                         # A first number the browser reads otherwise than drawn().
                         ("sets a list number the check cannot read",
                          re.compile(r'<ol\b[^>]*\bstart="(?!-?\d{1,9}")'))]
+          # Browsers read these attribute values in any case ("Right"), and
+          # the renderer keeps the case as written.
+          UNREADABLE = [(why, re.compile(mark.pattern, re.I)) for why, mark in UNREADABLE]
 
           # Every tag the renderer keeps, and how it lays text out: an inline
           # tag (an image and a task checkbox included, drawn in the line)
@@ -468,8 +471,8 @@ jobs:
               out (inline tags dropped, block tags as line breaks), with every
               tag dropped, so a tag filed in the wrong list cannot open a gap,
               laid out with each image as its alt text in place (a broken
-              image shows it there), and laid out with closed details' content
-              dropped. Entities decoded, the alt and
+              image shows it there), and both of those again with closed
+              details' content dropped. Entities decoded, the alt and
               title texts kept, and every link and image address decoded.
               Also what in it cannot be read plainly, if anything. Any
               failure stops the check."""
@@ -488,14 +491,19 @@ jobs:
               def layout(m):
                   return "\n" if m.group(1).lower() in BLOCK else ""
 
-              page_drawn = drawn(page)
-              pictured = re.sub(r"<img\b[^>]*>",
+              def pictured(page):
+                  return re.sub(r"<img\b[^>]*>",
                                 lambda m: "".join(re.findall(r'\balt="([^"]*)"', m.group(0))[:1]),
-                                page_drawn)
+                                page)
+
+              # A hidden list item is no list item: closed details' content
+              # goes before the markers are counted.
+              page_drawn, closed_drawn = drawn(page), drawn(closed(page))
               shown_texts = [html.unescape(view) + "\n" + "\n".join(extras)
                              for view in (TAG.sub(layout, page_drawn), TAG.sub("", page_drawn),
-                                          TAG.sub(layout, pictured),
-                                          TAG.sub(layout, closed(page_drawn)))]
+                                          TAG.sub(layout, pictured(page_drawn)),
+                                          TAG.sub(layout, closed_drawn),
+                                          TAG.sub(layout, pictured(closed_drawn)))]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
               if odd and not problem:
@@ -512,13 +520,17 @@ jobs:
               in it cannot be read plainly. Plain views: as written and
               folded, with the robot shortcode as its emoji (GitHub shows it
               in commit messages too), and for Markdown as GitHub's renderer
-              shows it, folded. Readings: each with look-alike letters read
+              shows it, folded; a commit message also without backticks, as
+              GitHub shows its code spans. Readings: each with look-alike letters read
               as Latin, then also through the ASCII look-alike pairs (twins)."""
               views = [text, fold(text), fold(text.replace(":robot:", ROBOT))]
               problem = None
               if is_markdown and text.strip():
                   rendered, problem = render(text)
                   views += [form for view in rendered for form in (view, fold(view))]
+              elif not is_markdown:
+                  code = text.replace("`", "")
+                  views += [code, fold(code)]
               looks = [view.translate(LOOKALIKE) for view in views]
               return views, looks + [twin for view in looks for twin in twins(view)], problem
 
@@ -597,13 +609,14 @@ jobs:
               # The title becomes the merge commit's message, and an edited
               # merge message can carry the body: their co-authors face the
               # list, as written and as shown (an entity, escape or emphasis
-              # can write the key). Only a line with an address credits an
-              # account; prose about the key ("`Co-authored-by:` lines are
-              # checked") is left to the scan. Folded views are skipped:
+              # can write the key). Only a line with an email address credits
+              # an account; prose about the key ("`Co-authored-by:` lines are
+              # checked", "@owner" included) is left to the scan. Folded views are skipped:
               # folding drops a listed name's accents.
               if is_markdown:
                   for ident in sorted({loose(ident) for view in plain[0:1] + plain[3::2]
-                                       for ident in CO_AUTHOR.findall(view) if "@" in ident}
+                                       for ident in CO_AUTHOR.findall(view)
+                                       if re.search(r"[^\s@<>]@[^\s@<>]+\.[^\s@<>]", ident)}
                                       - {loose(ident) for ident in KNOWN}):
                       hits.append(f"{where}'s co-author '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
