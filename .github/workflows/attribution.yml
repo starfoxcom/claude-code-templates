@@ -156,6 +156,12 @@ jobs:
                               "symbols and emoji")
                   continue
               views = [view.translate(PLAIN).replace(":robot:", "\U0001F916") for view in views]
+              # The title (and an edited merge message, the body) ends the merge
+              # commit, so a co-author line there with an address faces the list.
+              if where.startswith("the PR "):
+                  hits += [f"{where}'s co-author '{ident}' is not listed in .github/attribution-identities.txt"
+                           for ident in sorted({i.strip() for v in views for i in CO_AUTHOR.findall(v)})
+                           if "@" in ident and ident not in KNOWN and ident != "a listed contributor"]
               hit = next(filter(None, (hook.ATTRIBUTION.search(v) or hook.ATTRIBUTION.search(hook.strip_paths(v))
                                        for v in views)), None)
               if hit:
