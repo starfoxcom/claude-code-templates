@@ -265,7 +265,19 @@ jobs:
           # "\u2f01") apart from "l", but inside a Latin word they draw alike.
           ELL = {source: "l" for source, _, fields in ucd_rows("confusables.txt")
                  if fields[0] in ("006C", "4E28")}
-          ELL[0x4E28] = "l"
+          ELL[0x4E28] = ELL[0x3163] = ELL[0x1175] = "l"
+          # Han and Hangul letters drawn like a Latin letter, which Unicode's
+          # table files under each other rather than under the Latin one:
+          # read as that letter, since Chinese and Korean pass next to Latin.
+          SHAPES = {"\u5de5": "I", "\u53e3": "O", "\u56d7": "O", "\u531a": "C", "\u5338": "C",
+                    "\u51f5": "U", "\u4e85": "J", "\u4e5a": "L", "\u4e01": "T", "\u4e05": "T",
+                    "\u4e59": "Z", "\u4e2b": "Y", "\u5182": "n", "\u4e00": "-",
+                    "\u3147": "o", "\u110b": "o", "\u11bc": "o", "\u3141": "o", "\u1106": "o",
+                    "\u11b7": "o", "\u3134": "L", "\u1102": "L", "\u11ab": "L", "\u3137": "C",
+                    "\u1103": "C", "\u11ae": "C", "\u314c": "E", "\u1110": "E", "\u11c0": "E",
+                    "\u315c": "T", "\u116e": "T", "\u3161": "-", "\u1173": "-", "\u3145": "A",
+                    "\u1109": "A", "\u11ba": "A"}
+          LOOKALIKE.update({ord(c): read for c, read in SHAPES.items() if ord(c) not in LOOKALIKE})
 
           ELLS = "".join(map(chr, ELL)) + "l"
           CAPS_WORD = re.compile(r"(?:[^\W\d_]|[" + re.escape(ELLS) + r"])+")
@@ -293,7 +305,8 @@ jobs:
           # allow-list for letters: one outside it (a small capital, a hooked
           # or barred variant, an archaic form) is one no ordinary text needs
           # and a reader may take for a Latin letter. Han ideographs are
-          # exempt: rare ones appear in names, and none draws like a Latin one.
+          # exempt, as rare ones appear in names (those drawn like a Latin
+          # letter are read as it, by SHAPES).
           MODERN = set()
           for first, last, fields in ucd_rows("IdentifierStatus.txt"):
               if fields[0] == "Allowed":
@@ -302,15 +315,15 @@ jobs:
           def odd_letter(text):
               """A letter outside modern use, once compatibility forms are
               folded (so "1\u00ba", fullwidth letters and ligatures pass). Han
-              is exempt, as are lone Hangul letters in a word with no Latin
-              letter (Korean writes "\u314b\u314b" with them; inside a Latin word
-              one could pose as a Latin letter)."""
-              for word in re.findall(r"[^\W\d_]+", fold(text)):
-                  latin = any(SCRIPT.get(ord(c)) == "Latin" for c in word)
-                  for c in word:
-                      if (unicodedata.category(c).startswith("L") and ord(c) not in MODERN
-                              and SCRIPT.get(ord(c)) != "Han"
-                              and (latin or SCRIPT.get(ord(c)) != "Hangul")):
+              is exempt, as are lone Hangul letters between spaces with only
+              Hangul letters (Korean writes "\u314b\u314b" with them; next to
+              another script one could pose as a letter of it)."""
+              for chunk in fold(text).split():
+                  letters = [c for c in chunk if unicodedata.category(c).startswith("L")]
+                  korean = all(SCRIPT.get(ord(c)) == "Hangul" for c in letters)
+                  for c in letters:
+                      if (ord(c) not in MODERN and SCRIPT.get(ord(c)) != "Han"
+                              and not (korean and SCRIPT.get(ord(c)) == "Hangul")):
                           return c
               return None
 
@@ -634,7 +647,7 @@ jobs:
                   for name, address in {(name, address), (fold(name), fold(address))}:
                       # The whole trailer line only, as TRAILER reads it.
                       person = re.compile(r"^([ \t]*co-authored-by:[ \t]*)" + re.escape(name)
-                                          + r"[ \t]*<?" + re.escape(address) + r">?(?=[ \t]*$)",
+                                          + r"[ \t]*<?" + re.escape(address) + r">?(?=[ \t\r]*$)",
                                           re.I | re.M)
                       views = [person.sub(r"\1a listed contributor", view) for view in views]
               return views
