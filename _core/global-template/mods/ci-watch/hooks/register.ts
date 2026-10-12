@@ -326,8 +326,10 @@ async function startWatch(
   headSha: string,
   isAsked = false,
 ): Promise<Watch> {
-  const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
   const startedAt = await $.clock.now()
+  // Found after the last wait and replaced in the same step: a poll that lands during a wait swaps the
+  // watch's object, so a match taken before it would stamp a copy no longer listed.
+  const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
   if (same && !isAsked) {
     // GitHub may not name the pushed commit yet: the head that shows within the hour is this session's.
     const pushed = { ...same, pushedAt: startedAt, isSilent: undefined }
