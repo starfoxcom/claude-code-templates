@@ -5,20 +5,21 @@ name: Attribution
 # commit made elsewhere, or a write that slipped past them, reaches this check.
 # It fails a pull request when:
 # - one of its commits' messages, its title or its body carries AI
-#   attribution: an AI Co-Authored-By, an Anthropic noreply address, a
-#   "generated with" line, a session link or the robot emoji. Plain mentions
-#   of the product pass. Each text is also read as GitHub shows it: the body
-#   rendered as Markdown, the title and commit messages with their code spans
-#   and emoji drawn.
+#   attribution, as the shipped hook's own patterns read it: an AI
+#   Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
+#   session link or the robot emoji. Each text is read as written, with its
+#   HTML entities decoded, and with its Markdown and HTML markup taken out.
+# - one of those texts uses a character outside the ones this repository
+#   accepts: English text (printable ASCII), common punctuation, arrows, box
+#   lines and emoji. The project is written in English; an allow-list keeps
+#   look-alike letters from other alphabets, invisible characters and
+#   direction marks out without chasing each one (curl keeps its sources the
+#   same way).
 # - a commit's author, committer or co-author is not listed in
 #   `.github/attribution-identities.txt`: an AI account fails whatever its
 #   name, with no list of AI names to keep current.
-# - a commit cannot be read plainly (any encoding but UTF-8, a repeated
-#   author, committer or encoding line), or a text cannot: a word mixing
-#   alphabets or using a letter outside modern use, right-to-left letters
-#   next to left-to-right ones, direction
-#   marks or a direction set by hand, characters newer than the runner's
-#   Unicode, math, ruby text, or diagrams drawn in the browser.
+# - a commit cannot be read plainly (any encoding but UTF-8, or a repeated
+#   author, committer or encoding line).
 #
 # A pull request cannot weaken the check on itself:
 # - `pull_request_target` runs this file as the default branch (`main`)
@@ -55,8 +56,6 @@ jobs:
   attribution:
     name: No AI attribution
     runs-on: ubuntu-latest
-    # A large body with many details blocks and images is read in every
-    # state; a release range takes under a minute.
     timeout-minutes: 10
     steps:
       # The base branch, never the PR's head.
@@ -82,22 +81,6 @@ jobs:
           git show origin/develop:_core/global-template/hooks/no-ai-attribution.py > "$RUNNER_TEMP/attribution_hook.py"
           git show origin/main:.github/attribution-identities.txt > "$RUNNER_TEMP/attribution-identities.txt"
 
-      # Unicode's own data, pinned to 17.0.0 by checksum: which script each
-      # letter belongs to, which letters look like others, and which are in
-      # modern use (UTS #39).
-      - name: Fetch the Unicode script, look-alike and letter-status tables
-        run: |
-          mkdir -p "$RUNNER_TEMP/ucd"
-          cd "$RUNNER_TEMP/ucd"
-          curl -sSfL -o Scripts.txt https://www.unicode.org/Public/17.0.0/ucd/Scripts.txt
-          curl -sSfL -o confusables.txt https://www.unicode.org/Public/17.0.0/security/confusables.txt
-          curl -sSfL -o IdentifierStatus.txt https://www.unicode.org/Public/17.0.0/security/IdentifierStatus.txt
-          sha256sum -c - <<'SUMS'
-          9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf  Scripts.txt
-          091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a  confusables.txt
-          617228a16da13850bf8af28b6cd08f5e9b6595d2eb60404fe6eee2c85b4e4a35  IdentifierStatus.txt
-          SUMS
-
       # The PR's text reaches the script through the environment, never the
       # script's own text, so a title or body cannot run as code.
       - name: Scan the commits, title and body
@@ -108,11 +91,9 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           HEAD_LABEL: ${{ github.event.pull_request.head.label }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'EOF'
-          import html, importlib.util, json, os, re, subprocess, sys, unicodedata
-          import urllib.parse, urllib.request
+          import html, importlib.util, os, re, subprocess, sys, urllib.parse
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
@@ -153,762 +134,112 @@ jobs:
           with open(os.path.join(os.environ["RUNNER_TEMP"], "attribution-identities.txt"),
                     encoding="utf-8") as listed:
               KNOWN = {line.strip() for line in listed if line.strip() and not line.startswith("#")}
-          CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*$", re.I | re.M)
-          # The trailer exactly as GitHub reads it, one line: the only form
-          # whose listed name is masked for the readability judgements.
-          TRAILER = re.compile(r"^[ \t]*co-authored-by:[ \t]*(.*?)[ \t]*$", re.I | re.M)
+          CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*\r?$", re.I | re.M)
+          TRAILER = re.compile(r"^([ \t]*co-authored-by:[ \t]*)(.*?)[ \t]*\r?$", re.I | re.M)
+          # A direction set by hand in HTML can swap two pieces of a line.
+          DIRECTION = re.compile(r"<[A-Za-z][^>]*\sdir\s*=", re.I)
+          EMAIL = re.compile(r"[^\s@<>]@[^\s@<>]+\.[^\s@<>]")
 
-          FILLERS = "\u115f\u1160\u2800\u3164\uffa0"
-          # The only spaces kept: a hair, thin or other narrow space inside a
-          # word shows it whole, so every other space is dropped with the marks.
-          SPACES = " \u00a0\u3000"
-          # Direction overrides and marks show letters in another order than
-          # stored: a right-to-left mark between letters flips them.
-          OVERRIDES = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
-          # Control characters but tab and line ends: no ordinary text holds
-          # them, and some draw as a blank gap (DEL) in a title or commit.
-          CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+          # The characters a text may use: printable ASCII with tabs and line
+          # ends, and symbols that draw as no letter. Those Unicode's look-alike
+          # table (UTS #39 confusables.txt) files under ASCII are also read as
+          # it (AS_ASCII).
+          ACCEPTED = [(0x20, 0x7E), (0xA7, 0xA7), (0xA9, 0xA9), (0xAE, 0xAE), (0xB0, 0xB0), (0xB7, 0xB7),
+                      (0xD7, 0xD7), (0x2013, 0x2014), (0x2018, 0x2019), (0x201C, 0x201D), (0x2022, 0x2022),
+                      (0x2026, 0x2026), (0x2122, 0x2122), (0x2190, 0x21FF), (0x2248, 0x2248), (0x2260, 0x2260),
+                      (0x2264, 0x2265), (0x23E9, 0x23FA), (0x2500, 0x257F), (0x25A0, 0x25FF), (0x2600, 0x27BF),
+                      (0x1F300, 0x1F64F), (0x1F680, 0x1F6FF), (0x1F7E0, 0x1F7EB), (0x1F900, 0x1F9FF),
+                      (0x1FA70, 0x1FAFF)]
+          # Emoji joiners and the emoji presentation selector: accepted, and
+          # dropped when reading, since they draw nothing between letters.
+          JOINERS = {0x200D: None, 0xFE0F: None}
+          AS_ASCII = {0xD7: "x", 0x2013: "-", 0x2018: "'", 0x2019: "'", 0x201C: "''", 0x201D: "''",
+                      0x2026: "...", 0x2571: "/", 0x2573: "X", 0x2768: "(", 0x2769: ")", 0x276E: "<",
+                      0x276F: ">", 0x2772: "(", 0x2773: ")", 0x2774: "{", 0x2775: "}", 0x2795: "+",
+                      0x2796: "-"}
+          # GitHub's shortcodes for the robot and for emoji drawn as letters.
+          SHORTCODES = {":robot:": "\U0001F916", ":a:": "A", ":b:": "B", ":o:": "O", ":o2:": "O",
+                        ":m:": "M", ":x:": "X", ":heavy_multiplication_x:": "x", ":ab:": "AB",
+                        ":cl:": "CL", ":cool:": "COOL", ":free:": "FREE", ":id:": "ID", ":new:": "NEW",
+                        ":ng:": "NG", ":ok:": "OK", ":parking:": "P", ":sos:": "SOS", ":up:": "UP",
+                        ":vs:": "VS", ":tm:": "TM", ":information_source:": "i"}
 
-          def unknown(text):
-              """Whether the text holds a code point the runner's Unicode does
-              not know. It is older than the pinned tables, so a mark or
-              letter added since reads as unassigned and is neither dropped
-              nor folded; unassigned invisible ones draw nothing at all.
-              Emoji newer than it pass: the pinned tables file them as symbols."""
-              return any(unicodedata.category(c) == "Cn"
-                         and not (0x1F000 <= ord(c) <= 0x1FAFF and SCRIPT.get(ord(c)) == "Common")
-                         for c in text)
+          def foreign(text):
+              """The first character outside the accepted ones, if any."""
+              for c in text:
+                  code = ord(c)
+                  if c not in "\t\n\r" and code not in JOINERS and not any(a <= code <= b for a, b in ACCEPTED):
+                      return c
+              return None
 
-          def mixed_direction(text):
-              """Whether the text holds right-to-left letters (Arabic, Hebrew)
-              and left-to-right ones together. GitHub sets each block's
-              direction from its first strong letter, so a line that starts
-              right-to-left shows its Latin words in reverse order, which no
-              view reads. Judged per paragraph (a blank line apart; the
-              check's own lines, the merge title and link addresses, stand
-              apart): one that starts left to right keeps every Latin word in
-              place, so only one that starts right to left and holds Latin
-              letters is refused."""
-              for block in re.split(r"\n\s*\n", text):
-                  classes = [unicodedata.bidirectional(c) for c in block]
-                  first = next((k for k in classes if k in ("L", "R", "AL")), None)
-                  if first in ("R", "AL") and "L" in classes:
-                      return True
-              return False
+          def unmarked(text, marks="*_~`\\[]"):
+              """Markdown and HTML as a reader sees them: comments gone, a link
+              or image as its text, an HTML image as its alt text, other tags
+              and the marks given gone."""
+              text = re.sub(r"<!--.*?(?:-->|$)", "", text, flags=re.S)
+              text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
+              text = re.sub(r"\]\[[^\]]*\]", "]", text)
+              text = re.sub(r"<img\b[^>]*?\balt=\"([^\"]*)\"[^>]*>", r"\1", text, flags=re.I)
+              text = re.sub(r"</?[A-Za-z][\w-]*(?:\s[^>]*)?/?>", "", text)
+              return text.translate({ord(c): None for c in marks})
 
-          def bare(text):
-              """Every invisible or combining mark and every narrow space
-              dropped. Decomposed first,
-              so an accent cannot shelter the letter it sits on."""
-              text = unicodedata.normalize("NFD", text)
-              text = "".join(c for c in text if c not in FILLERS
-                             and unicodedata.category(c) not in ("Cf", "Mn", "Me", "Zl", "Zp")
-                             and (unicodedata.category(c) != "Zs" or c in SPACES))
-              return unicodedata.normalize("NFC", text)
+          def unstruck(text):
+              """The text without struck-out words, which a reader skips."""
+              text = re.sub(r"~~.*?~~", "", text, flags=re.S)
+              return re.sub(r"<(del|s|strike)\b[^>]*>.*?</\1>", "", text, flags=re.S | re.I)
 
-          def fold(text):
-              """Bare text with compatibility forms folded (fullwidth letters,
-              ligatures). Letters borrowed from another script are
-              mixed_alphabets' and LOOKALIKE's."""
-              return unicodedata.normalize("NFKC", bare(text))
-
-          UCD = os.path.join(os.environ["RUNNER_TEMP"], "ucd")
-
-          def ucd_rows(name):
-              """(first, last, fields) for each data line of a UCD file."""
-              with open(os.path.join(UCD, name), encoding="utf-8") as data:
-                  for line in data:
-                      line = line.split("#", 1)[0].strip()
-                      if line:
-                          span, *fields = [part.strip() for part in line.split(";")]
-                          first, _, last = span.partition("..")
-                          yield int(first, 16), int(last or first, 16), fields
-
-          SCRIPT = {}
-          for first, last, fields in ucd_rows("Scripts.txt"):
-              SCRIPT.update(dict.fromkeys(range(first, last + 1), fields[0]))
-          # Script sets one word may mix (UTS #39 "Highly Restrictive"); Common
-          # and Inherited letters (digits, marks, punctuation) belong to any.
-          NEUTRAL = {"Common", "Inherited", "Unknown"}
-          ALLOWED_MIXES = [{"Latin", "Han", "Hiragana", "Katakana"},
-                           {"Latin", "Han", "Bopomofo"}, {"Latin", "Han", "Hangul"}]
-
-          # Unicode's look-alike table, kept to letters outside ASCII that
-          # stand for ASCII ones (a Cyrillic or Greek "a" read as Latin "a"),
-          # so plain Latin text reads unchanged.
-          LOOKALIKE = {}
-          for source, _, fields in ucd_rows("confusables.txt"):
-              # A target's marks dropped: Unicode reads a stroke letter as its
-              # base letter plus a stroke ("ø" as "o" + U+0338), and NFD
-              # leaves the stroke on, so "ø" reads as "o".
-              # A hook is spelled as an apostrophe ("\u0187" as "C'").
-              target = "".join(c for c in (chr(int(code, 16)) for code in fields[0].split())
-                               if unicodedata.category(c) not in ("Mn", "Me"))
-              if any(c.isalpha() for c in target):
-                  target = target.replace("'", "")
-              if source > 0x7F and target.isascii() and target.strip():
-                  # Unicode files I and l under one prototype, "l".
-                  upper = chr(source).isupper() and target == "l"
-                  LOOKALIKE[source] = "I" if upper else target
-          # Letters the table leaves out but whose Unicode name says which Latin
-          # letter they draw: small capitals, boxed and regional-indicator
-          # letters ("LATIN LETTER SMALL CAPITAL M", "NEGATIVE SQUARED LATIN
-          # CAPITAL LETTER A"). Turned, reversed and other variants keep their own.
-          NAMED = re.compile(r"(?:LATIN|^REGIONAL INDICATOR SYMBOL).*\b(SMALL LETTER|LETTER|CAPITAL) ([A-Z])$")
-          for code in SCRIPT:
-              name = unicodedata.name(chr(code), "")
-              named = NAMED.search(name)
-              # The name wins over a table entry that is no letter: "(a)".
-              if (code > 0x7F and not LOOKALIKE.get(code, "").isalpha() and named
-                      and not name.startswith("TAG ")):
-                  letter = named.group(2)
-                  LOOKALIKE[code] = letter.lower() if named.group(1) == "SMALL LETTER" else letter
-          # Unicode's chains: a letter filed under a non-ASCII prototype that
-          # itself reads as ASCII (Cyrillic "\u0442" under the small capital
-          # "\u1d1b", read as "T") reads as that.
-          for source, _, fields in ucd_rows("confusables.txt"):
-              if source > 0x7F and source not in LOOKALIKE:
-                  target = "".join(c for c in (chr(int(code, 16)) for code in fields[0].split())
-                                   if unicodedata.category(c) not in ("Mn", "Me"))
-                  read = "".join(LOOKALIKE.get(ord(c), c) for c in target)
-                  if read.isascii() and any(c.isalnum() for c in read):
-                      LOOKALIKE[source] = read
-          # Every look-alike of "l" read as "l": a capital I, "|" or "1" in
-          # place of an "l", after LOOKALIKE has read the rest.
-          # Unicode files the vertical stroke "\u4e28" (and Hangul "\u3163", the radical
-          # "\u2f01") apart from "l", but inside a Latin word they draw alike.
-          ELL = {source: "l" for source, _, fields in ucd_rows("confusables.txt")
-                 if fields[0] in ("006C", "4E28")}
-          ELL[0x4E28] = ELL[0x3163] = ELL[0x1175] = "l"
-          # Han and Hangul letters drawn like a Latin letter, which Unicode's
-          # table files under each other rather than under the Latin one:
-          # read as that letter, since Chinese and Korean pass next to Latin.
-          SHAPES = {"\u5de5": "I", "\u53e3": "O", "\u56d7": "O", "\u531a": "C", "\u5338": "C",
-                    "\u51f5": "U", "\u4e85": "J", "\u4e5a": "L", "\u4e01": "T", "\u4e05": "T",
-                    "\u4e59": "Z", "\u4e2b": "Y", "\u5182": "n", "\u4e00": "-",
-                    "\u3147": "o", "\u110b": "o", "\u11bc": "o", "\u3141": "o", "\u1106": "o",
-                    "\u11b7": "o", "\u3134": "L", "\u1102": "L", "\u11ab": "L", "\u3137": "C",
-                    "\u1103": "C", "\u11ae": "C", "\u314c": "E", "\u1110": "E", "\u11c0": "E",
-                    "\u315c": "T", "\u116e": "T", "\u3161": "-", "\u1173": "-", "\u3145": "A",
-                    "\u1109": "A", "\u11ba": "A", "\u4e42": "X", "\u3021": "l", "\u3022": "ll",
-                    "\u3023": "lll", "\u3024": "X", "\u0964": "l", "\u0965": "ll",
-                    "\u00a6": "l"}
-          LOOKALIKE.update({ord(c): read for c, read in SHAPES.items() if ord(c) not in LOOKALIKE})
-          # Each shape's whole look-alike group reads the same: Unicode files
-          # Katakana "\u30ed" under "\u53e3", and "\u4e00" with the dashes under "\u30fc".
-          PROTOTYPE = {source: "".join(chr(int(code, 16)) for code in fields[0].split())
-                       for source, _, fields in ucd_rows("confusables.txt")}
-          for shape, read in SHAPES.items():
-              group = PROTOTYPE.get(ord(shape), shape)
-              for source, target in PROTOTYPE.items():
-                  if target == group and source not in LOOKALIKE:
-                      LOOKALIKE[source] = read
-              if len(group) == 1 and ord(group) not in LOOKALIKE:
-                  LOOKALIKE[ord(group)] = read
-          # Unicode's chains once more, through the shapes and the "l" strokes:
-          # Hangul "\u1196" is filed under two "\u30fc", read as "--", and
-          # "\u3162" under "\u30fc\u4e28", read as "-l".
-          for source, target in PROTOTYPE.items():
-              if source > 0x7F and source not in LOOKALIKE:
-                  read = "".join(LOOKALIKE.get(ord(c), ELL.get(ord(c), c)) for c in target)
-                  if read.isascii() and read.strip():
-                      LOOKALIKE[source] = read
-
-          ELLS = "".join(map(chr, ELL)) + "l"
-          CAPS_WORD = re.compile(r"(?:[^\W\d_]|[" + re.escape(ELLS) + r"])+")
-
-          def capitals(match):
-              """An all-capitals word with each "l" look-alike read as "I", as
-              the font shows it: "Al", "GEMlNl". Lowercase words keep their l."""
-              word = match.group(0)
-              rest = [c for c in word if c not in ELLS]
-              if rest and all(c.isupper() for c in rest):
-                  return "".join("I" if c in ELLS else c for c in word)
-              return word
+          def views(text, is_markdown):
+              """The text as written, with its entities and its link addresses
+              decoded, and without its markup (a title only loses its code
+              spans), each with emoji joiners dropped and GitHub's shortcodes
+              drawn."""
+              decoded = html.unescape(text)
+              forms = [text, decoded, urllib.parse.unquote(decoded)]
+              if is_markdown:
+                  forms += [unmarked(decoded), unmarked(decoded, "*~`\\[]"), unmarked(unstruck(decoded))]
+              else:
+                  forms.append(decoded.replace("`", ""))
+              read = []
+              for form in dict.fromkeys(forms):
+                  form = form.translate(JOINERS).translate(AS_ASCII)
+                  for code, drawn in SHORTCODES.items():
+                      form = form.replace(code, drawn)
+                  read.append(form)
+              return list(dict.fromkeys(read))
 
           def twins(text):
-              """The text read through Unicode's look-alike pairs within ASCII
-              itself: "I", "|" or "1" as "l" (and "l" as "I" in an all-capitals
-              word), "0" as "O", and "rn" as "m" (the form LOOKALIKE gives every
-              "m" look-alike); each alone and together, since reading "AI" as
-              "Al" hides the other."""
-              ell, caps = text.translate(ELL), CAPS_WORD.sub(capitals, text)
-              return [ell, caps] + [view.replace("0", "O").replace("rn", "m")
-                                    for view in (text, ell, caps)]
+              """The text through Unicode's ASCII look-alike pairs: I, 1 and |
+              read as l and the other way round, 0 as O, and rn as m."""
+              common = text.replace("0", "O").replace("rn", "m")
+              return [common.translate(str.maketrans("I1|", "lll")),
+                      common.translate(str.maketrans("l1|", "III"))]
 
-          # Letters in modern use (UTS #39 Identifier_Status Allowed), the
-          # allow-list for letters: one outside it (a small capital, a hooked
-          # or barred variant, an archaic form) is one no ordinary text needs
-          # and a reader may take for a Latin letter. Han ideographs are
-          # exempt, as rare ones appear in names (those drawn like a Latin
-          # letter are read as it, by SHAPES).
-          MODERN = set()
-          for first, last, fields in ucd_rows("IdentifierStatus.txt"):
-              if fields[0] == "Allowed":
-                  MODERN.update(range(first, last + 1))
+          def unlisted(ident):
+              """Whether a co-author is someone the list does not name, with
+              angle brackets and spacing evened out."""
+              even = lambda s: " ".join(re.sub("[<>]", " ", s).split())
+              return even(ident) not in {even(known) for known in KNOWN}
 
-          # The scripts whose letters outside modern use pose as Latin (small
-          # capitals, hooked or barred letters, archaic Greek and Cyrillic).
-          # Other scripts' letters pass (a script in limited modern use, such
-          # as Cherokee or Tifinagh, is ordinary text); their look-alikes that
-          # Unicode lists are read by LOOKALIKE. A shared letter (a modifier,
-          # Arabic's tatweel, Bopomofo's tone marks) or a lone Hangul letter
-          # poses only inside a word with letters of these scripts.
-          POSING = {"Latin", "Greek", "Cyrillic"}
-          NEIGHBOURS = {"Common", "Inherited", "Hangul"}
-
-          def words(text):
-              """The runs of letters and digits in the text, counting as one
-              anything the look-alike table reads as a letter or a digit."""
-              runs, run = [], []
-              for c in text:
-                  read = LOOKALIKE.get(ord(c))
-                  if c.isalnum() or (isinstance(read, str) and read.isascii() and read.isalnum()):
-                      run.append(c)
-                  elif run:
-                      runs.append("".join(run))
-                      run = []
-              return runs + (["".join(run)] if run else [])
-
-          def odd_letter(text):
-              """A letter outside modern use, once compatibility forms are
-              folded (so "1\u00ba", fullwidth letters and ligatures pass): a
-              Latin, Greek or Cyrillic one anywhere, and a shared or lone
-              Hangul one inside a word holding Latin, Greek or Cyrillic
-              letters (Korean writes "\u314b\u314b", Arabic stretches a
-              word with a tatweel, Chinese marks a tone after Bopomofo)."""
-              for word in words(fold(text)):
-                  posing = any(SCRIPT.get(ord(c)) in POSING for c in word)
-                  for c in word:
-                      script = SCRIPT.get(ord(c))
-                      if (unicodedata.category(c).startswith("L") and ord(c) not in MODERN
-                              and (script in POSING or (script in NEIGHBOURS and posing))):
-                          return c
-              return None
-
-          def mixed_alphabets(text):
-              """A word whose letters come from scripts no language mixes in
-              one word (a Cyrillic or Greek letter inside a Latin word), by
-              Unicode's script data. A letter that looks like no ASCII one
-              cannot pose as Latin and counts as neutral ("5 \u03bcs", "10 k\u03a9")."""
-              for word in re.findall(r"[^\W\d_]+", bare(text)):
-                  scripts = {SCRIPT.get(ord(c), "Unknown") for c in word
-                             if ord(c) in LOOKALIKE or SCRIPT.get(ord(c)) == "Latin"} - NEUTRAL
-                  if len(scripts) > 1 and not any(scripts <= mix for mix in ALLOWED_MIXES):
-                      return word
-              return None
-
-          # What the renderer leaves for the browser to draw or arrange, so the
-          # page's text does not hold it plainly: math (TeX drops spaces and
-          # braces), diagrams and maps, ruby text over letters (a text
-          # direction set by hand is judged in render()).
-          UNREADABLE = [("holds math", re.compile(r"<math-renderer")),
-                        # A lone <rp> survives and browsers hide it.
-                        ("holds ruby text", re.compile(r"<r(?:uby|p|t)\b")),
-                        ("holds a diagram drawn in the browser",
-                         re.compile(r'<[A-Za-z][\w-]*\s[^>]*\bclass="[^"]*\brender-needs-enrichment\b')),
-                        # Markup the browser draws in another order than the
-                        # page holds: a table foot or a head after the body, a
-                        # details block whose summary is not first, a table or
-                        # image floated beside the text.
-                        ("lays its text out of order", re.compile(
-                            r'<tfoot\b|<tbody\b(?:(?!</table>)[\s\S])*?<thead\b'
-                            r'|<details\b[^>]*>(?!\s*<summary\b)'
-                            r'|<(?:table|img)\b[^>]*\balign="(?:left|right)"')),
-                        # A list whose markers the browser draws as letters.
-                        ("draws list markers as letters", re.compile(r'<(?:ol|ul|li)\b[^>]*\btype="')),
-                        # A first number the browser reads otherwise than drawn().
-                        ("sets a list number the check cannot read",
-                         re.compile(r'<ol\b[^>]*\bstart="(?!-?\d{1,9}")'))]
-          # Browsers read these attribute values in any case ("Right"), and
-          # the renderer keeps the case as written.
-          UNREADABLE = [(why, re.compile(mark.pattern, re.I)) for why, mark in UNREADABLE]
-
-          # Every tag the renderer keeps, and how it lays text out: an inline
-          # tag (an image and a task checkbox included, drawn in the line)
-          # joins the text on each side, a block or break tag starts a new
-          # line. A tag in neither list cannot be laid out plainly, so it
-          # fails the check.
-          INLINE = {"a", "b", "code", "del", "em", "g-emoji", "i", "img", "input", "ins", "kbd",
-                    "mark", "path", "picture", "q", "s", "samp", "source", "span", "strike", "strong",
-                    "sub", "sup", "svg", "themed-picture", "tt", "var"}
-          BLOCK = {"blockquote", "br", "dd", "details", "div", "dl", "dt", "h1", "h2", "h3", "h4",
-                   "h5", "h6", "hr", "li", "markdown-accessiblity-table", "ol", "p", "pre",
-                   "section", "summary", "table", "tbody", "td", "th", "thead", "tr", "ul", "video"}
-          TAG = re.compile(r"</?([A-Za-z][\w-]*)[^>]*>")
-          # Every attribute the renderer keeps on ordinary content. Any other
-          # (a cell's rowspan or valign, which move it below later text)
-          # fails the check, so the next layout attribute fails closed.
-          ATTRIBUTES = {"alias", "align", "alt", "aria-describedby", "aria-hidden", "aria-label", "checked",
-                        "class", "colspan", "controls", "d", "data-canonical-src", "data-catalyst-inline",
-                        "data-animated-image", "data-component", "data-error-text", "data-footnote-backref",
-                        "data-footnote-backref-idx", "data-footnote-ref", "data-footnotes",
-                        "data-hovercard-type", "data-hovercard-url", "data-id", "data-line-number",
-                        "data-octo-click", "data-octo-dimensions", "data-paste-markdown-skip",
-                        "data-permission-text", "data-pjax", "data-tab-size", "itemprop",
-                        "data-snippet-clipboard-copy-content", "data-url", "dir", "disabled",
-                        "height", "href", "id", "is", "lang", "media", "muted", "name", "open", "playsinline",
-                        "poster", "rel", "role", "src", "srcset", "start", "style", "tabindex",
-                        "target", "title", "type", "version",
-                        "viewbox", "width"}
-
-          def attribute_names(page):
-              """The name of every attribute on every tag, quoted values removed."""
-              names = set()
-              for inside in re.findall(r"<[A-Za-z][\w-]*(\s[^>]*)>", page):
-                  names.update(name.lower() for name in
-                               re.findall(r"([\w:.-]+)", re.sub(r'"[^"]*"', "", inside)))
-              return names
-
-          ROMAN = ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
-                   (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
-
-          def marker(number, depth):
-              """An ordered list item's marker as GitHub's stylesheet draws it:
-              decimal, lower-roman one list deep, lower-alpha deeper (each
-              falls back to decimal outside its range)."""
-              if depth == 1 or number < 1 or (depth == 2 and number > 3999):
-                  return str(number)
-              if depth == 2:
-                  numerals = ""
-                  for value, letters in ROMAN:
-                      count, number = divmod(number, value)
-                      numerals += letters * count
-                  return numerals
-              letters = ""
-              while number:
-                  number, rest = divmod(number - 1, 26)
-                  letters = chr(97 + rest) + letters
-              return letters
-
-          # The tags GitHub's renderer marks dir="auto": a direction on any
-          # other tag, or any other direction, is set by hand and can swap
-          # the order of two pieces (an inline tag with its own direction is
-          # drawn as one piece, ordered by the line around it).
-          DIRECTED = {"p", "div", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
-
-          def attribute(inside, wanted):
-              """The value of a tag's attribute by name, or None. Only an
-              attribute name counts: a "dir=" inside another attribute's
-              quoted value (a link's "?dir=desc") is not one."""
-              for name, value in re.findall(r'([\w:.-]+)(?:\s*=\s*("[^"]*"|\'[^\']*\'|[^\s"\'>]*))?', inside):
-                  if name.lower() == wanted:
-                      return value.strip("\"'")
-              return None
-
-          def own_direction(inside):
-              """The value of a tag's dir attribute, lowercased, or None."""
-              value = attribute(inside, "dir")
-              return None if value is None else value.lower()
-
-          VOID = {"area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"}
-
-          def drawn(page):
-              """The page with what its stylesheets draw written in as text:
-              each ordered list item's marker, counted from its list's start
-              (a nested list's markers are letters, so a number or an item
-              count picks one; a list right inside a div and a task list's
-              hidden ones excepted), a footnote reference's brackets, the
-              quotes around a q, and a code snippet's line numbers."""
-              parents, parts, last = [], [], 0
-              for m in re.finditer(r"<(/?)([A-Za-z][\w-]*)([^>]*)>", page):
-                  closing, tag, inside = m.group(1), m.group(2).lower(), m.group(3)
-                  parts.append(page[last:m.end()])
-                  last = m.end()
-                  if closing:
-                      if any(entry[0] == tag for entry in parents):
-                          while True:
-                              entry = parents.pop()
-                              parts.append(entry[3])
-                              if entry[0] == tag:
-                                  break
-                      continue
-                  entry = [tag, 1, 1, ""]
-                  if tag == "li":
-                      owner = next((e for e in reversed(parents) if e[0] in ("ol", "ul")), None)
-                      if owner and owner[0] == "ol":
-                          if not re.search(r'\bclass="[^"]*\btask-list-item\b', inside):
-                              parts.append(marker(owner[1], owner[2]) + ". ")
-                          owner[1] += 1
-                  elif tag in ("ol", "ul"):
-                      start = re.search(r'\bstart="(-?\d{1,9})"', inside)
-                      depth = 1 + sum(e[0] in ("ol", "ul") for e in parents)
-                      in_div = bool(parents) and parents[-1][0] == "div"
-                      entry = [tag, int(start.group(1)) if start else 1, 1 if in_div else depth, ""]
-                  elif tag == "q":
-                      parts.append('"')
-                      entry[3] = '"'
-                  elif tag == "a" and re.search(r"\bdata-footnote-ref\b", inside):
-                      parts.append("[")
-                      entry[3] = "]"
-                  if tag not in VOID and not inside.rstrip().endswith("/"):
-                      parents.append(entry)
-              parts.append(page[last:])
-              return re.sub(r'(<[^>]*\bdata-line-number="([^"]*)"[^>]*>)', r"\1\2 ", "".join(parts))
-
-          # Each details block can be opened or closed by a click, so every
-          # combination is read; past this many blocks the check refuses.
-          MOST_DETAILS = 6
-
-          def collapsed(page, opened):
-              """The page with each details block, in page order, open or
-              closed as `opened` says: a closed one's content after its own
-              summary dropped (a summary nested in it is part of it)."""
-              # Each frame: open, hiding, summary depth, summary done.
-              frames, parts, last, seen = [], [], 0, 0
-              for m in re.finditer(r"<(/?)(details|summary)\b([^>]*)>", page):
-                  if not any(frame[1] for frame in frames):
-                      parts.append(page[last:m.start()])
-                  parts.append(m.group(0))
-                  last = m.end()
-                  closing, tag, _ = m.groups()
-                  if tag == "details" and closing:
-                      frames = frames[:-1]
-                  elif tag == "details":
-                      frames.append([opened[seen], False, 0, False])
-                      seen += 1
-                  elif frames and not frames[-1][3]:
-                      frame = frames[-1]
-                      frame[2] += -1 if closing else 1
-                      if closing and frame[2] <= 0:
-                          frame[1], frame[3] = not frame[0], True
-              if not any(frame[1] for frame in frames):
-                  parts.append(page[last:])
-              return "".join(parts)
-
-          STRUCK = re.compile(r"<(del|s|strike)\b[^>]*>(?:(?!<\1\b)[\s\S])*?</\1>")
-
-          def unstruck(page):
-              """The page with struck-through text dropped: a reader skips it,
-              so the words on each side read as one sentence."""
-              while True:
-                  page, count = STRUCK.subn("", page)
-                  if not count:
-                      return page
-
-          def render(text):
-              """The text GitHub shows for this Markdown, from GitHub's own
-              renderer, with what its stylesheets draw written in: laid out
-              (inline tags dropped, block tags as line breaks) and laid out
-              with each image as its alt text in place (a broken image shows
-              it there), for every open/closed state of its details blocks,
-              with and without struck text; and with every tag dropped, so a
-              tag filed in the wrong list cannot open a gap. Entities
-              decoded, the alt and
-              title texts kept, and every link and image address decoded.
-              Also what in it cannot be read plainly, if anything. Any
-              failure stops the check."""
-              request = urllib.request.Request(
-                  "https://api.github.com/markdown",
-                  data=json.dumps({"text": text, "mode": "gfm",
-                                   "context": os.environ["GITHUB_REPOSITORY"]}).encode(),
-                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-                           "Accept": "application/vnd.github+json"})
-              with urllib.request.urlopen(request, timeout=60) as reply:
-                  page = reply.read().decode("utf-8")
-              labels = re.findall(r'\b(?:alt|title|aria-label)="([^"]*)"', page)
-              addresses = re.findall(r'\b(?:href|src|data-canonical-src)="([^"]*)"', page)
-              extras = ([html.unescape(label) for label in labels]
-                        + [urllib.parse.unquote(html.unescape(url)) for url in addresses])
-              def layout(m):
-                  return "\n" if m.group(1).lower() in BLOCK else ""
-
-              def pictured(page):
-                  return re.sub(r"<img\b[^>]*>",
-                                lambda m: "".join(re.findall(r'\balt="([^"]*)"', m.group(0))[:1]),
-                                page)
-
-              def boxed(page):
-                  """Each image as one piece holding its alt text, as the
-                  browser places it in a line."""
-                  return re.sub(r"<img\b([^>]*)>",
-                                lambda m: OBJECT + (attribute(m.group(1), "alt") or "") + OBJECT_END, page)
-
-              # Every open/closed combination of the details blocks, all open
-              # first, each with and without struck text. A hidden list item
-              # is no list item: closed content goes before the markers are
-              # counted.
-              count = len(re.findall(r"<details\b", page))
-              combos = [tuple(not k >> i & 1 for i in range(count))
-                        for k in range(2 ** min(count, MOST_DETAILS))]
-              views, boxes = [], []
-              for opened in combos if count <= MOST_DETAILS else combos[:1]:
-                  base = collapsed(page, opened)
-                  for marked in (drawn(base), drawn(unstruck(base))):
-                      views += [TAG.sub(layout, marked), TAG.sub(layout, pictured(marked))]
-                      boxes.append(TAG.sub(layout, boxed(marked)))
-              views = list(dict.fromkeys(views + [TAG.sub("", drawn(page))]))
-              shown_texts = [html.unescape(view) + "\n\n" + "\n\n".join(extras) for view in views]
-              # In shown order with each image as one piece: an image between
-              # two right-to-left characters is drawn inside their run.
-              shown_texts += [visual(html.unescape(box)) for box in dict.fromkeys(boxes)
-                              if OBJECT in box]
-              problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
-              tags = list(re.finditer(r"<([A-Za-z][\w-]*)([^>]*)>", page))
-              if not problem and any(own_direction(t.group(2)) not in (None, "auto")
-                                     or (own_direction(t.group(2)) and t.group(1).lower() not in DIRECTED)
-                                     for t in tags):
-                  problem = "sets its own text direction"
-              # Each block GitHub marks dir="auto" takes its direction from the
-              # first strong letter of its own text, line breaks included; as
-              # in the browser, a nested element with its own dir (a nested
-              # list, a quoted paragraph) is skipped and judged on its own. An
-              # image's alt text, drawn in place when the image does not load,
-              # takes no part in the direction (a block of images alone is left
-              # to right) but is placed by it, so Latin in it counts as Latin
-              # in a right-to-left block.
-              for m in (t for t in tags if own_direction(t.group(2)) == "auto"):
-                  stack, parts, alts, last = [], [], [], m.start()
-                  for t in re.finditer(r"<(/?)([A-Za-z][\w-]*)([^>]*)>", page[m.start():]):
-                      at = m.start() + t.start()
-                      if stack and not any(own for _, own in stack[1:]):
-                          parts.append(page[last:at])
-                          alts.append(attribute(t.group(3), "alt") or "")
-                      parts.append(" ")
-                      last = m.start() + t.end()
-                      closing, tag, inside = t.group(1), t.group(2).lower(), t.group(3)
-                      if closing and any(name == tag for name, _ in stack):
-                          while stack.pop()[0] != tag:
-                              pass
-                          if not stack:
-                              break
-                      elif not closing and tag not in VOID:
-                          stack.append((tag, bool(stack) and own_direction(inside) is not None))
-                  block = html.unescape("".join(parts)).replace("\n", " ")
-                  if any(unicodedata.bidirectional(c) in ("L", "R", "AL") for c in block):
-                      block += " " + html.unescape(" ".join(alts)).replace("\n", " ")
-                  if mixed_direction(block) and not problem:
-                      problem = "lays out a right-to-left block holding Latin words, whose order differs"
-              if count > MOST_DETAILS and not problem:
-                  problem = f"holds more than {MOST_DETAILS} collapsible sections"
-              odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
-              if odd and not problem:
-                  problem = f"holds HTML the check cannot lay out (<{odd[0]}>)"
-              loose = sorted(attribute_names(page) - ATTRIBUTES)
-              if loose and not problem:
-                  problem = f"holds an HTML attribute the check cannot lay out ({loose[0]})"
-              return shown_texts, problem
-
-          def emoji_list():
-              """GitHub's own emoji list: each shortcode's characters, or
-              nothing for a custom one (such as :octocat:, an image)."""
-              request = urllib.request.Request(
-                  "https://api.github.com/emojis",
-                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-                           "Accept": "application/vnd.github+json"})
-              with urllib.request.urlopen(request, timeout=60) as reply:
-                  table = json.load(reply)
-              emoji = {}
-              for name, url in table.items():
-                  code = re.search(r"/unicode/([0-9a-f-]+)\.png", url)
-                  emoji[name] = "".join(chr(int(part, 16)) for part in
-                                        code.group(1).split("-")) if code else ""
-              return emoji
-
-          # Titles and commit messages show every shortcode as its emoji,
-          # and some draw letters (:a: and :o2: as A and O).
-          EMOJI = emoji_list()
-          # Known names only, as GitHub matches them (":zz:robot:" shows the
-          # robot), longest first.
-          SHORTCODE = re.compile(":(" + "|".join(map(re.escape, sorted(EMOJI, key=len, reverse=True)))
-                                 + "):")
-
-          def emojified(text):
-              """The text with each known shortcode as its emoji."""
-              return SHORTCODE.sub(lambda m: EMOJI[m.group(1)], text)
-
-          def shown(text, is_markdown):
-              """The plain views of a text, its look-alike readings, and what
-              in it cannot be read plainly. Plain views: as written and
-              folded, with every shortcode as its emoji, and for Markdown as
-              GitHub's renderer shows it, folded; plain text (a title or a
-              commit message) also without backticks, as GitHub shows its
-              code spans. Readings: each with look-alike letters read
-              as Latin, then also through the ASCII look-alike pairs (twins)."""
-              views = [text, fold(text), fold(emojified(text))]
-              problem = None
-              if is_markdown and text.strip():
-                  rendered, problem = render(text)
-                  views += [form for view in rendered for form in (view, fold(view))]
-              elif not is_markdown:
-                  code = text.replace("`", "")
-                  views += [code, fold(code)]
-                  code = emojified(text).replace("`", "")
-                  views += [code, fold(code)]
-              return views, readings(views), problem
-
-          # Direction classes the shown-order view leaves out: the explicit
-          # marks (refused elsewhere) and the boundary neutrals, which draw
-          # nothing.
-          UNORDERED = {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI", "BN"}
-
-          # An image in a line, as visual() takes it: one neutral piece, its
-          # alt text between these two marks.
-          OBJECT, OBJECT_END = "\ufffc", "\ufffb"
-
-          def visual(text):
-              """The text in shown order, each line as a left-to-right paragraph
-              draws it."""
-              text = "\n".join(map(visual_line, text.split("\n")))
-              return text.replace(OBJECT, "").replace(OBJECT_END, "")
-
-          def bidi_class(piece):
-              """A character's direction class; an image's piece is a neutral."""
-              return "ON" if len(piece) > 1 else unicodedata.bidirectional(piece)
-
-          def visual_line(line):
-              """A line reordered as Unicode's bidirectional algorithm (UAX #9)
-              draws a left-to-right paragraph with no explicit marks: rules
-              W1 to W7, N1 and N2 resolve each character's direction, I1 and
-              L1 its level, and L2 reverses each run from the highest level
-              down. Spaces and punctuation between two right-to-left letters
-              join them, and digits after an Arabic letter draw to its left."""
-              pieces = re.findall(OBJECT + "[^" + OBJECT + OBJECT_END + "]*" + OBJECT_END + "|.", line, re.S)
-              chars = [c for c in pieces if bidi_class(c) not in UNORDERED]
-              kinds = [bidi_class(c) for c in chars]
-              n, strong = len(kinds), "L"
-              for i in range(n):
-                  if kinds[i] == "NSM":
-                      kinds[i] = kinds[i - 1] if i else "L"
-                  if kinds[i] in ("L", "R", "AL"):
-                      strong = kinds[i]
-                  elif kinds[i] == "EN" and strong == "AL":
-                      kinds[i] = "AN"
-              kinds = ["R" if kind == "AL" else kind for kind in kinds]
-              for i in range(1, n - 1):
-                  if ((kinds[i] == "ES" and kinds[i - 1] == kinds[i + 1] == "EN")
-                          or (kinds[i] == "CS" and kinds[i - 1] == kinds[i + 1] in ("EN", "AN"))):
-                      kinds[i] = kinds[i - 1]
-              i = 0
-              while i < n:
-                  j = i
-                  while j < n and kinds[j] == "ET":
-                      j += 1
-                  if j > i and ((i and kinds[i - 1] == "EN") or (j < n and kinds[j] == "EN")):
-                      kinds[i:j] = ["EN"] * (j - i)
-                  i = max(j, i + 1)
-              kinds = ["ON" if kind in ("ES", "ET", "CS") else kind for kind in kinds]
-              strong = "L"
-              for i in range(n):
-                  if kinds[i] in ("L", "R"):
-                      strong = kinds[i]
-                  elif kinds[i] == "EN" and strong == "L":
-                      kinds[i] = "L"
-              side = lambda kind: "L" if kind == "L" else "R"
-              i = 0
-              while i < n:
-                  j = i
-                  while j < n and kinds[j] in ("B", "S", "WS", "ON"):
-                      j += 1
-                  if j > i:
-                      before = side(kinds[i - 1]) if i else "L"
-                      after = side(kinds[j]) if j < n else "L"
-                      kinds[i:j] = [before if before == after else "L"] * (j - i)
-                  i = max(j, i + 1)
-              levels = [{"L": 0, "R": 1}.get(kind, 2) for kind in kinds]
-              kinds = [bidi_class(c) for c in chars]
-              trailing = True
-              for i in reversed(range(n)):
-                  if kinds[i] in ("B", "S"):
-                      levels[i], trailing = 0, True
-                  elif kinds[i] == "WS" and trailing:
-                      levels[i] = 0
-                  else:
-                      trailing = False
-              for level in range(max(levels, default=0), 0, -1):
-                  i = 0
-                  while i < n:
-                      if levels[i] >= level:
-                          j = i
-                          while j < n and levels[j] >= level:
-                              j += 1
-                          chars[i:j], levels[i:j] = chars[i:j][::-1], levels[i:j][::-1]
-                          i = j
-                      else:
-                          i += 1
-              return "".join(visual_line(c[1:-1]) if len(c) > 1 else c for c in chars)
-
-          def unjoined(text):
-              """The text without the shared letters outside modern use (a low
-              macron drawn as an underscore, a tone mark), which pass beside
-              other scripts' letters and could join look-alikes of Latin ones."""
-              return "".join(c for c in text
-                             if not (unicodedata.category(c).startswith("L") and ord(c) not in MODERN
-                                     and SCRIPT.get(ord(c)) in ("Common", "Inherited")))
-
-          def readings(views):
-              """Each view, and each in shown order where right-to-left runs
-              draw reversed (as is and folded), and each without shared letters
-              outside modern use, with look-alike letters read as Latin, then also
-              through the ASCII look-alike pairs (twins)."""
-              shown = [order for view in views for order in (visual(view), fold(visual(view)))]
-              views = views + [order for order in dict.fromkeys(shown) if order not in views]
-              views += [joined for joined in dict.fromkeys(map(unjoined, views)) if joined not in views]
-              looks = [view.translate(LOOKALIKE) for view in views]
-              return looks + [twin for view in looks for twin in twins(view)]
-
-          def listed_names(text):
-              """The name and address of each co-author trailer in the text that
-              names a listed identity exactly."""
-              parts = []
-              for m in TRAILER.finditer(text):
-                  ident = m.group(1).strip()
-                  if ident in KNOWN:
-                      name, _, address = ident.partition(" <")
-                      parts += [name, "<" + address, address.rstrip(">")]
-              return [part for part in parts if part]
-
-          def credited(views, text):
-              """The views with each listed co-author's name and address, where
-              they follow that trailer's "Co-authored-by:", read as a neutral
-              placeholder: the list judges people, never their names (a listed
-              "Ai Tanaka" passes). Nowhere else is a name taken out. Taken
-              from the plain views, as written and folded, before the
-              look-alike readings, which would rewrite it ("Al" as "AI")."""
-              for ident in {m.group(1).strip() for m in TRAILER.finditer(text)} & KNOWN:
-                  name, _, address = ident.partition(" <")
-                  address = address.rstrip(">")
-                  for name, address in {(name, address), (fold(name), fold(address))}:
-                      # The whole trailer line only, as TRAILER reads it.
-                      person = re.compile(r"^([ \t]*co-authored-by:[ \t]*)" + re.escape(name)
-                                          + r"[ \t]*<?" + re.escape(address) + r">?(?=[ \t\r]*$)",
-                                          re.I | re.M)
-                      views = [person.sub(r"\1a listed contributor", view) for view in views]
-              return views
-
-          def loose(ident):
-              """An identity with its angle brackets and spacing evened out: a
-              shown address loses its brackets to the link around it."""
-              return " ".join(re.sub("[<>]", " ", ident).split())
-
-          def masked(views, names):
-              """The views with listed people's names and addresses blanked, for
-              the readability judgements only: the list judges people, so a
-              listed name in another script (an Arabic name beside a Latin
-              email) never fails them. The scan and the renderer read the
-              text whole, as GitHub does."""
-              for name in sorted(names, key=len, reverse=True):
-                  views = [view.replace(name, " ") for view in views]
-              return views
+          def masked(text):
+              """The text with each listed co-author's identity, after the
+              exact trailer key, read as a neutral placeholder: the list
+              judges people, never their names (a listed "Ai Tanaka" passes)."""
+              return TRAILER.sub(lambda m: m.group(1) + ("a listed contributor" if m.group(2) in KNOWN
+                                                         else m.group(2)), text)
 
           hits = []
-          # GitHub shows a title as plain text with its code spans and
-          # emoji drawn, never as Markdown.
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), False),
                    ("the PR body", os.environ.get("PR_BODY", ""), True)]
           # The merge commit's message, whole: its title names the head as
           # "owner/branch" (for a fork, the owner is the contributor's
-          # login; the label is "owner:branch", and neither half can hold a
-          # colon), and the PR title follows it.
+          # login), and the PR title follows it.
           head = os.environ.get("HEAD_LABEL", "").replace(":", "/", 1)
-          merge = (f"Merge pull request #{os.environ.get('PR_NUMBER', '')} from {head}\n\n"
-                   f"{os.environ.get('PR_TITLE', '')}")
-          branch = [("the merge commit's message", merge, False)]
-          texts += branch
+          texts.append(("the merge commit's message",
+                        f"Merge pull request #{os.environ.get('PR_NUMBER', '')} from {head}\n\n"
+                        f"{os.environ.get('PR_TITLE', '')}", False))
           # Each commit the PR adds: what its base already holds is not its own.
-          # Its people face the list; a listed identity is the maintainer's call.
-          span = f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"
-          for sha in git("rev-list", span).decode().split():
+          messages = []
+          for sha in git("rev-list", f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}").decode().split():
               author, committer, message = read_commit(sha)
               people = [("author", author), ("committer", committer)]
               people += [("co-author", ident) for ident in CO_AUTHOR.findall(message)]
@@ -917,59 +248,35 @@ jobs:
                       hits.append(f"commit {sha[:7]}'s {role} '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
               texts.append((f"commit {sha[:7]}'s message", message, False))
+              messages.append(message)
           # A squash merge joins the messages into one, oldest first, each as
           # a "* " bullet; rev-list lists them newest first.
-          messages = [text for where, text, _ in texts if where.endswith("'s message")
-                      and where.startswith("commit ")]
           if len(messages) > 1:
-              squash = "\n\n".join("* " + message for message in reversed(messages))
-              texts.append(("the commit messages joined", squash, False))
+              texts.append(("the commit messages joined",
+                            "\n\n".join("* " + message for message in reversed(messages)), False))
 
           for where, text, is_markdown in texts:
-              plain, looks, problem = shown(text, is_markdown)
-              # The title becomes the merge commit's message, and an edited
-              # merge message can carry the body: their co-authors face the
-              # list, as written and as shown (an entity, escape or emphasis
-              # can write the key). Only a line with an email address credits
-              # an account; prose about the key ("`Co-authored-by:` lines are
-              # checked", "@owner" included) is left to the scan. Folded views are skipped:
-              # folding drops a listed name's accents.
+              text = masked(text)
+              odd = foreign(text) or foreign(html.unescape(text))
+              if odd:
+                  hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside the characters this "
+                              "repository accepts (English text, common punctuation, arrows, box lines "
+                              "and emoji)")
+                  continue
+              if is_markdown and DIRECTION.search(text):
+                  hits.append(f"{where} sets a text direction by hand in HTML, which can reorder it")
+                  continue
+              read = views(text, is_markdown)
+              # The title and body become merge messages, so a co-author line
+              # in them faces the list too; only one with an email address
+              # credits an account.
               if where.startswith("the PR "):
-                  for ident in sorted({loose(ident) for view in plain[0:1] + plain[3::2]
-                                       for ident in CO_AUTHOR.findall(view)
-                                       if re.search(r"[^\s@<>]@[^\s@<>]+\.[^\s@<>]", ident)}
-                                      - {loose(ident) for ident in KNOWN}):
+                  for ident in sorted({ident for view in read for ident in CO_AUTHOR.findall(view)
+                                       if EMAIL.search(ident) and unlisted(ident)}):
                       hits.append(f"{where}'s co-author '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
-              # Judged on the plain views, never the look-alike readings (which
-              # mix alphabets by design): an entity can spell what the raw text
-              # lacks. Mixing is judged before folding, which turns the micro
-              # sign (Common) into a Greek letter.
-              judged = masked(plain, listed_names(text))
-              rendered_body = is_markdown and len(judged) > 3
-              word = next(filter(None, map(mixed_alphabets, judged[0:1] + judged[3:4])), None)
-              letter = next(filter(None, map(odd_letter, judged)), None)
-              if word:
-                  problem = f"mixes alphabets in '{word}'"
-              elif letter:
-                  problem = f"uses '{letter}' (U+{ord(letter):04X}), a letter outside modern use"
-              elif any(map(unknown, judged)):
-                  problem = "holds characters the runner's Unicode does not know"
-              # A body's Markdown source is never shown, only its rendering,
-              # whose direction render() judges per block on the page itself.
-              elif not rendered_body and any(map(mixed_direction, judged)):
-                  problem = "mixes right-to-left and left-to-right letters, whose display order differs"
-              elif any(OVERRIDES.search(view) for view in judged):
-                  problem = "holds direction marks that reorder its letters"
-              elif any(CONTROLS.search(view) for view in (judged[3:] if rendered_body else judged)):
-                  problem = "holds control characters, some of which draw as a blank"
-              if problem:
-                  hits.append(f"{where} {problem}, so it cannot be checked")
-                  continue
-              credit = credited(plain, text)
-              for view in credit + readings(credit):
-                  hit = (hook.ATTRIBUTION.search(view)
-                         or hook.ATTRIBUTION.search(hook.strip_paths(view)))
+              for view in read + [twin for view in read for twin in twins(view)]:
+                  hit = hook.ATTRIBUTION.search(view) or hook.ATTRIBUTION.search(hook.strip_paths(view))
                   if hit:
                       hits.append(f"AI attribution in {where}: '{hit.group(0).strip()}'")
                       break
@@ -977,9 +284,10 @@ jobs:
               print(f"::error::{line}")
           if hits:
               print("Commits, PRs, issues, comments and releases belong to the maintainer: remove the "
-                    "attribution (reword the commits, edit the title or body) and push again. A new "
-                    "contributor's own identity is added to .github/attribution-identities.txt by the "
-                    "maintainer, once they have read the pull request.")
+                    "attribution or the unaccepted characters (reword the commits, edit the title or "
+                    "body) and push again. A new contributor's own identity is added to "
+                    ".github/attribution-identities.txt by the maintainer, once they have read the "
+                    "pull request.")
               sys.exit(1)
           print(f"No AI attribution in {len(texts)} texts.")
           EOF
