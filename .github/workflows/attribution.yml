@@ -365,7 +365,7 @@ jobs:
                         "data-octo-click", "data-octo-dimensions", "data-paste-markdown-skip",
                         "data-permission-text", "data-pjax", "data-tab-size", "itemprop",
                         "data-snippet-clipboard-copy-content", "data-url", "dir", "disabled",
-                        "height", "href", "id", "is", "media", "muted", "name", "open", "playsinline",
+                        "height", "href", "id", "is", "lang", "media", "muted", "name", "open", "playsinline",
                         "poster", "rel", "role", "src", "srcset", "start", "style", "tabindex",
                         "target", "title", "type", "version",
                         "viewbox", "width"}
