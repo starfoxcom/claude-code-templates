@@ -463,14 +463,19 @@ jobs:
           # drawn as one piece, ordered by the line around it).
           DIRECTED = {"p", "div", "ul", "ol", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote"}
 
-          def own_direction(inside):
-              """The value of a tag's dir attribute, lowercased, or None. Only an
+          def attribute(inside, wanted):
+              """The value of a tag's attribute by name, or None. Only an
               attribute name counts: a "dir=" inside another attribute's
               quoted value (a link's "?dir=desc") is not one."""
               for name, value in re.findall(r'([\w:.-]+)(?:\s*=\s*("[^"]*"|\'[^\']*\'|[^\s"\'>]*))?', inside):
-                  if name.lower() == "dir":
-                      return value.strip("\"'").lower()
+                  if name.lower() == wanted:
+                      return value.strip("\"'")
               return None
+
+          def own_direction(inside):
+              """The value of a tag's dir attribute, lowercased, or None."""
+              value = attribute(inside, "dir")
+              return None if value is None else value.lower()
 
           VOID = {"area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"}
 
@@ -612,13 +617,17 @@ jobs:
               # Each block GitHub marks dir="auto" takes its direction from the
               # first strong letter of its own text, line breaks included; as
               # in the browser, a nested element with its own dir (a nested
-              # list, a quoted paragraph) is skipped and judged on its own.
+              # list, a quoted paragraph) is skipped and judged on its own. An
+              # image's alt text, drawn in place when the image does not load,
+              # takes no part in the direction but is placed by it, so Latin
+              # in it counts as Latin in the block.
               for m in (t for t in tags if own_direction(t.group(2)) == "auto"):
-                  stack, parts, last = [], [], m.start()
+                  stack, parts, alts, last = [], [], [], m.start()
                   for t in re.finditer(r"<(/?)([A-Za-z][\w-]*)([^>]*)>", page[m.start():]):
                       at = m.start() + t.start()
                       if stack and not any(own for _, own in stack[1:]):
                           parts.append(page[last:at])
+                          alts.append(attribute(t.group(3), "alt") or "")
                       parts.append(" ")
                       last = m.start() + t.end()
                       closing, tag, inside = t.group(1), t.group(2).lower(), t.group(3)
@@ -629,7 +638,7 @@ jobs:
                               break
                       elif not closing and tag not in VOID:
                           stack.append((tag, bool(stack) and own_direction(inside) is not None))
-                  block = html.unescape("".join(parts)).replace("\n", " ")
+                  block = html.unescape("".join(parts) + " " + " ".join(alts)).replace("\n", " ")
                   if mixed_direction(block) and not problem:
                       problem = "lays out a right-to-left block holding Latin words, whose order differs"
               if count > MOST_DETAILS and not problem:
