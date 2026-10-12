@@ -99,7 +99,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_LABEL: ${{ github.event.pull_request.head.label }}
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'EOF'
@@ -273,8 +273,11 @@ jobs:
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
                    ("the PR body", os.environ.get("PR_BODY", ""), True)]
-          # The merge commit's title names the branch.
-          branch = [("the branch name", os.environ.get("HEAD_REF", ""), False)]
+          # The merge commit's title names the head as "owner/branch"; for a
+          # fork, the owner is the contributor's login. The label is
+          # "owner:branch", and neither half can hold a colon.
+          branch = [("the head owner and branch",
+                     os.environ.get("HEAD_LABEL", "").replace(":", "/", 1), False)]
           # The title becomes the merge commit's message, and an edited
           # merge message can carry the body: their co-authors face the list.
           for where, text, _ in texts:
