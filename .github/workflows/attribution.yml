@@ -55,7 +55,9 @@ jobs:
   attribution:
     name: No AI attribution
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # A large body with many details blocks and images is read in every
+    # state; a release range takes under a minute.
+    timeout-minutes: 10
     steps:
       # The base branch, never the PR's head.
       - uses: actions/checkout@v6
@@ -451,11 +453,12 @@ jobs:
 
           def collapsed(page, opened):
               """The page with each details block, in page order, open or
-              closed as `opened` says: a closed one's content after its
-              summary dropped."""
+              closed as `opened` says: a closed one's content after its own
+              summary dropped (a summary nested in it is part of it)."""
+              # Each frame: open, hiding, summary depth, summary done.
               frames, parts, last, seen = [], [], 0, 0
               for m in re.finditer(r"<(/?)(details|summary)\b([^>]*)>", page):
-                  if not any(hiding for _, hiding in frames):
+                  if not any(frame[1] for frame in frames):
                       parts.append(page[last:m.start()])
                   parts.append(m.group(0))
                   last = m.end()
@@ -463,11 +466,14 @@ jobs:
                   if tag == "details" and closing:
                       frames = frames[:-1]
                   elif tag == "details":
-                      frames.append([opened[seen], False])
+                      frames.append([opened[seen], False, 0, False])
                       seen += 1
-                  elif closing and frames:
-                      frames[-1][1] = not frames[-1][0]
-              if not any(hiding for _, hiding in frames):
+                  elif frames and not frames[-1][3]:
+                      frame = frames[-1]
+                      frame[2] += -1 if closing else 1
+                      if closing and frame[2] <= 0:
+                          frame[1], frame[3] = not frame[0], True
+              if not any(frame[1] for frame in frames):
                   parts.append(page[last:])
               return "".join(parts)
 
@@ -557,10 +563,14 @@ jobs:
           # Titles and commit messages show every shortcode as its emoji,
           # and some draw letters (:a: and :o2: as A and O).
           EMOJI = emoji_list()
+          # Known names only, as GitHub matches them (":zz:robot:" shows the
+          # robot), longest first.
+          SHORTCODE = re.compile(":(" + "|".join(map(re.escape, sorted(EMOJI, key=len, reverse=True)))
+                                 + "):")
 
           def emojified(text):
               """The text with each known shortcode as its emoji."""
-              return re.sub(r":([\w+-]+):", lambda m: EMOJI.get(m.group(1), m.group(0)), text)
+              return SHORTCODE.sub(lambda m: EMOJI[m.group(1)], text)
 
           def shown(text, is_markdown):
               """The plain views of a text, its look-alike readings, and what
@@ -576,6 +586,8 @@ jobs:
                   rendered, problem = render(text)
                   views += [form for view in rendered for form in (view, fold(view))]
               elif not is_markdown:
+                  code = text.replace("`", "")
+                  views += [code, fold(code)]
                   code = emojified(text).replace("`", "")
                   views += [code, fold(code)]
               return views, readings(views), problem
