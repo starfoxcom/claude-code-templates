@@ -7,14 +7,16 @@ name: Attribution
 # - one of its commits' messages, its title or its body carries AI
 #   attribution, as the shipped hook's own patterns read it: an AI
 #   Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
-#   session link or the robot emoji. Each text is read as written, with its
-#   HTML entities decoded, and with its Markdown and HTML markup taken out.
+#   session link or the robot emoji. Each text is read as written and the
+#   body also as GitHub renders it; accepted symbols Unicode lists as ASCII
+#   look-alikes are read as ASCII, and the patterns also match Unicode's
+#   ASCII look-alike pairs (I, l, 1 and |; O and 0; m and rn).
 # - one of those texts uses a character outside the ones this repository
-#   accepts: English text (printable ASCII), common punctuation, arrows, box
-#   lines and emoji. The project is written in English; an allow-list keeps
-#   look-alike letters from other alphabets, invisible characters and
-#   direction marks out without chasing each one (curl keeps its sources the
-#   same way).
+#   accepts: English text (printable ASCII), common symbols and punctuation,
+#   arrows, box lines and emoji. The project is written in English; an
+#   allow-list keeps look-alike letters from other alphabets, invisible
+#   characters and direction marks out without chasing each one (curl keeps
+#   its sources the same way). A direction set by hand in HTML fails too.
 # - a commit's author, committer or co-author is not listed in
 #   `.github/attribution-identities.txt`: an AI account fails whatever its
 #   name, with no list of AI names to keep current.
@@ -81,6 +83,13 @@ jobs:
           git show origin/develop:_core/global-template/hooks/no-ai-attribution.py > "$RUNNER_TEMP/attribution_hook.py"
           git show origin/main:.github/attribution-identities.txt > "$RUNNER_TEMP/attribution-identities.txt"
 
+      # Unicode's look-alike table (UTS #39), pinned to 17.0.0 by checksum.
+      - name: Fetch the Unicode look-alike table
+        run: |
+          mkdir -p "$RUNNER_TEMP/ucd"
+          curl -sSfL -o "$RUNNER_TEMP/ucd/confusables.txt" https://www.unicode.org/Public/17.0.0/security/confusables.txt
+          echo "091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a  $RUNNER_TEMP/ucd/confusables.txt" | sha256sum -c -
+
       # The PR's text reaches the script through the environment, never the
       # script's own text, so a title or body cannot run as code.
       - name: Scan the commits, title and body
@@ -91,9 +100,11 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           HEAD_LABEL: ${{ github.event.pull_request.head.label }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'EOF'
-          import html, importlib.util, os, re, subprocess, sys, urllib.parse
+          import importlib.util, json, os, re, subprocess, sys, unicodedata, urllib.parse, urllib.request
+          from html.parser import HTMLParser
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
@@ -136,33 +147,105 @@ jobs:
               KNOWN = {line.strip() for line in listed if line.strip() and not line.startswith("#")}
           CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*\r?$", re.I | re.M)
           TRAILER = re.compile(r"^([ \t]*co-authored-by:[ \t]*)(.*?)[ \t]*\r?$", re.I | re.M)
-          # A direction set by hand in HTML can swap two pieces of a line.
-          DIRECTION = re.compile(r"<[A-Za-z][^>]*\sdir\s*=", re.I)
           EMAIL = re.compile(r"[^\s@<>]@[^\s@<>]+\.[^\s@<>]")
 
           # The characters a text may use: printable ASCII with tabs and line
-          # ends, and symbols that draw as no letter. Those Unicode's look-alike
-          # table (UTS #39 confusables.txt) files under ASCII are also read as
-          # it (AS_ASCII).
-          ACCEPTED = [(0x20, 0x7E), (0xA7, 0xA7), (0xA9, 0xA9), (0xAE, 0xAE), (0xB0, 0xB0), (0xB7, 0xB7),
-                      (0xD7, 0xD7), (0x2013, 0x2014), (0x2018, 0x2019), (0x201C, 0x201D), (0x2022, 0x2022),
-                      (0x2026, 0x2026), (0x2122, 0x2122), (0x2190, 0x21FF), (0x2248, 0x2248), (0x2260, 0x2260),
-                      (0x2264, 0x2265), (0x23E9, 0x23FA), (0x2500, 0x257F), (0x25A0, 0x25FF), (0x2600, 0x27BF),
-                      (0x1F300, 0x1F64F), (0x1F680, 0x1F6FF), (0x1F7E0, 0x1F7EB), (0x1F900, 0x1F9FF),
-                      (0x1FA70, 0x1FAFF)]
-          # Emoji joiners and the emoji presentation selector: accepted, and
-          # dropped when reading, since they draw nothing between letters.
-          JOINERS = {0x200D: None, 0xFE0F: None}
-          AS_ASCII = {0xD7: "x", 0x2013: "-", 0x2018: "'", 0x2019: "'", 0x201C: "''", 0x201D: "''",
-                      0x2026: "...", 0x2571: "/", 0x2573: "X", 0x2768: "(", 0x2769: ")", 0x276E: "<",
-                      0x276F: ">", 0x2772: "(", 0x2773: ")", 0x2774: "{", 0x2775: "}", 0x2795: "+",
-                      0x2796: "-"}
-          # GitHub's shortcodes for the robot and for emoji drawn as letters.
+          # ends, and common symbols, punctuation, arrows, box lines and
+          # emoji. Left out: letters of other alphabets, invisible and
+          # direction characters, the soft hyphen and the broken bar.
+          ACCEPTED = [(0x20, 0x7E), (0xA0, 0xA5), (0xA7, 0xAC), (0xAE, 0xBF), (0xD7, 0xD7), (0xF7, 0xF7),
+                      (0x2010, 0x2027), (0x2030, 0x205E), (0x20A0, 0x20C0), (0x2100, 0x218B),
+                      (0x2190, 0x23FF), (0x2460, 0x27BF), (0x2900, 0x297F), (0x2B00, 0x2BFF),
+                      (0x3030, 0x3030), (0x303D, 0x303D), (0x3297, 0x3297), (0x3299, 0x3299),
+                      (0x1F000, 0x1FAFF)]
+          # Emoji joiners, the emoji presentation selector and the keycap
+          # mark: accepted, and dropped when reading, as they draw nothing
+          # between letters.
+          JOINERS = {0x200D: None, 0xFE0F: None, 0x20E3: None}
+
+          # Each accepted symbol that reads as ASCII: as the letter its name
+          # spells (circled, parenthesized, regional indicator and squared
+          # letters, "SQUARED CL"), as Unicode's look-alike table files it,
+          # or as its compatibility form ("1/2" for one half).
+          CONFUSABLE = {}
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "ucd", "confusables.txt"), encoding="utf-8-sig") as table:
+              for line in table:
+                  fields = [field.strip() for field in line.split("#", 1)[0].split(";")]
+                  if len(fields) > 1:
+                      CONFUSABLE[int(fields[0], 16)] = "".join(chr(int(code, 16)) for code in fields[1].split())
+
+          def as_ascii(c):
+              name = unicodedata.name(c, "")
+              letter = re.search(r"(?:LATIN (?:CAPITAL |SMALL )?LETTER|REGIONAL INDICATOR SYMBOL LETTER) ([A-Z])$", name)
+              if letter:
+                  return letter.group(1) if "SMALL" not in name else letter.group(1).lower()
+              squared = re.fullmatch(r"(?:NEGATIVE )?SQUARED ([A-Z]+)", name)
+              if squared:
+                  return squared.group(1)
+              target = CONFUSABLE.get(ord(c))
+              if target and target.isascii():
+                  return target
+              folded = unicodedata.normalize("NFKC", c)
+              return folded if folded.isascii() and folded.strip() else None
+
+          AS_ASCII = {code: read for first, last in ACCEPTED if first > 0x7E
+                      for code in range(first, last + 1) if (read := as_ascii(chr(code)))}
+          AS_ASCII.update({0xA0: " "})
+          # GitHub's shortcodes for the robot and for emoji drawn as letters,
+          # in a title or commit message (a body is read as rendered).
           SHORTCODES = {":robot:": "\U0001F916", ":a:": "A", ":b:": "B", ":o:": "O", ":o2:": "O",
                         ":m:": "M", ":x:": "X", ":heavy_multiplication_x:": "x", ":ab:": "AB",
                         ":cl:": "CL", ":cool:": "COOL", ":free:": "FREE", ":id:": "ID", ":new:": "NEW",
                         ":ng:": "NG", ":ok:": "OK", ":parking:": "P", ":sos:": "SOS", ":up:": "UP",
                         ":vs:": "VS", ":tm:": "TM", ":information_source:": "i"}
+
+          def loosened(pattern):
+              """The hook's pattern with each literal i or l also matching I,
+              l, 1 and |, o matching 0, and m matching rn: Unicode's ASCII
+              look-alike pairs, letter by letter (UTS #39 skeletons)."""
+              out, i, in_class = [], 0, False
+              while i < len(pattern):
+                  c = pattern[i]
+                  if c == "\\":
+                      kind = pattern[i + 1]
+                      size = {"x": 4, "u": 6, "U": 10}.get(kind, 2)
+                      if kind == "N":
+                          size = pattern.index("}", i) - i + 1
+                      out.append(pattern[i:i + size])
+                      i += size
+                  elif in_class:
+                      in_class = c != "]"
+                      out.append(c)
+                      i += 1
+                  elif c == "[":
+                      start = i + 1 + (pattern[i + 1:i + 2] == "^")
+                      start += pattern[start:start + 1] == "]"
+                      out.append(pattern[i:start])
+                      in_class, i = True, start
+                  elif c == "(" and pattern[i + 1:i + 2] == "?":
+                      j = i + 2
+                      if pattern[j:j + 2] == "P<":
+                          j = pattern.index(">", j) + 1
+                      elif pattern[j:j + 2] in ("<=", "<!"):
+                          j += 2
+                      else:
+                          while pattern[j] in "aiLmsux-":
+                              j += 1
+                          j += pattern[j] in ":=!)"
+                      out.append(pattern[i:j])
+                      i = j
+                  elif c == "{" and re.match(r"\{\d*,?\d*\}", pattern[i:]):
+                      size = re.match(r"\{\d*,?\d*\}", pattern[i:]).end()
+                      out.append(pattern[i:i + size])
+                      i += size
+                  else:
+                      lower = c.lower()
+                      out.append("[il1|]" if lower in "il" else "[o0]" if lower == "o"
+                                 else "(?:m|rn)" if lower == "m" else c)
+                      i += 1
+              return "".join(out)
+
+          LOOSE = re.compile(loosened(hook.ATTRIBUTION.pattern), hook.ATTRIBUTION.flags)
 
           def foreign(text):
               """The first character outside the accepted ones, if any."""
@@ -172,53 +255,67 @@ jobs:
                       return c
               return None
 
-          def unmarked(text, marks="*_~`\\[]"):
-              """Markdown and HTML as a reader sees them: comments gone, a link
-              or image as its text, an HTML image as its alt text, other tags
-              and the marks given gone."""
-              text = re.sub(r"<!--.*?(?:-->|$)", "", text, flags=re.S)
-              text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)
-              text = re.sub(r"\]\[[^\]]*\]", "]", text)
-              text = re.sub(r"<img\b[^>]*?\balt=\"([^\"]*)\"[^>]*>", r"\1", text, flags=re.I)
-              text = re.sub(r"</?[A-Za-z][\w-]*(?:\s[^>]*)?/?>", "", text)
-              return text.translate({ord(c): None for c in marks})
+          # Tags a browser draws on their own line, and tags that strike text.
+          BLOCKS = {"address", "article", "aside", "blockquote", "br", "dd", "details", "div", "dl", "dt",
+                    "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr",
+                    "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td",
+                    "tfoot", "th", "thead", "tr", "ul"}
+          STRUCK = {"del", "s", "strike"}
 
-          def unstruck(text):
-              """The text without struck-out words, which a reader skips."""
-              text = re.sub(r"~~.*?~~", "", text, flags=re.S)
-              return re.sub(r"<(del|s|strike)\b[^>]*>.*?</\1>", "", text, flags=re.S | re.I)
+          class Page(HTMLParser):
+              """GitHub's rendered body as text: every text node, each image's
+              alt text in its place, block tags as line ends, a superscript
+              or subscript (a footnote mark) set apart; once whole and once
+              without struck text. Keeps the link and image addresses, and
+              notes a direction set by hand."""
+              def __init__(self):
+                  super().__init__(convert_charrefs=True)
+                  self.whole, self.unstruck, self.struck, self.direction = [], [], 0, None
+                  self.addresses = []
 
-          def views(text, is_markdown):
-              """The text as written, with its entities and its link addresses
-              decoded, and without its markup (a title only loses its code
-              spans), each with emoji joiners dropped and GitHub's shortcodes
-              drawn."""
-              decoded = html.unescape(text)
-              forms = [text, decoded, urllib.parse.unquote(decoded)]
-              if is_markdown:
-                  forms += [unmarked(decoded), unmarked(decoded, "*~`\\[]"), unmarked(unstruck(decoded))]
-              else:
-                  forms.append(decoded.replace("`", ""))
-              read = []
-              for form in dict.fromkeys(forms):
-                  form = form.translate(JOINERS).translate(AS_ASCII)
-                  for code, drawn in SHORTCODES.items():
-                      form = form.replace(code, drawn)
-                  read.append(form)
-              return list(dict.fromkeys(read))
+              def add(self, text):
+                  self.whole.append(text)
+                  if not self.struck:
+                      self.unstruck.append(text)
 
-          def twins(text):
-              """The text through Unicode's ASCII look-alike pairs: I, 1 and |
-              read as l and the other way round, 0 as O, and rn as m."""
-              common = text.replace("0", "O").replace("rn", "m")
-              return [common.translate(str.maketrans("I1|", "lll")),
-                      common.translate(str.maketrans("l1|", "III"))]
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  if "dir" in attrs and (attrs["dir"] or "").lower() != "auto":
+                      self.direction = attrs["dir"]
+                  if tag in BLOCKS:
+                      self.add("\n")
+                  if tag in ("sup", "sub"):
+                      self.add(" ")
+                  if tag == "img":
+                      self.add(attrs.get("alt") or "")
+                  self.addresses += [attrs[key] for key in ("href", "src") if attrs.get(key)]
+                  if tag in STRUCK:
+                      self.struck += 1
 
-          def unlisted(ident):
-              """Whether a co-author is someone the list does not name, with
-              angle brackets and spacing evened out."""
-              even = lambda s: " ".join(re.sub("[<>]", " ", s).split())
-              return even(ident) not in {even(known) for known in KNOWN}
+              def handle_endtag(self, tag):
+                  if tag in STRUCK and self.struck:
+                      self.struck -= 1
+                  if tag in BLOCKS:
+                      self.add("\n")
+                  if tag in ("sup", "sub"):
+                      self.add(" ")
+
+              def handle_data(self, data):
+                  self.add(data)
+
+          def rendered(text):
+              """The body as GitHub renders it (its own Markdown parser)."""
+              request = urllib.request.Request(
+                  "https://api.github.com/markdown",
+                  data=json.dumps({"text": text, "mode": "gfm",
+                                   "context": os.environ["GITHUB_REPOSITORY"]}).encode(),
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                           "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(request, timeout=60) as reply:
+                  page = Page()
+                  page.feed(reply.read().decode("utf-8"))
+                  page.close()
+              return page
 
           def masked(text):
               """The text with each listed co-author's identity, after the
@@ -226,6 +323,50 @@ jobs:
               judges people, never their names (a listed "Ai Tanaka" passes)."""
               return TRAILER.sub(lambda m: m.group(1) + ("a listed contributor" if m.group(2) in KNOWN
                                                          else m.group(2)), text)
+
+          def judged(text, is_markdown):
+              """Why the text cannot be checked (or None), and its readings:
+              as written (a title or commit message also without code-span
+              backticks, with shortcodes drawn) and, for the body, as
+              rendered, whole and without struck text; each with joiners
+              dropped and accepted symbols read as ASCII; and the body's link
+              and image addresses, decoded."""
+              text = masked(text)
+              forms, addresses = [text], []
+              if is_markdown and text.strip():
+                  page = rendered(text)
+                  addresses = ["\n".join(urllib.parse.unquote(address) for address in page.addresses)]
+                  forms += ["".join(page.whole), "".join(page.unstruck)]
+                  if page.direction:
+                      return f"sets a text direction by hand ({page.direction})", []
+              elif not is_markdown:
+                  forms.append(text.replace("`", ""))
+              for form in forms:
+                  odd = foreign(form)
+                  if odd:
+                      return (f"uses '{odd}' (U+{ord(odd):04X}), outside the characters this repository "
+                              "accepts (English text, common symbols, arrows, box lines and emoji)"), []
+              read = []
+              for form in dict.fromkeys(forms):
+                  if not is_markdown:
+                      for code, drawn in SHORTCODES.items():
+                          form = form.replace(code, drawn)
+                  read.append(form.translate(JOINERS).translate(AS_ASCII))
+              return None, list(dict.fromkeys(read + addresses))
+
+          def unlisted(ident):
+              """Whether a co-author is someone the list does not name, with
+              angle brackets and spacing evened out."""
+              even = lambda s: " ".join(re.sub("[<>]", " ", s).split())
+              return even(ident) not in {even(known) for known in KNOWN}
+
+          def credit(view):
+              """The AI attribution the hook's patterns find in a reading, if any."""
+              for pattern in (hook.ATTRIBUTION, LOOSE):
+                  hit = pattern.search(view) or pattern.search(hook.strip_paths(view))
+                  if hit:
+                      return hit.group(0).strip()
+              return None
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), False),
@@ -256,17 +397,10 @@ jobs:
                             "\n\n".join("* " + message for message in reversed(messages)), False))
 
           for where, text, is_markdown in texts:
-              text = masked(text)
-              odd = foreign(text) or foreign(html.unescape(text))
-              if odd:
-                  hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside the characters this "
-                              "repository accepts (English text, common punctuation, arrows, box lines "
-                              "and emoji)")
+              problem, read = judged(text, is_markdown)
+              if problem:
+                  hits.append(f"{where} {problem}")
                   continue
-              if is_markdown and DIRECTION.search(text):
-                  hits.append(f"{where} sets a text direction by hand in HTML, which can reorder it")
-                  continue
-              read = views(text, is_markdown)
               # The title and body become merge messages, so a co-author line
               # in them faces the list too; only one with an email address
               # credits an account.
@@ -275,11 +409,9 @@ jobs:
                                        if EMAIL.search(ident) and unlisted(ident)}):
                       hits.append(f"{where}'s co-author '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
-              for view in read + [twin for view in read for twin in twins(view)]:
-                  hit = hook.ATTRIBUTION.search(view) or hook.ATTRIBUTION.search(hook.strip_paths(view))
-                  if hit:
-                      hits.append(f"AI attribution in {where}: '{hit.group(0).strip()}'")
-                      break
+              found = next(filter(None, map(credit, read)), None)
+              if found:
+                  hits.append(f"AI attribution in {where}: '{found}'")
           for line in hits:
               print(f"::error::{line}")
           if hits:
