@@ -13,7 +13,10 @@ name: Attribution
 #   `.github/attribution-identities.txt`: an AI account fails whatever its
 #   name, with no list of AI names to keep current.
 # - a commit cannot be read plainly (any encoding but UTF-8, a repeated
-#   author, committer or encoding line).
+#   author, committer or encoding line), or a text cannot: a word mixing
+#   alphabets, direction marks or a direction set by hand, characters newer
+#   than the runner's Unicode, math, ruby text, or diagrams drawn in the
+#   browser.
 #
 # A pull request cannot weaken the check on itself:
 # - `pull_request_target` runs this file as the default branch (`main`)
@@ -100,7 +103,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'EOF'
-          import html, importlib.util, json, os, re, subprocess, sys, unicodedata, urllib.request
+          import html, importlib.util, json, os, re, subprocess, sys, unicodedata
+          import urllib.parse, urllib.request
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
@@ -144,8 +148,16 @@ jobs:
           CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*$", re.I | re.M)
 
           FILLERS = "\u115f\u1160\u2800\u3164\uffa0"
-          # Direction overrides show letters in another order than stored.
-          OVERRIDES = re.compile("[\u202a-\u202e\u2066-\u2069]")
+          # Direction overrides and marks show letters in another order than
+          # stored: a right-to-left mark between letters flips them.
+          OVERRIDES = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+          def unknown(text):
+              """Whether the text holds a code point the runner's Unicode does
+              not know. It is older than the pinned tables, so a mark or
+              letter added since reads as unassigned and is neither dropped
+              nor folded; unassigned invisible ones draw nothing at all."""
+              return any(unicodedata.category(c) == "Cn" for c in text)
 
           def bare(text):
               """Every invisible or combining mark dropped. Decomposed first,
@@ -192,22 +204,40 @@ jobs:
                   # Unicode files I and l under one prototype, "l".
                   upper = chr(source).isupper() and target == "l"
                   LOOKALIKE[source] = "I" if upper else target
+          # Every look-alike of "l" read as "l": a capital I, "|" or "1" in
+          # place of an "l", after LOOKALIKE has read the rest.
+          ELL = {source: "l" for source, _, fields in ucd_rows("confusables.txt")
+                 if fields[0] == "006C"}
 
           def mixed_alphabets(text):
               """A word whose letters come from scripts no language mixes in
               one word (a Cyrillic or Greek letter inside a Latin word), by
-              Unicode's script data."""
+              Unicode's script data. A letter that looks like no ASCII one
+              cannot pose as Latin and counts as neutral ("5 \u03bcs", "10 k\u03a9")."""
               for word in re.findall(r"[^\W\d_]+", bare(text)):
-                  scripts = {SCRIPT.get(ord(c), "Unknown") for c in word} - NEUTRAL
+                  scripts = {SCRIPT.get(ord(c), "Unknown") for c in word
+                             if ord(c) in LOOKALIKE or SCRIPT.get(ord(c)) == "Latin"} - NEUTRAL
                   if len(scripts) > 1 and not any(scripts <= mix for mix in ALLOWED_MIXES):
                       return word
               return None
 
+          # What the renderer leaves for the browser to draw or arrange, so the
+          # page's text does not hold it plainly: math (TeX drops spaces and
+          # braces), diagrams and maps, ruby text over letters, and a text
+          # direction set by hand (GitHub's own is "auto"), which can swap
+          # the order of two pieces.
+          UNREADABLE = [("holds math", re.compile(r"<math-renderer")),
+                        ("holds ruby text", re.compile(r"<ruby")),
+                        ("holds a diagram drawn in the browser",
+                         re.compile(r'class="[^"]*\brender-needs-enrichment\b')),
+                        ("sets its own text direction", re.compile(r'\bdir="(?!auto")'))]
+
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
-              renderer: tags dropped, entities decoded, and the alt and title
-              texts kept; and whether it holds math with TeX commands, which
-              cannot be read plainly. Any failure stops the check."""
+              renderer: tags dropped, entities decoded, the alt and title
+              texts kept, and every link and image address decoded; and what
+              in it cannot be read plainly, if anything. Any failure stops
+              the check."""
               request = urllib.request.Request(
                   "https://api.github.com/markdown",
                   data=json.dumps({"text": text, "mode": "gfm",
@@ -216,25 +246,29 @@ jobs:
                            "Accept": "application/vnd.github+json"})
               with urllib.request.urlopen(request, timeout=60) as reply:
                   page = reply.read().decode("utf-8")
-              extras = re.findall(r'\b(?:alt|title|aria-label)="([^"]*)"', page)
-              maths = re.findall(r"<math-renderer[^>]*>(.*?)</math-renderer>", page, re.S)
-              shown_text = html.unescape(re.sub(r"<[^>]*>", "", page) + "\n" + "\n".join(extras))
-              return shown_text, any("\\" in html.unescape(m) for m in maths)
+              labels = re.findall(r'\b(?:alt|title|aria-label)="([^"]*)"', page)
+              addresses = re.findall(r'\b(?:href|src|data-canonical-src)="([^"]*)"', page)
+              extras = ([html.unescape(label) for label in labels]
+                        + [urllib.parse.unquote(html.unescape(url)) for url in addresses])
+              shown_text = html.unescape(re.sub(r"<[^>]*>", "", page)) + "\n" + "\n".join(extras)
+              return shown_text, next((why for why, mark in UNREADABLE if mark.search(page)), None)
 
           ROBOT = "\U0001F916"
 
           def shown(text, is_markdown):
-              """The views of a text, and whether it holds math with TeX
-              commands. Views: as written and folded, with the robot
-              shortcode as its emoji (GitHub shows it in commit messages
-              too), and for Markdown as GitHub's renderer shows it, folded;
-              then each with look-alike letters read as Latin."""
+              """The plain views of a text, its look-alike readings, and what
+              in it cannot be read plainly. Plain views: as written and
+              folded, with the robot shortcode as its emoji (GitHub shows it
+              in commit messages too), and for Markdown as GitHub's renderer
+              shows it, folded. Readings: each with look-alike letters read
+              as Latin, then also with every "l" look-alike as "l"."""
               views = [text, fold(text), fold(text.replace(":robot:", ROBOT))]
-              has_math = False
+              problem = None
               if is_markdown and text.strip():
-                  rendered, has_math = render(text)
+                  rendered, problem = render(text)
                   views += [rendered, fold(rendered)]
-              return views + [view.translate(LOOKALIKE) for view in views], has_math
+              looks = [view.translate(LOOKALIKE) for view in views]
+              return views, looks + [view.translate(ELL) for view in looks], problem
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
@@ -263,19 +297,22 @@ jobs:
               texts.append((f"commit {sha[:7]}'s message", message, False))
 
           for where, text, is_markdown in texts:
-              views, has_math = shown(text, is_markdown)
-              # Judged on every view but the look-alike readings (which mix
-              # alphabets by design): an entity can spell what the raw text lacks.
-              plain_views = views[:len(views) // 2]
-              # Mixing is judged on the text and its rendering before folding,
-              # which turns the micro sign (Common) into a Greek letter.
-              word = next(filter(None, map(mixed_alphabets, plain_views[0:1] + plain_views[3:4])), None)
-              if word or has_math or any(OVERRIDES.search(view) for view in plain_views):
-                  why = (f"mixes alphabets in '{word}'" if word
-                         else "holds math with TeX commands" if has_math else "reorders its letters")
-                  hits.append(f"{where} {why}, so it cannot be checked")
+              plain, looks, problem = shown(text, is_markdown)
+              # Judged on the plain views, never the look-alike readings (which
+              # mix alphabets by design): an entity can spell what the raw text
+              # lacks. Mixing is judged before folding, which turns the micro
+              # sign (Common) into a Greek letter.
+              word = next(filter(None, map(mixed_alphabets, plain[0:1] + plain[3:4])), None)
+              if word:
+                  problem = f"mixes alphabets in '{word}'"
+              elif any(map(unknown, plain)):
+                  problem = "holds characters the runner's Unicode does not know"
+              elif any(OVERRIDES.search(view) for view in plain):
+                  problem = "holds direction marks that reorder its letters"
+              if problem:
+                  hits.append(f"{where} {problem}, so it cannot be checked")
                   continue
-              for view in views:
+              for view in plain + looks:
                   hit = (hook.ATTRIBUTION.search(view)
                          or hook.ATTRIBUTION.search(hook.strip_paths(view)))
                   if hit:
