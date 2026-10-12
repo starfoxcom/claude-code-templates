@@ -344,8 +344,8 @@ jobs:
           # joins the text on each side, a block or break tag starts a new
           # line. A tag in neither list cannot be laid out plainly, so it
           # fails the check.
-          INLINE = {"a", "b", "code", "del", "em", "i", "img", "input", "ins", "kbd", "mark",
-                    "path", "picture", "q", "s", "samp", "source", "span", "strike", "strong",
+          INLINE = {"a", "b", "code", "del", "em", "g-emoji", "i", "img", "input", "ins", "kbd",
+                    "mark", "path", "picture", "q", "s", "samp", "source", "span", "strike", "strong",
                     "sub", "sup", "svg", "themed-picture", "tt", "var"}
           BLOCK = {"blockquote", "br", "dd", "details", "div", "dl", "dt", "h1", "h2", "h3", "h4",
                    "h5", "h6", "hr", "li", "markdown-accessiblity-table", "ol", "p", "pre",
@@ -354,7 +354,7 @@ jobs:
           # Every attribute the renderer keeps on ordinary content. Any other
           # (a cell's rowspan or valign, which move it below later text)
           # fails the check, so the next layout attribute fails closed.
-          ATTRIBUTES = {"align", "alt", "aria-describedby", "aria-hidden", "aria-label", "checked",
+          ATTRIBUTES = {"alias", "align", "alt", "aria-describedby", "aria-hidden", "aria-label", "checked",
                         "class", "colspan", "controls", "d", "data-canonical-src", "data-catalyst-inline",
                         "data-component", "data-error-text", "data-footnote-backref",
                         "data-footnote-backref-idx", "data-footnote-ref", "data-footnotes",
