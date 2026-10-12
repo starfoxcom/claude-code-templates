@@ -367,16 +367,19 @@ jobs:
               return names
 
           def nested_start(page):
-              """Whether an ordered list inside a list item sets its first
+              """Whether an ordered list inside another list sets its first
               number. GitHub's stylesheet draws nested markers as letters
-              (lower-roman, lower-alpha), so the number would pick the letter."""
+              (lower-roman, lower-alpha) by list nesting alone, so the number
+              would pick the letter."""
               depth = 0
-              for m in re.finditer(r"<(/?)(li|ol)\b([^>]*)>", page):
+              for m in re.finditer(r"<(/?)(ol|ul)\b([^>]*)>", page):
                   closing, tag, inside = m.groups()
-                  if tag == "li":
-                      depth += -1 if closing else 1
-                  elif not closing and depth and re.search(r'\bstart="', inside):
+                  if closing:
+                      depth -= 1
+                  elif tag == "ol" and depth and re.search(r'\bstart="', inside):
                       return True
+                  else:
+                      depth += 1
               return False
 
           def render(text):
