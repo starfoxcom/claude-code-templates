@@ -8,21 +8,28 @@ name: Attribution
 # Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
 # session link or the robot emoji. Plain mentions of the product pass.
 #
-# The patterns are the shipped hook's own (`ATTRIBUTION` in
-# `_core/global-template/hooks/no-ai-attribution.py`), read from protected
-# `develop`, never from the pull request: a PR that edits the hook cannot
-# weaken the check on itself. No manual trigger.
+# A pull request cannot weaken the check on itself:
+# - `pull_request_target` runs this file as the base branch holds it, never
+#   the PR's copy, so editing the workflow in a PR changes nothing for it.
+# - The patterns are the shipped hook's own (`ATTRIBUTION` in
+#   `_core/global-template/hooks/no-ai-attribution.py`), read from protected
+#   `develop`, never from the pull request.
+# That trigger is safe only while nothing from the PR runs: its commits are
+# fetched as objects and read with `git log`, never checked out, and its text
+# reaches the script through the environment. Keep it that way. No manual
+# trigger.
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [develop, main]
     types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
 
+# Under `pull_request_target`, `github.ref` is the base branch: group by PR.
 concurrency:
-  group: attribution-${{ github.ref }}
+  group: attribution-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 defaults:
@@ -35,10 +42,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # The base branch, never the PR's head.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # Objects only: nothing from the PR is checked out or run.
+      - name: Fetch the PR's commits
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "$HEAD_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
 
       - name: Read the hook's patterns from develop
         run: |
