@@ -159,4 +159,6 @@ Gate: **simple-git-hooks**, config `.simple-git-hooks.json`. Activate with `npx 
 <!-- TOGGLE:precommit:simple-git-hooks END -->
 
 The hook runs lint, type check and tests before each commit. Do not bypass it with `--no-verify`; fix the failure.
+
+After activating, check that git runs it: make a commit the hook must refuse and confirm it is refused. When `git config core.hooksPath` prints a folder (often set globally by another tool), git runs the hooks there, not in `.git/hooks`, so a gate installed in `.git/hooks` never runs and some gates refuse to install. If that folder's hooks hand off to `.git/hooks/<name>`, the gate's scripts in `.git/hooks` are enough; otherwise run `git config --local core.hooksPath .git/hooks` before activating.
 <!-- TOGGLE:precommit_hooks_scaffold END -->
