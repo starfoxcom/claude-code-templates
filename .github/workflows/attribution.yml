@@ -173,20 +173,26 @@ jobs:
               """Whether the text holds a code point the runner's Unicode does
               not know. It is older than the pinned tables, so a mark or
               letter added since reads as unassigned and is neither dropped
-              nor folded; unassigned invisible ones draw nothing at all."""
-              return any(unicodedata.category(c) == "Cn" for c in text)
+              nor folded; unassigned invisible ones draw nothing at all.
+              Emoji newer than it pass: the pinned tables file them as symbols."""
+              return any(unicodedata.category(c) == "Cn"
+                         and not (0x1F000 <= ord(c) <= 0x1FAFF and SCRIPT.get(ord(c)) == "Common")
+                         for c in text)
 
           def mixed_direction(text):
               """Whether the text holds right-to-left letters (Arabic, Hebrew)
               and left-to-right ones together. GitHub sets each block's
               direction from its first strong letter, so a line that starts
               right-to-left shows its Latin words in reverse order, which no
-              view reads. Judged line by line, as the check's own lines (the
-              merge title, link addresses) are never in the user's block.
-              Text in one direction passes."""
-              for line in text.splitlines():
-                  classes = {unicodedata.bidirectional(c) for c in line}
-                  if classes & {"R", "AL"} and "L" in classes:
+              view reads. Judged per paragraph (a blank line apart; the
+              check's own lines, the merge title and link addresses, stand
+              apart): one that starts left to right keeps every Latin word in
+              place, so only one that starts right to left and holds Latin
+              letters is refused."""
+              for block in re.split(r"\n\s*\n", text):
+                  classes = [unicodedata.bidirectional(c) for c in block]
+                  first = next((k for k in classes if k in ("L", "R", "AL")), None)
+                  if first in ("R", "AL") and "L" in classes:
                       return True
               return False
 
@@ -333,6 +339,13 @@ jobs:
               if fields[0] == "Allowed":
                   MODERN.update(range(first, last + 1))
 
+          # The scripts whose letters outside modern use pose as Latin (small
+          # capitals, hooked or barred letters, archaic Greek and Cyrillic).
+          # Other scripts' letters pass (a script in limited modern use, such
+          # as Cherokee or Tifinagh, is ordinary text); their look-alikes that
+          # Unicode lists are read by LOOKALIKE.
+          POSING = {"Latin", "Greek", "Cyrillic", "Common", "Inherited"}
+
           def odd_letter(text):
               """A letter outside modern use, once compatibility forms are
               folded (so "1\u00ba", fullwidth letters and ligatures pass). Han
@@ -343,8 +356,9 @@ jobs:
                   letters = [c for c in chunk if unicodedata.category(c).startswith("L")]
                   korean = all(SCRIPT.get(ord(c)) == "Hangul" for c in letters)
                   for c in letters:
-                      if (ord(c) not in MODERN and SCRIPT.get(ord(c)) != "Han"
-                              and not (korean and SCRIPT.get(ord(c)) == "Hangul")):
+                      script = SCRIPT.get(ord(c))
+                      if ord(c) not in MODERN and (script in POSING
+                                                   or (script == "Hangul" and not korean)):
                           return c
               return None
 
@@ -578,7 +592,7 @@ jobs:
                   for marked in (drawn(base), drawn(unstruck(base))):
                       views += [TAG.sub(layout, marked), TAG.sub(layout, pictured(marked))]
               views = list(dict.fromkeys(views + [TAG.sub("", drawn(page))]))
-              shown_texts = [html.unescape(view) + "\n" + "\n".join(extras) for view in views]
+              shown_texts = [html.unescape(view) + "\n\n" + "\n\n".join(extras) for view in views]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
               if count > MOST_DETAILS and not problem:
                   problem = f"holds more than {MOST_DETAILS} collapsible sections"
