@@ -343,6 +343,27 @@ jobs:
                    "h5", "h6", "hr", "li", "markdown-accessiblity-table", "ol", "p", "pre",
                    "section", "summary", "table", "tbody", "td", "th", "thead", "tr", "ul"}
           TAG = re.compile(r"</?([A-Za-z][\w-]*)[^>]*>")
+          # Every attribute the renderer keeps on ordinary content. Any other
+          # (a cell's rowspan or valign, which move it below later text)
+          # fails the check, so the next layout attribute fails closed.
+          ATTRIBUTES = {"align", "alt", "aria-describedby", "aria-hidden", "aria-label", "checked",
+                        "class", "colspan", "d", "data-canonical-src", "data-catalyst-inline",
+                        "data-component", "data-error-text", "data-footnote-backref",
+                        "data-footnote-backref-idx", "data-footnote-ref", "data-footnotes",
+                        "data-hovercard-type", "data-hovercard-url", "data-id", "data-octo-click",
+                        "data-octo-dimensions", "data-permission-text",
+                        "data-snippet-clipboard-copy-content", "data-url", "dir", "disabled",
+                        "height", "href", "id", "is", "media", "name", "open", "rel", "role", "src",
+                        "srcset", "start", "style", "tabindex", "target", "title", "type", "version",
+                        "viewbox", "width"}
+
+          def attribute_names(page):
+              """The name of every attribute on every tag, quoted values removed."""
+              names = set()
+              for inside in re.findall(r"<[A-Za-z][\w-]*(\s[^>]*)>", page):
+                  names.update(name.lower() for name in
+                               re.findall(r"([\w:.-]+)", re.sub(r'"[^"]*"', "", inside)))
+              return names
 
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
@@ -372,6 +393,9 @@ jobs:
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
               if odd and not problem:
                   problem = f"holds HTML the check cannot lay out (<{odd[0]}>)"
+              loose = sorted(attribute_names(page) - ATTRIBUTES)
+              if loose and not problem:
+                  problem = f"holds an HTML attribute the check cannot lay out ({loose[0]})"
               return shown_texts, problem
 
           ROBOT = "\U0001F916"
@@ -401,6 +425,18 @@ jobs:
                       name, _, address = ident.partition(" <")
                       parts += [name, "<" + address, address.rstrip(">")]
               return [part for part in parts if part]
+
+          def credited(views, text):
+              """The views with each listed co-author's name and address, where
+              they follow that trailer's "Co-authored-by:", read as a neutral
+              placeholder: the list judges people, never their names (a listed
+              "Ai Tanaka" passes). Nowhere else is a name taken out."""
+              for ident in {m.group(1).strip() for m in TRAILER.finditer(text)} & KNOWN:
+                  name, _, address = ident.partition(" <")
+                  person = re.compile(r"(co-authored-by:[ \t]*)" + re.escape(name)
+                                      + r"[ \t]*<?" + re.escape(address.rstrip(">")) + r">?", re.I)
+                  views = [person.sub(r"\1a listed contributor", view) for view in views]
+              return views
 
           def masked(views, names):
               """The views with listed people's names and addresses blanked, for
@@ -473,7 +509,7 @@ jobs:
               if problem:
                   hits.append(f"{where} {problem}, so it cannot be checked")
                   continue
-              for view in plain + looks:
+              for view in credited(plain + looks, text):
                   hit = (hook.ATTRIBUTION.search(view)
                          or hook.ATTRIBUTION.search(hook.strip_paths(view)))
                   if hit:
