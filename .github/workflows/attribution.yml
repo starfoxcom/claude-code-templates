@@ -9,8 +9,8 @@ name: Attribution
 #   Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
 #   session link or the robot emoji. Each text is read as written and the
 #   body also as GitHub renders it; accepted symbols Unicode lists as ASCII
-#   look-alikes are read as ASCII, and the patterns also match Unicode's
-#   ASCII look-alike pairs (I, l, 1 and |; O and 0; m and rn).
+#   look-alikes are read as ASCII. ASCII text reaches the patterns as the
+#   local hook reads it ("Al" for "AI" is the hook's matter).
 # - one of those texts uses a character outside the ones this repository
 #   accepts: English text (printable ASCII), common symbols and punctuation,
 #   arrows, box lines and emoji. The project is written in English; an
@@ -190,7 +190,9 @@ jobs:
 
           AS_ASCII = {code: read for first, last in ACCEPTED if first > 0x7E
                       for code in range(first, last + 1) if (read := as_ascii(chr(code)))}
-          AS_ASCII.update({0xA0: " "})
+          # The no-break space as a space, and the emoji GitHub draws for its
+          # letter shortcodes whose names spell no letter (":o:", ":x:").
+          AS_ASCII.update({0xA0: " ", 0x2B55: "O", 0x274C: "X", 0x2716: "x", 0x1F199: "UP"})
           # GitHub's shortcodes for the robot and for emoji drawn as letters,
           # in a title or commit message (a body is read as rendered).
           SHORTCODES = {":robot:": "\U0001F916", ":a:": "A", ":b:": "B", ":o:": "O", ":o2:": "O",
@@ -198,54 +200,6 @@ jobs:
                         ":cl:": "CL", ":cool:": "COOL", ":free:": "FREE", ":id:": "ID", ":new:": "NEW",
                         ":ng:": "NG", ":ok:": "OK", ":parking:": "P", ":sos:": "SOS", ":up:": "UP",
                         ":vs:": "VS", ":tm:": "TM", ":information_source:": "i"}
-
-          def loosened(pattern):
-              """The hook's pattern with each literal i or l also matching I,
-              l, 1 and |, o matching 0, and m matching rn: Unicode's ASCII
-              look-alike pairs, letter by letter (UTS #39 skeletons)."""
-              out, i, in_class = [], 0, False
-              while i < len(pattern):
-                  c = pattern[i]
-                  if c == "\\":
-                      kind = pattern[i + 1]
-                      size = {"x": 4, "u": 6, "U": 10}.get(kind, 2)
-                      if kind == "N":
-                          size = pattern.index("}", i) - i + 1
-                      out.append(pattern[i:i + size])
-                      i += size
-                  elif in_class:
-                      in_class = c != "]"
-                      out.append(c)
-                      i += 1
-                  elif c == "[":
-                      start = i + 1 + (pattern[i + 1:i + 2] == "^")
-                      start += pattern[start:start + 1] == "]"
-                      out.append(pattern[i:start])
-                      in_class, i = True, start
-                  elif c == "(" and pattern[i + 1:i + 2] == "?":
-                      j = i + 2
-                      if pattern[j:j + 2] == "P<":
-                          j = pattern.index(">", j) + 1
-                      elif pattern[j:j + 2] in ("<=", "<!"):
-                          j += 2
-                      else:
-                          while pattern[j] in "aiLmsux-":
-                              j += 1
-                          j += pattern[j] in ":=!)"
-                      out.append(pattern[i:j])
-                      i = j
-                  elif c == "{" and re.match(r"\{\d*,?\d*\}", pattern[i:]):
-                      size = re.match(r"\{\d*,?\d*\}", pattern[i:]).end()
-                      out.append(pattern[i:i + size])
-                      i += size
-                  else:
-                      lower = c.lower()
-                      out.append("[il1|]" if lower in "il" else "[o0]" if lower == "o"
-                                 else "(?:m|rn)" if lower == "m" else c)
-                      i += 1
-              return "".join(out)
-
-          LOOSE = re.compile(loosened(hook.ATTRIBUTION.pattern), hook.ATTRIBUTION.flags)
 
           def foreign(text):
               """The first character outside the accepted ones, if any."""
@@ -271,12 +225,18 @@ jobs:
               def __init__(self):
                   super().__init__(convert_charrefs=True)
                   self.whole, self.unstruck, self.struck, self.direction = [], [], 0, None
-                  self.addresses = []
+                  self.joined, self.addresses = [], []
 
-              def add(self, text):
+              def add(self, text, apart=False):
+                  """Text as drawn; what is set apart (the space around a
+                  superscript, an image's alt text, which a tiny image never
+                  shows) is left out of the joined reading, where a raised
+                  letter inside a word stays in it."""
                   self.whole.append(text)
                   if not self.struck:
                       self.unstruck.append(text)
+                  if not apart:
+                      self.joined.append(text)
 
               def handle_starttag(self, tag, attrs):
                   attrs = dict(attrs)
@@ -285,9 +245,9 @@ jobs:
                   if tag in BLOCKS:
                       self.add("\n")
                   if tag in ("sup", "sub"):
-                      self.add(" ")
+                      self.add(" ", apart=True)
                   if tag == "img":
-                      self.add(attrs.get("alt") or "")
+                      self.add(attrs.get("alt") or "", apart=True)
                   self.addresses += [attrs[key] for key in ("href", "src") if attrs.get(key)]
                   if tag in STRUCK:
                       self.struck += 1
@@ -298,7 +258,7 @@ jobs:
                   if tag in BLOCKS:
                       self.add("\n")
                   if tag in ("sup", "sub"):
-                      self.add(" ")
+                      self.add(" ", apart=True)
 
               def handle_data(self, data):
                   self.add(data)
@@ -336,7 +296,7 @@ jobs:
               if is_markdown and text.strip():
                   page = rendered(text)
                   addresses = ["\n".join(urllib.parse.unquote(address) for address in page.addresses)]
-                  forms += ["".join(page.whole), "".join(page.unstruck)]
+                  forms += ["".join(page.whole), "".join(page.unstruck), "".join(page.joined)]
                   if page.direction:
                       return f"sets a text direction by hand ({page.direction})", []
               elif not is_markdown:
@@ -362,11 +322,8 @@ jobs:
 
           def credit(view):
               """The AI attribution the hook's patterns find in a reading, if any."""
-              for pattern in (hook.ATTRIBUTION, LOOSE):
-                  hit = pattern.search(view) or pattern.search(hook.strip_paths(view))
-                  if hit:
-                      return hit.group(0).strip()
-              return None
+              hit = hook.ATTRIBUTION.search(view) or hook.ATTRIBUTION.search(hook.strip_paths(view))
+              return hit.group(0).strip() if hit else None
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), False),
