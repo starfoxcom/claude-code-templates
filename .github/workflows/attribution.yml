@@ -396,35 +396,80 @@ jobs:
                   letters = chr(97 + rest) + letters
               return letters
 
+          VOID = {"area", "br", "col", "embed", "hr", "img", "input", "source", "track", "wbr"}
+
           def drawn(page):
-              """The page with what its stylesheet draws written in as text:
+              """The page with what its stylesheets draw written in as text:
               each ordered list item's marker, counted from its list's start
               (a nested list's markers are letters, so a number or an item
-              count picks one), and a code snippet's line numbers."""
-              lists, parts, last = [], [], 0
-              for m in re.finditer(r"<(/?)(ol|ul|li)\b([^>]*)>", page):
-                  closing, tag, inside = m.groups()
+              count picks one; a list right inside a div and a task list's
+              hidden ones excepted), a footnote reference's brackets, the
+              quotes around a q, and a code snippet's line numbers."""
+              parents, parts, last = [], [], 0
+              for m in re.finditer(r"<(/?)([A-Za-z][\w-]*)([^>]*)>", page):
+                  closing, tag, inside = m.group(1), m.group(2).lower(), m.group(3)
                   parts.append(page[last:m.end()])
                   last = m.end()
+                  if closing:
+                      if any(entry[0] == tag for entry in parents):
+                          while True:
+                              entry = parents.pop()
+                              parts.append(entry[3])
+                              if entry[0] == tag:
+                                  break
+                      continue
+                  entry = [tag, 1, 1, ""]
                   if tag == "li":
-                      if not closing and lists and lists[-1][0] == "ol":
-                          parts.append(marker(lists[-1][1], len(lists)) + ". ")
-                          lists[-1][1] += 1
-                  elif closing:
-                      lists = lists[:-1]
-                  else:
+                      owner = next((e for e in reversed(parents) if e[0] in ("ol", "ul")), None)
+                      if owner and owner[0] == "ol":
+                          if not re.search(r'\bclass="[^"]*\btask-list-item\b', inside):
+                              parts.append(marker(owner[1], owner[2]) + ". ")
+                          owner[1] += 1
+                  elif tag in ("ol", "ul"):
                       start = re.search(r'\bstart="(-?\d{1,9})"', inside)
-                      lists.append([tag, int(start.group(1)) if start else 1])
+                      depth = 1 + sum(e[0] in ("ol", "ul") for e in parents)
+                      in_div = bool(parents) and parents[-1][0] == "div"
+                      entry = [tag, int(start.group(1)) if start else 1, 1 if in_div else depth, ""]
+                  elif tag == "q":
+                      parts.append('"')
+                      entry[3] = '"'
+                  elif tag == "a" and re.search(r"\bdata-footnote-ref\b", inside):
+                      parts.append("[")
+                      entry[3] = "]"
+                  if tag not in VOID and not inside.rstrip().endswith("/"):
+                      parents.append(entry)
               parts.append(page[last:])
               return re.sub(r'(<[^>]*\bdata-line-number="([^"]*)"[^>]*>)', r"\1\2 ", "".join(parts))
+
+          def closed(page):
+              """The page as shown before any closed details is opened: what
+              follows each one's summary dropped."""
+              frames, parts, last = [], [], 0
+              for m in re.finditer(r"<(/?)(details|summary)\b([^>]*)>", page):
+                  if not any(hiding for _, hiding in frames):
+                      parts.append(page[last:m.start()])
+                  parts.append(m.group(0))
+                  last = m.end()
+                  closing, tag, inside = m.groups()
+                  if tag == "details" and closing:
+                      frames = frames[:-1]
+                  elif tag == "details":
+                      names = re.findall(r"[\w:.-]+", re.sub(r'"[^"]*"', "", inside))
+                      frames.append(["open" in (name.lower() for name in names), False])
+                  elif closing and frames:
+                      frames[-1][1] = not frames[-1][0]
+              if not any(hiding for _, hiding in frames):
+                  parts.append(page[last:])
+              return "".join(parts)
 
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
               renderer, with list markers and line numbers written in: laid
               out (inline tags dropped, block tags as line breaks), with every
               tag dropped, so a tag filed in the wrong list cannot open a gap,
-              and laid out with each image as its alt text in place (a broken
-              image shows it there). Entities decoded, the alt and
+              laid out with each image as its alt text in place (a broken
+              image shows it there), and laid out with closed details' content
+              dropped. Entities decoded, the alt and
               title texts kept, and every link and image address decoded.
               Also what in it cannot be read plainly, if anything. Any
               failure stops the check."""
@@ -449,7 +494,8 @@ jobs:
                                 page_drawn)
               shown_texts = [html.unescape(view) + "\n" + "\n".join(extras)
                              for view in (TAG.sub(layout, page_drawn), TAG.sub("", page_drawn),
-                                          TAG.sub(layout, pictured))]
+                                          TAG.sub(layout, pictured),
+                                          TAG.sub(layout, closed(page_drawn)))]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
               if odd and not problem:
@@ -551,11 +597,13 @@ jobs:
               # The title becomes the merge commit's message, and an edited
               # merge message can carry the body: their co-authors face the
               # list, as written and as shown (an entity, escape or emphasis
-              # can write the key). Folded views are skipped: folding drops a
-              # listed name's accents.
+              # can write the key). Only a line with an address credits an
+              # account; prose about the key ("`Co-authored-by:` lines are
+              # checked") is left to the scan. Folded views are skipped:
+              # folding drops a listed name's accents.
               if is_markdown:
                   for ident in sorted({loose(ident) for view in plain[0:1] + plain[3::2]
-                                       for ident in CO_AUTHOR.findall(view)}
+                                       for ident in CO_AUTHOR.findall(view) if "@" in ident}
                                       - {loose(ident) for ident in KNOWN}):
                       hits.append(f"{where}'s co-author '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
