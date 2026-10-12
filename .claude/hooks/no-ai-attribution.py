@@ -62,13 +62,19 @@ AI = (r"(?:" + CLAUDE + "|" + ANTHROPIC + r"|ai|llm|assistant|copilot|codex|chat
       r"cursor" + _Z + r"(?:ai|ide|agent))")
 AN = r"(?:an?" + _Z + r")?"
 
+# The Attribution workflow (.github/workflows/attribution.yml on main) imports
+# ATTRIBUTION and strip_paths from develop's copy of this file: keep both names,
+# and keep importing it free of side effects (main() runs only as a script).
 ATTRIBUTION = re.compile(
     "|".join([
         # Co-Authored-By naming an AI; a human co-author passes.
         r"co" + _Z + r"-?" + _Z + r"authored" + _Z + r"-?" + _Z + r"by\s*:?[^\n]*?\b" + AI + r"\b",
         r"noreply@" + ANTHROPIC,
         r"\b(?:generated|written|created|made|authored|produced|assisted|co-?written)" + _Z
-        + r"(?:with|by|using|via)" + _Z + AN + AI + r"\b",
+        + r"(?:with|by|using|via)" + _Z + r":?" + _Z + AN + AI + r"\b",
+        # Trailer forms with a colon: "Assisted-by: <AI>:<model>", "Made-with: Cursor".
+        r"\b(?:generated|written|created|made|authored|produced|assisted|co-?written)" + _Z
+        + r"(?:with|by|using|via)" + _Z + r":[ \t]*" + AN + r"(?:" + AI + r"|cursor)\b",
         # A line or quoted message that ends "via Claude Code" / "by Claude".
         # Not "with" / "using": "compatible with Claude Code" is a mention.
         r"\b(?:by|via)" + _Z + CLAUDE + r"(?:" + _Z + r"code)?(?=[\s.!)\]]*(?:$|['\"`]))",
