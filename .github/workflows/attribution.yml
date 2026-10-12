@@ -165,6 +165,9 @@ jobs:
           # Direction overrides and marks show letters in another order than
           # stored: a right-to-left mark between letters flips them.
           OVERRIDES = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+          # Control characters but tab and line ends: no ordinary text holds
+          # them, and some draw as a blank gap (DEL) in a title or commit.
+          CONTROLS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
           def unknown(text):
               """Whether the text holds a code point the runner's Unicode does
@@ -178,9 +181,14 @@ jobs:
               and left-to-right ones together. GitHub sets each block's
               direction from its first strong letter, so a line that starts
               right-to-left shows its Latin words in reverse order, which no
-              view reads. Text in one direction passes."""
-              classes = {unicodedata.bidirectional(c) for c in text}
-              return bool(classes & {"R", "AL"}) and "L" in classes
+              view reads. Judged line by line, as the check's own lines (the
+              merge title, link addresses) are never in the user's block.
+              Text in one direction passes."""
+              for line in text.splitlines():
+                  classes = {unicodedata.bidirectional(c) for c in line}
+                  if classes & {"R", "AL"} and "L" in classes:
+                      return True
+              return False
 
           def bare(text):
               """Every invisible or combining mark and every narrow space
@@ -743,10 +751,13 @@ jobs:
                   problem = f"uses '{letter}' (U+{ord(letter):04X}), a letter outside modern use"
               elif any(map(unknown, judged)):
                   problem = "holds characters the runner's Unicode does not know"
-              elif any(map(mixed_direction, judged)):
+              # A body's Markdown source is never shown: only its rendering.
+              elif any(map(mixed_direction, judged[3:] if len(judged) > 3 and is_markdown else judged)):
                   problem = "mixes right-to-left and left-to-right letters, whose display order differs"
               elif any(OVERRIDES.search(view) for view in judged):
                   problem = "holds direction marks that reorder its letters"
+              elif any(CONTROLS.search(view) for view in judged):
+                  problem = "holds control characters, some of which draw as a blank"
               if problem:
                   hits.append(f"{where} {problem}, so it cannot be checked")
                   continue
