@@ -146,17 +146,19 @@ A feature is done when it works end to end in the running app, not when it compi
 ## Pre-commit hooks
 
 <!-- TOGGLE:precommit:lefthook START -->
-Gate: **lefthook**, config `lefthook.yml`. Activate with `lefthook install`.
+Gate: **lefthook**, config `lefthook.yml`. Activate with `lefthook install`. If `git config core.hooksPath` prints a folder, ask the user to run `git config --local core.hooksPath "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)/hooks"` first (POSIX shell): lefthook writes its hooks into whatever folder that setting names, even on `lefthook run`, so a global one would replace the hooks of every repo that shares it.
 <!-- TOGGLE:precommit:lefthook END -->
 <!-- TOGGLE:precommit:husky START -->
-Gate: **husky**, config `.husky/pre-commit`. Activate with `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`.
+Gate: **husky**, config `.husky/pre-commit`. Activate with `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`. A `core.hooksPath` that `git config core.hooksPath` prints needs no step: husky sets this repo's own (`.husky/_`), which overrides a global one.
 <!-- TOGGLE:precommit:husky END -->
 <!-- TOGGLE:precommit:pre-commit START -->
-Gate: **pre-commit**, config `.pre-commit-config.yaml`. Activate with `pre-commit install`.
+Gate: **pre-commit**, config `.pre-commit-config.yaml`. Activate with `pre-commit install`. It refuses to install while `git config core.hooksPath` prints anything, at any level; removing a global value changes every repo on the machine, so that is the user's call.
 <!-- TOGGLE:precommit:pre-commit END -->
 <!-- TOGGLE:precommit:simple-git-hooks START -->
-Gate: **simple-git-hooks**, config `.simple-git-hooks.json`. Activate with `npx simple-git-hooks`.
+Gate: **simple-git-hooks**, config `.simple-git-hooks.json`. Activate with `npx simple-git-hooks`. It installs into `.git/hooks` whatever `core.hooksPath` says, so if `git config core.hooksPath` prints a folder, ask the user to run `git config --local core.hooksPath "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)/hooks"` (POSIX shell) so git looks there.
 <!-- TOGGLE:precommit:simple-git-hooks END -->
 
 The hook runs lint, type check and tests before each commit. Do not bypass it with `--no-verify`; fix the failure.
+
+After activating, make a commit the hook must refuse and confirm it is refused: a gate git never runs reports nothing.
 <!-- TOGGLE:precommit_hooks_scaffold END -->
