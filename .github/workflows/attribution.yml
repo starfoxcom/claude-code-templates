@@ -104,6 +104,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
           HEAD_LABEL: ${{ github.event.pull_request.head.label }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'EOF'
@@ -235,7 +236,9 @@ jobs:
           for code in SCRIPT:
               name = unicodedata.name(chr(code), "")
               named = NAMED.search(name)
-              if code > 0x7F and code not in LOOKALIKE and named and not name.startswith("TAG "):
+              # The name wins over a table entry that is no letter: "(a)".
+              if (code > 0x7F and not LOOKALIKE.get(code, "").isalpha() and named
+                      and not name.startswith("TAG ")):
                   letter = named.group(2)
                   LOOKALIKE[code] = letter.lower() if named.group(1) == "SMALL LETTER" else letter
           # Every look-alike of "l" read as "l": a capital I, "|" or "1" in
@@ -303,14 +306,34 @@ jobs:
                         ("holds ruby text", re.compile(r"<r(?:uby|p|t)\b")),
                         ("holds a diagram drawn in the browser",
                          re.compile(r'class="[^"]*\brender-needs-enrichment\b')),
-                        ("sets its own text direction", re.compile(r'\bdir="(?!auto")'))]
+                        ("sets its own text direction", re.compile(r'\bdir="(?!auto")')),
+                        # Markup the browser draws in another order than the
+                        # page holds: a table foot or a head after the body, a
+                        # details block whose summary is not first, a table or
+                        # image floated beside the text.
+                        ("lays its text out of order", re.compile(
+                            r'<tfoot\b|<tbody\b(?:(?!</table>)[\s\S])*?<thead\b'
+                            r'|<details\b[^>]*>(?!\s*<summary\b)'
+                            r'|<(?:table|img)\b[^>]*\balign="(?:left|right)"'))]
+
+          # Every tag the renderer keeps, and how it lays text out: an inline
+          # tag joins the text on each side, a block or break tag (and an
+          # image) starts a new line. A tag in neither list cannot be laid
+          # out plainly, so it fails the check.
+          INLINE = {"a", "b", "code", "del", "em", "i", "ins", "kbd", "mark", "path", "q", "s",
+                    "samp", "span", "strike", "strong", "sub", "sup", "svg", "tt", "var"}
+          BLOCK = {"blockquote", "br", "dd", "details", "div", "dl", "dt", "h1", "h2", "h3", "h4",
+                   "h5", "h6", "hr", "img", "input", "li", "markdown-accessiblity-table", "ol", "p",
+                   "picture", "pre", "section", "source", "summary", "table", "tbody", "td", "th",
+                   "thead", "themed-picture", "tr", "ul"}
+          TAG = re.compile(r"</?([A-Za-z][\w-]*)[^>]*>")
 
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
-              renderer: tags dropped, entities decoded, the alt and title
-              texts kept, and every link and image address decoded; and what
-              in it cannot be read plainly, if anything. Any failure stops
-              the check."""
+              renderer: inline tags dropped, block tags as line breaks,
+              entities decoded, the alt and title texts kept, and every link
+              and image address decoded; and what in it cannot be read
+              plainly, if anything. Any failure stops the check."""
               request = urllib.request.Request(
                   "https://api.github.com/markdown",
                   data=json.dumps({"text": text, "mode": "gfm",
@@ -323,8 +346,13 @@ jobs:
               addresses = re.findall(r'\b(?:href|src|data-canonical-src)="([^"]*)"', page)
               extras = ([html.unescape(label) for label in labels]
                         + [urllib.parse.unquote(html.unescape(url)) for url in addresses])
-              shown_text = html.unescape(re.sub(r"<[^>]*>", "", page)) + "\n" + "\n".join(extras)
-              return shown_text, next((why for why, mark in UNREADABLE if mark.search(page)), None)
+              laid_out = TAG.sub(lambda m: "\n" if m.group(1).lower() in BLOCK else "", page)
+              shown_text = html.unescape(laid_out) + "\n" + "\n".join(extras)
+              problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
+              odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
+              if odd and not problem:
+                  problem = f"holds HTML the check cannot lay out (<{odd[0]}>)"
+              return shown_text, problem
 
           ROBOT = "\U0001F916"
 
@@ -344,20 +372,28 @@ jobs:
               return views, looks + [twin for view in looks for twin in twins(view)], problem
 
           def unlisted(text):
-              """The text without its co-author lines naming a listed identity.
-              The list judges people, so a listed name in another script (an
-              Arabic name beside a Latin email) never meets the text checks;
-              any other co-author line stays and is read."""
-              return TRAILER.sub(lambda m: "" if m.group(1).strip() in KNOWN else m.group(0), text)
+              """The text with each co-author trailer naming a listed identity
+              reduced to a placeholder name. The list judges people, so a
+              listed name in another script (an Arabic name beside a Latin
+              email) never meets the text checks; the line itself stays, so
+              the Markdown around it parses as GitHub parses it."""
+              def placeholder(m):
+                  if m.group(1).strip() not in KNOWN:
+                      return m.group(0)
+                  return m.group(0)[:m.start(1) - m.start()] + "a listed contributor"
+              return TRAILER.sub(placeholder, text)
 
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
                    ("the PR body", os.environ.get("PR_BODY", ""), True)]
-          # The merge commit's title names the head as "owner/branch"; for a
-          # fork, the owner is the contributor's login. The label is
-          # "owner:branch", and neither half can hold a colon.
-          branch = [("the head owner and branch",
-                     os.environ.get("HEAD_LABEL", "").replace(":", "/", 1), False)]
+          # The merge commit's message, whole: its title names the head as
+          # "owner/branch" (for a fork, the owner is the contributor's
+          # login; the label is "owner:branch", and neither half can hold a
+          # colon), and the PR title follows it.
+          head = os.environ.get("HEAD_LABEL", "").replace(":", "/", 1)
+          merge = (f"Merge pull request #{os.environ.get('PR_NUMBER', '')} from {head}\n\n"
+                   f"{os.environ.get('PR_TITLE', '')}")
+          branch = [("the merge commit's message", unlisted(merge), False)]
           # The title becomes the merge commit's message, and an edited
           # merge message can carry the body: their co-authors face the list.
           for where, text, _ in texts:
@@ -379,6 +415,11 @@ jobs:
                       hits.append(f"commit {sha[:7]}'s {role} '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
               texts.append((f"commit {sha[:7]}'s message", unlisted(message), False))
+          # A squash merge joins the messages into one.
+          messages = [text for where, text, _ in texts if where.endswith("'s message")
+                      and where.startswith("commit ")]
+          if len(messages) > 1:
+              texts.append(("the commit messages joined", "\n\n".join(messages), False))
 
           for where, text, is_markdown in texts:
               plain, looks, problem = shown(text, is_markdown)
