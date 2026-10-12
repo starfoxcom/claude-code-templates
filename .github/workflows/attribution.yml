@@ -6,7 +6,8 @@ name: Attribution
 # It fails a pull request when one of its commits (message, author or
 # committer), its title or its body carries AI attribution: an AI
 # Co-Authored-By, an Anthropic noreply address, a "generated with" line, a
-# session link or the robot emoji. Plain mentions of the product pass.
+# session link, the robot emoji, or an AI account as author or committer.
+# Plain mentions of the product pass.
 #
 # A pull request cannot weaken the check on itself:
 # - `pull_request_target` runs this file as the base branch holds it, never
@@ -71,29 +72,44 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           python3 - <<'EOF'
-          import importlib.util, os, subprocess, sys
+          import importlib.util, os, re, subprocess, sys
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
           hook = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(hook)
 
+          # An AI account as a commit's author or committer: a bot login or
+          # the tool's name alone. A person named Claude with a surname passes.
+          TOOL = (r"(?:" + hook.CLAUDE + "|" + hook.ANTHROPIC
+                  + r"|copilot|codex|chat\W?gpt|gemini|cursor|devin)")
+          IDENTITY = re.compile(
+              r"\b" + TOOL + r"[\w-]*\[bot\]"
+              + r"|^\s*" + TOOL + r"(?:[\s-]+(?:code|agent|ai|bot))?\s*<"
+              + r"|\+" + TOOL + r"[\w-]*@users\.noreply\.github\.com",
+              re.I)
+
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+
           # Each commit the PR adds: what its base already holds is not its own.
-          log = subprocess.run(
-              ["git", "log", "--format=%H%x1f%an <%ae>%x1f%cn <%ce>%x1f%B%x1e",
-               f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"],
-              check=True, capture_output=True, text=True).stdout
-          texts = [("the PR title", os.environ.get("PR_TITLE", "")),
-                   ("the PR body", os.environ.get("PR_BODY", ""))]
-          for entry in filter(str.strip, log.split("\x1e")):
-              sha, author, committer, message = entry.strip("\n").split("\x1f", 3)
-              texts += [(f"commit {sha[:7]}'s author", author),
-                        (f"commit {sha[:7]}'s committer", committer),
-                        (f"commit {sha[:7]}'s message", message)]
+          # One read per field, so no character in a message can pass for a
+          # separator and hide text from the scan.
+          texts = [("the PR title", os.environ.get("PR_TITLE", ""), False),
+                   ("the PR body", os.environ.get("PR_BODY", ""), False)]
+          for sha in git("rev-list", f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}").split():
+              author = git("show", "-s", "--format=%an <%ae>", sha)
+              committer = git("show", "-s", "--format=%cn <%ce>", sha)
+              message = git("show", "-s", "--format=%B", sha)
+              texts += [(f"commit {sha[:7]}'s author", author, True),
+                        (f"commit {sha[:7]}'s committer", committer, True),
+                        (f"commit {sha[:7]}'s message", message, False)]
 
           hits = []
-          for where, text in texts:
+          for where, text, is_identity in texts:
               hit = hook.ATTRIBUTION.search(hook.strip_paths(text))
+              if not hit and is_identity:
+                  hit = IDENTITY.search(text)
               if hit:
                   hits.append(f"{where}: '{hit.group(0).strip()}'")
           for line in hits:
