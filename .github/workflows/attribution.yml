@@ -156,6 +156,9 @@ jobs:
           TRAILER = re.compile(r"^[ \t]*co-authored-by:[ \t]*(.*?)[ \t]*$", re.I | re.M)
 
           FILLERS = "\u115f\u1160\u2800\u3164\uffa0"
+          # The only spaces kept: a hair, thin or other narrow space inside a
+          # word shows it whole, so every other space is dropped with the marks.
+          SPACES = " \u00a0\u3000"
           # Direction overrides and marks show letters in another order than
           # stored: a right-to-left mark between letters flips them.
           OVERRIDES = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
@@ -177,11 +180,13 @@ jobs:
               return bool(classes & {"R", "AL"}) and "L" in classes
 
           def bare(text):
-              """Every invisible or combining mark dropped. Decomposed first,
+              """Every invisible or combining mark and every narrow space
+              dropped. Decomposed first,
               so an accent cannot shelter the letter it sits on."""
               text = unicodedata.normalize("NFD", text)
               text = "".join(c for c in text if c not in FILLERS
-                             and unicodedata.category(c) not in ("Cf", "Mn", "Me"))
+                             and unicodedata.category(c) not in ("Cf", "Mn", "Me", "Zl", "Zp")
+                             and (unicodedata.category(c) != "Zs" or c in SPACES))
               return unicodedata.normalize("NFC", text)
 
           def fold(text):
@@ -329,7 +334,10 @@ jobs:
                             r'|<details\b[^>]*>(?!\s*<summary\b)'
                             r'|<(?:table|img)\b[^>]*\balign="(?:left|right)"')),
                         # A list whose markers the browser draws as letters.
-                        ("draws list markers as letters", re.compile(r'<(?:ol|ul|li)\b[^>]*\btype="'))]
+                        ("draws list markers as letters", re.compile(r'<(?:ol|ul|li)\b[^>]*\btype="')),
+                        # A first number the browser reads otherwise than drawn().
+                        ("sets a list number the check cannot read",
+                         re.compile(r'<ol\b[^>]*\bstart="(?!-?\d{1,9}")'))]
 
           # Every tag the renderer keeps, and how it lays text out: an inline
           # tag (an image and a task checkbox included, drawn in the line)
@@ -350,8 +358,9 @@ jobs:
                         "class", "colspan", "controls", "d", "data-canonical-src", "data-catalyst-inline",
                         "data-component", "data-error-text", "data-footnote-backref",
                         "data-footnote-backref-idx", "data-footnote-ref", "data-footnotes",
-                        "data-hovercard-type", "data-hovercard-url", "data-id", "data-octo-click",
-                        "data-octo-dimensions", "data-permission-text",
+                        "data-hovercard-type", "data-hovercard-url", "data-id", "data-line-number",
+                        "data-octo-click", "data-octo-dimensions", "data-paste-markdown-skip",
+                        "data-permission-text", "data-pjax", "data-tab-size", "itemprop",
                         "data-snippet-clipboard-copy-content", "data-url", "dir", "disabled",
                         "height", "href", "id", "is", "media", "muted", "name", "open", "playsinline",
                         "poster", "rel", "role", "src", "srcset", "start", "style", "tabindex",
@@ -366,27 +375,56 @@ jobs:
                                re.findall(r"([\w:.-]+)", re.sub(r'"[^"]*"', "", inside)))
               return names
 
-          def nested_start(page):
-              """Whether an ordered list inside another list sets its first
-              number. GitHub's stylesheet draws nested markers as letters
-              (lower-roman, lower-alpha) by list nesting alone, so the number
-              would pick the letter."""
-              depth = 0
-              for m in re.finditer(r"<(/?)(ol|ul)\b([^>]*)>", page):
+          ROMAN = ((1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
+                   (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i"))
+
+          def marker(number, depth):
+              """An ordered list item's marker as GitHub's stylesheet draws it:
+              decimal, lower-roman one list deep, lower-alpha deeper (each
+              falls back to decimal outside its range)."""
+              if depth == 1 or number < 1 or (depth == 2 and number > 3999):
+                  return str(number)
+              if depth == 2:
+                  numerals = ""
+                  for value, letters in ROMAN:
+                      count, number = divmod(number, value)
+                      numerals += letters * count
+                  return numerals
+              letters = ""
+              while number:
+                  number, rest = divmod(number - 1, 26)
+                  letters = chr(97 + rest) + letters
+              return letters
+
+          def drawn(page):
+              """The page with what its stylesheet draws written in as text:
+              each ordered list item's marker, counted from its list's start
+              (a nested list's markers are letters, so a number or an item
+              count picks one), and a code snippet's line numbers."""
+              lists, parts, last = [], [], 0
+              for m in re.finditer(r"<(/?)(ol|ul|li)\b([^>]*)>", page):
                   closing, tag, inside = m.groups()
-                  if closing:
-                      depth -= 1
-                  elif tag == "ol" and depth and re.search(r'\bstart="', inside):
-                      return True
+                  parts.append(page[last:m.end()])
+                  last = m.end()
+                  if tag == "li":
+                      if not closing and lists and lists[-1][0] == "ol":
+                          parts.append(marker(lists[-1][1], len(lists)) + ". ")
+                          lists[-1][1] += 1
+                  elif closing:
+                      lists = lists[:-1]
                   else:
-                      depth += 1
-              return False
+                      start = re.search(r'\bstart="(-?\d{1,9})"', inside)
+                      lists.append([tag, int(start.group(1)) if start else 1])
+              parts.append(page[last:])
+              return re.sub(r'(<[^>]*\bdata-line-number="([^"]*)"[^>]*>)', r"\1\2 ", "".join(parts))
 
           def render(text):
               """The text GitHub shows for this Markdown, from GitHub's own
-              renderer, twice: laid out (inline tags dropped, block tags as
-              line breaks) and with every tag dropped, so a tag filed in the
-              wrong list cannot open a gap. Entities decoded, the alt and
+              renderer, with list markers and line numbers written in: laid
+              out (inline tags dropped, block tags as line breaks), with every
+              tag dropped, so a tag filed in the wrong list cannot open a gap,
+              and laid out with each image as its alt text in place (a broken
+              image shows it there). Entities decoded, the alt and
               title texts kept, and every link and image address decoded.
               Also what in it cannot be read plainly, if anything. Any
               failure stops the check."""
@@ -402,16 +440,20 @@ jobs:
               addresses = re.findall(r'\b(?:href|src|data-canonical-src)="([^"]*)"', page)
               extras = ([html.unescape(label) for label in labels]
                         + [urllib.parse.unquote(html.unescape(url)) for url in addresses])
-              laid_out = TAG.sub(lambda m: "\n" if m.group(1).lower() in BLOCK else "", page)
-              joined = TAG.sub("", page)
+              def layout(m):
+                  return "\n" if m.group(1).lower() in BLOCK else ""
+
+              page_drawn = drawn(page)
+              pictured = re.sub(r"<img\b[^>]*>",
+                                lambda m: "".join(re.findall(r'\balt="([^"]*)"', m.group(0))[:1]),
+                                page_drawn)
               shown_texts = [html.unescape(view) + "\n" + "\n".join(extras)
-                             for view in (laid_out, joined)]
+                             for view in (TAG.sub(layout, page_drawn), TAG.sub("", page_drawn),
+                                          TAG.sub(layout, pictured))]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
               if odd and not problem:
                   problem = f"holds HTML the check cannot lay out (<{odd[0]}>)"
-              if nested_start(page) and not problem:
-                  problem = "numbers a nested list, whose markers draw as letters"
               loose = sorted(attribute_names(page) - ATTRIBUTES)
               if loose and not problem:
                   problem = f"holds an HTML attribute the check cannot lay out ({loose[0]})"
@@ -429,8 +471,8 @@ jobs:
               views = [text, fold(text), fold(text.replace(":robot:", ROBOT))]
               problem = None
               if is_markdown and text.strip():
-                  (rendered, joined), problem = render(text)
-                  views += [rendered, fold(rendered), joined, fold(joined)]
+                  rendered, problem = render(text)
+                  views += [form for view in rendered for form in (view, fold(view))]
               looks = [view.translate(LOOKALIKE) for view in views]
               return views, looks + [twin for view in looks for twin in twins(view)], problem
 
@@ -457,6 +499,11 @@ jobs:
                   views = [person.sub(r"\1a listed contributor", view) for view in views]
               return views
 
+          def loose(ident):
+              """An identity with its angle brackets and spacing evened out: a
+              shown address loses its brackets to the link around it."""
+              return " ".join(re.sub("[<>]", " ", ident).split())
+
           def masked(views, names):
               """The views with listed people's names and addresses blanked, for
               the readability judgements only: the list judges people, so a
@@ -478,13 +525,6 @@ jobs:
           merge = (f"Merge pull request #{os.environ.get('PR_NUMBER', '')} from {head}\n\n"
                    f"{os.environ.get('PR_TITLE', '')}")
           branch = [("the merge commit's message", merge, False)]
-          # The title becomes the merge commit's message, and an edited
-          # merge message can carry the body: their co-authors face the list.
-          for where, text, _ in texts:
-              for ident in CO_AUTHOR.findall(text):
-                  if ident.strip() not in KNOWN:
-                      hits.append(f"{where}'s co-author '{ident}' is not listed in "
-                                  ".github/attribution-identities.txt")
           texts += branch
           # Each commit the PR adds: what its base already holds is not its own.
           # Its people face the list; a listed identity is the maintainer's call.
@@ -508,6 +548,17 @@ jobs:
 
           for where, text, is_markdown in texts:
               plain, looks, problem = shown(text, is_markdown)
+              # The title becomes the merge commit's message, and an edited
+              # merge message can carry the body: their co-authors face the
+              # list, as written and as shown (an entity, escape or emphasis
+              # can write the key). Folded views are skipped: folding drops a
+              # listed name's accents.
+              if is_markdown:
+                  for ident in sorted({loose(ident) for view in plain[0:1] + plain[3::2]
+                                       for ident in CO_AUTHOR.findall(view)}
+                                      - {loose(ident) for ident in KNOWN}):
+                      hits.append(f"{where}'s co-author '{ident}' is not listed in "
+                                  ".github/attribution-identities.txt")
               # Judged on the plain views, never the look-alike readings (which
               # mix alphabets by design): an entity can spell what the raw text
               # lacks. Mixing is judged before folding, which turns the micro
