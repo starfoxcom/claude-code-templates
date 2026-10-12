@@ -594,6 +594,19 @@ jobs:
               views = list(dict.fromkeys(views + [TAG.sub("", drawn(page))]))
               shown_texts = [html.unescape(view) + "\n\n" + "\n\n".join(extras) for view in views]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
+              # Each block GitHub marks dir="auto" takes its direction from the
+              # first strong letter of its whole text, line breaks and nested
+              # lists included: judged on the page itself, markers aside.
+              for m in re.finditer(r'<([A-Za-z][\w-]*)\b[^>]*\bdir="auto"', page):
+                  depth, end = 0, len(page)
+                  for t in re.finditer(r"<(/?)" + re.escape(m.group(1)) + r"\b[^>]*>", page[m.start():]):
+                      depth += -1 if t.group(1) else 1
+                      if not depth:
+                          end = m.start() + t.end()
+                          break
+                  block = html.unescape(TAG.sub(" ", page[m.start():end])).replace("\n", " ")
+                  if mixed_direction(block) and not problem:
+                      problem = "lays out a right-to-left block holding Latin words, whose order differs"
               if count > MOST_DETAILS and not problem:
                   problem = f"holds more than {MOST_DETAILS} collapsible sections"
               odd = sorted({tag.lower() for tag in TAG.findall(page)} - INLINE - BLOCK)
