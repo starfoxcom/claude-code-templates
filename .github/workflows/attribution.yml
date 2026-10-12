@@ -208,7 +208,11 @@ jobs:
           # so plain Latin text reads unchanged.
           LOOKALIKE = {}
           for source, _, fields in ucd_rows("confusables.txt"):
-              target = "".join(chr(int(code, 16)) for code in fields[0].split())
+              # A target's marks dropped: Unicode reads a stroke letter as its
+              # base letter plus a stroke ("ø" as "o" + U+0338), and NFD
+              # leaves the stroke on, so "ø" reads as "o".
+              target = "".join(c for c in (chr(int(code, 16)) for code in fields[0].split())
+                               if unicodedata.category(c) not in ("Mn", "Me"))
               if source > 0x7F and target.isascii() and target.strip():
                   # Unicode files I and l under one prototype, "l".
                   upper = chr(source).isupper() and target == "l"
@@ -269,7 +273,8 @@ jobs:
           # direction set by hand (GitHub's own is "auto"), which can swap
           # the order of two pieces.
           UNREADABLE = [("holds math", re.compile(r"<math-renderer")),
-                        ("holds ruby text", re.compile(r"<ruby")),
+                        # A lone <rp> survives and browsers hide it.
+                        ("holds ruby text", re.compile(r"<r(?:uby|p|t)\b")),
                         ("holds a diagram drawn in the browser",
                          re.compile(r'class="[^"]*\brender-needs-enrichment\b')),
                         ("sets its own text direction", re.compile(r'\bdir="(?!auto")'))]
@@ -312,6 +317,13 @@ jobs:
               looks = [view.translate(LOOKALIKE) for view in views]
               return views, looks + [twin for view in looks for twin in twins(view)], problem
 
+          def unlisted(text):
+              """The text without its co-author lines naming a listed identity.
+              The list judges people, so a listed name in another script (an
+              Arabic name beside a Latin email) never meets the text checks;
+              any other co-author line stays and is read."""
+              return CO_AUTHOR.sub(lambda m: "" if m.group(1).strip() in KNOWN else m.group(0), text)
+
           hits = []
           texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
                    ("the PR body", os.environ.get("PR_BODY", ""), True)]
@@ -327,19 +339,20 @@ jobs:
                   if ident.strip() not in KNOWN:
                       hits.append(f"{where}'s co-author '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
+          texts = [(where, unlisted(text), is_markdown) for where, text, is_markdown in texts]
           texts += branch
           # Each commit the PR adds: what its base already holds is not its own.
+          # Its people face the list; a listed identity is the maintainer's call.
           span = f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"
           for sha in git("rev-list", span).decode().split():
               author, committer, message = read_commit(sha)
               people = [("author", author), ("committer", committer)]
               people += [("co-author", ident) for ident in CO_AUTHOR.findall(message)]
               for role, ident in people:
-                  texts.append((f"commit {sha[:7]}'s {role}", ident, False))
                   if ident.strip() not in KNOWN:
                       hits.append(f"commit {sha[:7]}'s {role} '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
-              texts.append((f"commit {sha[:7]}'s message", message, False))
+              texts.append((f"commit {sha[:7]}'s message", unlisted(message), False))
 
           for where, text, is_markdown in texts:
               plain, looks, problem = shown(text, is_markdown)
