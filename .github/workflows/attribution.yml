@@ -84,9 +84,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'EOF'
-          import html, importlib.util, os, re, subprocess, sys, unicodedata
+          import html, importlib.util, json, os, re, subprocess, sys, unicodedata, urllib.request
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
@@ -129,33 +130,64 @@ jobs:
               KNOWN = {line.strip() for line in listed if line.strip() and not line.startswith("#")}
           CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*$", re.I | re.M)
 
-          ROBOT = "\U0001F916"
-          FILLERS = "\u115f\u1160\u3164\uffa0"
+          FILLERS = "\u115f\u1160\u2800\u3164\uffa0"
+          # Direction overrides show letters in another order than stored.
+          OVERRIDES = re.compile("[\u202a-\u202e\u2066-\u2069]")
 
-          def plain(text):
-              """Markdown's marks dropped (backslash escapes, code-span
-              backticks, strikes, link brackets, with each link's text and
-              address kept), look-alike letters folded, and every invisible or
-              combining mark dropped."""
-              text = re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", text)
-              text = re.sub(r"!?\[([^\]]*)\]\(([^)]*)\)", r"\1 \2", text)
-              text = unicodedata.normalize("NFKC", text)
-              return "".join(c for c in text if c not in "`~[]" and c not in FILLERS
+          def fold(text):
+              """Compatibility forms folded (fullwidth letters, ligatures)
+              and every invisible or combining mark dropped. Decomposed
+              first, so an accent cannot shelter the letter it sits on.
+              Letters borrowed from another alphabet are mixed_alphabets'."""
+              text = unicodedata.normalize("NFKD", text)
+              text = "".join(c for c in text if c not in FILLERS
                              and unicodedata.category(c) not in ("Cf", "Mn", "Me"))
+              return unicodedata.normalize("NFKC", text)
 
-          def shown(text):
-              """The text as written, and as GitHub may render it: shortcodes
-              and entities decoded with angle-bracket text kept (text that is
-              no tag shows as written), and with tags and comments dropped;
-              each of those also in plain form."""
-              text = text.replace(":robot:", ROBOT)
-              decoded = html.unescape(text)
-              untagged = html.unescape(re.sub(r"<!--.*?-->|<[^>]*>", "", text, flags=re.S))
-              return [text, decoded, untagged, plain(decoded), plain(untagged)]
+          def mixed_alphabets(text):
+              """A word of four letters or more that mixes Latin with another
+              alphabet (a Cyrillic letter standing in for a Latin one)."""
+              for word in re.findall(r"[^\W\d_]{4,}", fold(text)):
+                  alphabets = {unicodedata.name(c, "?").split()[0] for c in word}
+                  if "LATIN" in alphabets and len(alphabets) > 1:
+                      return word
+              return None
+
+          def render(text):
+              """The text GitHub shows for this Markdown, from GitHub's own
+              renderer: tags dropped, entities decoded, and the alt and title
+              texts kept. Any failure stops the check."""
+              request = urllib.request.Request(
+                  "https://api.github.com/markdown",
+                  data=json.dumps({"text": text, "mode": "gfm",
+                                   "context": os.environ["GITHUB_REPOSITORY"]}).encode(),
+                  headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                           "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(request, timeout=60) as reply:
+                  page = reply.read().decode("utf-8")
+              extras = re.findall(r'\b(?:alt|title|aria-label)="([^"]*)"', page)
+              return html.unescape(re.sub(r"<[^>]*>", "", page) + "\n" + "\n".join(extras))
+
+          def shown(text, is_markdown):
+              """The text as written and folded, and for Markdown also as
+              GitHub renders it, folded, and with math markup dropped
+              (`$\text\{Gen\}$` shows as Gen)."""
+              views = [text, fold(text)]
+              if is_markdown and text.strip():
+                  rendered = fold(render(text))
+                  views += [rendered, re.sub(r"\\[A-Za-z]+|[{}$]", "", rendered)]
+              return views
 
           hits = []
-          texts = [("the PR title", os.environ.get("PR_TITLE", "")),
-                   ("the PR body", os.environ.get("PR_BODY", ""))]
+          texts = [("the PR title", os.environ.get("PR_TITLE", ""), True),
+                   ("the PR body", os.environ.get("PR_BODY", ""), True)]
+          # The title becomes the merge commit's message, and an edited
+          # merge message can carry the body: their co-authors face the list.
+          for where, text, _ in texts:
+              for ident in CO_AUTHOR.findall(text):
+                  if ident.strip() not in KNOWN:
+                      hits.append(f"{where}'s co-author '{ident}' is not listed in "
+                                  ".github/attribution-identities.txt")
           # Each commit the PR adds: what its base already holds is not its own.
           span = f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}"
           for sha in git("rev-list", span).decode().split():
@@ -163,14 +195,19 @@ jobs:
               people = [("author", author), ("committer", committer)]
               people += [("co-author", ident) for ident in CO_AUTHOR.findall(message)]
               for role, ident in people:
-                  texts.append((f"commit {sha[:7]}'s {role}", ident))
+                  texts.append((f"commit {sha[:7]}'s {role}", ident, False))
                   if ident.strip() not in KNOWN:
                       hits.append(f"commit {sha[:7]}'s {role} '{ident}' is not listed in "
                                   ".github/attribution-identities.txt")
-              texts.append((f"commit {sha[:7]}'s message", message))
+              texts.append((f"commit {sha[:7]}'s message", message, False))
 
-          for where, text in texts:
-              for view in shown(text):
+          for where, text, is_markdown in texts:
+              word = mixed_alphabets(text)
+              if word or OVERRIDES.search(text):
+                  why = f"mixes alphabets in '{word}'" if word else "reorders its letters"
+                  hits.append(f"{where} {why}, so it cannot be checked")
+                  continue
+              for view in shown(text, is_markdown):
                   hit = hook.ATTRIBUTION.search(hook.strip_paths(view))
                   if hit:
                       hits.append(f"AI attribution in {where}: '{hit.group(0).strip()}'")
