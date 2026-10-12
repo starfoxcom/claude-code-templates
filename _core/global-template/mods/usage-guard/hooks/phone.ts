@@ -4,6 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { UsageCard } from '../types'
 import type { Pause } from './plan'
 import { EMPTY_ARM_NOTE } from './plan'
+import { SAVED_OFFER_LINE } from './saved'
 import type { Tone } from './texts'
 import { cardTone } from './texts'
 
@@ -35,7 +36,9 @@ async function phoneText($: EngineInterface, status: string): Promise<string> {
   const card = await readShared<UsageCard>($, 'card.json')
   if (card && !card.dismissed) lines.push(`${SQUARES[cardTone(card.id)]} ${card.text}`)
   if ((await read($, armedWake))?.isQuestioned) lines.push(`🟨 ${EMPTY_ARM_NOTE}`)
-  if ((await read($, adopt))?.offer) lines.push(OFFER_LINE)
+  const offered = await read($, adopt)
+  if (offered?.offer) lines.push(OFFER_LINE)
+  else if (offered?.saved) lines.push(SAVED_OFFER_LINE)
   lines.push('/usage-guard help for more')
   return lines.join('\n')
 }

@@ -728,7 +728,7 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
     '/usage-guard disarm',
     '/usage-guard settings',
     '/usage-guard phone',
-    '/usage-guard adopt [drop]',
+    '/usage-guard adopt [keep | drop]',
   ]
   for (const line of lines)
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))

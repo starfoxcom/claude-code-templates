@@ -18,6 +18,7 @@ import { applyValues, type Live, newLive } from './live'
 import { ARGUMENT_HINT, armLineText, CANCELLED_TEXT, cardTone, COMMAND_TEXT, formatLocal, HELP } from './texts'
 import { armedText, joinedPauseText, pausedText, questionText, READ_ZONE, statusText } from './texts'
 import { finishStepText, nothingToSaveText, savingText, UNCONFIRMED_NOTICE, zoneOf } from './texts'
+import { SAVED_FILE, savedRecord } from './saved'
 import { ARM_TOOL, ARM_TOOL_NAME, type ArmRequest, parseArmArgs, planWake, toolRequest, untilText } from './wake'
 
 const CHECK_EVERY_MS = 60_000
@@ -173,6 +174,10 @@ async function wrapUp($: EngineInterface, pause: Pause): Promise<void> {
   if (live.workSession !== sessionId) return notice($, nothingToSaveText(pause, resumeAt))
   const work = `work-${resetKey(pause)}-${sessionId}`
   await claim($, work)
+  // Filed in the claim's folder (the helper made it): if this session is closed when the reset comes, a
+  // later one in the project offers the work (adopt.tsx).
+  const record = JSON.stringify(savedRecord(pause, sessionId, await $.session.root()), null, 2)
+  await $.fs.write(`${await dataDir($)}/claims/${work}/${SAVED_FILE}`, record).catch(() => undefined)
   await notice($, savingText(pause, resumeAt))
   // Mid-turn, the wrap-up never starts beside the running turn: the turn is told to finish its
   // step, and turn.complete runs the wrap-up once it has ended.
