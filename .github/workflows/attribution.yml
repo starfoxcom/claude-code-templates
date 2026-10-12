@@ -276,8 +276,20 @@ jobs:
                     "\u11b7": "o", "\u3134": "L", "\u1102": "L", "\u11ab": "L", "\u3137": "C",
                     "\u1103": "C", "\u11ae": "C", "\u314c": "E", "\u1110": "E", "\u11c0": "E",
                     "\u315c": "T", "\u116e": "T", "\u3161": "-", "\u1173": "-", "\u3145": "A",
-                    "\u1109": "A", "\u11ba": "A"}
+                    "\u1109": "A", "\u11ba": "A", "\u4e42": "X", "\u3021": "l", "\u3022": "ll",
+                    "\u3023": "lll", "\u3024": "X"}
           LOOKALIKE.update({ord(c): read for c, read in SHAPES.items() if ord(c) not in LOOKALIKE})
+          # Each shape's whole look-alike group reads the same: Unicode files
+          # Katakana "\u30ed" under "\u53e3", and "\u4e00" with the dashes under "\u30fc".
+          PROTOTYPE = {source: "".join(chr(int(code, 16)) for code in fields[0].split())
+                       for source, _, fields in ucd_rows("confusables.txt")}
+          for shape, read in SHAPES.items():
+              group = PROTOTYPE.get(ord(shape), shape)
+              for source, target in PROTOTYPE.items():
+                  if target == group and source not in LOOKALIKE:
+                      LOOKALIKE[source] = read
+              if len(group) == 1 and ord(group) not in LOOKALIKE:
+                  LOOKALIKE[ord(group)] = read
 
           ELLS = "".join(map(chr, ELL)) + "l"
           CAPS_WORD = re.compile(r"(?:[^\W\d_]|[" + re.escape(ELLS) + r"])+")
@@ -325,6 +337,39 @@ jobs:
                       if (ord(c) not in MODERN and SCRIPT.get(ord(c)) != "Han"
                               and not (korean and SCRIPT.get(ord(c)) == "Hangul")):
                           return c
+              return None
+
+          # What may sit between two Latin letters of one word: anything the
+          # readings read, digits, the letters Chinese, Japanese and Korean
+          # write next to Latin without spaces, ordinary punctuation, arrows,
+          # a few comparison signs, and emoji. Anything else there (a circle
+          # for an "o", a counting-rod numeral for an "l") draws as a letter
+          # no view reads, so it fails the check.
+          GLUE_SCRIPTS = {"Han", "Hiragana", "Katakana", "Hangul", "Bopomofo"}
+          GLUE_SIGNS = set("\u00b1\u00d7\u00f7\u2212\u2213\u221e\u2248\u2260\u2261\u2264\u2265")
+
+          def glue_readable(c):
+              """Whether a character between two Latin letters is one the
+              check reads or one no reader takes for a letter."""
+              code, kind = ord(c), unicodedata.category(c)
+              return (c.isascii() or code in LOOKALIKE or code in ELL or kind == "Nd"
+                      or (kind.startswith("L") and code in MODERN
+                          and SCRIPT.get(code) in GLUE_SCRIPTS | {"Latin", "Common", "Inherited"})
+                      or (kind.startswith("P") and (0xA1 <= code <= 0xBF or 0x2010 <= code <= 0x205E
+                                                    or 0x3000 <= code <= 0x303F))
+                      or 0x2190 <= code <= 0x21FF or c in GLUE_SIGNS
+                      or (kind == "So" and code >= 0x1F000))
+
+          def glued(text):
+              """A character between two Latin letters of one word that the
+              check cannot read, if any."""
+              for chunk in fold(text).split():
+                  latin = [i for i, c in enumerate(chunk)
+                           if c.isalpha() and SCRIPT.get(ord(c)) == "Latin"]
+                  if len(latin) > 1:
+                      odd = [c for c in chunk[latin[0] + 1:latin[-1]] if not glue_readable(c)]
+                      if odd:
+                          return odd[0]
               return None
 
           def mixed_alphabets(text):
@@ -724,10 +769,13 @@ jobs:
               judged = masked(plain, listed_names(text))
               word = next(filter(None, map(mixed_alphabets, judged[0:1] + judged[3:4])), None)
               letter = next(filter(None, map(odd_letter, judged)), None)
+              glue = next(filter(None, map(glued, judged)), None)
               if word:
                   problem = f"mixes alphabets in '{word}'"
               elif letter:
                   problem = f"uses '{letter}' (U+{ord(letter):04X}), a letter outside modern use"
+              elif glue:
+                  problem = f"puts '{glue}' (U+{ord(glue):04X}) inside a word, where it may draw as a letter"
               elif any(map(unknown, judged)):
                   problem = "holds characters the runner's Unicode does not know"
               elif any(map(mixed_direction, judged)):
