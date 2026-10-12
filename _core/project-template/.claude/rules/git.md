@@ -146,7 +146,7 @@ A feature is done when it works end to end in the running app, not when it compi
 ## Pre-commit hooks
 
 <!-- TOGGLE:precommit:lefthook START -->
-Gate: **lefthook**, config `lefthook.yml`. Activate with `lefthook install`. If `git config core.hooksPath` prints a folder, ask the user to run `git config --local core.hooksPath "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)/hooks"` first (POSIX shell): lefthook writes its hooks into whatever folder that setting names, even on `lefthook run`, so a global one would replace the hooks of every repo that shares it.
+Gate: **lefthook**, config `lefthook.yml`. Activate with `lefthook install`. If `git config core.hooksPath` prints a folder, ask the user to run `git config --local core.hooksPath "$(cd "$(git rev-parse --git-common-dir)" && pwd -P)/hooks"` first (POSIX shell), then activate with `lefthook install --force`: lefthook writes its hooks into whatever folder that setting names, even on `lefthook run`, so a global one would replace the hooks of every repo that shares it. Lefthook 2 refuses a plain install while any such setting exists; `--force` installs into the local folder, while `--reset-hooks-path` would remove the global setting for every repo. With its own folder the repo no longer runs the global folder's hooks, so copy any it still needs (an indexer's sync, say) into its own `post-commit` or `post-checkout`.
 <!-- TOGGLE:precommit:lefthook END -->
 <!-- TOGGLE:precommit:husky START -->
 Gate: **husky**, config `.husky/pre-commit`. Activate with `npm install --save-dev husky && npm pkg set scripts.prepare=husky && npm run prepare`. A `core.hooksPath` that `git config core.hooksPath` prints needs no step: husky sets this repo's own (`.husky/_`), which overrides a global one.
