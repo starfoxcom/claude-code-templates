@@ -86,10 +86,15 @@ jobs:
                       (0x2500, 0x27BF), (0x2900, 0x297F), (0x2B00, 0x2BFF), (0xFE0F, 0xFE0F),
                       (0x1F300, 0x1FAFF)]
 
+          # Read as the patterns see them: the emoji joiner, presentation
+          # selector and keycap mark draw nothing between letters, and every
+          # dash reads as "-".
+          PLAIN = {0x200D: None, 0xFE0F: None, 0x20E3: None, **dict.fromkeys(range(0x2010, 0x2016), "-")}
+
           def foreign(text):
               """The first character outside the accepted ones, if any."""
               for c in text:
-                  if c not in "\t\n\r‍" and not any(a <= ord(c) <= b for a, b in ACCEPTED):
+                  if c not in "\t\n\r\u200d" and not any(a <= ord(c) <= b for a, b in ACCEPTED):
                       return c
               return None
 
@@ -123,7 +128,7 @@ jobs:
           for sha in git("rev-list", f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}").decode().split():
               author, committer, message = read_commit(sha)
               people = [("author", author), ("committer", committer)]
-              people += [("co-author", ident) for ident in CO_AUTHOR.findall(message)]
+              people += [("co-author", ident) for ident in CO_AUTHOR.findall(message.translate(PLAIN))]
               hits += [f"commit {sha[:7]}'s {role} '{ident}' is not listed in .github/attribution-identities.txt"
                        for role, ident in people if ident.strip() not in KNOWN]
               texts.append((f"commit {sha[:7]}'s message", message))
@@ -137,7 +142,7 @@ jobs:
                   hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside English text, common "
                               "symbols and emoji")
                   continue
-              views = [view.replace(":robot:", "\U0001F916") for view in views]
+              views = [view.translate(PLAIN).replace(":robot:", "\U0001F916") for view in views]
               hit = next(filter(None, (hook.ATTRIBUTION.search(v) or hook.ATTRIBUTION.search(hook.strip_paths(v))
                                        for v in views)), None)
               if hit:
