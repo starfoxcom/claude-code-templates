@@ -46,10 +46,14 @@ const live = {
   isTurnRunning: false,
 }
 
+// The same watch on the same head, whatever object holds it now: a push or a reconcile made while a poll
+// or a command waited on gh or the disk replaces the object, never the watch.
+const isSameRun = (a: Watch, b: Watch) =>
+  a.id === b.id && a.repo === b.repo && a.number === b.number && a.headSha === b.headSha
+
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
 // stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. So is
 // an incident's note, while the watch is still unsettled on the same head (the poll drops it otherwise).
-// The polled copy itself is kept whenever nothing differs: the poll finds its settled watches by identity.
 function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   const same = (a: Watch, b: Watch) =>
     a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
@@ -466,7 +470,9 @@ async function poll($: EngineInterface): Promise<void> {
   }
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
-  const toWake = settled.filter(w => live.watches.includes(w) && !w.isSilent)
+  // Found by watch and head, not identity: a push made meanwhile is laid onto the polled copy, and the
+  // watch as it is now decides whether it is silent. One stopped or restarted meanwhile is not found.
+  const toWake = live.watches.filter(w => w.outcome && !w.isSilent && settled.some(s => isSameRun(s, w)))
   // GitHub's status is read before the retirement check: the read can take seconds, and a load retired
   // meanwhile must not save over the newer one's file afterwards.
   const isIncidentNoted = await noteIncidents($, now)
@@ -478,8 +484,10 @@ async function poll($: EngineInterface): Promise<void> {
   // instance's record is written before its prompt goes out.
   const recorded = toWake.length > 0 ? await readSaved($) : undefined
   // Each wake is marked pending in the same save that records its outcome; sendHeld sends it.
-  const due = new Set(toWake.filter(w => !isRecorded(recorded, w) && claimWake(w)))
-  if (due.size > 0) live.watches = live.watches.map(w => (due.has(w) ? { ...w, wakePending: true } : w))
+  const due = toWake.filter(w => !isRecorded(recorded, w) && claimWake(w))
+  // Marked by watch and head too: a same-head push made during the reads above replaced the object.
+  const isDue = (w: Watch) => due.some(d => isSameRun(d, w))
+  if (due.length > 0) live.watches = live.watches.map(w => (isDue(w) ? { ...w, wakePending: true } : w))
   if (changed || isIncidentNoted || live.isUnsaved) await save($)
   if (!live.isTurnRunning) await sendHeld($)
 }
@@ -686,7 +694,7 @@ export const register: Register = (on, options) => {
       const gone: Watch[] = []
       for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
       if (gone.length > 0) {
-        live.watches = live.watches.filter(w => !gone.includes(w))
+        live.watches = live.watches.filter(w => !gone.some(g => isSameRun(g, w)))
         live.generation++
         await save($)
       }

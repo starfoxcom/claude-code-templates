@@ -463,6 +463,47 @@ test('an own push made mid-poll keeps the session its wake', async ($, on) => {
   expect(seen.prompts).toHaveLength(2)
 })
 
+// A push that leaves the head where it was (nothing new to send, or GitHub still naming the old head),
+// made while the poll that settles the watch waits on gh: the settlement still wakes the session once.
+test('a same-head push made while a poll settles the watch keeps its wake', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
+  seen.duringChecks = () => {
+    seen.duringChecks = undefined
+    return $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  }
+  await clock.advance(POLL_MS)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(1)
+})
+
+// The same push, landing later in that poll: while it reads the saved file again right before waking.
+test('a same-head push made while the settling poll checks the file before waking keeps its wake', async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  seen.bucket = 'pass'
+  await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
+  // The poll reads the file once at its start, and once more before it wakes.
+  let reads = 0
+  seen.duringStateRead = () => {
+    if (++reads < 2) return undefined
+    seen.duringStateRead = undefined
+    return $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  }
+  await clock.advance(POLL_MS)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  expect(reads).toBe(2)
+  expect(seen.prompts).toHaveLength(1)
+})
+
 test('a watch settled long ago asks GitHub about its PR every ten minutes, not every poll', async ($, on) => {
   const { seen, clock } = world(on)
   await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
