@@ -301,9 +301,18 @@ jobs:
 
           def odd_letter(text):
               """A letter outside modern use, once compatibility forms are
-              folded (so "1\u00ba", fullwidth letters and ligatures pass)."""
-              return next((c for c in fold(text) if unicodedata.category(c).startswith("L")
-                           and ord(c) not in MODERN and SCRIPT.get(ord(c)) != "Han"), None)
+              folded (so "1\u00ba", fullwidth letters and ligatures pass). Han
+              is exempt, as are lone Hangul letters in a word with no Latin
+              letter (Korean writes "\u314b\u314b" with them; inside a Latin word
+              one could pose as a Latin letter)."""
+              for word in re.findall(r"[^\W\d_]+", fold(text)):
+                  latin = any(SCRIPT.get(ord(c)) == "Latin" for c in word)
+                  for c in word:
+                      if (unicodedata.category(c).startswith("L") and ord(c) not in MODERN
+                              and SCRIPT.get(ord(c)) != "Han"
+                              and (latin or SCRIPT.get(ord(c)) != "Hangul")):
+                          return c
+              return None
 
           def mixed_alphabets(text):
               """A word whose letters come from scripts no language mixes in
@@ -620,8 +629,10 @@ jobs:
                   name, _, address = ident.partition(" <")
                   address = address.rstrip(">")
                   for name, address in {(name, address), (fold(name), fold(address))}:
-                      person = re.compile(r"(co-authored-by:[ \t]*)" + re.escape(name)
-                                          + r"[ \t]*<?" + re.escape(address) + r">?", re.I)
+                      # The whole trailer line only, as TRAILER reads it.
+                      person = re.compile(r"^([ \t]*co-authored-by:[ \t]*)" + re.escape(name)
+                                          + r"[ \t]*<?" + re.escape(address) + r">?(?=[ \t]*$)",
+                                          re.I | re.M)
                       views = [person.sub(r"\1a listed contributor", view) for view in views]
               return views
 
