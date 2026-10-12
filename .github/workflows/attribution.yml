@@ -63,7 +63,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           python3 - <<'EOF'
-          import html, importlib.util, os, re, subprocess, sys, unicodedata
+          import html, importlib.util, os, re, subprocess, sys
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
@@ -94,11 +94,10 @@ jobs:
                       (0x2B1B, 0x2B1C), (0x2B50, 0x2B50), (0x2B55, 0x2B55), (0xFE0F, 0xFE0F),
                       (0x1F300, 0x1F6FF), (0x1F780, 0x1FAFF)]
           # Read as the patterns see them: the emoji joiner, presentation
-          # selector and keycap mark (and a soft hyphen an entity spells) draw
-          # nothing between letters, and each accepted symbol Unicode's
-          # look-alike table (confusables.txt 17.0.0) files under ASCII reads
-          # as that ASCII.
-          PLAIN = {0x200D: None, 0xFE0F: None, 0x20E3: None, 0x00AD: None,
+          # selector and keycap mark draw nothing between letters, and each
+          # accepted symbol Unicode's look-alike table (confusables.txt
+          # 17.0.0) files under ASCII reads as that ASCII.
+          PLAIN = {0x200D: None, 0xFE0F: None, 0x20E3: None,
                    0x00A0: " ", 0x00B4: "'", 0x00B8: ",", 0x2009: " ", 0x2010: "-", 0x2011: "-",
                    0x2012: "-", 0x2013: "-", 0x2014: "-", 0x2015: "-", 0x2018: "'", 0x2019: "'",
                    0x201A: ",", 0x201B: "'", 0x201C: "''", 0x201D: "''", 0x201F: "''", 0x2024: ".",
@@ -113,12 +112,6 @@ jobs:
                   if c not in "\t\n\r\u200d" and not any(a <= ord(c) <= b for a, b in ACCEPTED):
                       return c
               return None
-
-          def bare(text):
-              """Text without accents, invisible and control characters (tabs
-              and line ends stay)."""
-              return "".join(c for c in unicodedata.normalize("NFD", text)
-                             if c in "\t\n\r" or unicodedata.category(c)[0] not in "CM")
 
           def entity(m):
               """An entity as GitHub's Markdown shows it."""
@@ -169,13 +162,10 @@ jobs:
               # GitHub's Markdown decodes an entity only when it ends in ";" (a
               # known name, or a number of up to eight digits); inside an HTML
               # block, like a browser, it also decodes numbers and the old names
-              # without one. Every reading is scanned. Characters are checked on
-              # all numbers but only on known names that end in ";", so a link's
-              # "&ethernet=on" stays as written.
+              # without one. Every reading is checked and scanned.
               shown = re.sub(r"&(#[0-9]{1,8}|#[xX][0-9A-Fa-f]{1,8}|[A-Za-z][A-Za-z0-9]*);", entity, text)
               views = [text, html.unescape(text), shown]
-              strict = html.unescape(re.sub(r"&(?=[A-Za-z])", "&amp;", shown))
-              odd = next(filter(None, map(foreign, [text, strict, shown])), None)
+              odd = next(filter(None, map(foreign, views)), None)
               if odd:
                   hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside English text, common "
                               "symbols and emoji")
@@ -184,7 +174,7 @@ jobs:
               # dingbat digit) reads as a space, so it cannot glue onto a word.
               # The readings as written are scanned too.
               written = views
-              views = [re.sub(r"(?![A-Za-z0-9_])\w", " ", bare(view).translate(PLAIN)).replace(":robot:", "\U0001F916")
+              views = [re.sub(r"(?![A-Za-z0-9_])\w", " ", view.translate(PLAIN)).replace(":robot:", "\U0001F916")
                        for view in views]
               # The title (and an edited merge message, the body) ends the merge
               # commit, so a co-author line there with an address faces the list.
