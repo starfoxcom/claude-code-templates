@@ -83,8 +83,8 @@ jobs:
           git show origin/main:.github/attribution-identities.txt > "$RUNNER_TEMP/attribution-identities.txt"
 
       # Unicode's own data, pinned to 17.0.0 by checksum: which script each
-      # letter belongs to, which letters look like others, and which are in
-      # modern use (UTS #39).
+      # letter belongs to and which scripts use a shared one, which letters
+      # look like others, and which are in modern use (UTS #39).
       - name: Fetch the Unicode script, look-alike and letter-status tables
         run: |
           mkdir -p "$RUNNER_TEMP/ucd"
@@ -92,10 +92,14 @@ jobs:
           curl -sSfL -o Scripts.txt https://www.unicode.org/Public/17.0.0/ucd/Scripts.txt
           curl -sSfL -o confusables.txt https://www.unicode.org/Public/17.0.0/security/confusables.txt
           curl -sSfL -o IdentifierStatus.txt https://www.unicode.org/Public/17.0.0/security/IdentifierStatus.txt
+          curl -sSfL -o ScriptExtensions.txt https://www.unicode.org/Public/17.0.0/ucd/ScriptExtensions.txt
+          curl -sSfL -o PropertyValueAliases.txt https://www.unicode.org/Public/17.0.0/ucd/PropertyValueAliases.txt
           sha256sum -c - <<'SUMS'
           9f5e50d3abaee7d6ce09480f325c706f485ae3240912527e651954d2d6b035bf  Scripts.txt
           091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a  confusables.txt
           617228a16da13850bf8af28b6cd08f5e9b6595d2eb60404fe6eee2c85b4e4a35  IdentifierStatus.txt
+          ec2107e58825a1586acee8e0911ce18260394ac8b87e535ca325f1ccbeb06bc6  ScriptExtensions.txt
+          64e9a5f76f7a1e8b5a47d6a1f9a26522a251208f5276bdfa1559dac7cf2e827a  PropertyValueAliases.txt
           SUMS
 
       # The PR's text reaches the script through the environment, never the
@@ -227,6 +231,18 @@ jobs:
           SCRIPT = {}
           for first, last, fields in ucd_rows("Scripts.txt"):
               SCRIPT.update(dict.fromkeys(range(first, last + 1), fields[0]))
+          # The scripts that use each shared character (Arabic's tatweel,
+          # Bopomofo's tone marks), by the long names Scripts.txt uses.
+          SCRIPT_NAME = {}
+          with open(os.path.join(UCD, "PropertyValueAliases.txt"), encoding="utf-8") as data:
+              for line in data:
+                  fields = [part.strip() for part in line.split("#", 1)[0].split(";")]
+                  if fields[0] == "sc":
+                      SCRIPT_NAME[fields[1]] = fields[2]
+          USED_BY = {}
+          for first, last, fields in ucd_rows("ScriptExtensions.txt"):
+              USED_BY.update(dict.fromkeys(range(first, last + 1),
+                                           {SCRIPT_NAME[short] for short in fields[0].split()}))
           # Script sets one word may mix (UTS #39 "Highly Restrictive"); Common
           # and Inherited letters (digits, marks, punctuation) belong to any.
           NEUTRAL = {"Common", "Inherited", "Unknown"}
@@ -351,14 +367,19 @@ jobs:
               folded (so "1\u00ba", fullwidth letters and ligatures pass). Han
               is exempt, as are lone Hangul letters between spaces with only
               Hangul letters (Korean writes "\u314b\u314b" with them; next to
-              another script one could pose as a letter of it)."""
+              another script one could pose as a letter of it), and a shared
+              letter between spaces whose other letters all come from a
+              script, other than these, that Unicode lists as using it
+              (Arabic's tatweel, Bopomofo's tone marks)."""
               for chunk in fold(text).split():
                   letters = [c for c in chunk if unicodedata.category(c).startswith("L")]
                   korean = all(SCRIPT.get(ord(c)) == "Hangul" for c in letters)
+                  scripts = {SCRIPT.get(ord(c)) for c in letters} - {"Common", "Inherited"}
                   for c in letters:
                       script = SCRIPT.get(ord(c))
-                      if ord(c) not in MODERN and (script in POSING
-                                                   or (script == "Hangul" and not korean)):
+                      used = scripts and scripts <= USED_BY.get(ord(c), set()) - POSING
+                      if ord(c) not in MODERN and not used and (script in POSING
+                                                                or (script == "Hangul" and not korean)):
                           return c
               return None
 
@@ -594,6 +615,12 @@ jobs:
                                 lambda m: "".join(re.findall(r'\balt="([^"]*)"', m.group(0))[:1]),
                                 page)
 
+              def boxed(page):
+                  """Each image as one piece holding its alt text, as the
+                  browser places it in a line."""
+                  return re.sub(r"<img\b([^>]*)>",
+                                lambda m: OBJECT + (attribute(m.group(1), "alt") or "") + OBJECT_END, page)
+
               # Every open/closed combination of the details blocks, all open
               # first, each with and without struck text. A hidden list item
               # is no list item: closed content goes before the markers are
@@ -601,13 +628,18 @@ jobs:
               count = len(re.findall(r"<details\b", page))
               combos = [tuple(not k >> i & 1 for i in range(count))
                         for k in range(2 ** min(count, MOST_DETAILS))]
-              views = []
+              views, boxes = [], []
               for opened in combos if count <= MOST_DETAILS else combos[:1]:
                   base = collapsed(page, opened)
                   for marked in (drawn(base), drawn(unstruck(base))):
                       views += [TAG.sub(layout, marked), TAG.sub(layout, pictured(marked))]
+                      boxes.append(TAG.sub(layout, boxed(marked)))
               views = list(dict.fromkeys(views + [TAG.sub("", drawn(page))]))
               shown_texts = [html.unescape(view) + "\n\n" + "\n\n".join(extras) for view in views]
+              # In shown order with each image as one piece: an image between
+              # two right-to-left characters is drawn inside their run.
+              shown_texts += [visual(html.unescape(box)) for box in dict.fromkeys(boxes)
+                              if OBJECT in box]
               problem = next((why for why, mark in UNREADABLE if mark.search(page)), None)
               tags = list(re.finditer(r"<([A-Za-z][\w-]*)([^>]*)>", page))
               if not problem and any(own_direction(t.group(2)) not in (None, "auto")
@@ -619,8 +651,9 @@ jobs:
               # in the browser, a nested element with its own dir (a nested
               # list, a quoted paragraph) is skipped and judged on its own. An
               # image's alt text, drawn in place when the image does not load,
-              # takes no part in the direction but is placed by it, so Latin
-              # in it counts as Latin in the block.
+              # takes no part in the direction (a block of images alone is left
+              # to right) but is placed by it, so Latin in it counts as Latin
+              # in a right-to-left block.
               for m in (t for t in tags if own_direction(t.group(2)) == "auto"):
                   stack, parts, alts, last = [], [], [], m.start()
                   for t in re.finditer(r"<(/?)([A-Za-z][\w-]*)([^>]*)>", page[m.start():]):
@@ -638,7 +671,9 @@ jobs:
                               break
                       elif not closing and tag not in VOID:
                           stack.append((tag, bool(stack) and own_direction(inside) is not None))
-                  block = html.unescape("".join(parts) + " " + " ".join(alts)).replace("\n", " ")
+                  block = html.unescape("".join(parts)).replace("\n", " ")
+                  if any(unicodedata.bidirectional(c) in ("L", "R", "AL") for c in block):
+                      block += " " + html.unescape(" ".join(alts)).replace("\n", " ")
                   if mixed_direction(block) and not problem:
                       problem = "lays out a right-to-left block holding Latin words, whose order differs"
               if count > MOST_DETAILS and not problem:
@@ -704,10 +739,19 @@ jobs:
           # nothing.
           UNORDERED = {"LRE", "RLE", "LRO", "RLO", "PDF", "LRI", "RLI", "FSI", "PDI", "BN"}
 
+          # An image in a line, as visual() takes it: one neutral piece, its
+          # alt text between these two marks.
+          OBJECT, OBJECT_END = "\ufffc", "\ufffb"
+
           def visual(text):
               """The text in shown order, each line as a left-to-right paragraph
               draws it."""
-              return "\n".join(map(visual_line, text.split("\n")))
+              text = "\n".join(map(visual_line, text.split("\n")))
+              return text.replace(OBJECT, "").replace(OBJECT_END, "")
+
+          def bidi_class(piece):
+              """A character's direction class; an image's piece is a neutral."""
+              return "ON" if len(piece) > 1 else unicodedata.bidirectional(piece)
 
           def visual_line(line):
               """A line reordered as Unicode's bidirectional algorithm (UAX #9)
@@ -716,8 +760,9 @@ jobs:
               L1 its level, and L2 reverses each run from the highest level
               down. Spaces and punctuation between two right-to-left letters
               join them, and digits after an Arabic letter draw to its left."""
-              chars = [c for c in line if unicodedata.bidirectional(c) not in UNORDERED]
-              kinds = [unicodedata.bidirectional(c) for c in chars]
+              pieces = re.findall(OBJECT + "[^" + OBJECT + OBJECT_END + "]*" + OBJECT_END + "|.", line, re.S)
+              chars = [c for c in pieces if bidi_class(c) not in UNORDERED]
+              kinds = [bidi_class(c) for c in chars]
               n, strong = len(kinds), "L"
               for i in range(n):
                   if kinds[i] == "NSM":
@@ -758,7 +803,7 @@ jobs:
                       kinds[i:j] = [before if before == after else "L"] * (j - i)
                   i = max(j, i + 1)
               levels = [{"L": 0, "R": 1}.get(kind, 2) for kind in kinds]
-              kinds = [unicodedata.bidirectional(c) for c in chars]
+              kinds = [bidi_class(c) for c in chars]
               trailing = True
               for i in reversed(range(n)):
                   if kinds[i] in ("B", "S"):
@@ -778,13 +823,14 @@ jobs:
                           i = j
                       else:
                           i += 1
-              return "".join(chars)
+              return "".join(visual_line(c[1:-1]) if len(c) > 1 else c for c in chars)
 
           def readings(views):
               """Each view, and each in shown order where right-to-left runs
-              draw reversed, with look-alike letters read as Latin, then also
+              draw reversed (as is and folded), with look-alike letters read as Latin, then also
               through the ASCII look-alike pairs (twins)."""
-              views = views + [order for order in map(visual, views) if order not in views]
+              shown = [order for view in views for order in (visual(view), fold(visual(view)))]
+              views = views + [order for order in dict.fromkeys(shown) if order not in views]
               looks = [view.translate(LOOKALIKE) for view in views]
               return looks + [twin for view in looks for twin in twins(view)]
 
