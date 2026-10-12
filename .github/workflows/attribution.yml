@@ -1,0 +1,197 @@
+name: Attribution
+
+# The server-side backstop to the local attribution guards. The local hook and
+# the guards mod catch AI credit written the ordinary way from a session; a
+# commit made elsewhere, or a write that slipped past them, reaches this check.
+# It fails a pull request when:
+# - one of its commits' messages, its title or its body carries AI
+#   attribution, as the shipped hook's own patterns read it, as written and
+#   with HTML entities decoded.
+# - one of those texts uses a character outside English text (printable
+#   ASCII), common symbols and emoji. An allow-list keeps look-alike letters
+#   from other alphabets, invisible characters and direction marks out
+#   without chasing each one, as curl does for its sources.
+# - a commit's author, committer or co-author is not listed in
+#   `.github/attribution-identities.txt`: an AI account fails whatever its
+#   name.
+#
+# A pull request cannot weaken the check on itself: `pull_request_target`
+# runs this file as the protected base branch holds it; the identity list comes from `main` and
+# the patterns (`ATTRIBUTION` in
+# `_core/global-template/hooks/no-ai-attribution.py`) from `develop`. Nothing
+# from the PR runs: its commits are fetched as objects and read raw, and its
+# text reaches the script through the environment. Keep it that way.
+
+on:
+  pull_request_target:
+    branches: [develop, main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: attribution-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  attribution:
+    name: No AI attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The base branch, never the PR's head.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the PR's commits, the hook's patterns and the identity list
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "$HEAD_SHA" develop main
+          git cat-file -e "$HEAD_SHA^{commit}"
+          git show origin/develop:_core/global-template/hooks/no-ai-attribution.py > "$RUNNER_TEMP/attribution_hook.py"
+          git show origin/main:.github/attribution-identities.txt > "$RUNNER_TEMP/attribution-identities.txt"
+
+      - name: Scan the commits, title and body
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'EOF'
+          import html, importlib.util, os, re, subprocess, sys
+
+          spec = importlib.util.spec_from_file_location(
+              "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
+          hook = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(hook)
+
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "attribution-identities.txt"), encoding="utf-8") as listed:
+              KNOWN = {line.strip() for line in listed if line.strip() and not line.startswith("#")}
+          CO_AUTHOR = re.compile(r"^[ \t]*co[\W_]*authored[\W_]*by[ \t]*:[ \t]*(.*?)[ \t]*\r?$", re.I | re.M)
+          # A listed co-author's name is the list's matter, not the patterns'
+          # (a listed "Ai Tanaka" passes).
+          TRAILER = re.compile(r"^([ \t]*co-authored-by:[ \t]*)(.*?)([ \t]*\r?)$", re.I | re.M)
+
+          # Printable ASCII with tabs and line ends, and the symbols English
+          # text uses: Latin-1 signs, punctuation, currency, arrows, box lines,
+          # shapes, dingbats and emoji (with their joiner, presentation
+          # selector and keycap mark). Left out: letters of other alphabets,
+          # invisible and direction characters, math and technical symbols,
+          # the ordinal indicators and the micro sign, emoji drawn as letters (flags, boxed and
+          # squared letters), which could spell a name, and the symbols Unicode
+          # reads as letters (× ‖ ₨ ₶ ╳), which could glue onto one.
+          ACCEPTED = [(0x20, 0x7E), (0xA0, 0xA5), (0xA7, 0xA9), (0xAB, 0xAC), (0xAE, 0xB4), (0xB6, 0xB9), (0xBB, 0xBF),
+                      (0xF7, 0xF7), (0x2009, 0x2009), (0x2010, 0x2015), (0x2017, 0x2027), (0x202F, 0x202F),
+                      (0x2030, 0x2046), (0x2049, 0x2049), (0x20A0, 0x20A7), (0x20A9, 0x20B5), (0x20B7, 0x20C0),
+                      (0x20E3, 0x20E3), (0x2122, 0x2122),
+                      (0x2190, 0x21FF), (0x231A, 0x231B), (0x2328, 0x2328), (0x23CF, 0x23CF), (0x23E9, 0x23F3), (0x23F8, 0x23FA),
+                      (0x2500, 0x2572), (0x2574, 0x257F), (0x2934, 0x2935), (0x25A0, 0x25FF), (0x2600, 0x27BF), (0x2B05, 0x2B07),
+                      (0x2B1B, 0x2B1C), (0x2B50, 0x2B50), (0x2B55, 0x2B55), (0xFE0F, 0xFE0F),
+                      (0x1F300, 0x1F6FF), (0x1F780, 0x1FAFF)]
+          # Read as the patterns see them: the emoji joiner, presentation
+          # selector and keycap mark draw nothing between letters, and each
+          # accepted symbol Unicode's look-alike table (confusables.txt
+          # 17.0.0) files under ASCII reads as that ASCII.
+          PLAIN = {0x200D: None, 0xFE0F: None, 0x20E3: None,
+                   0x00A0: " ", 0x00B4: "'", 0x00B8: ",", 0x2009: " ", 0x2010: "-", 0x2011: "-",
+                   0x2012: "-", 0x2013: "-", 0x2014: "-", 0x2015: "-", 0x2018: "'", 0x2019: "'",
+                   0x201A: ",", 0x201B: "'", 0x201C: "''", 0x201D: "''", 0x201F: "''", 0x2024: ".",
+                   0x2025: "..", 0x2026: "...", 0x202F: " ", 0x2032: "'", 0x2033: "''", 0x2034: "'''",
+                   0x2035: "'", 0x2036: "''", 0x2037: "'''", 0x2039: "<", 0x203A: ">", 0x203C: "!!", 0x2049: "!?",
+                   0x2041: "/", 0x2043: "-", 0x2044: "/", 0x2571: "/", 0x2768: "(", 0x2769: ")", 0x276E: "<", 0x276F: ">", 0x2772: "(",
+                   0x2773: ")", 0x2774: "{", 0x2775: "}", 0x2795: "+", 0x2796: "-"}
+
+          def foreign(text):
+              """The first character outside the accepted ones, if any."""
+              for c in text:
+                  if c not in "\t\n\r\u200d" and not any(a <= ord(c) <= b for a, b in ACCEPTED):
+                      return c
+              return None
+
+          def entity(m):
+              """An entity as GitHub's Markdown shows it."""
+              name = m.group(1)
+              if name[0] != "#":
+                  return html.unescape(m.group(0)) if name + ";" in html.entities.html5 else m.group(0)
+              n = int(name[2:], 16) if name[1] in "xX" else int(name[1:])
+              return chr(n) if 0 < n < 0x110000 and not 0xD800 <= n < 0xE000 else "\ufffd"
+
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, capture_output=True).stdout
+
+          def read_commit(sha):
+              """A commit's author, committer and message from its raw object.
+              Only plain UTF-8 passes: git's formatter re-encodes other
+              encodings, which can blank every field."""
+              try:
+                  raw = git("cat-file", "commit", sha).decode("utf-8")
+              except UnicodeDecodeError:
+                  sys.exit(f"::error::commit {sha[:7]} is not valid UTF-8, so it cannot be checked.")
+              head, _, message = raw.partition("\n\n")
+              fields = {}
+              for line in head.split("\n"):
+                  key, _, value = line.partition(" ")
+                  if key in fields and key in ("author", "committer", "encoding"):
+                      sys.exit(f"::error::commit {sha[:7]} has two {key} lines, so it cannot be checked.")
+                  if key:
+                      fields.setdefault(key, value)
+              if fields.get("encoding", "UTF-8").lower().replace("-", "") != "utf8":
+                  sys.exit(f"::error::commit {sha[:7]} is not stored as UTF-8, so it cannot be checked.")
+              stamp = re.compile(r" \d+ [+-]\d{4}$")
+              return stamp.sub("", fields["author"]), stamp.sub("", fields["committer"]), message
+
+          hits = []
+          texts = [("the PR title", os.environ.get("PR_TITLE", "")),
+                   ("the PR body", os.environ.get("PR_BODY", ""))]
+          for sha in git("rev-list", f"{os.environ['BASE_SHA']}..{os.environ['HEAD_SHA']}").decode().split():
+              author, committer, message = read_commit(sha)
+              people = [("author", author), ("committer", committer)]
+              people += [("co-author", ident) for ident in CO_AUTHOR.findall(message.translate(PLAIN))]
+              hits += [f"commit {sha[:7]}'s {role} '{ident}' is not listed in .github/attribution-identities.txt"
+                       for role, ident in people if ident.strip() not in KNOWN]
+              texts.append((f"commit {sha[:7]}'s message", message))
+
+          for where, text in texts:
+              text = TRAILER.sub(lambda m: m.group(1) + ("a listed contributor" if m.group(2) in KNOWN
+                                                         else m.group(2)) + m.group(3), text)
+              # GitHub's Markdown decodes an entity only when it ends in ";" (a
+              # known name, or a number of up to eight digits); inside an HTML
+              # block, like a browser, it also decodes numbers and the old names
+              # without one. Every reading is checked and scanned.
+              shown = re.sub(r"&(#[0-9]{1,8}|#[xX][0-9A-Fa-f]{1,8}|[A-Za-z][A-Za-z0-9]*);", entity, text)
+              views = [text, html.unescape(text), shown]
+              odd = next(filter(None, map(foreign, views)), None)
+              if odd:
+                  hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside English text, common "
+                              "symbols and emoji")
+                  continue
+              # A number sign that counts as a word character (a footnote "¹", a
+              # dingbat digit) reads as a space, so it cannot glue onto a word.
+              # The readings as written are scanned too.
+              written = views
+              views = [re.sub(r"(?![A-Za-z0-9_])\w", " ", view.translate(PLAIN)).replace(":robot:", "\U0001F916")
+                       for view in views]
+              # The title (and an edited merge message, the body) ends the merge
+              # commit, so a co-author line there with an address faces the list.
+              if where.startswith("the PR "):
+                  hits += [f"{where}'s co-author '{ident}' is not listed in .github/attribution-identities.txt"
+                           for ident in sorted({i.strip() for v in views for i in CO_AUTHOR.findall(v)})
+                           if "@" in ident and ident not in KNOWN and ident != "a listed contributor"]
+              hit = next(filter(None, (hook.ATTRIBUTION.search(v) or hook.ATTRIBUTION.search(hook.strip_paths(v))
+                                       for v in written + views)), None)
+              if hit:
+                  hits.append(f"AI attribution in {where}: '{hit.group(0).strip()}'")
+          for line in hits:
+              print(f"::error::{line}")
+          if hits:
+              print("Remove the attribution or the unaccepted characters and push again. A new "
+                    "contributor's identity is added to .github/attribution-identities.txt by the "
+                    "maintainer.")
+              sys.exit(1)
+          print(f"No AI attribution in {len(texts)} texts.")
+          EOF
