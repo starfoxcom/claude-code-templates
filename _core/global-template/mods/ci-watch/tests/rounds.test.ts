@@ -285,6 +285,23 @@ test('each settled watch of a pushed head adds a round; an unreadable count file
   expect(JSON.parse(seen.files.get(path) ?? '{}')['o/r#7']).toEqual({ rounds: [{ sha: 'a1', red: true }] })
 })
 
+// A head someone else pushed (a silent watch, past the hour after this session's push) is no round of this
+// session's: its red run never counts toward the limit.
+test("a silent watch of someone else's head adds no round", async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'pass'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let i = 0; i < 3; i++) await clock.advance(30_000)
+  await clock.advance(2 * 60 * 60_000)
+  seen.head = 'b2'
+  seen.bucket = 'fail'
+  for (let i = 0; i < 25; i++) await clock.advance(30_000)
+  const rounds = (JSON.parse(seen.files.get(path) ?? '{}') as Record<string, PrRounds>)['o/r#7']?.rounds
+  expect(rounds).toEqual([{ sha: 'a1', red: false }])
+})
+
 // A reset another session writes while a round is being added is the state the round adds to: the file
 // is read once, right before the write, with nothing in between that could let a reset land unseen.
 test("a round adds to the count file as read right before its write", async ($, on) => {
