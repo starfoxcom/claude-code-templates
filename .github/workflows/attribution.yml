@@ -63,7 +63,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           python3 - <<'EOF'
-          import html, importlib.util, os, re, subprocess, sys
+          import html, importlib.util, os, re, subprocess, sys, unicodedata
 
           spec = importlib.util.spec_from_file_location(
               "attribution_hook", os.path.join(os.environ["RUNNER_TEMP"], "attribution_hook.py"))
@@ -82,10 +82,10 @@ jobs:
           # shapes, dingbats and emoji (with their joiner, presentation
           # selector and keycap mark). Left out: letters of other alphabets,
           # invisible and direction characters, math and technical symbols,
-          # the ordinal indicators, emoji drawn as letters (flags, boxed and
+          # the ordinal indicators and the micro sign, emoji drawn as letters (flags, boxed and
           # squared letters), which could spell a name, and the symbols Unicode
           # reads as letters (× ‖ ₨ ₶ ╳), which could glue onto one.
-          ACCEPTED = [(0x20, 0x7E), (0xA0, 0xA5), (0xA7, 0xA9), (0xAB, 0xAC), (0xAE, 0xB9), (0xBB, 0xBF),
+          ACCEPTED = [(0x20, 0x7E), (0xA0, 0xA5), (0xA7, 0xA9), (0xAB, 0xAC), (0xAE, 0xB4), (0xB6, 0xB9), (0xBB, 0xBF),
                       (0xF7, 0xF7), (0x2009, 0x2009), (0x2010, 0x2015), (0x2017, 0x2027), (0x202F, 0x202F),
                       (0x2030, 0x2046), (0x2049, 0x2049), (0x20A0, 0x20A7), (0x20A9, 0x20B5), (0x20B7, 0x20C0),
                       (0x20E3, 0x20E3), (0x2122, 0x2122),
@@ -113,6 +113,20 @@ jobs:
                   if c not in "\t\n\r\u200d" and not any(a <= ord(c) <= b for a, b in ACCEPTED):
                       return c
               return None
+
+          def bare(text):
+              """Text without accents, invisible and control characters (tabs
+              and line ends stay)."""
+              return "".join(c for c in unicodedata.normalize("NFD", text)
+                             if c in "\t\n\r" or unicodedata.category(c)[0] not in "CM")
+
+          def entity(m):
+              """An entity as GitHub's Markdown shows it."""
+              name = m.group(1)
+              if name[0] != "#":
+                  return html.unescape(m.group(0)) if name + ";" in html.entities.html5 else m.group(0)
+              n = int(name[2:], 16) if name[1] in "xX" else int(name[1:])
+              return chr(n) if 0 < n < 0x110000 and not 0xD800 <= n < 0xE000 else "\ufffd"
 
           def git(*args):
               return subprocess.run(["git", *args], check=True, capture_output=True).stdout
@@ -152,21 +166,25 @@ jobs:
           for where, text in texts:
               text = TRAILER.sub(lambda m: m.group(1) + ("a listed contributor" if m.group(2) in KNOWN
                                                          else m.group(2)) + m.group(3), text)
-              views = [text, html.unescape(text)]
-              # Characters are checked on entities that end in ";", as GitHub
-              # decodes them: a link's "&ethernet=on" stays as written.
-              strict = html.unescape(re.sub(r"&(?=[A-Za-z][A-Za-z0-9]*(?![A-Za-z0-9;]))", "&amp;", text))
-              odd = next(filter(None, map(foreign, [text, strict])), None)
+              # GitHub's Markdown decodes an entity only when it ends in ";" (a
+              # known name, or a number of up to eight digits); inside an HTML
+              # block, like a browser, it also decodes numbers and the old names
+              # without one. Every reading is scanned. Characters are checked on
+              # all numbers but only on known names that end in ";", so a link's
+              # "&ethernet=on" stays as written.
+              shown = re.sub(r"&(#[0-9]{1,8}|#[xX][0-9A-Fa-f]{1,8}|[A-Za-z][A-Za-z0-9]*);", entity, text)
+              views = [text, html.unescape(text), shown]
+              strict = html.unescape(re.sub(r"&(?=[A-Za-z])", "&amp;", shown))
+              odd = next(filter(None, map(foreign, [text, strict, shown])), None)
               if odd:
                   hits.append(f"{where} uses '{odd}' (U+{ord(odd):04X}), outside English text, common "
                               "symbols and emoji")
                   continue
               # A number sign that counts as a word character (a footnote "¹", a
               # dingbat digit) reads as a space, so it cannot glue onto a word.
-              # The text as written is scanned too: a symbol read as a letter
-              # ("×" as "x") must not glue onto a word either.
+              # The readings as written are scanned too.
               written = views
-              views = [re.sub(r"(?![A-Za-z0-9_])\w", " ", view.translate(PLAIN)).replace(":robot:", "\U0001F916")
+              views = [re.sub(r"(?![A-Za-z0-9_])\w", " ", bare(view).translate(PLAIN)).replace(":robot:", "\U0001F916")
                        for view in views]
               # The title (and an edited merge message, the body) ends the merge
               # commit, so a co-author line there with an address faces the list.
