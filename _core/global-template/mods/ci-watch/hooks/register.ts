@@ -435,6 +435,9 @@ async function poll($: EngineInterface): Promise<void> {
         ? {
             ...current,
             headSha: head,
+            // Pinned as recheckSettled pins it: a watch saved before pushes were stamped keeps its push's
+            // time, never the restart's, so a later head is judged from the same push.
+            pushedAt: current.pushedAt ?? current.startedAt,
             startedAt: now,
             stablePolls: 0,
             checks: {},

@@ -439,6 +439,23 @@ test("a head that moves past the hour onto a running watch is someone else's: no
   expect(seen.prompts).toHaveLength(0)
 })
 
+// A running watch saved by the version before pushes were stamped: its first head move keeps the push's
+// time as the stamp, so a second move, past the hour after that push, is still someone else's.
+test("a watch saved with no push stamp keeps its push time across a head move", async ($, on) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  const unstamped: Watch = { repo: 'o/r', number: 7, headSha: 'a1', startedAt: 1_000, checks: {}, stablePolls: 0 }
+  seen.files.set(STATE, JSON.stringify({ watches: [unstamped] }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await clock.advance(50 * 60_000)
+  seen.head = 'b2'
+  await clock.advance(50 * 60_000)
+  seen.head = 'b3'
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(0)
+})
+
 // A push made while a poll reads the saved file stays the session's own: the poll does not undo its mark.
 test('an own push made mid-poll keeps the session its wake', async ($, on) => {
   const { seen, clock } = world(on)
