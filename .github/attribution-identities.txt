@@ -1,8 +1,9 @@
 # Who may author, commit or co-author a commit in a pull request here: one
 # "Name <email>" per line, exactly as git records it. The Attribution workflow
-# reads this file from the pull request's base branch, so a PR cannot add an
-# identity for itself. A new contributor's identity is added here in a PR of
-# its own, after the maintainer has read their pull request.
+# reads this file from `main` for PRs into either branch, so a PR cannot add
+# an identity for itself and a release reads the same names. A new
+# contributor is listed in a hotfix PR to `main` (then cascaded), after the
+# maintainer has read their pull request.
 Alex Zamudio <alexzamudio_11@hotmail.com>
 Jorge Alexandro Zamudio Arredondo <alexzamudio_11@hotmail.com>
 GitHub <noreply@github.com>
