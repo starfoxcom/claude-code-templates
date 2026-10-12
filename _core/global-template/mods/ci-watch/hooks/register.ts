@@ -12,7 +12,13 @@ const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
 const PENDING = new Set(['pending'])
 const FAILED = new Set(['fail', 'cancel'])
 const SETTLE_POLLS = 2
-const KEEP_SETTLED_MS = 60 * 60_000
+// For an hour after this session pushed to a PR (or asked to watch it), a new head on it is the session's own
+// and wakes it; later, it is someone else's push and only updates the row. Past that hour a settled watch
+// asks GitHub about its PR every RECHECK_MS instead of every poll.
+const OWN_HEAD_MS = 60 * 60_000
+const RECHECK_MS = 10 * 60_000
+/** Whether a head that shows now was pushed by someone else: the session's last push is past the hour. */
+const isForeign = (watch: Watch, now: number) => now - (watch.pushedAt ?? watch.startedAt) >= OWN_HEAD_MS
 const HINT = '[help | settings | set | stop | phone]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
@@ -28,6 +34,8 @@ const live = {
   pollMs: 30_000,
   timeoutMs: 60 * 60_000,
   watches: [] as Watch[],
+  /** When each long-settled watch (by id) last asked GitHub about its PR: memory only. */
+  rechecked: new Map<string, number>(),
   /** The load's one start: claim, sweep, load, poll. Every hook awaits it, so none acts mid-claim. */
   started: undefined as Promise<void> | undefined,
   /** The last save failed: memory holds watches the file may lack. */
@@ -38,10 +46,14 @@ const live = {
   isTurnRunning: false,
 }
 
+// The same watch on the same head, whatever object holds it now: a push or a reconcile made while a poll
+// or a command waited on gh or the disk replaces the object, never the watch.
+const isSameRun = (a: Watch, b: Watch) =>
+  a.id === b.id && a.repo === b.repo && a.number === b.number && a.headSha === b.headSha
+
 // The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
 // stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. So is
 // an incident's note, while the watch is still unsettled on the same head (the poll drops it otherwise).
-// The polled copy itself is kept whenever nothing differs: the poll finds its settled watches by identity.
 function reconcile(current: Watch[], polled: Watch[]): Watch[] {
   const same = (a: Watch, b: Watch) =>
     a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
@@ -52,11 +64,15 @@ function reconcile(current: Watch[], polled: Watch[]): Watch[] {
     const incidentPending = isNoteMemorys ? w.incidentPending : p.incidentPending
     // A note made meanwhile (another poll of this load noted and sent it) is kept, or it would be made again.
     const incident = isNoteMemorys ? (w.incident ?? p.incident) : p.incident
+    // A push made meanwhile marked the watch as the session's own: the poll's copy predates it.
+    const isPushedSince = (w.pushedAt ?? 0) > (p.pushedAt ?? 0)
     const isKept =
       Boolean(p.wakePending) === Boolean(w.wakePending) &&
       Boolean(p.incidentPending) === Boolean(incidentPending) &&
-      p.incident === incident
-    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident }
+      p.incident === incident &&
+      !isPushedSince
+    const pushed = isPushedSince ? { pushedAt: w.pushedAt, isSilent: undefined } : {}
+    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident, ...pushed }
   })
 }
 
@@ -310,22 +326,36 @@ async function startWatch(
   headSha: string,
   isAsked = false,
 ): Promise<Watch> {
-  const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
-  if (same && !isAsked) return same
   const startedAt = await $.clock.now()
+  // Found after the last wait and replaced in the same step: a poll that lands during a wait swaps the
+  // watch's object, so a match taken before it would stamp a copy no longer listed.
+  const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
+  if (same && !isAsked) {
+    // GitHub may not name the pushed commit yet: the head that shows within the hour is this session's.
+    const pushed = { ...same, pushedAt: startedAt, isSilent: undefined }
+    live.watches = live.watches.map(w => (w === same ? pushed : w))
+    live.generation++
+    await save($)
+    return pushed
+  }
   const id = `${startedAt}-${Math.random().toString(36).slice(2)}`
-  const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id }
+  const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id, pushedAt: startedAt }
   live.watches = [...live.watches.filter(w => !(w.repo === repo && w.number === number)), fresh]
   live.generation++
   await save($)
   return fresh
 }
 
-// A settled watch is kept an hour so a second instance does not wake for it again. A merge made outside
-// this session (the web page) drops it. A head that moved restarts it: right after a push GitHub can
-// still name the old commit, so the push found the settled watch, and its new commit is caught here.
+// A settled watch stays on the row until its PR is merged or closed, here or outside this session (the web
+// page), or the user stops it: a PR that is still open is unfinished work, red or green. A head that moved
+// restarts it: right after a push GitHub can still name the old commit, so the push found the settled
+// watch, and its new commit is caught here. Past OWN_HEAD_MS the new head is someone else's push: the
+// restarted watch keeps the row current and wakes no session.
 async function recheckSettled($: EngineInterface, watch: Watch, now: number): Promise<Watch | undefined> {
-  if (now - (watch.settledAt ?? now) >= KEEP_SETTLED_MS) return undefined
+  const isOwn = !isForeign(watch, now)
+  const key = watch.id ?? `${watch.repo}#${watch.number}`
+  if (!isOwn && now - (live.rechecked.get(key) ?? -Infinity) < RECHECK_MS) return watch
+  if (!isOwn) live.rechecked.set(key, now)
   let view: { state?: string; headRefOid?: string } = {}
   try {
     view = JSON.parse(
@@ -338,7 +368,9 @@ async function recheckSettled($: EngineInterface, watch: Watch, now: number): Pr
   const head = String(view.headRefOid ?? '')
   if (!head || head === watch.headSha) return watch
   const id = `${now}-${Math.random().toString(36).slice(2)}`
-  return { repo: watch.repo, number: watch.number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
+  const { repo, number } = watch
+  const fresh: Watch = { repo, number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
+  return { ...fresh, pushedAt: watch.pushedAt ?? watch.startedAt, ...(isOwn ? {} : { isSilent: true }) }
 }
 
 // GitHub's status, read at most every few minutes and only while some watch waits long past a normal run.
@@ -360,7 +392,8 @@ async function noteIncidents($: EngineInterface, now: number): Promise<boolean> 
     const buckets = Object.values(w.checks)
     return buckets.length === 0 || buckets.some(bucket => PENDING.has(bucket))
   }
-  const isWaiting = (w: Watch) => !w.outcome && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
+  const isWaiting = (w: Watch) =>
+    !w.outcome && !w.isSilent && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
   if (!live.watches.some(isWaiting)) return false
   const incident = await readIncident($, now)
   if (!incident) return false
@@ -404,12 +437,16 @@ async function poll($: EngineInterface): Promise<void> {
         ? {
             ...current,
             headSha: head,
+            // Pinned as recheckSettled pins it: a watch saved before pushes were stamped keeps its push's
+            // time, never the restart's, so a later head is judged from the same push.
+            pushedAt: current.pushedAt ?? current.startedAt,
             startedAt: now,
             stablePolls: 0,
             checks: {},
             quietSince: undefined,
             incident: undefined,
             incidentPending: undefined,
+            isSilent: isForeign(current, now) || undefined,
           }
         : current
     let checks: Record<string, string> | undefined
@@ -438,7 +475,9 @@ async function poll($: EngineInterface): Promise<void> {
   }
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
-  const toWake = settled.filter(w => live.watches.includes(w))
+  // Found by watch and head, not identity: a push made meanwhile is laid onto the polled copy, and the
+  // watch as it is now decides whether it is silent. One stopped or restarted meanwhile is not found.
+  const toWake = live.watches.filter(w => w.outcome && !w.isSilent && settled.some(s => isSameRun(s, w)))
   // GitHub's status is read before the retirement check: the read can take seconds, and a load retired
   // meanwhile must not save over the newer one's file afterwards.
   const isIncidentNoted = await noteIncidents($, now)
@@ -450,8 +489,10 @@ async function poll($: EngineInterface): Promise<void> {
   // instance's record is written before its prompt goes out.
   const recorded = toWake.length > 0 ? await readSaved($) : undefined
   // Each wake is marked pending in the same save that records its outcome; sendHeld sends it.
-  const due = new Set(toWake.filter(w => !isRecorded(recorded, w) && claimWake(w)))
-  if (due.size > 0) live.watches = live.watches.map(w => (due.has(w) ? { ...w, wakePending: true } : w))
+  const due = toWake.filter(w => !isRecorded(recorded, w) && claimWake(w))
+  // Marked by watch and head too: a same-head push made during the reads above replaced the object.
+  const isDue = (w: Watch) => due.some(d => isSameRun(d, w))
+  if (due.length > 0) live.watches = live.watches.map(w => (isDue(w) ? { ...w, wakePending: true } : w))
   if (changed || isIncidentNoted || live.isUnsaved) await save($)
   if (!live.isTurnRunning) await sendHeld($)
 }
@@ -658,7 +699,7 @@ export const register: Register = (on, options) => {
       const gone: Watch[] = []
       for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
       if (gone.length > 0) {
-        live.watches = live.watches.filter(w => !gone.includes(w))
+        live.watches = live.watches.filter(w => !gone.some(g => isSameRun(g, w)))
         live.generation++
         await save($)
       }
