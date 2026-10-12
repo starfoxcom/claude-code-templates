@@ -456,6 +456,41 @@ test("a watch saved with no push stamp keeps its push time across a head move", 
   expect(seen.prompts).toHaveLength(0)
 })
 
+// The session pushes the head a silent watch (someone else's commit) is running on, while a poll reads
+// that watch's checks: the push makes the watch the session's own, so its settlement wakes the session.
+// (The push finds the watch only after its last wait, so no poll can swap the object between its lookup
+// and its stamp; the test kit cannot pause inside the clock read to show the old window.)
+test("a same-head push made while a poll reads a silent watch's checks makes it the session's own", async (
+  $,
+  on,
+) => {
+  const { seen, clock } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  seen.bucket = 'pass'
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  for (let poll = 0; poll < 3; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(1)
+  await clock.advance(2 * HOUR)
+  // Someone else's commit: the watch follows it silently.
+  seen.head = 'b2'
+  seen.bucket = 'pending'
+  while (!seen.ghCalls.some(call => call.includes('state,headRefOid'))) await clock.advance(POLL_MS)
+  await clock.advance(10 * 60_000)
+  const views = () => seen.ghCalls.filter(call => call.includes('headRefName')).length
+  // Inside the poll's checks read: the push starts beside it and gets as far as its own PR lookup.
+  seen.duringChecks = async () => {
+    seen.duringChecks = undefined
+    const before = views()
+    void $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+    while (views() === before) await moment(0)
+  }
+  while (seen.duringChecks) await clock.advance(POLL_MS)
+  seen.bucket = 'pass'
+  for (let poll = 0; poll < 4; poll++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toHaveLength(2)
+})
+
 // A push made while a poll reads the saved file stays the session's own: the poll does not undo its mark.
 test('an own push made mid-poll keeps the session its wake', async ($, on) => {
   const { seen, clock } = world(on)
