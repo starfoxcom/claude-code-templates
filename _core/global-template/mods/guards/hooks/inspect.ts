@@ -2,71 +2,117 @@
 // to history, the body files it hands over, the branches it creates, and whether a commit's added
 // lines need a look. Pure, no engine access.
 //
-// guards is a safety net for commands written the ordinary way, not a sandbox. It follows the shapes
-// people and agents really write: git and gh behind `if`/`then`/`do`/`{`/`(`, `sudo`, `env`, `timeout`,
-// `xargs`, inside `$(...)`, `bash -c` and `powershell -Command`; messages from variables set earlier in
-// the command, here-docs, pipes and files the command writes itself. Where a message exists but its text
-// is made by something the reading cannot follow, the message is named in `unread` (logged, never
-// silently passed). What it cannot see at all (also listed in mods/README.md):
-// - commands run from a script file, an alias or shell function, a git alias (`git ci -m ...`), `eval`,
-//   `ssh host ...`, or any other program that writes to GitHub on its own (a Python script, an SDK);
+// A command that names a git or GitHub write, a hook switch, a git or hook config file, or a program built
+// at run time is first held to the plain rule (plain.ts): one that is not plain is refused outright, so
+// the reading below only ever sees plain git, gh and read-only calls. The reading (`readCommand`) follows
+// what the shell runs: messages from `-m`, `-F` files, here-docs and the `$(cat <<'EOF' ...)` form, and
+// body files the command writes itself. Where a message exists but its text is made by something the
+// reading cannot follow, the message is named in `unread`, and the call is refused: what reaches history
+// unread is never passed.
+// What it cannot see at all (also listed in mods/README.md):
+// - commands run from a script file or fed to a shell from a file or a pipe, an alias or shell function,
+//   a git alias (`git ci -m ...`), `ssh host ...`, a command held in a variable from outside it
+//   (`eval "$CMD"`, `bash -c "$CMD"`), or any other program that writes to GitHub on its own (a Python
+//   script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
-//   file does not exist yet, so it reports that it could not read it (unread when inline script code wrote it);
+//   file does not exist yet, so it reports that it could not read it, and any body file in a command that
+//   runs a program that may write files is refused as unread; one that inline script code in the
+//   command may write is noted instead, and passes;
 // - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
-//   unread, its text never checked;
+//   unread and refused, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
+import { bypassOf, EVAL, functionsOf, hooksOffReason } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
-import type { PrCall } from './prbody'
-import { parse, programOf, runsInlineCode } from './shell'
+import {
+  aloneOf,
+  folderNow,
+  isSameFolder,
+  landsAt,
+  moveTo,
+  norm,
+  placeHere,
+  ranBefore,
+  repoMoves,
+  targetOf,
+  writersOf,
+} from './folders'
+import type { Folder, Here, Place } from './folders'
+import {
+  branchesOf,
+  builtReasons,
+  isCommitAll,
+  isSplat,
+  cmdWrites,
+  evalWrites,
+  isUnknownSetting,
+  withProgram,
+  mayBeFlag,
+  splitsAt,
+  TAG_READS,
+  writesAsAny,
+  writesHistory,
+} from './gitwords'
+import { psEvalWords, script } from './scripts'
+import { mayWriteFiles, programOf, runsInlineCode, setsRunner } from './programs'
+import { joinWords, sliceWord } from './quoting'
+import { parse } from './shell'
+import { assign, catValue, expand, expandBody, forget, inherit, lookup, psEnvSet, setVar, within } from './vars'
+import { assignPsTargets, forgetOutVars, knownPath, psAssignment, setCounts, setsNameAtRunTime } from './vars'
+import { psSetsUnknown, type Seen, seenOf, varsIn, withWords } from './vars'
+import type { Var, VarState } from './vars'
+import {
+  COMMIT,
+  CURL,
+  GH_API,
+  GH_WRITES,
+  ghSpec,
+  gitLong,
+  MESSAGE,
+  NOTES,
+  PS_WEB,
+  RAW_WRITES,
+  SWITCH,
+} from './specs'
+import type { Kind, Spec } from './specs'
+import { emptyPlan, type Plan } from './plan'
+import { namesWrite, NOT_PLAIN, notPlain } from './plain'
 import type { Statement, Word } from './shell'
 
-export type Plan = {
-  /** Message text with where it goes ("the commit message", "the PR body"). `creditOnly`: command text
-   * around a message (a `$(...)` as typed), checked for AI credit but not for the product name. */
-  texts: { where: string; text: string; creditOnly?: boolean }[]
-  /** Body files the command hands to git or gh, as written (relative to `cwd` when not absolute).
-   * `written`: this same command writes the file, and what it writes was read from the command text. */
-  /** `folder`: where a relative path resolves, as the command stands where the file is named.
-   * `scripted`: a script an earlier statement runs (python, node) may write it, unseen by the reading. */
-  files: { where: string; path: string; written?: boolean; folder?: Folder; scripted?: boolean }[]
-  /** Files the command itself writes (`> file`). */
-  written: string[]
-  branches: string[]
-  /** A commit runs: `cached` checks the staged lines, `all` the working tree's too (`-a`, pathspecs). */
-  diff: 'cached' | 'all' | null
-  /** Messages whose text is built in a way the guard cannot read ($VAR from outside, another program's output). */
-  unread: string[]
-  /** `gh --repo owner/name` when given. */
-  repo?: string
-  /** Where relative paths resolve: a leading `cd` or `git -C`. */
-  cwd?: string
-  /** The `cd` or `-C` folder is built at run time (`cd "$REPO"`): relative paths cannot be found. */
-  isCwdUnknown?: boolean
-  block?: string
-  isWrite: boolean
-  /** Each `gh pr create` or `gh pr edit`: what it sets, for the PR-body contract. */
-  prs: PrCall[]
-  /** Every `gh` statement in the command: the PR-body contract judges only a command with one. */
-  ghCalls: number
-}
+export type { Plan } from './plan'
 
-/** A folder the command moved to: `path` is relative to the session folder unless absolute; none = there. */
-export type Folder = { path?: string; isUnknown: boolean }
+export type { Folder, Target } from './folders'
+
+// The statement that writes a file, where it runs, and the values of the variables its path names there.
+type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[]; folder: Folder; path: string }
+  & { seen: Seen; isLater: boolean; index: number }
 
 // The reading's working state while it walks one command.
-type Reading = {
+type Reading = VarState & {
   plan: Plan
-  /** The folder each `cd` so far leads to. */
-  folder: Folder
-  /** A `git -C <dir>` on the statement being read: its folder, for this statement only. */
-  statementDir?: Word
-  ps: boolean
-  /** Variables set earlier in the command, by lower-cased name; `literal` when their value is known. */
-  vars: Map<string, { text: string; literal: boolean }>
-  /** The statement that writes each file (`> file`), by normalized path. */
-  writers: Map<string, { st: Statement; ps: boolean }>
+  /** The folder each `cd` so far leads to, and the `pushd` stack, by the scope that moved them. */
+  places: Map<string, Place>
+  /** Body files matched to the statements that may have written them, latest first. */
+  matched: Map<object, Writer[]>
+  /** What the statement being read sets for itself: its `git -C` folder, `gh --repo`, its commit's lines. */
+  at: Here
+  /** While a writer's statement is fed in after the walk: the folder it ran in, and how many writers ran
+   * before it (a file it reads was written by one of those, never by a later one). */
+  feedFolder?: Folder
+  writersBefore?: number
+  /** A statement so far set a git alias, include or config file (`-c alias.x=`, `GIT_CONFIG_GLOBAL=`). */
+  isConfigMoved?: boolean
+  /** An environment variable named at run time was set: any later git or gh call may run under it. */
+  isEnvUnknown?: boolean
+  /** An earlier statement pointed git at another repo for what follows (`export GIT_DIR=x`). */
+  isRepoMoved?: boolean
+  /** `$(...)` substitutions and child shells read so far, which number their scopes. */
+  opened: number
+  /** A statement anywhere in the command, run or deferred, may write files beyond its `>`: see `mayWriteFiles`. */
+  mayRewrite?: boolean
+  /** The statements that write files (`> file`), in order, each with its normalized path and where it runs. */
+  writers: Writer[]
   /** Message routes read from stdin so far (`-F -`, `--body-file -`, `--input -`, `body=@-`). */
   stdin: number
   /** Write statements found so far. */
@@ -76,164 +122,77 @@ type Reading = {
   alone?: Statement
   /** An earlier statement ran script code written in the command, which may write any file. */
   ranScript?: boolean
-}
-
-// `attached`: a flag whose value can only be attached (`-S<keyid>`, `--gpg-sign=<keyid>`); it never takes
-// the next word, and in a bundle the rest of the word is its value.
-type Kind = 'text' | 'file' | 'skip' | 'repo' | 'branch' | 'field' | 'data' | 'method' | 'attached'
-type Spec = Record<string, Kind>
-
-const COMMIT: Spec = {
-  '-m': 'text',
-  '--message': 'text',
-  '-F': 'file',
-  '--file': 'file',
-  '-t': 'file',
-  '--template': 'file',
-  '-C': 'skip',
-  '-c': 'skip',
-  '--reuse-message': 'skip',
-  '--reedit-message': 'skip',
-  '--fixup': 'skip',
-  '--squash': 'skip',
-  '--author': 'text',
-  '--date': 'skip',
-  '--trailer': 'text',
-  '--cleanup': 'skip',
-  '-S': 'attached',
-  '--gpg-sign': 'attached',
-  '-u': 'attached',
-  '--untracked-files': 'attached',
-}
-const MESSAGE: Spec = { '-m': 'text', '--message': 'text', '-F': 'file', '--file': 'file' }
-const GH_BODY: Spec = {
-  '-t': 'text',
-  '--title': 'text',
-  '-b': 'text',
-  '--body': 'text',
-  '-F': 'file',
-  '--body-file': 'file',
-  '-R': 'repo',
-  '--repo': 'repo',
-  '-T': 'skip',
-  '--template': 'skip',
-  '-B': 'skip',
-  '--base': 'skip',
-  '-H': 'skip',
-  '--head': 'skip',
-  '-a': 'skip',
-  '--assignee': 'skip',
-  '-l': 'skip',
-  '--label': 'skip',
-  '-m': 'skip',
-  '--milestone': 'skip',
-  '-p': 'skip',
-  '--project': 'skip',
-  '-r': 'skip',
-  '--reviewer': 'skip',
-  '--add-label': 'skip',
-  '--remove-label': 'skip',
-  '--comment': 'text',
-}
-// Subcommands whose short flags mean something else: a boolean read as value-taking would swallow the
-// next word (`gh pr review 5 -a -b '<text>'` would hide the body), so each gets its own table. Flags
-// absent from a table are read as booleans.
-const GH_REVIEW: Spec = {
-  '-b': 'text',
-  '--body': 'text',
-  '-F': 'file',
-  '--body-file': 'file',
-  '-R': 'repo',
-  '--repo': 'repo',
-}
-const GH_MERGE: Spec = {
-  '-b': 'text',
-  '--body': 'text',
-  '-F': 'file',
-  '--body-file': 'file',
-  '-t': 'text',
-  '--subject': 'text',
-  '-A': 'skip',
-  '--author-email': 'skip',
-  '--match-head-commit': 'skip',
-  '-R': 'repo',
-  '--repo': 'repo',
-}
-const GH_CLOSE: Spec = {
-  '-c': 'text',
-  '--comment': 'text',
-  '-r': 'skip',
-  '--reason': 'skip',
-  '-R': 'repo',
-  '--repo': 'repo',
-}
-const GH_RELEASE: Spec = {
-  '-t': 'text',
-  '--title': 'text',
-  '-n': 'text',
-  '--notes': 'text',
-  '-F': 'file',
-  '--notes-file': 'file',
-  '-R': 'repo',
-  '--repo': 'repo',
-  '--target': 'skip',
-}
-const GH_DESC: Spec = { '-d': 'text', '--desc': 'text', '--description': 'text', '-R': 'repo', '--repo': 'repo' }
-const GH_API: Spec = {
-  '-f': 'field',
-  '--raw-field': 'field',
-  '-F': 'field',
-  '--field': 'field',
-  '--input': 'file',
-  '-X': 'method',
-  '--method': 'method',
-  '-H': 'skip',
-  '--header': 'skip',
-  '--jq': 'skip',
-  '-q': 'skip',
-}
-const CURL: Spec = { '-d': 'data', '--data': 'data', '--data-raw': 'data', '--data-binary': 'data' }
-const PS_WEB: Spec = { '-body': 'text', '-infile': 'file' }
-
-const GH_WRITES: Record<string, string[]> = {
-  pr: ['create', 'edit', 'comment', 'review', 'merge', 'close', 'reopen'],
-  issue: ['create', 'edit', 'comment', 'close', 'reopen'],
-  release: ['create', 'edit'],
-  gist: ['create', 'edit'],
-  repo: ['create', 'edit'],
+  /** A statement runs `eval` or `Invoke-Expression`. */
+  hasEval?: boolean
+  /** A hook switch set, a hooked git call read, the functions defined: see `HookState`. */
+  hooksOff?: boolean
+  isHooked?: boolean
+  functions?: Set<string>
 }
 
 export function inspect(command: string, powershell: boolean): Plan {
-  const plan: Plan = {
-    texts: [],
-    files: [],
-    written: [],
-    branches: [],
-    diff: null,
-    unread: [],
-    isWrite: false,
-    prs: [],
-    ghCalls: 0,
-  }
+  // A command naming a history write is read only when it is plain: anything else is refused (plain.ts).
+  const why = namesWrite(command, powershell) ? notPlain(command, powershell) : undefined
+  if (why) return { ...emptyPlan(), isWrite: true, block: `${NOT_PLAIN} Not plain here: ${why}.` }
+  return readCommand(command, powershell)
+}
+
+/** The reading itself, of a plain command or one that names no history write. */
+export function readCommand(command: string, powershell: boolean): Plan {
+  const plan = emptyPlan()
   const r: Reading = {
     plan,
-    folder: { isUnknown: false },
+    places: new Map([['', { folder: { isUnknown: false }, folders: [] }]]),
+    matched: new Map(),
+    at: {},
     ps: powershell,
     vars: new Map(),
-    writers: new Map(),
+    isIfsSet: /\bIFS\b/.test(command),
+    sets: setCounts(command, powershell),
+    functions: functionsOf(command),
+    scope: '',
+    opened: 0,
+    writers: [],
     stdin: 0,
     writes: 0,
   }
   const statements = parse(command, powershell)
   r.alone = aloneOf(statements)
   read(statements, r)
-  // A body file this same command writes is read from the statement that writes it.
-  for (const f of [...plan.files]) {
-    const writer = r.writers.get(norm(f.path))
-    if (!writer) continue
-    f.written = true
-    feed(writer.st, { ...r, ps: writer.ps }, `${f.where} (file ${f.path})`)
+  // `eval` and `Invoke-Expression` build their command at run time: refused in a command that writes
+  // history anywhere, as the reading finds it.
+  if (r.hasEval && plan.isWrite) plan.block ??= EVAL
+  plan.block ??= hooksOffReason(r)
+  // A body file this same command writes is read from the statement that writes it. What another
+  // program writes into it cannot be read; the maintainer's rule passes a file the command writes itself,
+  // so that is noted, not refused.
+  // By position, so a file a writer reads (`cat a.md > b.md` after `cat > a.md`) is fed in turn; each
+  // writer once per path, so one that reads its own file ends.
+  const fed = new Map<Writer, Set<string>>()
+  for (let i = 0; i < plan.files.length; i++) {
+    const f = plan.files[i] as Plan['files'][number]
+    // The writers it had where it was named: one after it writes over a file the command already read.
+    for (const writer of r.matched.get(f) ?? []) {
+      const paths = fed.get(writer) ?? new Set<string>()
+      if (paths.has(norm(f.path))) continue
+      fed.set(writer, paths.add(norm(f.path)))
+      const before = plan.unread.length
+      const named = plan.files.length
+      // Fed with the variables as they stood where it ran. One that may run later (a function body, a trap
+      // action, a loop) sees each name's last value, so a name set more than once is unknown there.
+      const vars = writer.isLater ? {} : seenOf(writer.seen)
+      const at = { ...r, ...vars, ps: writer.ps, scope: writer.scope, at: {}, feedFolder: writer.folder }
+      at.writersBefore = writer.index
+      at.isDeferredRead = writer.isLater
+      feed(writer.st, at, `${f.where} (file ${f.path})`)
+      // A file the writer reads (`cat CHANGES.md > b.md`) is where the writer ran.
+      for (const g of plan.files.slice(named)) g.folder ??= writer.folder
+      plan.notes.push(...plan.unread.splice(before))
+    }
   }
+  // A program of the command that may write files may rewrite any body file, in any order the shell runs
+  // them: none is read as it stands now.
+  if (r.mayRewrite) for (const f of plan.files) f.named = true
   // The backstop the shipped attribution hook has always had: a write's whole command text is checked last
   // for credit lines, so a spelling the reading does not model still cannot carry one into history. The
   // hook's own raw-text patterns are the floor: a write hidden in backticks or fed to `bash` on stdin is
@@ -244,71 +203,80 @@ export function inspect(command: string, powershell: boolean): Plan {
   return plan
 }
 
-// The shipped no-ai-attribution hook's write patterns (`_core/global-template/hooks/no-ai-attribution.py`),
-// matched on the raw command text, plus the history rewrites. A `gh api` call counts only with a writing
-// method or fields: a read reaches no history. `REST`: the rest of the same command, up to a separator or
-// a line end.
-const REST = String.raw`[^|;&\n]*?`
-const GIT_WRITES = 'commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace'
-const GH_NOUNS = 'pr|issue|release|gist|repo'
-const GH_VERBS = 'create|edit|comment|review|merge|close|reopen'
-// A writing method, or a field: a field flag counts spaced (`-f body=x`) or attached (`-fbody=x`), as gh
-// reads both.
-const API_METHOD = String.raw`(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)`
-const API_WRITE = String.raw`${API_METHOD}|(?<=\s)-[fF](?:\s|\S*=)|--field|--raw-field|--input`
-const RAW_WRITES = [
-  String.raw`\bgit\b${REST}\b(?:${GIT_WRITES})\b`,
-  String.raw`\bgh\b${REST}\b(?:${GH_NOUNS})\b${REST}\b(?:${GH_VERBS})\b`,
-  String.raw`\bgh\b${REST}\bapi\b(?=${REST}(?:${API_WRITE}))`,
-  String.raw`\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b${REST}api\.github\.com`,
-].map(source => new RegExp(source, 'i'))
-
-const norm = (path: string) => path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
-
-const CD_NAMES = new Set(['cd', 'set-location', 'pushd', 'sl'])
-
-// The statement a command runs on its own: the only one, or the last after `cd`s to literal folders
-// (`cd "C:/Repos/game" && gh pr create ...`), whose folder is then known. Any other shape has none.
-function aloneOf(statements: Statement[]): Statement | undefined {
-  const last = statements.at(-1)
-  const isPlainCd = (st: Statement) => {
-    const { name, args } = programOf(st)
-    const bare = !st.inner.length && !st.heredocs.length && !st.writes.length && !st.pipeIn && !st.isNested
-    return bare && CD_NAMES.has(name) && args.length === 1 && !args[0]?.dynamic && !args[0]?.text.startsWith('-')
-  }
-  return last && !last.pipeIn && statements.slice(0, -1).every(isPlainCd) ? last : undefined
+// `outer`: where commands from a `$(...)` or a `bash -c` script run; their own subshells nest inside it.
+function read(statements: Statement[], r: Reading, outer?: string) {
+  statements.forEach((st, idx) => {
+    const was = r.isDeferredRead
+    r.isDeferredRead = was || st.isDeferred || st.isLooped
+    readStatement(st, statements[idx - 1], r, outer)
+    r.isDeferredRead = was
+  })
 }
 
-function read(statements: Statement[], r: Reading) {
-  statements.forEach((st, idx) => readStatement(st, statements[idx - 1], r))
-}
-
-function readStatement(st: Statement, prev: Statement | undefined, r: Reading) {
+function readStatement(typed: Statement, prev: Statement | undefined, r: Reading, outer?: string) {
   const { plan } = r
-  read(st.inner, r)
-  plan.written.push(...st.writes)
-  for (const path of st.writes) r.writers.set(norm(path), { st, ps: r.ps })
-  const { name, args } = programOf(st)
-  if (assign(st, name, args, r)) return
-  if (CD_NAMES.has(name) || POP_NAMES.has(name)) {
-    const target = POP_NAMES.has(name) ? undefined : args.find(a => !a.text.startsWith('-'))
-    if (!plan.cwd && !plan.isCwdUnknown && target) setCwd(plan, target)
-    r.folder = moveFolder(r.folder, target)
-    return
+  const scope = outer === undefined ? (typed.scope ?? '') : within(outer, typed.scope)
+  // Each Bash `$(...)` or backtick runs in a subshell of its own; PowerShell's `$(...)` runs in place.
+  const subshells = new Map<number | undefined, string>()
+  const placeOf = (group?: number) => {
+    if (!subshells.has(group)) subshells.set(group, within(scope, `s${++r.opened}`))
+    return subshells.get(group) as string
   }
-  if (readScript(name, args, r)) return
+  const inner = typed.inner
+  inner.forEach((st, i) => readStatement(st, inner[i - 1], r, r.ps ? scope : placeOf(st.group)))
+  r.scope = scope
+  const filled = withProgram(withWords(typed, r), r.ps, plan)
+  const assignment = r.ps ? psAssignment(filled) : undefined
+  if (r.ps) forgetOutVars(filled, r)
+  // PowerShell's `$env:X = v`, `env:` drive and .NET spellings are read as `$env:X = v`.
+  const env = r.ps ? psEnvSet(filled, assignment) : undefined
+  const st = env?.statement ?? filled
+  if (env && env.name === undefined) r.isEnvUnknown = true
+  // A file written under a variable set earlier (`cat > "$S/body.md"`) is known by its full path.
+  const writes = st.writes.map((path, i) => knownPath(st.writeWords?.[i] ?? path, r) ?? path)
+  const at = placeHere(r).folder
+  plan.written.push(...writes.map(path => ({ path, folder: at })))
+  const seen = writes.length > 0 ? seenOf(r) : undefined
+  const isLater = Boolean(r.isDeferredRead)
+  for (const path of writes) {
+    const vars = varsIn(path, r)
+    const index = r.writers.length
+    r.writers.push({ st, ps: r.ps, scope, vars, folder: at, path: norm(path), seen: seen as Seen, isLater, index })
+  }
+  const { name, args } = programOf(st)
+  // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
+  plan.block ??= bypassOf(st, name, args, r)
+  for (const what of builtReasons(st, name, args, r)) unreadCall(r, what)
+  const moves = repoMoves(st, name, args)
+  r.mayRewrite ||= setsRunner(st)
+  r.isRepoMoved ||= moves.movesLater
+  if (r.ps ? psSetsUnknown(st, name, args) : setsNameAtRunTime(name, args)) r.isSourced = true
+  if (/^(eval|invoke-expression|iex)$/.test(name)) return readEval(st, args, r, prev)
+  if (!r.ps && name === 'trap') return readTrap(args, r)
+  // A PowerShell assignment sets its variables; a command after its operator (`$r = git push`) is read in turn.
+  if (assignment) assignPsTargets(st, assignment, r)
+  if (assignment) return void (assignment.command && readStatement(assignment.command, prev, r, outer))
+  if (assign(st, name, args, r)) return
+  if (moveTo(name, args, r)) return
+  if (readScript(st, name, args, r)) return
+  // A wrapper shell (`bash -c`) is read above, its statements in turn; an assignment sets no file.
+  r.mayRewrite ||= mayWriteFiles(st, r.ps)
+  forget(st, name, r)
   // Script code in the command (`python - <<EOF`, `node -e`) may write files the reading never sees; its
   // text is under the credit backstop. A script file on disk (`python gen.py`) is not, so it marks nothing.
   if (runsInlineCode(st)) r.ranScript = true
   const before = plan.files.length
-  r.statementDir = undefined
+  const count = r.writes
+  r.at = {}
   readWrite(st, prev, name, args, r)
   // Each body file keeps the folder in effect where it is named: `cd a && ... && cd b` moves it on.
-  const folder = r.statementDir ? moveFolder(r.folder, r.statementDir) : r.folder
+  const folder = folderNow(r)
   for (const f of plan.files.slice(before)) {
     f.folder ??= folder
     if (r.ranScript) f.scripted = true
   }
+  // The repo rules and the diff scan follow each write to where it runs, never to the first `cd`.
+  if (r.writes > count) plan.targets.push(targetOf(folder, r.at, moves.isMoved || Boolean(r.isRepoMoved)))
 }
 
 function readWrite(st: Statement, prev: Statement | undefined, name: string, args: Word[], r: Reading) {
@@ -321,43 +289,122 @@ function readWrite(st: Statement, prev: Statement | undefined, name: string, arg
   if (r.stdin > stdin && st.heredocs.length === 0) readStdin(st, prev, r, where)
 }
 
-const POP_NAMES = new Set(['popd', 'pop-location'])
-
-// The folder after a `cd`: a literal target composes onto it, anything else (`$DIR`, `-`, `popd`, no
-// target) leaves it unknown.
-function moveFolder(folder: Folder, target: Word | undefined): Folder {
-  if (folder.isUnknown || !target || target.dynamic || target.text === '-') return { isUnknown: true }
-  const dir = target.text.replace(/\\/g, '/')
-  if (/^([a-zA-Z]:)?\/|^~/.test(dir) || folder.path === undefined) return { path: dir, isUnknown: false }
-  return { path: `${folder.path.replace(/\/$/, '')}/${dir}`, isUnknown: false }
+// `eval` and `Invoke-Expression` run their words as a command in this same shell: read here, with the
+// variables set earlier filled in. Words built in a way the reading cannot follow hide the command, so
+// they are refused when their text names a history write.
+function readEval(st: Statement, typed: Word[], r: Reading, prev?: Statement) {
+  r.hasEval = true
+  const args = r.ps ? psEvalWords(st, typed, prev) : typed
+  // Another program's output piped in (`gc fix.ps1 | iex`) may run anything and set anything.
+  if (!args) return void (r.mayRewrite = r.isSourced = true)
+  const { text, literals } = joinWords(args)
+  const e = args.some(a => a.dynamic) ? expand(text, r, literals) : { text, unresolved: false }
+  if (e.unresolved) {
+    if (evalWrites(parse(text, r.ps), r.ps)) r.plan.block ??= EVAL
+    // Text the reading cannot know may run any program.
+    r.mayRewrite = true
+    return
+  }
+  // `M=x eval '...'`: the words see `M=x`; whether the shell keeps it afterwards depends on its mode, so
+  // after the eval it is unknown.
+  const names: string[] = []
+  for (const w of st.words.slice(0, st.words.length - args.length - 1)) {
+    const m = /^([A-Za-z_]\w*)(\+?)=/.exec(w.text)
+    if (!m) continue
+    names.push(m[1] ?? '')
+    // An append (`M+=x eval ...`) is left unknown.
+    setVar(r, m[1] ?? '', m[2] ? undefined : sliceWord(w, m[0].length))
+  }
+  readInPlace(parse(e.text, r.ps), r, 'e', st.isDeferred)
+  for (const name of names) setVar(r, name, undefined)
 }
 
-// `bash -c '...'` and the like: the script is read as commands of its own. True when it was one.
-function readScript(name: string, args: Word[], r: Reading): boolean {
-  const inner = script(name, args)
+const TRAP = 'a trap action built at run time hides the command it runs, so its message cannot be read.'
+
+// `trap 'ACTION' SIGNAL...`: the action runs in this shell later (`DEBUG` before every command), so what it
+// sets may change anything read after it. One that cannot be filled in is refused when it names a write.
+function readTrap(args: Word[], r: Reading) {
+  const k = args.findIndex(a => !/^(-[lp]+|--)$/.test(a.text))
+  const action = args[k]
+  if (!action || args.length - k < 2 || action.text === '-') return
+  // The action is filled in when the trap is set (`trap "rm -f $T" EXIT`), and read as an `eval` is.
+  const e = action.dynamic ? expand(action.text, r, action.literals) : { text: action.text, unresolved: false }
+  if (!e.unresolved) return readInPlace(parse(e.text, false), r, 'c', true)
+  if (evalWrites(parse(action.text, false), false)) r.plan.block ??= TRAP
+  // An `EXIT` trap of the command's own shell runs once every command is done; one set in a subshell or a
+  // child shell runs as that ends, and any other may run before any command and set anything.
+  const isTop = !/(^|\/)(\d+|s\d+|p\d+)(\/|$)/.test(r.scope)
+  if (isTop && args.slice(k + 1).every(a => !a.dynamic && /^(EXIT|SIGEXIT|0)$/i.test(a.text))) return
+  r.mayRewrite = true
+  r.isSourced = true
+}
+
+// Commands an `eval` or a `trap` runs in this same shell: their subshells numbered apart from the command's.
+// A trap's run later, all in a branch of their own (`c<n>`).
+function readInPlace(statements: Statement[], r: Reading, tag: 'e' | 'c', isDeferred?: boolean) {
+  const n = ++r.opened
+  const at = r.scope
+  for (const s of statements) {
+    if (s.scope || tag === 'c') s.scope = within(`${tag}${n}`, s.scope)
+    s.isDeferred ||= isDeferred
+  }
+  read(statements, r, at)
+  r.scope = at
+}
+
+// `bash -c '...'` and the like: the script is read as commands of its own, run in a child shell that
+// sees only exported variables. True when it was one.
+function readScript(st: Statement, name: string, args: Word[], r: Reading): boolean {
+  const inner = script(st, name, args)
   if (!inner) return false
+  // A script held in a variable set earlier in the command, or a here-doc that names one, is read with
+  // its value.
+  const text = inner.dynamic ? inner.text : undefined
+  const e = text === undefined ? undefined : inner.isBody ? expandBody(text, r) : expand(text, r, inner.literals)
+  const isKnown = e !== undefined && !e.unresolved
   const ps = r.ps
   const writes = r.writes
+  const child = within(r.scope, `p${++r.opened}`)
+  inherit(st, args, r, child)
   r.ps = inner.ps
-  read(inner.statements, r)
+  read(isKnown ? parse(e.text, inner.ps) : inner.statements, r, child)
   r.ps = ps
-  if (inner.dynamic && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
+  if (inner.dynamic && !isKnown && r.writes > writes) r.plan.unread.push(`a ${name} script built at run time`)
+  // A script the reading cannot know may run any program; so may a cmd line split at `&` or `|`, or holding
+  // a word the shell fills in, since it is read as one statement.
+  if (inner.dynamic && !isKnown) r.mayRewrite = true
+  // cmd fills in `%NAME%`, drops `^` and runs each part of a line split at `&` or `|`: unlike the shell.
+  const line = inner.text ?? args.map(a => a.text).join(' ')
+  if (name === 'cmd' && /[%^&|]/.test(line) && cmdWrites(line)) unreadCall(r, 'a cmd script built at run time')
+  if (name === 'cmd' && (/[%^&|]/.test(line) || args.some(a => a.dynamic))) r.mayRewrite = true
   return true
 }
 
-// PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed.
+// PowerShell splatting (`gh pr create @params`): the hashtable built earlier is checked as typed; one
+// from outside the command cannot be read.
 function readSplats(args: Word[], r: Reading, where: string) {
   for (const a of args) {
     const splat = r.ps ? /^@(\w+)$/.exec(a.text) : null
     if (!splat) continue
-    const v = r.vars.get((splat[1] ?? '').toLowerCase())
+    const v = lookup(r, splat[1] ?? '')
     if (v) r.plan.texts.push({ where, text: v.text, creditOnly: true })
+    // A native program gets a hashtable as `-key:value` words (`@{ nm = 'x' }` is `-n -m :x`), a list as items.
     r.plan.unread.push(where)
   }
 }
 
+// The files fed through `<`, read for `where`: one built at run time in a way the reading does not know
+// names it unread.
+function readFiles(st: Statement, r: Reading, where: string) {
+  for (const [i, path] of st.reads.entries()) {
+    const full = knownPath(st.readWords?.[i] ?? path, r)
+    if (full === undefined) r.plan.unread.push(where)
+    else pushFile(r, where, full)
+  }
+}
+
 function readStdin(st: Statement, prev: Statement | undefined, r: Reading, where: string) {
-  if (st.reads.length > 0) for (const path of st.reads) r.plan.files.push({ where, path })
+  if (st.reads.length > 0) readFiles(st, r, where)
   else if (st.pipeIn && prev) feed(prev, r, where)
   else r.plan.unread.push(where)
 }
@@ -365,12 +412,12 @@ function readStdin(st: Statement, prev: Statement | undefined, r: Reading, where
 // What a statement prints, read as message text for `where`: the input of a pipe, or a file it writes.
 function feed(st: Statement, r: Reading, where: string) {
   const { plan } = r
-  pushBodies(plan, st, where)
+  pushBodies(r, st, where)
   const { name, args } = programOf(st)
   if (/^(cat|type|get-content|gc)$/.test(name)) {
     const paths = args.filter(a => !a.text.startsWith('-'))
     for (const p of paths) take('file', p, r, where)
-    for (const path of st.reads) plan.files.push({ where, path })
+    readFiles(st, r, where)
     if (paths.length + st.reads.length + st.heredocs.length === 0) plan.unread.push(where)
     return
   }
@@ -385,104 +432,48 @@ function feed(st: Statement, r: Reading, where: string) {
   plan.unread.push(where)
 }
 
-// Variables set earlier in the command (`MSG='...'`, `$m = @'...'@`, `read -r -d '' BODY <<'EOF'`):
-// a message that names one is read with its value. Returns true for an assignment statement.
-function assign(st: Statement, name: string, args: Word[], r: Reading): boolean {
-  const w = st.words
-  if (r.ps) {
-    const spaced = /^\$(\w+)$/.exec(w[0]?.text ?? '')
-    if (spaced && w[1]?.text === '=') {
-      set(r, spaced[1] ?? '', w.length === 3 ? w[2] : undefined)
-      return true
-    }
-    const joined = w.length === 1 ? /^\$(\w+)=([\s\S]*)$/.exec(w[0]?.text ?? '') : null
-    if (joined) set(r, joined[1] ?? '', { ...(w[0] as Word), text: joined[2] ?? '' })
-    return Boolean(joined)
-  }
-  const pairs = name === '' ? w : /^(export|declare|local|readonly|typeset)$/.test(name) ? args : null
-  if (pairs) {
-    for (const a of pairs) {
-      const m = /^([A-Za-z_]\w*)=/.exec(a.text)
-      if (m) set(r, m[1] ?? '', { ...a, text: a.text.slice(m[0].length) })
-    }
-    return true
-  }
-  if (name === 'read' && st.heredocs.length > 0) {
-    const v = [...args].reverse().find(a => /^[A-Za-z_]\w*$/.test(a.text))
-    if (v) r.vars.set(v.text.toLowerCase(), { text: st.heredocs[0] ?? '', literal: true })
-    return true
-  }
-  return false
+// A body file named here, matched to the statements that wrote it so far, if any.
+function pushFile(r: Reading, where: string, path: string) {
+  const entry: Plan['files'][number] = { where, path }
+  matchFile(r, entry, landsAt(path, r))
+  r.plan.files.push(entry)
 }
 
-function set(r: Reading, name: string, value: Word | undefined) {
-  const key = name.toLowerCase()
-  if (!value) return void r.vars.delete(key)
-  if (!value.dynamic) return void r.vars.set(key, { text: value.text, literal: true })
-  const e = expand(value.text, r)
-  r.vars.set(key, { text: e.unresolved ? value.text : e.text, literal: !e.unresolved })
+// The file's writers, back to one that surely ran before it is read. With none sure, the file on disk is
+// read too: the writers may not have run.
+function matchFile(r: Reading, entry: Plan['files'][number], isIt: (w: Writer) => boolean): boolean {
+  const found = writersOf(r.writers.slice(0, r.writersBefore ?? r.writers.length), r.scope, isIt)
+  if (found.length === 0) return false
+  r.matched.set(entry, found)
+  if (ranBefore(found.at(-1)?.scope ?? '', r.scope)) entry.written = true
+  return true
 }
 
-// `bash -c '...'`, `powershell -Command "..."`, `cmd /c ...`: the script is read as a command of its own.
-function script(name: string, args: Word[]): { statements: Statement[]; ps: boolean; dynamic: boolean } | undefined {
-  const of = (i: number, ps: boolean) => {
-    const rest = args.slice(i + 1)
-    if (i === -1 || rest.length === 0) return undefined
-    const text = rest.length === 1 ? (rest[0]?.text ?? '') : rest.map(a => a.text).join(' ')
-    return { statements: parse(text, ps), ps, dynamic: rest.some(a => a.dynamic) }
-  }
-  if (/^(bash|sh|zsh|dash|ksh)$/.test(name))
-    return of(
-      args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a.text)),
-      false,
-    )
-  if (/^(pwsh|powershell)$/.test(name))
-    return of(
-      args.findIndex(a => /^-(c|command)$/i.test(a.text)),
-      true,
-    )
-  if (name === 'cmd') {
-    // Git Bash turns `/c` into a path, so it is typed `//c` there.
-    const i = args.findIndex(a => /^\/{1,2}[ck]$/i.test(a.text))
-    if (i === -1) return undefined
-    const words = args.slice(i + 1)
-    // `cmd /c "git commit -m \"...\""`: the command as one quoted word is read as a command line.
-    if (words.length === 1)
-      return { statements: parse(words[0]?.text ?? '', false), ps: false, dynamic: words[0]?.dynamic ?? false }
-    return {
-      statements: [{ words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }],
-      ps: false,
-      dynamic: false,
-    }
-  }
-  return undefined
-}
-
-function setCwd(plan: Plan, word: Word | undefined) {
-  if (word?.dynamic) plan.isCwdUnknown = true
-  else plan.cwd = word?.text
+// A call whose own words are built at run time: a write, since what it does cannot be read.
+function unreadCall(r: Reading, what: string) {
+  r.plan.isWrite = true
+  if (!r.plan.unread.includes(what)) r.plan.unread.push(what)
 }
 
 // A write statement: its here-doc bodies are message text (a `--body-file -` or `-F -` reads them).
-function write(plan: Plan, st: Statement, where: string): string {
-  plan.isWrite = true
-  pushBodies(plan, st, where)
+function write(r: Reading, st: Statement, where: string): string {
+  r.plan.isWrite = true
+  pushBodies(r, st, where)
   return where
 }
 
-// A statement's here-doc bodies as message text. A body the shell fills in at run time is checked as
-// written and also named unread: its expanded text cannot be known.
-function pushBodies(plan: Plan, st: Statement, where: string) {
-  for (const body of st.heredocs) plan.texts.push({ where, text: body })
-  if (st.hasDynamicBody && where && !plan.unread.includes(where)) plan.unread.push(where)
+// A statement's here-doc bodies as message text, as typed and as the shell fills them in. A body with a
+// part the reading cannot fill in (a variable from outside the command, a `$(...)`) is named unread.
+function pushBodies(r: Reading, st: Statement, where: string) {
+  const { plan } = r
+  for (const body of st.heredocs) {
+    plan.texts.push({ where, text: body })
+    if (!st.hasDynamicBody) continue
+    const e = expandBody(body, r)
+    if (e.text !== body) plan.texts.push({ where, text: e.text })
+    if (e.unresolved && where && !plan.unread.includes(where)) plan.unread.push(where)
+  }
 }
-
-// `git branch` flags that list, delete or configure instead of creating a branch.
-const BRANCH_NOT_CREATE = new RegExp(
-  '^-[dDlarvu]|^--(' +
-    'delete|list|all|remotes|show-current|contains|merged|no-merged|set-upstream|unset-upstream|edit-description' +
-    ')',
-)
 
 // The index of git's subcommand, past its global options; `-C <dir>` sets the folder.
 function gitSubcommand(args: Word[], r: Reading): number {
@@ -491,76 +482,78 @@ function gitSubcommand(args: Word[], r: Reading): number {
   while (k < args.length) {
     const t = args[k]?.text ?? ''
     if (t === '-C') {
-      if (!plan.cwd && !plan.isCwdUnknown) setCwd(plan, args[k + 1])
-      r.statementDir = args[k + 1]
+      if (splitsAt(args[k + 1]) || isSplat(args[k + 1], r.ps)) unreadCall(r, 'a git option built at run time')
+      r.at.dir = args[k + 1]
       k += 2
-    } else if (t === '-c' || t === '--git-dir' || t === '--work-tree' || t === '--namespace') k += 2
-    else if (t.startsWith('-')) k++
-    else break
+    } else if (/^(-c|--git-dir|--work-tree|--namespace|--config-env|--attr-source|--super-prefix)$/.test(t)) {
+      // A setting built at run time may name a hook path or an alias: what git then runs is unknown.
+      if ((t === '-c' || t === '--config-env') && isUnknownSetting(args[k + 1])) {
+        unreadCall(r, 'a git setting built at run time')
+      }
+      if (splitsAt(args[k + 1]) || isSplat(args[k + 1], r.ps)) unreadCall(r, 'a git option built at run time')
+      k += 2
+    } else if (t.startsWith('-')) {
+      // The joined `--config-env=<key>=<variable>` is judged as the spaced one is.
+      const joined = t.startsWith('--config-env=') ? sliceWord(args[k] as Word, '--config-env='.length) : undefined
+      if (isUnknownSetting(joined)) unreadCall(r, 'a git setting built at run time')
+      k++
+    } else break
   }
   return k
 }
 
-// `git branch <name>` creates one (a rename or copy names the new one last); listing flags create none.
-function gitBranch(rest: Word[], plan: Plan) {
-  const flags = rest.filter(a => a.text.startsWith('-')).map(a => a.text)
-  const names = rest.filter(a => !a.text.startsWith('-')).map(a => a.text)
-  if (flags.some(f => /^-(m|M|c|C)$|^--(move|copy)$/.test(f))) plan.branches.push(...names.slice(-1))
-  else if (!flags.some(f => BRANCH_NOT_CREATE.test(f))) plan.branches.push(...names.slice(0, 1))
-}
-
-// `-a` in a bundle counts only before the first letter that takes a value: in `-Sabc` or `-uall` it is
-// part of that value, read the same way `walk` reads the bundle.
-function isCommitAll(text: string): boolean {
-  if (text === '--all') return true
-  if (!/^-[A-Za-z]/.test(text)) return false
-  for (const letter of text.slice(1)) {
-    if (letter === 'a') return true
-    if (!/[A-Za-z]/.test(letter) || COMMIT[`-${letter}`]) return false
-  }
-  return false
-}
-
 function gitCommit(st: Statement, rest: Word[], r: Reading): string {
   const { plan } = r
-  const where = write(plan, st, 'the commit message')
-  const positional = walk(rest, COMMIT, r, where)
+  const where = write(r, st, 'the commit message')
+  const positional = walk(rest, COMMIT, r, where, 'commit')
   const all = rest.some(a => isCommitAll(a.text))
-  plan.diff = all || positional.length > 0 ? 'all' : (plan.diff ?? 'cached')
+  r.at.diff = all || positional.length > 0 ? 'all' : 'cached'
   return where
 }
 
 function git(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
   const k = gitSubcommand(args, r)
+  if (args[k]?.dynamic || isSplat(args[k], r.ps)) return void unreadCall(r, 'a git subcommand built at run time')
   const sub = args[k]?.text ?? ''
   const rest = args.slice(k + 1)
+  // A write whose flags are not walked (push, rebase, am): any word built at run time may be one, even
+  // after a `--` (`push -o -- $REF` gives `-o` the `--`, and push reads flags after its refspecs).
+  const isWalked = /^(commit|tag|merge|commit-tree|notes)$/.test(sub)
+  const isUnwalkedWrite = !isWalked && writesHistory('git', args, r.ps)
+  if (isUnwalkedWrite && rest.some(w => mayBeFlag(w) || isSplat(w, r.ps))) unreadCall(r, 'a word built at run time')
   switch (sub) {
     case 'commit':
       return gitCommit(st, rest, r)
     case 'tag':
     case 'merge':
     case 'commit-tree': {
-      const where = write(plan, st, `the ${sub} message`)
-      walk(rest, MESSAGE, r, where)
+      // Listing, verifying or deleting tags, or no arguments at all, writes no message.
+      const isRead = (a: Word) => TAG_READS.test(gitLong('tag', a.text))
+      if (sub === 'tag' && (rest.length === 0 || rest.some(isRead))) return undefined
+      const where = write(r, st, `the ${sub} message`)
+      walk(rest, MESSAGE, r, where, sub)
       return where
     }
     case 'notes': {
-      const where = write(plan, st, 'the git note')
-      walk(rest.slice(1), MESSAGE, r, where)
+      // Listing, showing or removing notes writes no message.
+      if (/^(list|show|get-ref|prune|remove)$/.test(rest[0]?.text ?? '')) return undefined
+      const where = write(r, st, 'the git note')
+      walk(rest.slice(1), NOTES, r, where, 'notes')
       return where
     }
     case 'checkout':
-      walk(rest, { '-b': 'branch', '-B': 'branch' }, r, '')
+      walk(rest, { '-b': 'branch', '-B': 'branch', '--orphan': 'branch' }, r, '', 'checkout')
       return undefined
     case 'switch':
-      walk(rest, { '-c': 'branch', '-C': 'branch', '--create': 'branch', '--force-create': 'branch' }, r, '')
+      walk(rest, SWITCH, r, '', 'switch')
       return undefined
     case 'worktree':
       if (rest[0]?.text === 'add') walk(rest.slice(1), { '-b': 'branch', '-B': 'branch' }, r, '')
       return undefined
     case 'branch':
-      gitBranch(rest, plan)
+      // A name built at run time is unread, as `checkout -b` names it.
+      for (const w of branchesOf(rest)) take('branch', w, r, '')
       return undefined
   }
   return undefined
@@ -575,7 +568,7 @@ function ghWords(args: Word[], r: Reading): { gi: number; ai: number } {
     if (t === '-R' || t === '--repo') {
       const value = args[++i]
       if (value) take('repo', value, r, '')
-    } else if (t.startsWith('--repo=')) take('repo', { ...(args[i] as Word), text: t.slice(7) }, r, '')
+    } else if (t.startsWith('--repo=')) take('repo', sliceWord(args[i] as Word, 7), r, '')
     else if (t.startsWith('-')) continue
     else if (gi === -1) gi = i
     else ai = i
@@ -591,21 +584,20 @@ function ghApi(st: Statement, args: Word[], r: Reading): string | undefined {
   walk(args, GH_API, r, 'the GitHub API call')
   const hasFields = plan.files.length + plan.texts.length + r.stdin > before
   if (r.method === 'GET' || (!hasFields && !/^(POST|PATCH|PUT)$/.test(r.method ?? ''))) return undefined
-  return write(plan, st, 'the GitHub API call')
-}
-
-function ghSpec(group: string, action: string): Spec {
-  if (group === 'release') return GH_RELEASE
-  if (group === 'gist' || group === 'repo') return GH_DESC
-  if (group === 'pr' && action === 'review') return GH_REVIEW
-  if (group === 'pr' && action === 'merge') return GH_MERGE
-  return action === 'close' || action === 'reopen' ? GH_CLOSE : GH_BODY
+  return write(r, st, 'the GitHub API call')
 }
 
 function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
   plan.ghCalls++
   const { gi, ai } = ghWords(args, r)
+  // A splat up to the action word may hand over the subcommand or global options.
+  if ((ai === -1 ? args : args.slice(0, ai + 1)).some(w => isSplat(w, r.ps)))
+    return void unreadCall(r, 'a gh subcommand built at run time')
+  // The subcommand, or a `gh api` endpoint that may turn into a flag, built at run time.
+  const isApi = args[gi]?.text === 'api'
+  if (args[gi]?.dynamic || (args[ai] && (isApi ? mayBeFlag(args[ai]) : args[ai]?.dynamic)))
+    return void unreadCall(r, 'a gh subcommand built at run time')
   const group = args[gi]?.text ?? ''
   const action = args[ai]?.text ?? ''
   const rest = args.filter((_, i) => i !== gi && i !== ai)
@@ -616,17 +608,13 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
     return undefined
   }
   // The endpoint is a positional; keep it out of the field walk.
-  if (group === 'api')
-    return ghApi(
-      st,
-      args.filter((_, i) => i !== gi),
-      r,
-    )
+  const apiArgs = args.filter((_, i) => i !== gi)
+  if (group === 'api') return ghApi(st, apiArgs, r)
   if (!GH_WRITES[group]?.includes(action)) {
     walk(rest, { '-R': 'repo', '--repo': 'repo' }, r, '')
     return undefined
   }
-  const where = write(plan, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
+  const where = write(r, st, `the ${group === 'pr' ? 'PR' : group} ${action === 'create' ? 'text' : action}`)
   const before = plan.files.length
   walk(rest, ghSpec(group, action), r, where)
   if (group === 'pr' && (action === 'create' || action === 'edit')) {
@@ -647,26 +635,23 @@ function web(name: string, st: Statement, args: Word[], r: Reading): string | un
   if (!args.some(a => a.text.includes('api.github.com'))) return undefined
   const where = 'the GitHub API call'
   if (name === 'curl') {
-    write(r.plan, st, where)
+    write(r, st, where)
     walk(args, CURL, r, where)
     return where
   }
   if (/^(invoke-restmethod|invoke-webrequest|irm|iwr)$/.test(name)) {
-    write(r.plan, st, where)
-    walk(
-      args.map(a => ({ ...a, text: a.text.startsWith('-') ? a.text.toLowerCase() : a.text })),
-      PS_WEB,
-      r,
-      where,
-    )
+    write(r, st, where)
+    const lowered = args.map(a => ({ ...a, text: a.text.startsWith('-') ? a.text.toLowerCase() : a.text }))
+    walk(lowered, PS_WEB, r, where)
     return where
   }
   return undefined
 }
 
 // Reads options by the spec; returns the positional words. Short flags may be bundled (`-am "msg"`)
-// or carry their value attached (`-m"msg"`, `-Fbody.md`, `-XPOST`); long ones may use `=`.
-function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
+// or carry their value attached (`-m"msg"`, `-Fbody.md`, `-XPOST`); long ones may use `=`, and a git
+// subcommand's (`sub`) may be shortened as git reads them (`--mess`).
+function walk(args: Word[], spec: Spec, r: Reading, where: string, sub?: string): Word[] {
   const positional: Word[] = []
   for (let i = 0; i < args.length; i++) {
     const w = args[i] as Word
@@ -676,11 +661,11 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
       break
     }
     if (t.startsWith('--')) {
-      const eq = t.indexOf('=')
-      const flag = eq === -1 ? t : t.slice(0, eq)
-      const kind = spec[flag]
+      const full = sub ? gitLong(sub, t) : t
+      const eq = full.indexOf('=')
+      const kind = spec[eq === -1 ? full : full.slice(0, eq)]
       if (!kind || kind === 'attached') continue
-      const value = eq === -1 ? args[++i] : { ...w, text: t.slice(eq + 1) }
+      const value = eq === -1 ? args[++i] : sliceWord(w, t.length - (full.length - eq - 1))
       if (value) take(kind, value, r, where)
       else missing(kind, r, where)
       continue
@@ -703,13 +688,15 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string): Word[] {
         if (!kind) continue
         if (kind === 'attached') break
         const attached = t.slice(j + 1)
-        const value = attached ? { ...w, text: attached } : args[++i]
+        const value = attached ? sliceWord(w, j + 1) : args[++i]
         if (value) take(kind, value, r, where)
         else missing(kind, r, where)
         break
       }
       continue
     }
+    // A word built at run time where a flag could stand may turn into one (`$NV`, `"$@"`).
+    if (where && mayBeFlag(w) && !r.plan.unread.includes(where)) r.plan.unread.push(where)
     positional.push(w)
   }
   return positional
@@ -723,58 +710,68 @@ function missing(kind: Kind, r: Reading, where: string) {
 
 function take(kind: Kind, value: Word, r: Reading, where: string) {
   const { plan } = r
+  // A value the shell splits at run time may carry more options (`--base $B` with `B='main -F x'`).
+  const isMany = splitsAt(value) || isSplat(value, r.ps)
+  if (isMany && /^(skip|repo|method)$/.test(kind)) unreadCall(r, where || 'a flag value built at run time')
+  // A PowerShell list hands a write its first item as the value and the rest as more words.
+  if (value.list && (where || kind === 'branch')) unreadCall(r, 'a flag value built at run time')
   switch (kind) {
     case 'text':
       return message(value, r, where)
     case 'file': {
       if (value.text === '-') return void r.stdin++
-      if (!value.dynamic) return void plan.files.push({ where, path: value.text })
-      const e = expand(value.text, r)
-      if (!e.unresolved) return void plan.files.push({ where, path: e.text })
-      return fileOrUnread(value, plan, where)
+      if (!value.dynamic) return void pushFile(r, where, value.text)
+      const e = expand(value.text, r, value.literals)
+      if (!e.unresolved) return void pushFile(r, where, e.text)
+      // A file this command writes under the same spelling (`F=$(mktemp); cat > "$F"`), with every
+      // variable in it unchanged since: the same file.
+      const now = varsIn(value.text, r)
+      const isTracked = now.length > 0 && now.every(Boolean) && !/\$[({@*#?$!0-9-]|`|\$env:/i.test(value.text)
+      const isSame = (w: Writer) => w.path === norm(value.text) && isSameFolder(value.text, w.folder, r)
+      const isIt = (w: Writer) => isSame(w) && w.vars.length === now.length && w.vars.every((v, i) => v === now[i])
+      const entry = { where, path: value.text }
+      if (isTracked && matchFile(r, entry, isIt)) return void plan.files.push(entry)
+      // `-F <(cat <<'EOF' ... EOF)` hands over the here-doc's text; any other path built at run time
+      // names a file the reading cannot know.
+      if (!held(value, r, where, '<')) plan.unread.push(where)
+      return
     }
     case 'repo':
-      plan.repo = value.text.split('/').pop()
+      r.at.repo = value
       return
     case 'method':
       r.method = value.text.toUpperCase()
       return
     case 'branch':
-      if (!value.dynamic) plan.branches.push(value.text)
+      // A PowerShell splat or list hands git several words: a start point after the name, perhaps.
+      if (value.dynamic || isMany || value.list) unreadCall(r, 'the new branch name')
+      else plan.branches.push(value.text)
       return
     case 'field': {
       const eq = value.text.indexOf('=')
       // A whole field built at run time (`-f "$KV"`): its value cannot be read.
       if (eq === -1 && value.dynamic) return void (where && plan.unread.push(where))
-      const v = eq === -1 ? '' : value.text.slice(eq + 1)
-      if (v === '@-') return void r.stdin++
-      if (v.startsWith('@')) return void plan.files.push({ where, path: v.slice(1) })
-      return message({ ...value, text: v }, r, where)
+      const v = sliceWord(value, eq === -1 ? value.text.length : eq + 1)
+      if (v.text === '@-') return void r.stdin++
+      if (v.text.startsWith('@')) return filePath(sliceWord(v, 1), r, where)
+      return message(v, r, where)
     }
     case 'data':
       if (value.text === '@-') return void r.stdin++
-      if (value.text.startsWith('@')) return void plan.files.push({ where, path: value.text.slice(1) })
+      if (value.text.startsWith('@')) return filePath(sliceWord(value, 1), r, where)
       return message(value, r, where)
   }
 }
 
-const SUBSTITUTION = /\$\((?:[^()]|\([^()]*\))*\)/g
-
-// A value with its variables replaced by what the command set them to; `unresolved` when any part is
-// built at run time in a way the reading does not know.
-function expand(text: string, r: Reading): { text: string; unresolved: boolean } {
-  let unresolved = /\$\(|^[<>]?\(|@[({]/.test(text) || (!r.ps && text.includes('`'))
-  const out = text.replace(SUBSTITUTION, ' ').replace(/\$\{?([A-Za-z_]\w*)\}?/g, (_, name: string) => {
-    const v = r.vars.get(name.toLowerCase())
-    if (v?.literal) return v.text
-    unresolved = true
-    return ' '
-  })
-  return { text: out, unresolved }
+// A body file named after `@` in a field (`-F query=@$q`): read from its full path, or named unread.
+function filePath(path: Word, r: Reading, where: string) {
+  const full = knownPath(path, r)
+  if (full === undefined) return void r.plan.unread.push(where)
+  pushFile(r, where, full)
 }
 
-// A message value: literal text is checked; text built at run time is read where the reading can
-// (a variable set earlier, a here-doc inside `$(cat <<'EOF' ... EOF)`, a `$(cat file)`) and named as
+// A message value: literal text is checked; text built at run time is read where the reading can (a
+// variable set earlier, a value that is wholly `$(cat <<'EOF' ... EOF)` or `$(cat file)`) and named as
 // unread otherwise. The value as typed is checked for credit too: a credit inside `$(echo '...')` or
 // `$(printf ...)` is in the command text itself.
 function message(value: Word, r: Reading, where: string) {
@@ -782,17 +779,21 @@ function message(value: Word, r: Reading, where: string) {
   if (!value.dynamic) return void plan.texts.push({ where, text: value.text })
   for (const body of value.bodies) plan.texts.push({ where, text: body })
   plan.texts.push({ where, text: value.text, creditOnly: true })
-  const e = expand(value.text, r)
+  if (held(value, r, where)) return
+  const e = expand(value.text, r, value.literals)
   plan.texts.push({ where, text: e.text })
-  if (e.unresolved) fileOrUnread(value, plan, where)
+  // Variables that hold a file's text (`BODY=$(cat b.md)`): the file is read instead.
+  if (e.isFilesOnly) for (const path of e.files) pushFile(r, where, path)
+  else if (e.unresolved) plan.unread.push(where)
 }
 
-function fileOrUnread(value: Word, plan: Plan, where: string) {
-  const cat =
-    /(?:\$|^)\(\s*(?:cat|Get-Content|gc)(?:\s+-Raw)?\s+(?:"([^"$]+)"|'([^']+)'|([^\s)$]+))(?:\s+-Raw)?\s*\)/i.exec(
-      value.text,
-    )
-  if (cat) return void plan.files.push({ where, path: (cat[1] ?? cat[2] ?? cat[3]) as string })
-  if (value.bodies.length > 0) return
-  plan.unread.push(where)
+// A value that is wholly one `cat` of a here-doc or a file: the here-doc's text is checked (unread when
+// a part of it stays unknown), the file is read. True when it was one.
+function held(value: Word, r: Reading, where: string, opener: '$' | '<' = '$'): boolean {
+  const v = catValue(value, r, opener)
+  if (!v) return false
+  if (v.file) pushFile(r, where, v.file)
+  else r.plan.texts.push({ where, text: v.text })
+  if (!v.file && !v.literal) r.plan.unread.push(where)
+  return true
 }
