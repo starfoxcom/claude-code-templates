@@ -106,10 +106,12 @@ jobs:
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
           # The diff endpoint (`gh pr diff`) 406s past 300 files; the paginated
-          # files API lists up to 3,000 and silently stops there. A listing
-          # that fails or comes back shorter than the PR's file count runs the
-          # review: a PR too large to enumerate is by definition reviewable.
-          if ! gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' > /tmp/changed_files.txt \
+          # files API lists up to 3,000 and silently stops there. A PR at that
+          # cap, or a listing that fails or comes back shorter than the PR's
+          # file count, runs the review: a PR too large to enumerate is by
+          # definition reviewable.
+          if [ "$CHANGED_FILES" -ge 3000 ] \
+            || ! gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' > /tmp/changed_files.txt \
             || [ "$(wc -l < /tmp/changed_files.txt)" -lt "$CHANGED_FILES" ]; then
             echo "File listing failed or is incomplete (diff too large?) — treating as reviewable."
             echo "run_review=true" >> "$GITHUB_OUTPUT"
