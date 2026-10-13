@@ -25,7 +25,11 @@ name: Attribution
 on:
   pull_request_target:
     branches: [develop, main]
-    types: [opened, synchronize, reopened, edited]
+    # No `edited`: a run on its own makes the earlier run of this workflow
+    # stale, and the review workflow's `Claude On-Demand` check, which GitHub
+    # files under the first workflow run of the commit, goes stale with it and
+    # blocks the merge. The title and body are read again on every push.
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
