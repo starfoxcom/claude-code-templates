@@ -165,6 +165,17 @@ test('a bypass route in a command that is not plain is still refused', () => {
     expect([command, plan.block ?? plan.unread[0]]).toEqual([command, expect.any(String)])
     expect([command, isNoted(command, ps)]).toEqual([command, true])
   }
+  // A git call in any program's quoted text meets the rules a typed call meets, named launcher or not, and the
+  // words a program only prints or matches are data.
+  for (const command of [
+    "tmux new -d 'git commit --no-veri -m x'",
+    "nix-shell --run 'git commit -ac HEAD'",
+    "npx -c 'git config set core.hooksPath /x'",
+    "kubectl exec pod -- sh -c 'git commit --trail x -m y'",
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.any(String)])
+  }
+  expect(inspect('grep -e "git commit -n" notes.md -n', false).block).toBeUndefined()
   // A git or gh call in a launcher's quoted text is refused even when it names no write.
   expect(inspect("flock /tmp/l -c 'git submodule --quiet foreach make'", false).block).toContain('run through `flock`')
   expect(inspect("ssh host 'gh -R o/r alias import aliases.yml'", false).block).toContain('run through `ssh`')

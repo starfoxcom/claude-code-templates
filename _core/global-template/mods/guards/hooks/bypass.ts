@@ -291,7 +291,7 @@ export function bypassOf(st: Statement, name: string, args: Word[], state: HookS
 const FOLLOWED = /^(git|gh|bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|eval|iex|invoke-expression|trap)$/
 const SHELL = /^(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd)$/
 // Programs that only print or match their words: a git word among them is data (`echo git commit -n`).
-const PRINTS = /^(echo|printf|write-output|write-host|grep|egrep|fgrep|rg|select-string|sls)$/
+export const PRINTS = /^(echo|printf|write-output|write-host|grep|egrep|fgrep|rg|select-string|sls)$/
 // Programs that run their quoted argument as a command the reading does not follow (`flock -c '...'`,
 // `ssh host '...'`, `Start-Process git -ArgumentList '...'`, an alias's value).
 export const LAUNCHERS =

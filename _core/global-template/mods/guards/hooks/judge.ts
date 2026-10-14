@@ -9,8 +9,9 @@
 import { launched } from './bypass'
 import { readCommand } from './inspect'
 import type { Plan } from './plan'
-import { launcherIn, namesWrite, notPlain, QUOTED_STRING, runsShellText, withoutDataBodies } from './plain'
-import { routeIn } from './routes'
+import { launcherIn, namesWrite, notPlain, QUOTED_STRING, runsShellText } from './plain'
+import { withoutDataBodies, withoutPrints } from './plain'
+import { callRoute, routeIn } from './routes'
 
 // The unread kinds real work produces (2026-10-14 replay) that only the shell can fill in, and that the
 // shipped hook passes: noted. Every other unread kind stays refused.
@@ -24,7 +25,10 @@ export function inspect(command: string, powershell: boolean): Plan {
   plan.unread = plan.unread.filter(what => !NOTED.has(what))
   // Where the reading could not follow every word, a route around the check named anywhere in the command is
   // refused (`flock /tmp/l -c 'git filter-repo --force'`, `ARGS=(--no-verify); git commit -m x "${ARGS[@]}"`).
-  const route = plan.notes.length > 0 ? routeIn(scanText(command, plan, why, powershell)) : undefined
+  // A git or gh call named anywhere in the text, a launcher's or a wrapper's quoted text included, meets the rules
+  // a typed call meets in every command; the route table counts where the reading left a note.
+  const scan = scanText(command, plan, why, powershell)
+  const route = callRoute(withoutPrints(scan)) ?? (plan.notes.length > 0 ? routeIn(scan) : undefined)
   // A git or gh call inside a launcher's quoted text runs unread, as one inside `eval` does; a flag word built at run
   // time from a variable the command sets to a flag (`ARGS=(-n); git commit -m x "${ARGS[@]}"`) is unread too.
   const launcher = launcherIn(command)

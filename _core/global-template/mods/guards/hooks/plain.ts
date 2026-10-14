@@ -4,7 +4,7 @@
 // still read as far as the reading goes, and the reason is noted in the log: refusing it blocked ordinary
 // work the shipped attribution hook passes. Pure, no engine access.
 
-import { LAUNCHERS, NAMES_CALL } from './bypass'
+import { LAUNCHERS, NAMES_CALL, PRINTS } from './bypass'
 
 // What the text names, read with quotes, escapes and expansion marks taken out.
 const NAMES_GIT = /\bgit\b/
@@ -91,6 +91,22 @@ export function launcherIn(command: string): string | undefined {
     if (NAMES_CALL.test(callText(code.slice(at, end === -1 ? undefined : at + end)))) return name
   }
   return undefined
+}
+
+/** The text without the statements of programs that only print or match their words (`echo`, `grep`): a git
+ * call named there is data. A shell they feed is judged on its own statement (`bypassIn`). */
+export function withoutPrints(text: string): string {
+  const masked = text.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
+  let out = text
+  for (const m of masked.matchAll(PROGRAM_WORD)) {
+    const word = m[1] as string
+    if (!PRINTS.test(word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, ''))) continue
+    const at = (m.index ?? 0) + m[0].length - word.length
+    const end = masked.slice(at).search(/[;&|\n]/)
+    const to = end === -1 ? text.length : at + end
+    out = out.slice(0, at) + ' '.repeat(to - at) + out.slice(to)
+  }
+  return out
 }
 
 // A statement's text with quotes and expansion marks taken out, where git or gh is found as a program word.
