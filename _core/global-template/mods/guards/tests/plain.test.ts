@@ -206,6 +206,10 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['HUSKY=0 npm ci && git push', false],
     ['make SKIP=tests && git commit -m x', false],
     ['LEFTHOOK=0 npm ci && git commit -m x', false],
+    // Text a reader writes to a file, or another language runs as its own code, is data to the call check.
+    ['cat >> CLAUDE.md <<EOF\nNever run git commit -n in $REPO.\nEOF', false],
+    ["node -e \"console.log('git commit -n')\"", false],
+    ["python -c \"print('git commit -n')\"", false],
   ] as const) {
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
   }

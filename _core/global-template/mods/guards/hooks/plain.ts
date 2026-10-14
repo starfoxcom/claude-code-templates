@@ -111,10 +111,14 @@ export function withoutPrints(text: string, isCallRead = false): string {
     // With `isCallRead`, a git or gh statement goes too, with a here-doc it is fed (its message): the reading
     // checked its own words, and the text inside them (`git log --grep "git commit -n"`) is its data.
     const isCall = isCallRead && /^(git|gh)$/.test(name)
-    if (!PRINTS.test(name) && !isCall) continue
+    // A reader or another language's interpreter takes its text and here-doc as data or as its own code,
+    // unless it pipes them on (`cat <<'EOF' | ssh host`).
+    const isData = isCallRead && DATA_PROGRAMS.test(name)
+    if (!PRINTS.test(name) && !isCall && !isData) continue
     const end = masked.slice(at).search(/[;&|\n]/)
     const lineEnd = end === -1 ? text.length : at + end
-    const fed = isCall ? bodies.find(b => b.open >= at && b.open < lineEnd) : undefined
+    if (isData && /^\|(?!\|)/.test(masked.slice(lineEnd))) continue
+    const fed = isCall || isData ? bodies.find(b => b.open >= at && b.open < lineEnd) : undefined
     const to = fed ? fed.to : lineEnd
     out = out.slice(0, at) + ' '.repeat(to - at) + out.slice(to)
   }
@@ -122,6 +126,9 @@ export function withoutPrints(text: string, isCallRead = false): string {
 }
 
 const blank = (text: string) => text.replace(/[^\n]/g, ' ')
+// Programs whose text is data to them (`cat >> notes.md <<EOF`) or code in their own language (`node -e`).
+const DATA_PROGRAMS =
+  /^(cat|tee|type|get-content|set-content|add-content|out-file|node|deno|python\d*(\.\d+)?|py|perl|ruby|php|awk|gawk)$/
 // A quoted string on one line, but a here-doc's quoted delimiter.
 const LINE_QUOTED = /(?<!<<-?[ \t]*)(?:'[^']*'|"(?:[^"\\]|\\.)*")/g
 
