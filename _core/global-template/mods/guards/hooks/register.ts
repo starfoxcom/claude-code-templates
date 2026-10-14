@@ -16,13 +16,23 @@ import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 // scanning raw text, so paths, branch names and flags never trip it. Hot reload watches this file only:
 // change it after editing shell.ts, inspect.ts or policy.ts. Opt-in per repo, from files in
 // mods-data/guards: the PR-body contract (pr-body.json) and banned names (names.json). Opt-in by
-// setting: helper agents (`helpers` = block refuses Agent and Workflow calls; see helpers.ts).
+// setting: helper agents (`helpers` = block refuses Agent and Workflow calls; see helpers.ts). Opt-out by
+// setting: `attribution` = off drops the AI-credit and product-name checks; every other check stays, since
+// banned names and the PR-body contract read the same text and need its refusals.
 //
 // mode `shadow` (the default while it is new): never blocks; it logs what it would block, and what the
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
 
 const LOG_CAP = 256 * 1024
-const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false, temp: '' }
+const live = {
+  mode: 'shadow',
+  isAttribution: true,
+  mentionRepos: ['*'] as string[],
+  home: '',
+  dir: '',
+  isWindows: false,
+  temp: '',
+}
 // The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
 // hooks worker forgets them, which errs toward the block).
 const helpers = { setting: 'allow' as 'allow' | 'block', allowedIn: new Set<string>() }
@@ -94,7 +104,7 @@ type TextRules = { mayName: boolean; banned?: NameRule }
 
 // One message text: AI credit first, then the product name, then the repo's banned names.
 function textReason(text: string, where: string, rules: TextRules, creditOnly = false): string | undefined {
-  const v = checkText(text, rules.mayName || creditOnly)
+  const v = live.isAttribution ? checkText(text, rules.mayName || creditOnly) : undefined
   if (v) return describe(v, where)
   const name = rules.banned && !creditOnly ? findName(text, rules.banned) : undefined
   return name ? describeName(name, where) : undefined
@@ -312,7 +322,7 @@ async function diffReason($: Engine, plan: Plan, session: string, isBash: boolea
     }
     const args = diff === 'all' ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color']
     const run = await gitRun($, folderAt(folder, session, isBash), args)
-    const hit = checkAddedLines(run.out)
+    const hit = live.isAttribution ? checkAddedLines(run.out) : undefined
     if (hit) return `AI credit line added to ${hit.file}: "${hit.line}". Remove it before committing.`
     // A diff past the output cap was read only in part: the rest is noted, never passed as clean.
     const cut = 'the lines the commit adds past the first part of its diff'
@@ -335,7 +345,7 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
   if (fileReason) return fileReason
   for (const branch of plan.branches) {
     const where = `the new branch name "${branch}" (it lands in merge commit titles)`
-    const v = checkBranch(branch, rules.mayName)
+    const v = live.isAttribution ? checkBranch(branch, rules.mayName) : undefined
     if (v) return describe(v, where)
     const name = rules.banned ? findName(branch, rules.banned) : undefined
     if (name) return describeName(name, where)
@@ -472,6 +482,7 @@ export const register: Register = (on, options) => {
   // The settings come from the mod's own file over the loaded options, read again as it changes.
   settings(on, options, values => {
     live.mode = String(values.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
+    live.isAttribution = String(values.attribution ?? 'on') !== 'off'
     live.mentionRepos = String(values.mentionRepos ?? '*')
       .split(',')
       .map(s => s.trim().toLowerCase())
@@ -561,7 +572,9 @@ async function statusText($: Engine): Promise<string> {
   const banned = Object.keys((await nameRules($))?.repos ?? {})
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
-    `The product name may appear in ${names}; AI credit is blocked everywhere.`,
+    live.isAttribution
+      ? `The product name may appear in ${names}; AI credit is blocked everywhere.`
+      : 'Attribution check: off (setting attribution = off); AI credit and the product name are not checked.',
     ...(banned.length > 0 ? [`Banned names (names.json) are checked in: ${banned.join(', ')}.`] : []),
     helpersLine(await helperState($), isEnforced),
     line('Today (UTC)', sumDays(stats, now, 1)),
