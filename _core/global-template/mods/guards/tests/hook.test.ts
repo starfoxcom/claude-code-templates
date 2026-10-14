@@ -95,6 +95,23 @@ test('in enforce mode a block is refused, counted and logged', { options: { mode
   expect(Object.values(stats)).toMatchObject([{ checked: 1, mod: 1, scripts: 0 }])
 })
 
+// Attribution is opt-out: with it off, credit and the routes around the check pass; the rest stays.
+test(
+  'with attribution off, AI credit passes and the streaming CI watcher is still refused',
+  { options: { mode: 'enforce', attribution: 'off' } },
+  async ($, on) => {
+    const seen = world(on)
+    for (const command of [`git commit -m 'fix: x' -m '${AI_TRAILER}'`, 'git commit --no-verify -m "fix: x"']) {
+      const result = await bash($, command)
+      expect((result as { deny?: string }).deny).toBeUndefined()
+    }
+    expect(seen.ran).toHaveLength(2)
+    const watch = await bash($, ['gh', 'run', 'watch', '123'].join(' '))
+    expect(String((watch as { deny?: string }).deny)).toContain('streams a live log')
+    expect(seen.ran).toHaveLength(2)
+  },
+)
+
 test('writes the reading misses are still refused in enforce mode', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on)
   for (const command of [

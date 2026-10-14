@@ -2,7 +2,7 @@ import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import { foldDots } from './folders'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
-import { inspect } from './inspect'
+import { inspect, RUN_WATCH } from './inspect'
 import type { Folder, Plan, Target } from './inspect'
 import { describeName, findName, readNameRules } from './names'
 import type { NameRule } from './names'
@@ -16,13 +16,23 @@ import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 // scanning raw text, so paths, branch names and flags never trip it. Hot reload watches this file only:
 // change it after editing shell.ts, inspect.ts or policy.ts. Opt-in per repo, from files in
 // mods-data/guards: the PR-body contract (pr-body.json) and banned names (names.json). Opt-in by
-// setting: helper agents (`helpers` = block refuses Agent and Workflow calls; see helpers.ts).
+// setting: helper agents (`helpers` = block refuses Agent and Workflow calls; see helpers.ts). Opt-out by
+// setting: `attribution` = off drops every attribution check, leaving the CI-watcher refusal and the PR-body
+// contract.
 //
 // mode `shadow` (the default while it is new): never blocks; it logs what it would block, and what the
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
 
 const LOG_CAP = 256 * 1024
-const live = { mode: 'shadow', mentionRepos: ['*'] as string[], home: '', dir: '', isWindows: false, temp: '' }
+const live = {
+  mode: 'shadow',
+  isAttribution: true,
+  mentionRepos: ['*'] as string[],
+  home: '',
+  dir: '',
+  isWindows: false,
+  temp: '',
+}
 // The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
 // hooks worker forgets them, which errs toward the block).
 const helpers = { setting: 'allow' as 'allow' | 'block', allowedIn: new Set<string>() }
@@ -323,6 +333,7 @@ async function diffReason($: Engine, plan: Plan, session: string, isBash: boolea
 
 // The first reason to block, or undefined.
 async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | undefined> {
+  if (!live.isAttribution) return otherVerdict($, plan, isBash)
   if (plan.block) return plan.block
   const session = await $.session.cwd()
   const repos = await reposOf($, plan.targets, session, isBash)
@@ -347,6 +358,17 @@ async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | 
   if (unread) return unreadReason(unread)
   // Last: a credit anywhere outranks the PR format. A plain PR call is the command's one write.
   const prReason = await checkPr($, plan, session, repos[0], isBash)
+  return prReason ? `PR-body contract: ${prReason}` : undefined
+}
+
+// With the attribution check off: only what is not about attribution. Every other outright refusal (a shape the
+// reading cannot follow, skipped hooks, eval, history rewrites) exists to keep that check from being bypassed.
+async function otherVerdict($: Engine, plan: Plan, isBash: boolean): Promise<string | undefined> {
+  if (plan.block === RUN_WATCH) return plan.block
+  if (plan.prs.length === 0) return undefined
+  const session = await $.session.cwd()
+  const [repo] = await reposOf($, plan.targets, session, isBash)
+  const prReason = await checkPr($, plan, session, repo, isBash)
   return prReason ? `PR-body contract: ${prReason}` : undefined
 }
 
@@ -472,6 +494,7 @@ export const register: Register = (on, options) => {
   // The settings come from the mod's own file over the loaded options, read again as it changes.
   settings(on, options, values => {
     live.mode = String(values.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
+    live.isAttribution = String(values.attribution ?? 'on') !== 'off'
     live.mentionRepos = String(values.mentionRepos ?? '*')
       .split(',')
       .map(s => s.trim().toLowerCase())
@@ -561,7 +584,9 @@ async function statusText($: Engine): Promise<string> {
   const banned = Object.keys((await nameRules($))?.repos ?? {})
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
-    `The product name may appear in ${names}; AI credit is blocked everywhere.`,
+    live.isAttribution
+      ? `The product name may appear in ${names}; AI credit is blocked everywhere.`
+      : 'Attribution check: off (setting attribution = off); AI credit is not checked.',
     ...(banned.length > 0 ? [`Banned names (names.json) are checked in: ${banned.join(', ')}.`] : []),
     helpersLine(await helperState($), isEnforced),
     line('Today (UTC)', sumDays(stats, now, 1)),

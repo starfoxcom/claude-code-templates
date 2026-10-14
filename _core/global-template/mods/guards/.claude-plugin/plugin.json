@@ -11,6 +11,13 @@
       "options": ["shadow", "enforce"],
       "default": "shadow"
     },
+    "attribution": {
+      "type": "string",
+      "title": "Attribution check",
+      "description": "on (the default): AI credit is kept out of commits, PRs, issues, comments and releases, and the routes around that check (skipped git hooks, history rewrites, commands it cannot read) are refused. off: none of that is checked; the streaming CI watcher and the PR-body contract still are.",
+      "options": ["on", "off"],
+      "default": "on"
+    },
     "mentionRepos": {
       "type": "string",
       "title": "Repos that may name the product",
