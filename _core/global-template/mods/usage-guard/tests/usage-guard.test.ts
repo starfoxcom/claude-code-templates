@@ -527,6 +527,21 @@ test("a subagent's turn between main's turns does not hold the wrap-up", async (
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
 
+test("a subagent's turn ending mid-turn does not start the wrap-up beside main's turn", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.turn.start({ turnId: 't1' } as never)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  expect(seen.commands).toEqual([])
+
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
 test('a wrap-up owed by a running turn still runs when another session extends the pause', async ($, on) => {
   const seen = world(on)
   await start($)

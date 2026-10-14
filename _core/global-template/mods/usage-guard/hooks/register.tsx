@@ -750,6 +750,8 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    // A subagent's turn ends inside main's or after it: main's turn is not over.
+    if (e.agentId !== undefined) return next(e)
     live.isTurnRunning = false
     const result = await next(e)
     // Taken before anything below can start a wrap-up: a compaction owed by one runs after its own turn.

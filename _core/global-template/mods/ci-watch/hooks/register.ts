@@ -715,6 +715,8 @@ export const register: Register = (on, options) => {
   // A reload mid-turn ends the turn in the new module: it loads the watches, pending wakes included.
   on('turn.complete', async ($, e, next) => {
     await startPolling($)
+    // A subagent's turn ends inside main's or after it: main's turn is not over.
+    if (e.agentId !== undefined) return next(e)
     if (await isRetired($)) return next(e)
     await setTurnRunning($, false)
     // What is still pending (no tool result carried it) goes out from the next poll, between turns: a
