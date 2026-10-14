@@ -683,6 +683,8 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     await startAlive($)
+    // A subagent's turn (2.1.299+) runs inside or after main's: it starts no new main turn.
+    if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     live.turn += 1
     live.isTurnRunning = true
     live.toolsThisTurn = 0
@@ -700,11 +702,13 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    // A subagent's turn ends inside main's or after it: main's turn is not over.
+    if (e.agentId !== undefined) return next(e)
     live.isTurnRunning = false
     // Looked at a moment after the turn ends, never from the end itself: a prompt sent there was seen lost.
     // `reason` is the engine's TurnCompleteReason ('answer' | 'aborted' | 'refusal' | 'error'): only a turn
     // the model answered goes on.
-    if (live.keepGoing && !e.agentId && e.reason === 'answer')
+    if (live.keepGoing && e.reason === 'answer')
       $.clock.after(KEEP_GOING_DELAY_MS, () => void keepGoing($).catch(() => undefined))
     return next(e)
   })

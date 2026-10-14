@@ -706,6 +706,8 @@ export const register: Register = (on, options) => {
   // startPolling first: a freshly loaded instance claims the owner file before any check.
   on('turn.start', async ($, e, next) => {
     await startPolling($)
+    // A subagent's turn (2.1.299+) has no main turn.complete after it, so it never marks a turn running.
+    if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     if (!(await isRetired($))) await setTurnRunning($, true)
     return next(e)
   })
@@ -713,6 +715,8 @@ export const register: Register = (on, options) => {
   // A reload mid-turn ends the turn in the new module: it loads the watches, pending wakes included.
   on('turn.complete', async ($, e, next) => {
     await startPolling($)
+    // A subagent's turn ends inside main's or after it: main's turn is not over.
+    if (e.agentId !== undefined) return next(e)
     if (await isRetired($)) return next(e)
     await setTurnRunning($, false)
     // What is still pending (no tool result carried it) goes out from the next poll, between turns: a

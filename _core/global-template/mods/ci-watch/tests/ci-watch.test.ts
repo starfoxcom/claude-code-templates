@@ -819,6 +819,38 @@ test('checks that finish mid-turn reach the turn on its next tool result, once',
   expect(seen.prompts).toEqual([])
 })
 
+// Since Claude Code 2.1.299 a subagent's turn fires turn.start too, with no turn.complete for main after it.
+test("a subagent's turn after main's turn ended does not hold the wake", async ($, on) => {
+  const { seen, clock } = world(on)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+  await $.turn.complete({ turnId: 't1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await $.turn.start({ turnId: 't2', prompt: '', agentId: 'a1' } as never)
+  seen.bucket = 'pass'
+  for (let i = 0; i < 4; i++) await clock.advance(POLL_MS)
+  expect(seen.prompts.some(text => text.includes('o/r#7: all 1 checks settled'))).toBe(true)
+})
+
+test("a subagent's turn ending mid-turn keeps the wake on main's next tool result", async ($, on) => {
+  const { seen, clock } = world(on)
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: {} as never }))
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
+  await $.turn.start({ turnId: 's1', prompt: '', agentId: 'a1' } as never)
+  await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  seen.bucket = 'pass'
+  for (let i = 0; i < 4; i++) await clock.advance(POLL_MS)
+  expect(seen.prompts).toEqual([])
+  const read = (await $.tool.call({ tool: 'Read', file_path: 'a' } as never)) as { context?: string[] }
+  expect(read.context?.some(text => text.includes('o/r#7: all 1 checks settled'))).toBe(true)
+})
+
 const MANIFEST = JSON.stringify({ userConfig: { pollSeconds: { type: 'number' }, timeoutMinutes: { type: 'number' } } })
 const SETTINGS = 'C:/Users/me/.claude/mods-data/ci-watch/settings.json'
 
