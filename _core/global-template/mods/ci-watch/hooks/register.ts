@@ -752,9 +752,10 @@ export const register: Register = (on, options) => {
     const isPlain = 'deny' in answered || notes.length === 0
     const result = isPlain ? answered : { ...answered, context: [...(answered.context ?? []), ...notes] }
     if (result.deny !== undefined || result.isError) return result
+    // One command can merge a PR and push or open the next: forget the one, then watch the other.
     const merged = mergedNumber(command, isPowerShell)
     if (merged !== undefined) await forgetMerged($, merged)
-    else if (isPushOrPr(command, isPowerShell)) await watchPushed($, command, isPowerShell, result.result)
+    if (isPushOrPr(command, isPowerShell)) await watchPushed($, command, isPowerShell, result.result)
     return result
   })
 
