@@ -98,7 +98,7 @@ test('declining a request answers with a card saying so', { timeoutMs: 15_000 },
   on('tool.register', () => ({ value: { tool: 'mcp__shared-pc__pc' } }))
   mock.clock(on)
   on('session.start', () => ({ cwd: 'C:/Repos/app' }) as never)
-  on('session.append', () => ({}) as never)
+  on('session.append', ($, e, next) => next(e))
   on('ui.render', () => ({ type: 'Box', props: { key: 'beneath' }, children: [] }) as never)
 
   await $.session.start({ source: 'startup', cwd: 'C:/Repos/app' } as never)
