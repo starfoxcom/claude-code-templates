@@ -352,6 +352,22 @@ test('a merge drops the watch only once GitHub says the PR is merged', async ($,
   expect(watched()).toEqual([])
 })
 
+// The live session merged one PR and pushed the next branch in one command (2026-10-12): the push used to go
+// unwatched, since only one of the two was looked at.
+test('one command that merges a PR and pushes the next branch forgets the one and watches the other', async ($, on) => {
+  const { seen } = world(on)
+  seen.isReadable = true
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
+  const watched = () => (JSON.parse(seen.files.get(STATE) ?? '{}') as { watches: Watch[] }).watches.map(w => w.number)
+  expect(watched()).toEqual([7])
+
+  seen.mergedPrs = [7]
+  seen.branchPr = 8
+  await $.tool.call({ tool: 'Bash', command: 'gh pr merge 7 --merge; git push origin feature/y' } as never)
+  expect(watched()).toEqual([8])
+})
+
 // An open PR is unfinished work: its settled watch stays on the row, however long ago it settled, until
 // the PR is merged or closed.
 test('a settled watch stays until its PR is merged or closed, not for a set time', async ($, on) => {

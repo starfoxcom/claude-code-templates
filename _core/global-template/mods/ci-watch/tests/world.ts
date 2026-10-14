@@ -27,6 +27,9 @@ export type Seen = {
   isWriteDown?: boolean
   /** What `gh pr view --json state` reports. */
   prState: string
+  /** The PR of the branch a push names (7 by default), and PRs GitHub reports merged whatever `prState` says. */
+  branchPr?: number
+  mergedPrs?: number[]
   /** The head commit `gh pr view` reports (default `a1`). */
   head?: string
   /** The mod's manifest, read as any plugin.json (default: none). */
@@ -124,13 +127,7 @@ export function world(on: On) {
     const repo = named ?? seen.repoIn?.[e.init?.cwd ?? ''] ?? 'o/r'
     const stdout = args.includes('pr checks')
       ? JSON.stringify([{ name: 'build', bucket: seen.bucket }, ...seen.rows])
-      : JSON.stringify({
-          number: 7,
-          url: `https://github.com/${repo}/pull/7`,
-          headRefOid: seen.head ?? 'a1',
-          headRefName: 'feature/x',
-          state: seen.prState,
-        })
+      : prView(seen, repo, Number(/pr view (\d+)/.exec(args)?.[1] ?? seen.branchPr ?? 7))
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('prompt.submit', ($, e) => {
@@ -146,6 +143,12 @@ export function world(on: On) {
   // The engine's own band beneath the plugins: empty.
   on('ui.render', () => ({ type: 'Box', children: [] }) as never)
   return { seen, clock }
+}
+
+function prView(seen: Seen, repo: string, number: number): string {
+  const state = seen.mergedPrs?.includes(number) ? 'MERGED' : seen.prState
+  const url = `https://github.com/${repo}/pull/${number}`
+  return JSON.stringify({ number, url, headRefOid: seen.head ?? 'a1', headRefName: 'feature/x', state })
 }
 
 // The test runner has timers; the mod sandbox's types do not list them.
