@@ -4,6 +4,8 @@
 // still read as far as the reading goes, and the reason is noted in the log: refusing it blocked ordinary
 // work the shipped attribution hook passes. Pure, no engine access.
 
+import { LAUNCHERS } from './bypass'
+
 // What the text names, read with quotes, escapes and expansion marks taken out.
 const NAMES_GIT = /\bgit\b/
 const GIT_WRITES = /\b(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace)\b/
@@ -40,7 +42,7 @@ const RUNS_GIT = /\b(git|gh)\b/i
 // Each statement's program word, found on the command with every quoted string masked to marks of the same
 // length (so the data inside a string starts no statement) and then read from the command at that place. A
 // Bash assignment (`S="x"`) or a PowerShell one (`$s = 'x'`) is no program.
-const QUOTED_STRING = /'[^']*'|"(?:[^"\\]|\\[\s\S])*"/g
+export const QUOTED_STRING = /'[^']*'|"(?:[^"\\]|\\[\s\S])*"/g
 const PROGRAM_WORD = /(?:^|[;&|\n({])[ \t]*(?:[A-Za-z_]\w*=\S*[ \t]+)*(?![A-Za-z_]\w*=|\$[\w:]+[ \t]*=)([^\s;&|()]+)/g
 
 /** Whether a statement's program may be git or gh named so that no reading of its text sees it: built at
@@ -64,11 +66,8 @@ function hidesProgram(code: string, powershell: boolean): boolean {
   return false
 }
 
-// Programs that run their quoted argument as a command the reading does not follow (`flock -c '...'`,
-// `ssh host '...'`, `Start-Process git -ArgumentList '...'`), `env -S`, and a program word Bash builds from a
-// brace expansion (`{gi,commi}t` runs `git commit`).
-const LAUNCHERS =
-  /^(flock|watch|parallel|script|ssh|su|setsid|stdbuf|doas|runas|wsl|fish|start-process|saps|start|alias)$/i
+// The launchers (`bypass.ts`) at a statement's head, `env -S`, and a program word Bash builds from a brace
+// expansion (`{gi,commi}t` runs `git commit`). A launcher behind a wrapper is found on the reading's statement.
 const SPLIT_ENV = /(?:^|[;&|\n({])[ \t]*env(?:[ \t]+-\S+)*?[ \t]+(?:-S|--split-string)\b/
 
 /** The launcher or built program word in the command whose text the reading cannot follow, or undefined. */
@@ -95,20 +94,32 @@ const SMART_QUOTES = /[‘-„]/
 // The command without the bodies of here-docs whose delimiter is quoted: they are data. A here-doc is found
 // on its line with the quoted text blanked (its delimiter's own quotes kept), so a `<<'X'` inside a message
 // opens nothing; one never closed keeps the whole text.
-export function withoutBodies(command: string): string {
+const QUOTED_HEREDOC = /<<-?[ \t]*(['"])([A-Za-z_]\w*)\1/
+const ANY_HEREDOC = /(?<!<)<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\1/
+export function withoutBodies(command: string, isLiteral = false): string {
   const lines = command.split('\n')
   const kept: string[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] as string
     kept.push(line)
     const bare = line.replace(/(?<!<<-?[ \t]*)(?:'[^']*'|"(?:[^"\\]|\\.)*")/g, '""')
-    const doc = /<<-?[ \t]*(['"])([A-Za-z_]\w*)\1/.exec(bare)
+    const doc = (isLiteral ? ANY_HEREDOC : QUOTED_HEREDOC).exec(bare)
     if (!doc) continue
     const end = lines.findIndex((l, j) => j > i && l.replace(/^\t+/, '') === doc[2])
     if (end === -1) return command
+    // With `isLiteral`, an unquoted delimiter's body counts too when it expands nothing (no `$` or backtick).
+    if (!doc[1] && /[$`]/.test(lines.slice(i + 1, end).join('\n'))) continue
     i = end
   }
   return kept.join('\n')
+}
+
+/** The command without the here-doc and Windows PowerShell here-string bodies it only passes as data: a
+ * quoted delimiter's, and one that expands nothing. */
+export function withoutDataBodies(command: string, powershell: boolean): string {
+  const text = withoutBodies(command, true)
+  if (!powershell) return text
+  return text.replace(/@'\r?\n[\s\S]*?\r?\n'@/g, "@''@").replace(/@"\r?\n[^$`]*?\r?\n"@/g, '@""@')
 }
 
 // That text without the strings it only passes as data: single-quoted ones and double-quoted ones that run

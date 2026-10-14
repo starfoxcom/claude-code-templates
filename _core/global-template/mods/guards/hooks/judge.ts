@@ -9,7 +9,7 @@
 import { launched } from './bypass'
 import { readCommand } from './inspect'
 import type { Plan } from './plan'
-import { launcherIn, namesWrite, notPlain, runsShellText, withoutBodies } from './plain'
+import { launcherIn, namesWrite, notPlain, QUOTED_STRING, runsShellText, withoutDataBodies } from './plain'
 import { routeIn } from './routes'
 
 // The unread kinds real work produces (2026-10-14 replay) that only the shell can fill in, and that the
@@ -24,11 +24,11 @@ export function inspect(command: string, powershell: boolean): Plan {
   plan.unread = plan.unread.filter(what => !NOTED.has(what))
   // Where the reading could not follow every word, a route around the check named anywhere in the command is
   // refused (`flock /tmp/l -c 'git filter-repo --force'`, `ARGS=(--no-verify); git commit -m x "${ARGS[@]}"`).
-  const route = plan.notes.length > 0 ? routeIn(scanText(command, plan, why)) : undefined
+  const route = plan.notes.length > 0 ? routeIn(scanText(command, plan, why, powershell)) : undefined
   // A git or gh call inside a launcher's quoted text runs unread, as one inside `eval` does; a flag word built at run
   // time from a variable the command sets to a flag (`ARGS=(-n); git commit -m x "${ARGS[@]}"`) is unread too.
   const launcher = launcherIn(command)
-  const isFlagHeld = plan.notes.some(n => MAY_HOLD_FLAG.test(n)) && FLAG_HELD.test(command)
+  const isFlagHeld = plan.notes.some(n => MAY_HOLD_FLAG.test(n)) && FLAG_HELD.test(flagText(command, powershell))
   const reason = route ?? (launcher ? launched(launcher) : isFlagHeld ? FLAG_IN_VARIABLE : undefined)
   if (reason) {
     plan.isWrite = true
@@ -49,12 +49,19 @@ const FLAG_HELD = new RegExp(
 )
 const FLAG_IN_VARIABLE = 'a flag held in a variable cannot be read. Type the flags of the git or gh call out.'
 
+// The command's code, where an assignment sets a variable: quoted text keeps only its dashes (a value's own,
+// `ARGS=("-n")`), so a message that reads `X=-1` sets nothing; data here-doc bodies are left out.
+function flagText(command: string, powershell: boolean): string {
+  const code = runsShellText(command) ? command : withoutDataBodies(command, powershell)
+  return code.replace(QUOTED_STRING, s => s[0] + s.slice(1, -1).replace(/[^-]/g, '\u0001') + s.slice(-1))
+}
+
 // The command's text, quoted text included, less the messages the reading read and, unless a program in it
-// runs shell text, the bodies of quoted here-docs. Windows PowerShell breaks a word holding `"` apart
-// (`-m 'a "b" --no-verify'` reaches git as `a b --no-verify`), so then the whole text counts.
-function scanText(command: string, plan: Plan, why: string | undefined): string {
+// runs shell text, the here-doc and here-string bodies it passes as data. Windows PowerShell breaks a word
+// holding `"` apart (`-m 'a "b" --no-verify'` reaches git as `a b --no-verify`), so then the whole text counts.
+function scanText(command: string, plan: Plan, why: string | undefined, powershell: boolean): string {
   if (why?.startsWith('a word Windows PowerShell passes on changed')) return command
-  let text = runsShellText(command) ? command : withoutBodies(command)
+  let text = runsShellText(command) ? command : withoutDataBodies(command, powershell)
   for (const { text: message, creditOnly } of plan.texts) {
     if (creditOnly || message.length === 0) continue
     for (const quoted of [`'${message}'`, `"${message}"`]) text = text.split(quoted).join(' ')

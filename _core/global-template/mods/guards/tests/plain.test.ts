@@ -75,6 +75,16 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["find . -exec sh -c 'git commit --no-veri -m x' \\;", false],
     ["unbuffer bash -c 'git commit --no-veri -m x'", false],
     ['alias g="git commit --no-veri -m x"; g', false],
+    // A launcher behind a wrapper or a keyword, a shell text a wrapper runs, a program named at run time.
+    ["sudo ssh host 'git commit --no-veri -m x'", false],
+    ["timeout 10 flock /tmp/l -c 'git commit -ac HEAD'", false],
+    ["nohup watch 'git config set core.hooksPath /x'", false],
+    ["exec ssh host 'git commit --trail x -m y'", false],
+    ["env -i ssh host 'git commit --no-veri -m x'", false],
+    ["if ssh host 'git commit --no-veri -m x'; then :; fi", false],
+    ["sudo -s 'git commit --no-veri -m x'", false],
+    ["sudo -i 'git -C /repo commit --no-veri -m x'", false],
+    ['find . -exec "$GIT" commit --no-veri -m x \\;', false],
     // A flag held in a variable the command sets, in any spelling that sets it.
     ['ARGS=(-n); git commit -m x "${ARGS[@]}"', false],
     ['ARGS=(-C HEAD~1); git commit "${ARGS[@]}"', false],
@@ -124,6 +134,14 @@ test('a read that names a route in a command that is not plain passes', () => {
     'find . -path ./.git -prune -o -name "*.ts" -print; git commit -am x',
     'grep -rn git . -n; git commit -m x',
     'uv run git status; git commit -m x',
+    // Words a program only prints or matches are data.
+    'echo git commit --no-verify -m x; git commit -m y',
+    'echo git commit -n -m y >> howto.txt',
+    'grep -e "git commit -n" notes.md -n',
+    // A read message that reads like an assignment or names a route sets and skips nothing.
+    'git commit -m "feat: default X=-1" $NV',
+    'npm test; git commit -F - <<EOF\ndocs: explain --no-verify\nEOF',
+    'for i in 1; do git commit -F - <<EOF\ndocs: explain --no-verify\nEOF\ndone',
   ]) {
     const plan = inspect(command, false)
     expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])

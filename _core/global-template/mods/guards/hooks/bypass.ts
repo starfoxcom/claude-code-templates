@@ -62,7 +62,7 @@ const MANAGER_TOOL = /^((@evilmartians\/)?lefthook|husky|pre-commit|pre_commit)(
 
 /** What the reading keeps between statements: a hook manager's switch was set (`export HUSKY=0`), a git
  * call that runs hooks was read, and the functions the command defines (a prefix on one reaches its body). */
-export type HookState = { hooksOff?: boolean; isHooked?: boolean; functions?: Set<string> }
+export type HookState = { hooksOff?: boolean; isHooked?: boolean; functions?: Set<string>; ps?: boolean }
 
 /** A switch set anywhere in the command reaches every hooked git call in it: a trap action, a function or
  * a loop body may run after the switch though it is read before. */
@@ -290,20 +290,41 @@ export function bypassOf(st: Statement, name: string, args: Word[], state: HookS
 // Programs whose arguments the reading follows itself: git and gh, the shells (`bash -c`), `eval` and `trap`.
 const FOLLOWED = /^(git|gh|bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|eval|iex|invoke-expression|trap)$/
 const SHELL = /^(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd)$/
+// Programs that only print or match their words: a git word among them is data (`echo git commit -n`).
+const PRINTS = /^(echo|printf|write-output|write-host|grep|egrep|fgrep|rg|select-string|sls)$/
+// Programs that run their quoted argument as a command the reading does not follow (`flock -c '...'`,
+// `ssh host '...'`, `Start-Process git -ArgumentList '...'`, an alias's value).
+export const LAUNCHERS =
+  /^(flock|watch|parallel|script|ssh|su|setsid|stdbuf|doas|runas|wsl|fish|start-process|saps|start|alias)$/i
+const NAMES_CALL = /\b(git|gh)\b/i
+const WRITE_WORD =
+  /^(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace|pr|issue|release|api)$/
+export const SHELL_TEXT =
+  "a git or gh call in text a wrapper runs as a shell command (`sudo -s '...'`) cannot be read. Run the git " +
+  'or gh call directly, as its own command.'
 const baseName = (text: string) => (text.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
 
 /**
- * As `bypassOf`, and for a git or gh call another program runs from its arguments (`find . -exec git commit
- * ...`, `unbuffer git ...`, `uv run git ...`): that call is checked as one typed on its own. A shell run that
- * way (`find . -exec sh -c '...'`) runs its text unread, so a git or gh call in it is refused, as `eval` is.
+ * As `bypassOf`, and for a git or gh call another program runs: a launcher past any wrapper or keyword
+ * (`sudo ssh host '...'`, `if flock ...`) is refused as `eval` is, and so is a shell text a wrapper runs
+ * (`sudo -s '...'`). One run from another program's arguments (`find . -exec git commit ...`, `unbuffer git
+ * ...`) is checked as one typed on its own; a shell run that way (`find . -exec sh -c '...'`) or a program
+ * named at run time there (`find . -exec "$GIT" commit ...`) is refused when its words name or make a call.
  */
 export function bypassIn(st: Statement, name: string, args: Word[], state: HookState = {}): string | undefined {
   const own = bypassOf(st, name, args, state)
-  if (own || FOLLOWED.test(name)) return own
-  const at = args.findIndex(a => !a.dynamic && (/^(git|gh)$/.test(baseName(a.text)) || SHELL.test(baseName(a.text))))
-  if (at === -1) return undefined
-  const inner = baseName(args[at]?.text ?? '')
+  if (own || state.ps || FOLLOWED.test(name) || PRINTS.test(name)) return own
+  const head = st.words[st.words.length - args.length - 1]?.text ?? ''
+  if (name && /\s/.test(head) && NAMES_CALL.test(head)) return SHELL_TEXT
+  if (LAUNCHERS.test(name) && args.some(a => NAMES_CALL.test(a.text))) return launched(name)
+  const at = args.findIndex(a => a.dynamic || /^(git|gh)$/.test(baseName(a.text)) || SHELL.test(baseName(a.text)))
+  const word = args[at]
+  if (!word) return undefined
   const rest = args.slice(at + 1)
+  // A word built at run time counts as the program when a typed git or gh write follows it.
+  const next = rest.find(a => !a.text.startsWith('-'))
+  if (word.dynamic) return next && !next.dynamic && WRITE_WORD.test(next.text) ? launched(name) : undefined
+  const inner = baseName(word.text)
   if (!SHELL.test(inner)) return bypassOf(st, inner, rest, state)
-  return rest.some(a => /\b(git|gh)\b/i.test(a.text)) ? launched(name) : undefined
+  return rest.some(a => NAMES_CALL.test(a.text)) ? launched(name) : undefined
 }
