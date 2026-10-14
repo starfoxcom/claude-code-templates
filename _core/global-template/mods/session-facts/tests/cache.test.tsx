@@ -461,6 +461,17 @@ test('an idle big conversation is compacted by the mod a minute past the idle ti
   expect(compactions).toHaveLength(1)
 })
 
+// A subagent's turn end is not a reply of main's: main's cache lifetime still runs from main's reply.
+test("a subagent's turn ending after the reply does not move the idle compaction", async ($, on) => {
+  const { clock, compactions } = world(on)
+  await start($)
+  await turn($)
+  await clock.advance(20 * MINUTE)
+  await $.turn.complete({ turnId: 's', agentId: 'a1', answer: '', durationMs: 1, reason: 'answer' } as never)
+  await clock.advance(35 * MINUTE + 30_000)
+  expect(compactions).toHaveLength(1)
+})
+
 test('a conversation under the minimum is never compacted on idle', async ($, on) => {
   const { clock, compactions } = world(on, { CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS: '300000' })
   await start($)
@@ -503,6 +514,8 @@ const OFF_SWITCHES: [string, (w: ReturnType<typeof world>) => void, Record<strin
   ['DISABLE_AUTO_COMPACT set', () => {}, { DISABLE_AUTO_COMPACT: '1' }],
   ['DISABLE_COMPACT set', () => {}, { DISABLE_COMPACT: 'true' }],
   ['auto-compact off in the settings', w => void (w.settings.autoCompactEnabled = false)],
+  // Claude Code 2.1.299's own switch for idle compaction alone.
+  ['idle compaction off in the settings', w => void (w.settings.idleCompaction = false)],
   ['auto-compact off in /config', w => w.files.set('C:/Users/me/.claude.json', '{"autoCompactEnabled":false}')],
   // Read while another session rewrites it, or missing: the off switch may be in it.
   ['the global config torn', w => w.files.set('C:/Users/me/.claude.json', '{"autoCompactEnabled":fal')],

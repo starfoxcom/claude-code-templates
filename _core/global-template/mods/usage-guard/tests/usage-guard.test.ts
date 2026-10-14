@@ -52,7 +52,9 @@ test('crossing the line wraps up, stops background work and resumes after the re
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
 
-  await seen.clock.advance(WAKE - NOW)
+  // In 10-minute steps: one two-hour jump (thousands of 2-second ticks) stopped short of the wake on a slow
+  // CI runner, about 10 s in (2026-10-08 and 2026-10-14).
+  for (let left = WAKE - NOW; left > 0; left -= 10 * 60_000) await seen.clock.advance(Math.min(10 * 60_000, left))
   // The session goes on by itself: no /session-start, whose plan would wait for the person's OK.
   expect(resumes(seen)).toHaveLength(1)
   expect(resumes(seen)[0]).toContain('do not wait for a plan approval')
@@ -216,7 +218,7 @@ test('a session opened after the reset is told to resume by hand', async ($, on)
   expect(resumes(seen)).toEqual([])
 })
 
-test('cancel stops the automatic resume', async ($, on) => {
+test('cancel stops the automatic resume', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   seen.limits = [{ kind: 'five_hour', percentUsed: 95, resetsAt: RESET }]
@@ -287,7 +289,7 @@ test('the card cancels the automatic resume', LONG, async ($, on) => {
   expect(resumes(seen)).toEqual([])
 })
 
-test('the resume replaces the pause card', async ($, on) => {
+test('the resume replaces the pause card', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   seen.limits = [{ kind: 'five_hour', percentUsed: 92, resetsAt: RESET }]
@@ -315,7 +317,7 @@ test('a session whose entry in the shared pause was overwritten does not wrap up
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
 
-test('a session that loses the pause claim still stops its own project once', async ($, on) => {
+test('a session that loses the pause claim still stops its own project once', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await doWork($)
@@ -331,7 +333,7 @@ test('a session that loses the pause claim still stops its own project once', as
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('a session that loses the pause claim honours a cancel written since the winner paused', async ($, on) => {
+test('a session that loses the pause claim honours a cancel written since the winner paused', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await doWork($)
@@ -360,7 +362,7 @@ test('a session that loses the pause claim honours a cancel written since the wi
   expect(resumes(seen)).toEqual([])
 })
 
-test('a cancel of an extended pause holds against a session still reading the earlier reset', async ($, on) => {
+test('a cancel of an extended pause holds against a session still reading the earlier reset', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await doWork($)
@@ -381,7 +383,7 @@ test('a cancel of an extended pause holds against a session still reading the ea
   expect(resumes(seen)).toEqual([])
 })
 
-test('after a hot reload during a pause, the first turn arms the wake timer again', async ($, on) => {
+test('after a hot reload during a pause, the first turn arms the wake timer again', LONG, async ($, on) => {
   const seen = world(on)
   // This session wrapped up before the reload; the reload dropped its timer and skipped session.start.
   const pause = {
@@ -416,7 +418,7 @@ test('work whose claim failed before a hot reload is never called no work at the
   expect(seen.claims.has(`work-${KEY}-sess-a`)).toBe(false)
 })
 
-test('after a hot reload, a session with no work on record waits and says what is on record', async ($, on) => {
+test('after a hot reload, a session with no work on record waits and says what is on record', LONG, async ($, on) => {
   const seen = world(on)
   // The state the test above leaves, after a hot reload emptied the module's memory: the session
   // wrapped up, but its work claim never reached the disk.
@@ -435,7 +437,10 @@ test('after a hot reload, a session with no work on record waits and says what i
   expect(NO_WORK_NOTICE).not.toContain('saved no work')
 })
 
-test('a failed resume claim resumes nothing and leaves no work claim for another instance to find', async ($, on) => {
+test(
+  'a failed resume claim resumes nothing and leaves no work claim for another instance to find',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   const pause = { status: 'active', kinds: ['five_hour'], percentUsed: 93, resetsAt: RESET, wakeAt: WAKE }
   seen.files.set(PAUSE_FILE, JSON.stringify({ ...pause, triggeredBy: 'sess-a' }))
@@ -451,7 +456,10 @@ test('a failed resume claim resumes nothing and leaves no work claim for another
   expect(pauseOf(seen)?.status).toBe('done')
 })
 
-test('a failed arm claim resumes nothing, so a second instance cannot resume the session twice', async ($, on) => {
+test(
+  'a failed arm claim resumes nothing, so a second instance cannot resume the session twice',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -462,7 +470,7 @@ test('a failed arm claim resumes nothing, so a second instance cannot resume the
   expect(seen.claims.has(`arm-${KEY}-sess-a`)).toBe(false)
 })
 
-test('a session resumes once per reset, even beside an instance left by a hot reload', async ($, on) => {
+test('a session resumes once per reset, even beside an instance left by a hot reload', LONG, async ($, on) => {
   const seen = world(on)
   const pause = {
     status: 'done',
@@ -514,6 +522,41 @@ test('crossing the line mid-turn waits for the turn to end before the wrap-up ru
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
 
+// Since Claude Code 2.1.299 a subagent's turn fires turn.start too, with no main turn.complete after it.
+test("a subagent's turn between main's turns does not hold the wrap-up", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  await endTurn($)
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
+test("a subagent's turn ending mid-turn does not start the wrap-up beside main's turn", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.turn.start({ turnId: 't1' } as never)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  await $.turn.complete({
+    turnId: 's1',
+    agentId: 'a1',
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    reason: 'answer',
+  } as never)
+  expect(seen.commands).toEqual([])
+
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
 test('a wrap-up owed by a running turn still runs when another session extends the pause', async ($, on) => {
   const seen = world(on)
   await start($)
@@ -545,7 +588,7 @@ test('a wrap-up owed by a running turn is dropped when the pause is cancelled be
   expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
 })
 
-test('an armed session resumes after the reset it named, below the line and without a pause', async ($, on) => {
+test('an armed session resumes after the reset it named, below the line and without a pause', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   const answer = await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -560,7 +603,7 @@ test('an armed session resumes after the reset it named, below the line and with
   expect(seen.commands.filter(c => c.command === 'session-close')).toEqual([])
 })
 
-test('disarm drops the armed wake', async ($, on) => {
+test('disarm drops the armed wake', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -570,7 +613,7 @@ test('disarm drops the armed wake', async ($, on) => {
   expect(resumes(seen)).toEqual([])
 })
 
-test('an arm for the reset a pause already resumes at does not resume the session twice', async ($, on) => {
+test('an arm for the reset a pause already resumes at does not resume the session twice', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -601,7 +644,7 @@ test('arming names a known reset, or says why it cannot', () => {
   expect(planArm(unreadable, '5h', 2, NOW)).toBe('No 5-hour reset is known yet, so there is nothing to arm.')
 })
 
-test('an arm resumes the session once when a pause for its reset began after the last check', async ($, on) => {
+test('an arm resumes the session once when a pause for its reset began after the last check', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -644,7 +687,7 @@ test('an armed wake that comes due during a pause leaves the resume to the pause
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('an armed wake another instance of this module already fired does not resume again', async ($, on) => {
+test('an armed wake another instance of this module already fired does not resume again', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -654,7 +697,7 @@ test('an armed wake another instance of this module already fired does not resum
   expect(resumes(seen)).toEqual([])
 })
 
-test('a cancel in this session also drops its armed wake', async ($, on) => {
+test('a cancel in this session also drops its armed wake', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -665,7 +708,7 @@ test('a cancel in this session also drops its armed wake', async ($, on) => {
   expect(resumes(seen)).toEqual([])
 })
 
-test("another session's cancel leaves this session's own arm in place", async ($, on) => {
+test("another session's cancel leaves this session's own arm in place", LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await $.command.run({ command: 'usage-guard', args: 'arm 5h' } as never)
@@ -734,7 +777,7 @@ test('/usage-guard shows its arguments in the menu and lists them on help', asyn
     expect(help).toEqual(expect.objectContaining({ text: expect.stringContaining(line) }))
 })
 
-test('after a /clear the new session id has no work: it only waits, and is not set to work', async ($, on) => {
+test('after a /clear the new session id has no work: it only waits, and is not set to work', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await doWork($)

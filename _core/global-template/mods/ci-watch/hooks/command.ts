@@ -6,9 +6,8 @@
 const GIT_OPTS = String.raw`(?:\s+(?:-[Cc]\s+\S+|--?[\w-]+(?:=\S+)?))*`
 const GH_OPTS = String.raw`(?:\s+(?:-R\s+\S+|--repo[=\s]\S+))*`
 const AT_START = String.raw`(?:^|[\s;&|({])`
-const PUSH_OR_PR = new RegExp(
-  `${AT_START}git${GIT_OPTS}\\s+push\\b|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`,
-)
+const PUSH = `${AT_START}git${GIT_OPTS}\\s+push\\b`
+const PUSH_OR_PR = new RegExp(`${PUSH}|${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+create\\b`)
 const PR_MERGE = new RegExp(`${AT_START}gh${GH_OPTS}\\s+pr${GH_OPTS}\\s+merge\\b([^|;&\\n]*)`)
 
 // The command with quoted strings emptied and here-doc bodies dropped, so message text never reads as
@@ -63,6 +62,111 @@ function maskedCommand(command: string, isPowerShell: boolean): string {
 
 export function isPushOrPr(command: string, isPowerShell = false): boolean {
   return PUSH_OR_PR.test(commandWords(command, isPowerShell))
+}
+
+// A push alone, not `gh pr create`: the fix-round limit refuses it on a PR past the limit.
+export function isPush(command: string, isPowerShell = false): boolean {
+  return new RegExp(PUSH).test(commandWords(command, isPowerShell))
+}
+
+// Push options that take the next word as their value.
+const PUSH_VALUES = /^(-o|--push-option|--repo|--receive-pack|--exec|--recurse-submodules)$/
+// Where a push's statement ends: `;`, a pipe, a line break, or an `&` that is no part of a redirect (`2>&1`,
+// `&>log`).
+const STATEMENT_END = /[;|\n]|(?<![<>])&(?!>)/
+// A redirect word, and the few that are read for sure: output joined or thrown away. Any other (`> log`,
+// `>& log`, `<<< y`, a here-doc) may take the next word as its target, so the push cannot be read for sure.
+const REDIRECT = /^[\d*&]?(?:>>?|<)/
+// Output thrown away is read for sure whether its target is joined (`2>/dev/null`) or the next word
+// (`> $null`).
+const NULL_OPS = ['>', '1>', '2>', '>>', '1>>', '2>>', '&>', '&>>', '*>', '*>>']
+const NULL_TARGETS = ['/dev/null', '$null']
+const KNOWN_REDIRECTS = new Set(['2>&1', '*>&1', ...NULL_OPS.flatMap(op => NULL_TARGETS.map(to => op + to))])
+// A word read for sure: a plain name, with nothing the shell fills in when it runs (quotes, `$`, `(`). `@`
+// inside a word is plain (`git@github.com:o/r.git`); a word that starts with one (`@`, `@{u}`, `@args`) is not.
+const LITERAL = /^[\w./:+^~,=-][\w./:+^~,=@-]*$/
+
+// The options `git push` takes, without an `=<value>`. Any other word that starts with `-` (an unknown
+// option, `--`, an abbreviation git would expand) cannot be read for sure.
+const PUSH_FLAGS = new Set([
+  ...['-v', '--verbose', '-q', '--quiet', '-n', '--dry-run', '--porcelain', '--progress', '--no-progress'],
+  ...['-f', '--force', '--force-with-lease', '--no-force-with-lease', '--force-if-includes'],
+  ...['--no-force-if-includes', '-u', '--set-upstream', '--all', '--branches', '--mirror', '--tags'],
+  ...['--follow-tags', '--no-follow-tags', '-d', '--delete', '--prune', '--atomic', '--no-atomic'],
+  ...['--signed', '--no-signed', '--verify', '--no-verify', '--thin', '--no-thin', '-4', '--ipv4'],
+  ...['-6', '--ipv6', '-o', '--push-option', '--repo', '--receive-pack', '--exec'],
+  ...['--recurse-submodules', '--no-recurse-submodules'],
+])
+const isKnownFlag = (word: string) => !word.startsWith('-') || PUSH_FLAGS.has(word.replace(/=[\s\S]*/, ''))
+
+// A group of short flags split the way git reads it: `-fd` is `-f -d`, and an `o` takes the rest of the
+// group as its value (`-oci.skip`), or the next word when it ends the group (`-fo ci.skip`).
+function shortFlags(token: string): string[] {
+  if (!/^-[A-Za-z0-9]{2,}/.test(token)) return [token]
+  const flags: string[] = []
+  for (let i = 1; i < token.length; i++) {
+    flags.push(`-${token[i]}`)
+    if (token[i] === 'o' && i + 1 < token.length) return [...flags, token.slice(i + 1)]
+  }
+  return flags
+}
+
+/** Each push's words, to the end of its statement, without redirects or a trailing comment; `isUnread` when
+ * one of them is no plain name, so where it pushes cannot be read for sure. */
+function pushes(command: string, isPowerShell: boolean): { args: string[]; isUnread: boolean }[] {
+  const words = commandWords(command, isPowerShell)
+  return [...words.matchAll(new RegExp(PUSH, 'g'))].map(push => {
+    const rest = words.slice((push.index ?? 0) + push[0].length)
+    const end = rest.search(STATEMENT_END)
+    const tokens = (end < 0 ? rest : rest.slice(0, end)).split(/\s+/).filter(Boolean)
+    const args: string[] = []
+    let isUnread = false
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i] ?? ''
+      if (token.startsWith('#')) break
+      if (REDIRECT.test(token)) {
+        const isSpacedNull = NULL_OPS.includes(token) && NULL_TARGETS.includes(tokens[i + 1] ?? '')
+        if (isSpacedNull) i++
+        isUnread ||= !isSpacedNull && !KNOWN_REDIRECTS.has(token)
+        continue
+      }
+      // In PowerShell a comma splits a word into several arguments. An option that takes the next word as
+      // its value (`-o -d`, `--repo --tags`) takes it whatever it looks like, so that word cannot be read.
+      const flags = shortFlags(token)
+      const takesNext = PUSH_VALUES.test(flags[flags.length - 1] ?? '')
+      isUnread ||= !LITERAL.test(token) || (isPowerShell && token.includes(',')) || !flags.every(isKnownFlag)
+      isUnread ||= takesNext
+      args.push(...flags)
+    }
+    return { args, isUnread }
+  })
+}
+
+/** Whether a push in the command updates `branch`, the folder's checked-out one: with no refspec (the
+ * branch itself, or every branch with `--all`/`--mirror`), a refspec to `HEAD` or to that branch, `:` (every
+ * matching branch), or any word that cannot be read for sure. Only a tag push, `--tags` alone, a delete
+ * (`--delete`, `-d`, `:<branch>`) or a plain refspec to another branch adds no round to its PR. */
+export function pushesBranch(command: string, branch: string, isPowerShell = false): boolean {
+  for (const { args, isUnread } of pushes(command, isPowerShell)) {
+    // An option's value is no option of its own (`-o -d` sends the push option `-d`).
+    // A word that cannot be read may undo a delete (`--no-delete`, `--push-opt -d`), so it is judged first.
+    if (isUnread) return true
+    const options = args.filter((a, i) => a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
+    if (options.some(a => a === '--delete' || a === '-d')) continue
+    const plain = args.filter((a, i) => !a.startsWith('-') && !PUSH_VALUES.test(args[i - 1] ?? ''))
+    const refs = plain.slice(1).map(ref => ref.replace(/^\+/, ''))
+    const isEvery = options.includes('--all') || options.includes('--mirror')
+    if (refs.length === 0 && (isEvery || !options.includes('--tags'))) return true
+    const isOurs = (ref: string) => {
+      if (ref === ':') return true
+      if (ref.startsWith(':')) return false
+      // Git reads `heads/<branch>` and `refs/heads/<branch>` as the branch too.
+      const dst = (ref.split(':').pop() ?? '').replace(/^(?:refs\/)?heads\//, '')
+      return dst === 'HEAD' || dst === branch
+    }
+    if (refs.some(isOurs)) return true
+  }
+  return false
 }
 
 // A merged PR's watch is noise: the chat already says it merged. Returns the

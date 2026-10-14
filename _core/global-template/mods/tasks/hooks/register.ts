@@ -95,14 +95,16 @@ export const HELP = [
   '  /task-list help      this list',
 ].join('\n')
 const SWEEP_DAYS = 14
+// A list with nothing left to carry over (handed over, or no open task) goes sooner.
+const DONE_SWEEP_DAYS = 7
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
 const UNCOUNTED_TOOLS = new Set([...TASK_TOOLS, 'ToolSearch', 'TaskStop', 'TaskOutput', 'SendMessage'])
 const UNLINK_SCRIPT =
   'const fs=require("fs"),p=require("path");const [d,...names]=process.argv.slice(1);' +
   'for(const n of names){try{fs.unlinkSync(p.join(d,n))}catch{}}'
-// Other sessions' lists and alive stamps not written for SWEEP_DAYS go, never the settings; a session
-// resumed after SWEEP_DAYS keeps its own list
-// (`node <plugin root>/scripts/sweep.cjs <folder> <this session's id> <days>`; test-helper/sweep.spec.cjs runs it).
+// Other sessions' lists and alive stamps not written for SWEEP_DAYS go (a done list after DONE_SWEEP_DAYS),
+// never the settings; a session resumed after SWEEP_DAYS keeps its own list (`node <plugin root>/
+// scripts/sweep.cjs <folder> <this session's id> <days> <doneDays>`; test-helper/sweep.spec.cjs runs it).
 export const SWEEP_SCRIPT = 'scripts/sweep.cjs'
 
 const live: {
@@ -613,7 +615,8 @@ async function keepGoing($: EngineInterface): Promise<void> {
   const mirror = await mirrorOf($)
   const tasks = workable(mirror)
   if (tasks.length === 0 || live.hasEngineWake) return
-  if (hasPendingWake(await peerFile($, 'ci-watch', `${await $.session.id()}.json`))) return
+  const ciWatch = await peerFile($, 'ci-watch', `${await $.session.id()}.json`)
+  if (hasPendingWake(ciWatch, await $.clock.now())) return
   if (isPauseHolding(await peerFile($, 'usage-guard', 'pause.json'), await $.clock.now())) return
   const isIdle = live.idlePrompts > 0 && live.promptedAt === mirror.changedAt
   if (isIdle && live.idlePrompts >= MAX_IDLE_PROMPTS) return
@@ -662,7 +665,8 @@ export const register: Register = (on, options) => {
       .catch(() => undefined)
     const dir = await dataDir($)
     // Done before this session's list is read, so the two never race.
-    const sweep = ['node', `${$.plugin.root}/${SWEEP_SCRIPT}`, dir, await $.session.id(), String(SWEEP_DAYS)]
+    const days = [String(SWEEP_DAYS), String(DONE_SWEEP_DAYS)]
+    const sweep = ['node', `${$.plugin.root}/${SWEEP_SCRIPT}`, dir, await $.session.id(), ...days]
     await $.process.run(sweep, { timeoutMs: 20_000 }).catch(() => undefined)
     await clearEngineStore($).catch(() => undefined)
     await carryOver($).catch(() => undefined)
@@ -680,6 +684,8 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     await startAlive($)
+    // A subagent's turn (2.1.299+) runs inside or after main's: it starts no new main turn.
+    if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     live.turn += 1
     live.isTurnRunning = true
     live.toolsThisTurn = 0
@@ -697,11 +703,13 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
+    // A subagent's turn ends inside main's or after it: main's turn is not over.
+    if (e.agentId !== undefined) return next(e)
     live.isTurnRunning = false
     // Looked at a moment after the turn ends, never from the end itself: a prompt sent there was seen lost.
     // `reason` is the engine's TurnCompleteReason ('answer' | 'aborted' | 'refusal' | 'error'): only a turn
     // the model answered goes on.
-    if (live.keepGoing && !e.agentId && e.reason === 'answer')
+    if (live.keepGoing && e.reason === 'answer')
       $.clock.after(KEEP_GOING_DELAY_MS, () => void keepGoing($).catch(() => undefined))
     return next(e)
   })

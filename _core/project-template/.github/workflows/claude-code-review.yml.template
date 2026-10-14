@@ -119,7 +119,18 @@ jobs:
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
-          gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
+          # The diff endpoint (`gh pr diff`) 406s past 300 files; the paginated
+          # files API lists up to 3,000 and silently stops there. A listing
+          # that fails or reaches that cap runs the review: a PR too large to
+          # enumerate is by definition reviewable. A renamed file lists its old
+          # path too, so moving a file out of a reviewable path is reviewed.
+          if ! gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" \
+              --jq '.[] | .filename, (.previous_filename // empty)' > /tmp/changed_files.txt \
+            || [ "$(wc -l < /tmp/changed_files.txt)" -ge 3000 ]; then
+            echo "File listing failed or is incomplete (diff too large?) — treating as reviewable."
+            echo "run_review=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Reviewable extensions — customize for your stack
           if grep -qE '\.(py|ts|tsx|js|jsx|rs|go|java|cpp|h|hpp|c|gd|dart|rb|kt|swift|cs)$' /tmp/changed_files.txt; then
             echo "Reviewable changes detected; running review."
@@ -156,12 +167,12 @@ jobs:
         <!-- TOGGLE:github_actions_deep_review_auto_fire END -->
         - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
 
-        Then read the PR diff once for the full context: `gh pr diff ${{ github.event.pull_request.number }} --repo ${{ github.repository }}`.
+        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history.
 
         <!-- TOGGLE:attribution_guard START -->
         **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (AI-attribution scan).
         <!-- TOGGLE:attribution_guard END -->
-        Use Read for architecture-critical files; use `gh pr diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc` and `head` will be denied.
+        Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc` and `head` will be denied.
 
         ## Step 2 — Architectural review
 
@@ -310,12 +321,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
 
-          gh pr diff $PR --repo $REPO > /tmp/pr_diff.txt
-          gh pr diff $PR --repo $REPO --name-only > /tmp/changed_files.txt
+          # Local git, not `gh pr diff` — the API diff endpoint 406s past 300
+          # files. The checkout above is fetch-depth 0, so the base branch is
+          # present; three-dot (merge-base..HEAD) equals the PR's diff.
+          git diff "origin/$BASE...HEAD" > /tmp/pr_diff.txt
+          git diff --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
 
           python3 - << 'PYEOF'
           import os
@@ -630,6 +645,13 @@ jobs:
           PR_NUMBER="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          # Triage itself died → its outputs are untrusted (an empty
+          # run_review would read as non-reviewable and pass).
+          if [ "${{ needs.triage.result }}" != "success" ]; then
+            echo "::error::Triage did not succeed (result: ${{ needs.triage.result }}) — refusing to trust its outputs, failing closed"
+            exit 1
+          fi
 
           if [ "${{ needs.triage.outputs.run_review }}" != "true" ]; then
             echo "✅ Triage classified diff as non-reviewable — gate auto-passes"
