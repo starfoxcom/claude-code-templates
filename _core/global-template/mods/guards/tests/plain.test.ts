@@ -138,6 +138,9 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["ssh host <<'EOF'\ngit commit -n -m x\nEOF", false],
     ["cat <<'EOF' | ssh host\ngit commit --no-veri -m x\nEOF", false],
     ["ssh host bash <<'EOF'\ngit commit -ac HEAD\nEOF", false],
+    ["echo 'git commit --no-verify -m x' | bash /dev/stdin", false],
+    ["printf 'git commit -n -m x' | sh /dev/fd/0", false],
+    ["echo 'git commit --no-verify -m x' | tee run.log | bash", false],
     // A PowerShell launcher on the right of an assignment.
     ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$out = ssh host 'git commit --no-veri -m x'", true],
@@ -210,6 +213,7 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['cat >> CLAUDE.md <<EOF\nNever run git commit -n in $REPO.\nEOF', false],
     ["node -e \"console.log('git commit -n')\"", false],
     ["python -c \"print('git commit -n')\"", false],
+    ['cat >> CLAUDE.md <<EOF\nNever run husky uninstall in $REPO.\nEOF\ngit commit -m x', false],
   ] as const) {
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
   }

@@ -321,7 +321,9 @@ function pipedScript(st: Statement, name: string, args: Word[], prev?: Statement
   if (!SHELL.test(name) || !st.pipeIn || !prev || st.heredocs.length > 0) return undefined
   if (args.some(a => /^-[a-z]*c[a-z]*$/i.test(a.text))) return undefined
   // A first word past the options is a script file, unless `-s` or `--` makes it an argument.
-  const file = args.findIndex(a => !a.text.startsWith('-'))
+  // `/dev/stdin` and its kin name the pipe itself, not a script file.
+  const isPipe = (a: Word) => /^\/(dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)$/.test(a.text)
+  const file = args.findIndex(a => !a.text.startsWith('-') && !isPipe(a))
   if (file !== -1 && !args.slice(0, file).some(a => /^-[a-z]*s/.test(a.text) || a.text === '--')) return undefined
   const fed = [...prev.words.map(w => w.text), ...prev.heredocs].join(' ')
   return namesCall(fed) ? launched(name) : undefined

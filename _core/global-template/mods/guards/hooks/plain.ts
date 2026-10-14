@@ -117,7 +117,8 @@ export function withoutPrints(text: string, isCallRead = false): string {
     if (!PRINTS.test(name) && !isCall && !isData) continue
     const end = masked.slice(at).search(/[;&|\n]/)
     const lineEnd = end === -1 ? text.length : at + end
-    if (isData && /^\|(?!\|)/.test(masked.slice(lineEnd))) continue
+    // What a print or data program pipes on may feed a shell (`echo '...' | tee x | bash`): it stays.
+    if (!isCall && /^\|(?!\|)/.test(masked.slice(lineEnd))) continue
     const fed = isCall || isData ? bodies.find(b => b.open >= at && b.open < lineEnd) : undefined
     const to = fed ? fed.to : lineEnd
     out = out.slice(0, at) + ' '.repeat(to - at) + out.slice(to)

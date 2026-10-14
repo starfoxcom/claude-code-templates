@@ -28,7 +28,7 @@ export function inspect(command: string, powershell: boolean): Plan {
   // A git or gh call named anywhere in the text, a launcher's or a wrapper's quoted text included, meets the rules
   // a typed call meets in every command; the route table counts where the reading left a note.
   const scan = scanText(command, plan, why, powershell)
-  const noted = plan.notes.length > 0 ? routeIn(withoutPrints(scan)) : undefined
+  const noted = plan.notes.length > 0 ? routeIn(withoutPrints(scan, true)) : undefined
   // Windows PowerShell hands git a word holding `"` broken apart: the git statement's own text is what git gets.
   const isBroken = why?.startsWith('a word Windows PowerShell passes on changed') ?? false
   const route = callRoute(withoutPrints(scan, !isBroken)) ?? noted
