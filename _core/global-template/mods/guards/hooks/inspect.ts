@@ -130,11 +130,6 @@ type Reading = VarState & {
   functions?: Set<string>
 }
 
-/** The one outright refusal that is not about attribution: it stands with the attribution check off. */
-export const RUN_WATCH =
-  '`gh run watch` streams a live log into the tool call. Watch checks with the ci-watch mod (it starts on ' +
-  'push), or the Monitor tool when that mod is not loaded.'
-
 export function inspect(command: string, powershell: boolean): Plan {
   // A command naming a history write is read only when it is plain: anything else is refused (plain.ts).
   const why = namesWrite(command, powershell) ? notPlain(command, powershell) : undefined
@@ -607,7 +602,9 @@ function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const action = args[ai]?.text ?? ''
   const rest = args.filter((_, i) => i !== gi && i !== ai)
   if (group === 'run' && action === 'watch') {
-    plan.block = RUN_WATCH
+    plan.block =
+      '`gh run watch` streams a live log into the tool call. Watch checks with the ci-watch mod (it starts on ' +
+      'push), or the Monitor tool when that mod is not loaded.'
     return undefined
   }
   // The endpoint is a positional; keep it out of the field walk.
