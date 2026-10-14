@@ -86,7 +86,7 @@ Built in visual slices of about 150 lines each, checked locally by the maintaine
 - [ ] Recording harness: headless Claude Code runs per scenario, with and without Bindwright, saved as sanitized replay data with the staleness hash test.
 - [ ] Demo pane: before and after diffs per setting.
 - [ ] Terminal pane: scenario picker and replay of recorded sessions.
-- [ ] Advanced drawer, URL state and Share link.
+- [ ] Advanced drawer, URL state and Share link. The attribution guard is one of its switches, on by default and plainly labelled as something to turn off (`attributionGuard`; decided 2026-10-14: opt-out, since most developers do not want AI credit in their history).
 - [ ] Setup code, zip fallback, review panel, mobile bottom bar.
 - [ ] Evidence section: numbers from `tools/receipts.py` (session logs and PR history) plus the incident stories from GameProject and BusinessApp, each with the rule it produced.
 - [ ] Secondary pages: compare, all settings, how it works.
