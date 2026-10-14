@@ -288,7 +288,7 @@ test('open tasks are the ones not completed, not dropped and not on hold', () =>
   expect(countOpenTasks('{}')).toBeUndefined()
 })
 
-test('an arm set beside open tasks still resumes fully after a /clear starts an empty list', async ($, on) => {
+test('an arm set beside open tasks still resumes fully after a /clear starts an empty list', LONG, async ($, on) => {
   const seen = world(on)
   tasksFile(seen, [{ status: 'in_progress' }])
   await start($)
@@ -463,7 +463,7 @@ test('after a /clear while idle, the minute check moves the saved arm to the new
   expect(savedArm(seen)).toBe('null')
 })
 
-test('a session started again before its wake schedules the saved arm', async ($, on) => {
+test('a session started again before its wake schedules the saved arm', LONG, async ($, on) => {
   const seen = world(on)
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
   await start($)
@@ -512,7 +512,7 @@ test('an idle session takes a new wrap-up line from the settings file at the nex
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
 
-test('/usage-guard set after an idle hot reload still restarts the saved arm and its timer', async ($, on) => {
+test('/usage-guard set after an idle hot reload still restarts the saved arm and its timer', LONG, async ($, on) => {
   const seen = world(on)
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
   await $.command.run({ command: 'usage-guard', args: 'set' } as never)
@@ -520,7 +520,10 @@ test('/usage-guard set after an idle hot reload still restarts the saved arm and
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('a session started again past the catch-up window drops the saved arm and resumes nothing', async ($, on) => {
+test(
+  'a session started again past the catch-up window drops the saved arm and resumes nothing',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   const missed = new Date(NOW - 2 * 3_600_000).toISOString()
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: missed, wakeAt: NOW - 31 * 60_000 }))
@@ -583,7 +586,7 @@ test('/usage-guard phone carries the question about an arm with nothing pending'
   expect(lines).toContain(`🟨 ${EMPTY_ARM_NOTE}`)
 })
 
-test('after a hot reload while idle, a command restores the saved arm and its timer', async ($, on) => {
+test('after a hot reload while idle, a command restores the saved arm and its timer', LONG, async ($, on) => {
   const seen = world(on)
   // The reload emptied the module and its state, and no turn has run since: only the saved copy is left.
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
@@ -592,7 +595,10 @@ test('after a hot reload while idle, a command restores the saved arm and its ti
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('after a hot reload in the middle of a turn, its end restores the saved arm and its timer', async ($, on) => {
+test(
+  'after a hot reload in the middle of a turn, its end restores the saved arm and its timer',
+  LONG,
+  async ($, on) => {
   const seen = world(on)
   // The turn started in the module before the reload; only its end reaches the new one.
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
@@ -601,7 +607,7 @@ test('after a hot reload in the middle of a turn, its end restores the saved arm
   expect(resumes(seen)).toHaveLength(1)
 })
 
-test('a disarm that lands while a reloaded start is still restoring the saved arm drops it', async ($, on) => {
+test('a disarm that lands while a reloaded start is still restoring the saved arm drops it', LONG, async ($, on) => {
   const seen = world(on)
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
   // The reload's start reads the saved arm; the disarm lands during that read and waits for the start,
@@ -619,7 +625,7 @@ test('a disarm that lands while a reloaded start is still restoring the saved ar
   expect(resumes(seen)).toEqual([])
 })
 
-test('after a hot reload while idle, disarm finds the saved arm and drops it', async ($, on) => {
+test('after a hot reload while idle, disarm finds the saved arm and drops it', LONG, async ($, on) => {
   const seen = world(on)
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
   const answer = (await $.command.run({ command: 'usage-guard', args: 'disarm' } as never)) as { text: string }
@@ -629,7 +635,7 @@ test('after a hot reload while idle, disarm finds the saved arm and drops it', a
   expect(resumes(seen)).toEqual([])
 })
 
-test('a start after a reload restores the saved arm even when the command is refused', async ($, on) => {
+test('a start after a reload restores the saved arm even when the command is refused', LONG, async ($, on) => {
   const seen = world(on)
   seen.refuseRegister = true
   seen.files.set(ARM_FILE, JSON.stringify({ kind: 'five_hour', resetsAt: RESET, wakeAt: WAKE }))
