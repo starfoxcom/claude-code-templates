@@ -4,7 +4,7 @@
 // still read as far as the reading goes, and the reason is noted in the log: refusing it blocked ordinary
 // work the shipped attribution hook passes. Pure, no engine access.
 
-import { LAUNCHERS } from './bypass'
+import { LAUNCHERS, NAMES_CALL } from './bypass'
 
 // What the text names, read with quotes, escapes and expansion marks taken out.
 const NAMES_GIT = /\bgit\b/
@@ -78,14 +78,31 @@ export function launcherIn(command: string): string | undefined {
   for (const m of masked.matchAll(PROGRAM_WORD)) {
     const word = m[1] as string
     const name = word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
-    if (!LAUNCHERS.test(name) && !/\{[^}]*,/.test(word)) continue
-    // Only a launcher whose own statement runs git or gh counts.
     const at = (m.index ?? 0) + m[0].length - word.length
+    if (/\{[^}]*,/.test(word)) return name
+    if (pipedScript(code, masked, at, name)) return name
+    if (!LAUNCHERS.test(name)) continue
+    // Only a launcher whose own statement runs git or gh counts.
     const end = masked.slice(at).search(/[;&|\n]/)
-    const text = code.slice(at, end === -1 ? undefined : at + end).toLowerCase().replace(/['"`^\\${}()]/g, '')
-    if (NAMES_GIT.test(text) || NAMES_GH.test(text) || /\{[^}]*,/.test(word)) return name
+    if (NAMES_CALL.test(callText(code.slice(at, end === -1 ? undefined : at + end)))) return name
   }
   return undefined
+}
+
+// A statement's text with quotes and expansion marks taken out, where git or gh is found as a program word.
+const callText = (text: string) => text.toLowerCase().replace(/['"`^\\${}()]/g, ' ')
+
+// A shell fed its script through a pipe (`echo 'git commit ...' | bash`) with no script of its own, whose
+// feeding statement names git or gh: the text runs unread.
+function pipedScript(code: string, masked: string, at: number, name: string): boolean {
+  if (!/^(bash|sh|zsh|dash|ksh|fish)$/i.test(name)) return false
+  const before = masked.slice(0, at)
+  if (!/(?:^|[^|])\|[ \t]*$/.test(before)) return false
+  const end = masked.slice(at).search(/[;&|\n]/)
+  if (!/^\S+(?:[ \t]+-[a-z]*)*[ \t]*$/i.test(masked.slice(at, end === -1 ? undefined : at + end))) return false
+  const pipe = before.lastIndexOf('|')
+  const start = Math.max(...[';', '&', '\n', '|'].map(c => masked.lastIndexOf(c, pipe - 1))) + 1
+  return NAMES_CALL.test(callText(code.slice(start, pipe)))
 }
 
 // The curly quotes Windows PowerShell reads as quote marks: no plain reading follows them.

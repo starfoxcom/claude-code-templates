@@ -41,9 +41,9 @@ export function inspect(command: string, powershell: boolean): Plan {
 // walks (`git rebase "${ARGS[@]}" main`).
 const MAY_HOLD_FLAG = /may be a flag|may carry more options|a word built at run time/
 // A variable the command sets to a flag: `X=-n`, `X=$'-n'`, `X=(-C HEAD)`, `printf -v X -- -n`, `for X in -n`,
-// `set -- -n`, `mapfile -t X <<< -n`.
+// `set -- -n`, `mapfile -t X <<< -n`, a default (`${X:--n}`, `${X:=-n}`) or an element (`A[0]=-n`).
 const FLAG_HELD = new RegExp(
-  String.raw`\b\w+\+?=(?:\((?:[^)]*?[\s'"])?-|\$?['"]?-)|` +
+  String.raw`\b\w+(?:\[[^\]]*\])?\+?=(?:\((?:[^)]*?[\s'"])?-|\$?['"]?-)|\$\{\w+:?[-=+?]['"]?-|` +
     String.raw`\b(?:printf\s+-v|for\s+\w+\s+in|set\s+--|(?:mapfile|readarray|read)\b[^;&|\n]*<<<)` +
     String.raw`[^;&|\n]*?[\s<]\$?['"]?-`,
 )
@@ -64,7 +64,14 @@ function scanText(command: string, plan: Plan, why: string | undefined, powershe
   let text = runsShellText(command) ? command : withoutDataBodies(command, powershell)
   for (const { text: message, creditOnly } of plan.texts) {
     if (creditOnly || message.length === 0) continue
-    for (const quoted of [`'${message}'`, `"${message}"`]) text = text.split(quoted).join(' ')
+    for (const quoted of spellings(message, powershell)) text = text.split(quoted).join(' ')
   }
   return text
 }
+
+// The ways a message the reading read is typed in quotes: as is, and with its quotes escaped (Bash's `\"`,
+// PowerShell's doubled `''` and `""`).
+const spellings = (m: string, powershell: boolean) =>
+  powershell
+    ? [`'${m.replace(/'/g, "''")}'`, `"${m.replace(/"/g, '""')}"`, `"${m.replace(/"/g, '`"')}"`]
+    : [`'${m}'`, `"${m}"`, `"${m.replace(/["\\$`]/g, '\\$&')}"`]

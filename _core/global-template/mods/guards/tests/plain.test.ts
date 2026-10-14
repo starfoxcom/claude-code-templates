@@ -85,6 +85,22 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["sudo -s 'git commit --no-veri -m x'", false],
     ["sudo -i 'git -C /repo commit --no-veri -m x'", false],
     ['find . -exec "$GIT" commit --no-veri -m x \\;', false],
+    // A launcher run from another program's arguments, and a shell fed its script through a pipe.
+    ["find . -exec ssh host 'git commit --no-veri -m x' \\;", false],
+    ["find . -exec flock /tmp/l -c 'git commit -ac HEAD' \\;", false],
+    ["unbuffer ssh host 'git commit --no-veri -m x'", false],
+    ["uv run watch 'git config set core.hooksPath /x'", false],
+    ["echo 'git commit --no-veri -m x' | bash", false],
+    ["printf 'git commit -ac HEAD' | sh -s", false],
+    // A flag as a default or an element, and a hooks setting or command through a run-time program word.
+    ['git commit -m x ${X:--n}', false],
+    [': ${X:=-n}; git commit -m x $X', false],
+    ['A=(x); A[0]=-n; git commit -m x "${A[@]}"', false],
+    ['$G config set core.hooksPath /x', false],
+    ['$G config unset core.hooksPath', false],
+    ['$G config -f .git/config core.hooksPath /x', false],
+    ['$G difftool -x cmd', false],
+    ["$GH alias set ci 'pr checks'", false],
     // A flag held in a variable the command sets, in any spelling that sets it.
     ['ARGS=(-n); git commit -m x "${ARGS[@]}"', false],
     ['ARGS=(-C HEAD~1); git commit "${ARGS[@]}"', false],
@@ -142,6 +158,13 @@ test('a read that names a route in a command that is not plain passes', () => {
     'git commit -m "feat: default X=-1" $NV',
     'npm test; git commit -F - <<EOF\ndocs: explain --no-verify\nEOF',
     'for i in 1; do git commit -F - <<EOF\ndocs: explain --no-verify\nEOF\ndone',
+    'npm test && git commit -m "docs: explain \\"--no-verify\\""',
+    // git as a user or a folder name in a launcher is no git call.
+    'ssh -T git@github.com; git push',
+    'ssh git@host ls; git commit -m x',
+    "ssh deploy 'ls /srv/app.git'; git commit -m x",
+    'watch ls build.git',
+    'cat setup.sh | bash; git commit -m x',
   ]) {
     const plan = inspect(command, false)
     expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])

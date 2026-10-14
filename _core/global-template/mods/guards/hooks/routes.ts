@@ -14,11 +14,13 @@ const COMMIT = String.raw`${PROGRAM}\s+commit\b`
 // A brace expansion may hold the subcommand itself (`{gi,commi}t` runs `git commit`).
 const BRACED = String.raw`(?:^|[\s;&|(])[^\s;&|$]*\{[^\s;&|$}]*,[^\s;&|]*`
 const REST = String.raw`[^|;&\n]*?`
-// The hooks path set or dropped (`-c core.hooksPath=x`, `git config core.hooksPath x`, `--unset`); a read
-// (`git config --get core.hooksPath`) is none.
+// The hooks path set or dropped (`-c core.hooksPath=x`, `git config core.hooksPath x`, `config set`,
+// `--unset`, `config unset`, past `-f <file>`); a read (`git config --get core.hooksPath`) is none.
+const CONFIG_OPTS = String.raw`(?:\s+(?:-f|--file|--blob|--type|--comment)\s+\S+|\s+--?(?!get|list|show)[\w-]+)*`
 const HOOKS_SET =
   String.raw`core\.hookspath\s*=|--unset(?:-all)?\s+core\.hookspath|` +
-  String.raw`\bconfig(?:\s+--?(?!get|list|show)[\w-]+)*\s+core\.hookspath\s+(?![0-9]*[<>|;&])\S`
+  String.raw`\bconfig${CONFIG_OPTS}(?:\s+set${CONFIG_OPTS})?\s+core\.hookspath\s+(?![0-9]*[<>|;&])\S|` +
+  String.raw`\bconfig${CONFIG_OPTS}\s+unset${CONFIG_OPTS}\s+core\.hookspath\b`
 const ENDS = String.raw`(?=[\s;&|)'"]|$)`
 
 // A commit's `-n` in a bundle of short flags (`-n`, `-an`, `-anm`); `-u` and `-S` take a value (`-uno`).
@@ -56,8 +58,8 @@ const ROUTES: [RegExp, string][] = [
   [new RegExp(REUSED), REUSE],
   [
     new RegExp(
-      String.raw`\brebase\b${REST}\s(?:-[A-Za-z]*x|--exec)\b|\bsubmodule\s+foreach\b|\bbisect\s+run\b|` +
-        String.raw`--extcmd\b|\bgh\s+alias\s+(?:set|import)\b`,
+      String.raw`\b(?:rebase|difftool)\b${REST}\s(?:-[A-Za-z]*x|--exec)\b|\bsubmodule\s+foreach\b|\bbisect\s+run\b|` +
+        String.raw`--extcmd\b|(?:\bgh|[^\s;&|]*[$*?[{)][^\s;&|]*)\s+alias\s+(?:set|import)\b`,
     ),
     RUNS_COMMAND,
   ],

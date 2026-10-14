@@ -296,7 +296,8 @@ const PRINTS = /^(echo|printf|write-output|write-host|grep|egrep|fgrep|rg|select
 // `ssh host '...'`, `Start-Process git -ArgumentList '...'`, an alias's value).
 export const LAUNCHERS =
   /^(flock|watch|parallel|script|ssh|su|setsid|stdbuf|doas|runas|wsl|fish|start-process|saps|start|alias)$/i
-const NAMES_CALL = /\b(git|gh)\b/i
+// git or gh as a program word in a text, quotes taken out: not `git@github.com` or `app.git`.
+export const NAMES_CALL = /(?:^|[\s;&|(])(?:[\w.~-]*\/)*(?:git|gh)(?:\.exe)?(?=[\s;&|)]|$)/i
 const WRITE_WORD =
   /^(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace|pr|issue|release|api)$/
 export const SHELL_TEXT =
@@ -316,8 +317,9 @@ export function bypassIn(st: Statement, name: string, args: Word[], state: HookS
   if (own || state.ps || FOLLOWED.test(name) || PRINTS.test(name)) return own
   const head = st.words[st.words.length - args.length - 1]?.text ?? ''
   if (name && /\s/.test(head) && NAMES_CALL.test(head)) return SHELL_TEXT
-  if (LAUNCHERS.test(name) && args.some(a => NAMES_CALL.test(a.text))) return launched(name)
-  const at = args.findIndex(a => a.dynamic || /^(git|gh)$/.test(baseName(a.text)) || SHELL.test(baseName(a.text)))
+  if (LAUNCHERS.test(name) && args.some(a => NAMES_CALL.test(a.text.replace(/['"]/g, ' ')))) return launched(name)
+  const runs = (a: Word) => /^(git|gh)$/.test(baseName(a.text)) || SHELL.test(baseName(a.text))
+  const at = args.findIndex(a => a.dynamic || runs(a) || LAUNCHERS.test(baseName(a.text)))
   const word = args[at]
   if (!word) return undefined
   const rest = args.slice(at + 1)
@@ -325,6 +327,8 @@ export function bypassIn(st: Statement, name: string, args: Word[], state: HookS
   const next = rest.find(a => !a.text.startsWith('-'))
   if (word.dynamic) return next && !next.dynamic && WRITE_WORD.test(next.text) ? launched(name) : undefined
   const inner = baseName(word.text)
-  if (!SHELL.test(inner)) return bypassOf(st, inner, rest, state)
-  return rest.some(a => NAMES_CALL.test(a.text)) ? launched(name) : undefined
+  if (/^(git|gh)$/.test(inner)) return bypassOf(st, inner, rest, state)
+  // A shell or a launcher run from the arguments (`find . -exec ssh host '...'`) runs its text unread.
+  const isCalled = rest.some(a => NAMES_CALL.test(a.text.replace(/['"]/g, ' ')))
+  return isCalled ? launched(SHELL.test(inner) ? name : inner) : undefined
 }
