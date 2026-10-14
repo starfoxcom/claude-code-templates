@@ -286,6 +286,20 @@ test('a long turn with no task list is asked for one, once', async ($, on) => {
   expect(notes[0]).toContain('ran 3 tool calls with no task list')
 })
 
+// Since Claude Code 2.1.299 a subagent's turn fires turn.start too; it is not a new main turn.
+test("a subagent's turn mid-turn does not restart main's count", async ($, on) => {
+  world(on)
+  await turn($)
+  const notes: string[] = []
+  for (let i = 0; i < 3; i++) {
+    if (i === 2) await $.turn.start({ turnId: 's', agentId: 'a1' } as never)
+    const result = (await $.tool.call({ tool: 'Read', file_path: 'a' } as never)) as never as { context?: string[] }
+    notes.push(...(result.context ?? []))
+  }
+  expect(notes.length).toBe(1)
+  expect(notes[0]).toContain('ran 3 tool calls with no task list')
+})
+
 test('the nudge count saved in the settings file applies from the session start', async ($, on) => {
   const seen = world(on)
   seen.files.set('plugin.json', JSON.stringify({ userConfig: { nudgeAfterTools: { type: 'number' } } }))

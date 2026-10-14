@@ -706,6 +706,8 @@ export const register: Register = (on, options) => {
   // startPolling first: a freshly loaded instance claims the owner file before any check.
   on('turn.start', async ($, e, next) => {
     await startPolling($)
+    // A subagent's turn (2.1.299+) has no main turn.complete after it, so it never marks a turn running.
+    if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     if (!(await isRetired($))) await setTurnRunning($, true)
     return next(e)
   })

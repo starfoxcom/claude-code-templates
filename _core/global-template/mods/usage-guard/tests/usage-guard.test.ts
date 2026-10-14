@@ -514,6 +514,19 @@ test('crossing the line mid-turn waits for the turn to end before the wrap-up ru
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
 
+// Since Claude Code 2.1.299 a subagent's turn fires turn.start too, with no main turn.complete after it.
+test("a subagent's turn between main's turns does not hold the wrap-up", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  await endTurn($)
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
 test('a wrap-up owed by a running turn still runs when another session extends the pause', async ($, on) => {
   const seen = world(on)
   await start($)
