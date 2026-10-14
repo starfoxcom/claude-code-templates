@@ -314,10 +314,13 @@ const baseName = (text: string) => (text.split(/[\\/]/).pop() ?? '').toLowerCase
  */
 export function bypassIn(st: Statement, name: string, args: Word[], state: HookState = {}): string | undefined {
   const own = bypassOf(st, name, args, state)
-  if (own || state.ps || FOLLOWED.test(name) || PRINTS.test(name)) return own
-  const head = st.words[st.words.length - args.length - 1]?.text ?? ''
-  if (name && /\s/.test(head) && NAMES_CALL.test(head)) return SHELL_TEXT
+  if (own || FOLLOWED.test(name) || PRINTS.test(name)) return own
+  const head = st.words[st.words.length - args.length - 1]
+  // A program word built at run time (`$G config --unset-a core.hooksPath`) may be git or gh: their routes count.
+  if (name && head?.dynamic) return bypassOf(st, 'git', args, state) ?? bypassOf(st, 'gh', args, state)
   if (LAUNCHERS.test(name) && args.some(a => NAMES_CALL.test(a.text.replace(/['"]/g, ' ')))) return launched(name)
+  if (state.ps) return undefined
+  if (name && /\s/.test(head?.text ?? '') && NAMES_CALL.test(head?.text ?? '')) return SHELL_TEXT
   const runs = (a: Word) => /^(git|gh)$/.test(baseName(a.text)) || SHELL.test(baseName(a.text))
   const at = args.findIndex(a => a.dynamic || runs(a) || LAUNCHERS.test(baseName(a.text)))
   const word = args[at]

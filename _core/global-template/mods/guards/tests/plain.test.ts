@@ -101,6 +101,16 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['$G config -f .git/config core.hooksPath /x', false],
     ['$G difftool -x cmd', false],
     ["$GH alias set ci 'pr checks'", false],
+    // A run-time program word takes every spelling git or gh accepts for a route.
+    ['$G config --unset-a core.hooksPath', false],
+    ['$G difftool --ext cmd', false],
+    ['$G submodule --quiet foreach make', false],
+    ['$G bisect --no-checkout run make', false],
+    ["$GH -R o/r alias set ci 'pr checks'", false],
+    // A PowerShell launcher on the right of an assignment.
+    ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
+    ["$out = ssh host 'git commit --no-veri -m x'", true],
+    ["$r = saps git 'commit -n -m x'", true],
     // A flag held in a variable the command sets, in any spelling that sets it.
     ['ARGS=(-n); git commit -m x "${ARGS[@]}"', false],
     ['ARGS=(-C HEAD~1); git commit "${ARGS[@]}"', false],
