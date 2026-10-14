@@ -683,6 +683,8 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     await startAlive($)
+    // A subagent's turn (2.1.299+) runs inside or after main's: it starts no new main turn.
+    if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     live.turn += 1
     live.isTurnRunning = true
     live.toolsThisTurn = 0

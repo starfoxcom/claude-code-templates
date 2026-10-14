@@ -726,7 +726,8 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', async ($, e, next) => {
-    live.isTurnRunning = true
+    // A subagent's turn (2.1.299+) has no main turn.complete after it, so it never marks a turn running.
+    if ((e as { agentId?: string }).agentId === undefined) live.isTurnRunning = true
     // A hot reload starts the module over without a session.start: the first turn after it restarts
     // the timers and reads the time zone again.
     await startTimers($).catch(() => undefined)
