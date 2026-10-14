@@ -9,16 +9,17 @@ import { COMMIT, gitLong, MESSAGE, NOTES } from './specs'
 import type { Spec } from './specs'
 import type { Statement, Word } from './shell'
 
-const HISTORY_REWRITE = 'history rewriting tools (git filter-repo, git filter-branch) are not allowed from a session.'
+export const HISTORY_REWRITE =
+  'history rewriting tools (git filter-repo, git filter-branch) are not allowed from a session.'
 export const HOOK_SKIP = 'skipping git hooks (--no-verify, commit -n, a hooks setting) is not allowed.'
-const TRAILER = '--trailer is not allowed; write the message body directly.'
-const REUSE = "reusing another commit's message (-C, -c, --reuse-message, --reedit-message) cannot be read."
+export const TRAILER = '--trailer is not allowed; write the message body directly.'
+export const REUSE = "reusing another commit's message (-C, -c, --reuse-message, --reedit-message) cannot be read."
 const CONFIG_UNREAD = 'a git config setting built at run time cannot be read.'
 export const EVAL = 'eval builds the command at run time, so its message cannot be read.'
-const RUNS_COMMAND =
+export const RUNS_COMMAND =
   'a git or gh call that runs a command of its own (rebase --exec, submodule foreach, bisect run, difftool ' +
   '--extcmd, a gh alias) cannot be read. Run that command directly, as its own git or gh call.'
-const HOOKS_OFF =
+export const HOOKS_OFF =
   "switching the repo's git hooks off (lefthook, husky, pre-commit or simple-git-hooks) is not allowed: they " +
   'hold its commit gates.'
 

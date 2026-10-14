@@ -250,6 +250,7 @@ const WAYS_OUT: [RegExp, string][] = [
     'Run the git or gh call directly, not through a shell, with every word typed out (no variable or `$(...)`).',
   ],
   [/^the new branch name/, 'Type the branch name out.'],
+  [/its subcommand built at run time\)$/, 'Type the gh subcommand out.'],
   [/^the git alias, include or config file/, 'Leave the git alias, include or config file out of the command.'],
   [
     /another program in this command may write/,

@@ -18,6 +18,8 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["bash -c 'git commit --no-verify -m x'", false],
     ["echo 'git commit --no-verify -m x' | bash", false],
     ['git -c core.hooksPath=$X commit -m x', false],
+    // The commit-message form inside a single-quoted string opens no here-doc: the lines after it are code.
+    ["echo 'x \"$(cat <<'EOF'\n'; HUSKY=0 npm x; echo '\nEOF\n)\"'; git commit -m 'fix: y'", false],
     // A program named by a glob, and launchers that run their quoted argument as shell text.
     ["/usr/bin/g[i]t commit -n -m 'x'", false],
     ["/mingw64/bin/g?t commit -n -m 'x'", false],
@@ -27,6 +29,22 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["parallel 'git commit --no-verify -m x' ::: 1", false],
     ["script -c 'git commit --no-verify -m x' /dev/null", false],
     ["ssh host 'git commit --no-verify -m x'", false],
+    // Every other route, in a launcher's quoted text or behind a program word the reading cannot name.
+    ["flock /tmp/l -c 'git filter-repo --force'", false],
+    ["watch 'git commit --trailer \"a: b\" -m m'", false],
+    ["parallel 'HUSKY=0 git commit -m x' ::: 1", false],
+    ["ssh host 'git -c core.hooksPath=/dev/null commit -m x'", false],
+    ["script -c 'git commit -C HEAD~1' /dev/null", false],
+    ["env -S 'git filter-repo --force'", false],
+    ["setsid git filter-repo --force", false],
+    ["flock /tmp/l -c 'git rebase -i --exec \"make\" main'", false],
+    ['$G filter-repo --force', false],
+    ["$G commit --trailer 'a: b' -m x", false],
+    ['$G commit -C HEAD~1', false],
+    // A skip at the end of the quoted text, and one beside a message that is a fragment of the flag.
+    ["flock /tmp/l -c 'git commit -m x -n'", false],
+    ['ssh host "git commit -m x -n"', false],
+    ["git commit -m n && flock /tmp/l -c 'git commit --no-verify -m x'", false],
     ["iex 'git commit -m x'", true],
     ['git commit -m x --% --no-verify', true],
     ["& (gcm g?t) commit -n -m 'x'", true],
@@ -40,8 +58,21 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["git commit -m 'a \"b\" --no-verify'", true],
   ] as const) {
     const plan = inspect(command, ps)
-    expect([command, plan.block]).toEqual([command, expect.any(String)])
+    expect([command, plan.block ?? plan.unread[0]]).toEqual([command, expect.any(String)])
     expect([command, isNoted(command, ps)]).toEqual([command, true])
+  }
+})
+
+// The routes are looked for where git gets them: a read that only names one is no route.
+test('a read that names a route in a command that is not plain passes', () => {
+  for (const command of [
+    'git log --grep commit -n 5 "$REF"',
+    'git config --get core.hooksPath; ls "$D"',
+    'sh "$(git config --get core.hooksPath)/commit-msg" m.txt',
+    'git config --show-origin --get core.hooksPath; ls .git/hooks | head; which lefthook',
+  ]) {
+    const plan = inspect(command, false)
+    expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])
   }
 })
 
@@ -78,7 +109,6 @@ test('any other command that is not plain is noted and left to the reading', () 
     ['. ./hooks.sh; git push', false],
     ['source ./x.sh && git push', false],
     ['npm run build && git commit -m x', false],
-    ["echo 'x \"$(cat <<'EOF'\n'; HUSKY=0 npm x; echo '\nEOF\n)\"'; git commit -m 'fix: y'", false],
     // A message that mentions a hook skip is text.
     ['npm test && git commit -m "docs: explain --no-verify"', false],
     ["$m = 'fix: x'; git commit -m $m", true],
@@ -204,11 +234,9 @@ test('a write named only in data, or a command that names none, is left to the r
   expect(namesWrite('C:\\tmp\\lv\\run_mem.ps1 -Tag a -GpuIndex 1', true)).toBe(false)
   expect(namesWrite("$env:X = ''; & C:\\tmp\\lv\\run_mem.ps1 -Tag a", true)).toBe(false)
   expect(namesWrite('g`it commit -m x', true)).toBe(true)
-  // A program word built at run time is read where the command sets it, and noted where it cannot be.
+  // A program word built at run time is read where the command sets it, and unread where it cannot be.
   expect(inspect('g=gi; ${g}t commit -m x', false).isWrite).toBe(true)
   for (const command of ['$G push', 'V=1 `echo git` push', 'x; "$g" push']) {
-    const plan = inspect(command, false)
-    const named = expect.arrayContaining(['a program named at run time'])
-    expect([command, plan.block, plan.notes]).toEqual([command, undefined, named])
+    expect([command, inspect(command, false).unread]).toEqual([command, ['a program named at run time']])
   }
 })

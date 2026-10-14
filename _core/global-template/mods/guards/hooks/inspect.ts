@@ -575,17 +575,22 @@ function ghApi(st: Statement, args: Word[], r: Reading): string | undefined {
   return write(r, st, 'the GitHub API call')
 }
 
+// A gh call whose subcommand is built at run time: unread when it hands over text or a file.
+function ghUnknown(args: Word[], r: Reading) {
+  const isText = args.some(w => /^(?:-[bFfmt]|--(?:body|title|field|raw-field|input|message|notes))/.test(w.text))
+  unreadCall(r, isText ? 'the gh call (its subcommand built at run time)' : 'a gh subcommand built at run time')
+}
+
 function gh(st: Statement, args: Word[], r: Reading): string | undefined {
   const { plan } = r
   plan.ghCalls++
   const { gi, ai } = ghWords(args, r)
   // A splat up to the action word may hand over the subcommand or global options.
-  if ((ai === -1 ? args : args.slice(0, ai + 1)).some(w => isSplat(w, r.ps)))
-    return void unreadCall(r, 'a gh subcommand built at run time')
+  if ((ai === -1 ? args : args.slice(0, ai + 1)).some(w => isSplat(w, r.ps))) return void ghUnknown(args, r)
   // The subcommand, or a `gh api` endpoint that may turn into a flag, built at run time.
   const isApi = args[gi]?.text === 'api'
-  if (args[gi]?.dynamic || (args[ai] && (isApi ? mayBeFlag(args[ai]) : args[ai]?.dynamic)))
-    return void unreadCall(r, 'a gh subcommand built at run time')
+  const isActionBuilt = args[ai] && (isApi ? mayBeFlag(args[ai]) : args[ai]?.dynamic)
+  if (args[gi]?.dynamic || isActionBuilt) return void ghUnknown(args, r)
   const group = args[gi]?.text ?? ''
   const action = args[ai]?.text ?? ''
   const rest = args.filter((_, i) => i !== gi && i !== ai)
