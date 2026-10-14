@@ -41,6 +41,18 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['$G filter-repo --force', false],
     ["$G commit --trailer 'a: b' -m x", false],
     ['$G commit -C HEAD~1', false],
+    ["flock /tmp/l -c 'SKIP=lint git commit -m x'", false],
+    ["ssh host 'GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x'", false],
+    ['$G config --remove-section core', false],
+    ["flock /tmp/l -c 'git notes add -C abc'", false],
+    ["flock /tmp/l -c 'git commit --fixup amend:HEAD'", false],
+    ["flock /tmp/l -c 'git rebase -ix make main'", false],
+    ["flock /tmp/l -c 'git --git-dir .git commit -n -m x'", false],
+    // A brace expansion may name the program and the subcommand (`{gi,commi}t` runs `git commit`).
+    ["{gi,commi}t -n -m 'x'", false],
+    ['{gi,commi}t -C HEAD~1', false],
+    ['{gi,commi}t --reuse-message=HEAD', false],
+    ['{gi,commi}t --fixup=amend:HEAD', false],
     // A skip at the end of the quoted text, and one beside a message that is a fragment of the flag.
     ["flock /tmp/l -c 'git commit -m x -n'", false],
     ['ssh host "git commit -m x -n"', false],
@@ -67,6 +79,9 @@ test('a bypass route in a command that is not plain is still refused', () => {
 test('a read that names a route in a command that is not plain passes', () => {
   for (const command of [
     'git log --grep commit -n 5 "$REF"',
+    'git log ${R} -n 5',
+    'npm test && git commit -uno -m "x"',
+    'python -c "skip = 1" && git commit -m x',
     'git config --get core.hooksPath; ls "$D"',
     'sh "$(git config --get core.hooksPath)/commit-msg" m.txt',
     'git config --show-origin --get core.hooksPath; ls .git/hooks | head; which lefthook',
@@ -127,9 +142,8 @@ test('any other command that is not plain is noted and left to the reading', () 
 })
 
 // Out of reach, as for the shipped hook: hook files and git config files written directly (setting hooks up
-// is ordinary work, and a path may be built at run time), and a program named by a brace expansion. Each is
-// noted, so the log shows it.
-test('hook files written directly and brace-expanded program names are noted', () => {
+// is ordinary work, and a path may be built at run time). Each is noted, so the log shows it.
+test('hook files written directly are noted', () => {
   for (const [command, ps] of [
     ["echo x > .git/hooks/commit-msg; git commit -m 'fix: x'", false],
     ["echo 'exit 0' > '.git/hooks/commit-msg'; 'git' commit -m 'fix: x'", false],
@@ -147,7 +161,6 @@ test('hook files written directly and brace-expanded program names are noted', (
     ["cd .githooks && echo 'exit 0' > pre-push; cd ..; git push", false],
     ["cd ~/.config/git && echo '[core]' > config; git commit -m 'fix: x'", false],
     ['cp hook.sh .git/', false],
-    ["{gi,commi}t -n -m 'x'", false],
     ["Remove-Item '.git\\hooks\\commit-msg'; & 'git' commit -m 'fix: x'", true],
     ["cd .git/hooks; 'exit 0' > commit-msg; cd ..\\..; git commit -m 'fix: x'", true],
   ] as const) {

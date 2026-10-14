@@ -577,7 +577,7 @@ function ghApi(st: Statement, args: Word[], r: Reading): string | undefined {
 
 // A gh call whose subcommand is built at run time: unread when it hands over text or a file.
 function ghUnknown(args: Word[], r: Reading) {
-  const isText = args.some(w => /^(?:-[bFfmt]|--(?:body|title|field|raw-field|input|message|notes))/.test(w.text))
+  const isText = args.some(w => /^(?:-[bFfmnt]|--(?:body|title|field|raw-field|input|message|notes))/.test(w.text))
   unreadCall(r, isText ? 'the gh call (its subcommand built at run time)' : 'a gh subcommand built at run time')
 }
 
