@@ -11,6 +11,13 @@
       "options": ["shadow", "enforce"],
       "default": "shadow"
     },
+    "attribution": {
+      "type": "string",
+      "title": "Attribution check",
+      "description": "on (the default): AI credit, and the product name outside mentionRepos, are kept out of commits, PRs, issues, comments, releases and committed lines. off: neither is checked. Everything else stays either way: commands the reading cannot follow, skipped git hooks and history rewrites are still refused, since banned names and the PR-body contract read the same text.",
+      "options": ["on", "off"],
+      "default": "on"
+    },
     "mentionRepos": {
       "type": "string",
       "title": "Repos that may name the product",
