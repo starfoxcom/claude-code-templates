@@ -52,7 +52,9 @@ test('crossing the line wraps up, stops background work and resumes after the re
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
 
-  await seen.clock.advance(WAKE - NOW)
+  // In 10-minute steps: one two-hour jump (thousands of 2-second ticks) stopped short of the wake on a slow
+  // CI runner, about 10 s in (2026-10-08 and 2026-10-14).
+  for (let left = WAKE - NOW; left > 0; left -= 10 * 60_000) await seen.clock.advance(Math.min(10 * 60_000, left))
   // The session goes on by itself: no /session-start, whose plan would wait for the person's OK.
   expect(resumes(seen)).toHaveLength(1)
   expect(resumes(seen)[0]).toContain('do not wait for a plan approval')
