@@ -19,13 +19,30 @@ export function workable(mirror: Mirror): MirrorTask[] {
   return [...ready.filter(isStarted), ...ready.filter(task => !isStarted(task))]
 }
 
-/** What is still coming that wakes the session on its own: a CI watch not yet settled or not yet sent. */
-export function hasPendingWake(ciWatchState: string | undefined): boolean {
+type WatchFields = { outcome?: string; wakePending?: boolean; settledAt?: number; pushedAt?: number }
+
+/**
+ * How long a push to a settled watch's PR counts as pending. Right after a push GitHub can still name the old
+ * head, so ci-watch only stamps the settled watch and restarts it on the new head at its next poll (under a
+ * minute). A push that moved no commit never restarts it: past this, it is no wake.
+ */
+export const PUSH_RESTART_MS = 5 * 60_000
+
+const isPushedSinceSettled = (watch: WatchFields, now: number) =>
+  watch.pushedAt !== undefined &&
+  watch.settledAt !== undefined &&
+  watch.pushedAt > watch.settledAt &&
+  now - watch.pushedAt <= PUSH_RESTART_MS
+
+/**
+ * What is still coming that wakes the session on its own: a CI watch not yet settled or not yet sent, or one
+ * pushed to again a moment ago.
+ */
+export function hasPendingWake(ciWatchState: string | undefined, now = 0): boolean {
   if (!ciWatchState) return false
   try {
-    const watches = (JSON.parse(ciWatchState) as { watches?: { outcome?: string; wakePending?: boolean }[] })
-      .watches
-    return (watches ?? []).some(watch => !watch.outcome || watch.wakePending)
+    const watches = (JSON.parse(ciWatchState) as { watches?: WatchFields[] }).watches
+    return (watches ?? []).some(watch => !watch.outcome || watch.wakePending || isPushedSinceSettled(watch, now))
   } catch {
     return false
   }
