@@ -226,7 +226,7 @@ async function checkPr($: Engine, plan: Plan, session: string, repo: string | un
   }
 }
 
-// The way out for each kind of unread body file or git config; a message's is the last.
+// The way out for each kind of unread entry; a message's is the last.
 const WAYS_OUT: [RegExp, string][] = [
   [
     /in a folder unknown before it runs, and another program/,
@@ -237,10 +237,32 @@ const WAYS_OUT: [RegExp, string][] = [
     'Give the body file its full path, or run the command in a folder named out (`cd <path>`).',
   ],
   [/Git Bash's \/tmp did not map/, "Give the body file's Windows path."],
+  [
+    /^an environment variable named at run time/,
+    'Type the name of each environment variable the command sets (`export NAME=value`, `$env:NAME = ...`).',
+  ],
+  [
+    /^a cmd script built at run time/,
+    'Run the git or gh call directly, not through `cmd /c`, with every word typed out (no `%NAME%`).',
+  ],
+  [
+    /^a \w+ script built at run time/,
+    'Run the git or gh call directly, not through a shell, with every word typed out (no variable or `$(...)`).',
+  ],
+  [/^the new branch name/, 'Type the branch name out.'],
   [/^the git alias, include or config file/, 'Leave the git alias, include or config file out of the command.'],
   [
     /another program in this command may write/,
     'Write the body file in an earlier command, or in this one with `>` or a here-doc, which the guard reads.',
+  ],
+  [/^a program named at run time/, 'Name the program itself (`git`, `gh`).'],
+  [
+    /^a git setting built at run time/,
+    'Leave the git alias, include or config file out of the command, and write each `-c` setting out.',
+  ],
+  [
+    /^a .* built at run time$/,
+    'Write each word of the git or gh call out: no variable, `$(...)`, list or splat in it.',
   ],
 ]
 
@@ -391,8 +413,10 @@ async function failed($: Engine, tool: string, command: string, error: string, r
 
 async function guard($: Engine, tool: string, command: string, run: () => Promise<any>) {
   const plan = inspect(command, tool === 'PowerShell')
-  // A write the reading missed still carries the command-text backstop, so text alone is reason to check.
-  if (!plan.isWrite && plan.texts.length === 0 && plan.branches.length === 0 && !plan.block) return run()
+  // A write the reading missed still carries the command-text backstop, so text alone is reason to check; a
+  // note (a command naming a write that is not plain) is logged.
+  const isQuiet = plan.texts.length === 0 && plan.branches.length === 0 && plan.notes.length === 0
+  if (!plan.isWrite && isQuiet && !plan.block) return run()
   // A hot reload starts the module over without a new session.start: set up on first use.
   if (!live.dir) await setUp($)
   let reason: string | undefined

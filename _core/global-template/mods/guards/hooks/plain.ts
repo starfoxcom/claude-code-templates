@@ -70,7 +70,7 @@ const SMART_QUOTES = /[‘-„]/
 // The command without the bodies of here-docs whose delimiter is quoted: they are data. A here-doc is found
 // on its line with the quoted text blanked (its delimiter's own quotes kept), so a `<<'X'` inside a message
 // opens nothing; one never closed keeps the whole text.
-function withoutBodies(command: string): string {
+export function withoutBodies(command: string): string {
   const lines = command.split('\n')
   const kept: string[] = []
   for (let i = 0; i < lines.length; i++) {
@@ -92,6 +92,9 @@ function withoutData(code: string): string {
   const text = code.replace(/'[^']*'|"(?:[^"`$\\]|\$(?!\()|\\[^\n])*"/g, ' ')
   return /['"]/.test(text) ? code : text
 }
+
+/** Whether the command runs a program that runs its quoted text as shell code (`flock -c '...'`, `ssh`). */
+export const runsShellText = (command: string) => RUNNERS.test(withoutData(withoutBodies(command)))
 
 /** Whether the command's text names a history write, a GitHub write or a hook switch, outside the text it
  * only passes as data (all of it, when it runs git, gh or shell text), or runs a program named at run time. */

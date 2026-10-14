@@ -435,8 +435,17 @@ test('names keep their case in Bash, plain dollars stay text, and a new branch a
 })
 
 // Every kind of unread entry other than a message names a way out of its own.
-test('each unread body file kind and an inline git config have their own way out', () => {
+test('each unread kind has its own way out', () => {
   for (const where of [
+    'a git setting built at run time',
+    'an environment variable named at run time',
+    'a bash script built at run time',
+    'a pwsh script built at run time',
+    'a cmd script built at run time',
+    'a git option built at run time',
+    'a git subcommand built at run time',
+    'a flag value built at run time',
+    'the new branch name',
     'the git alias, include or config file the command sets',
     'the PR text (in a folder unknown before it runs)',
     'the PR text (in a folder unknown before it runs, and another program in this command may write b.md)',
@@ -445,6 +454,8 @@ test('each unread body file kind and an inline git config have their own way out
   ]) {
     expect([where, wayOut(where)]).toEqual([where, expect.any(String)])
   }
+  expect(wayOut('a cmd script built at run time')).toContain('not through `cmd /c`')
+  expect(wayOut('a bash script built at run time')).toContain('not through a shell')
   expect(wayOut('the commit message')).toBeUndefined()
 })
 

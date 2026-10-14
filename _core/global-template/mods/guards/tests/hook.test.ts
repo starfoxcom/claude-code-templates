@@ -280,6 +280,14 @@ test('a diff past the output cap names the rest of the added lines unread', asyn
   expect(entry.notes).toEqual(['the lines the commit adds past the first part of its diff'])
 })
 
+// A command that writes a hook or git config file directly is out of reach, but never passes unseen.
+test('a git config file written directly is logged', async ($, on) => {
+  const seen = world(on)
+  await bash($, "echo 'hooksPath = /dev/null' >> ~/.gitconfig")
+  expect(seen.ran).toHaveLength(1)
+  expect(lastEntry(seen).notes.some((n: string) => n.startsWith('not plain: '))).toBe(true)
+})
+
 test('read-only and clean commands run untouched and log nothing', async ($, on) => {
   const seen = world(on)
   await bash($, 'git log -1 && git status')
@@ -613,10 +621,10 @@ test('a refusal names the way out for what it could not read', { options: { mode
   expect(await deny('git -c alias.ci=commit ci -m x')).toContain('Leave the git alias')
   expect(await deny('git commit -F -')).toContain('use a here-doc')
   expect(await deny('cd "$R" && git commit -F m.txt')).toContain(FOLDER_OUT)
-  // A word the reading cannot place is the shipped hook's blind spot too: noted, never refused.
-  for (const command of ['git checkout -b "$NAME"', 'git push origin $REFS']) {
-    expect([command, await deny(command)]).toEqual([command, 'undefined'])
-  }
+  // A new branch is no history write: the reading itself refuses a name built at run time.
+  expect(await deny('git checkout -b "$NAME"')).toContain('Type the branch name out')
+  // A word the reading cannot place in a push is the shipped hook's blind spot too: noted, never refused.
+  expect(await deny('git push origin $REFS')).toBe('undefined')
 })
 
 // A written file is found where its writer ran, whatever spelling and folder it is named from later.
@@ -814,7 +822,7 @@ test('a here-doc body file beside mkdir or mktemp passes; under a folder named a
 
 // Wrapper shells, exports, `set` and `cmd` lines are not plain: noted, as the shipped hook passes them, with
 // the whole command text under the credit check.
-test('a GitHub or git call inside a wrapper shell, after export or set, is noted', {
+test('a GitHub or git call inside a wrapper shell or after set is noted; a hidden cmd or variable is refused', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
   const seen = world(on, { 'C:/Repos/my-game/b.md': '## What\n- clean\n' })
@@ -822,13 +830,19 @@ test('a GitHub or git call inside a wrapper shell, after export or set, is noted
     "bash -c 'gh pr create -t t -F b.md'",
     'powershell -Command "gh pr create -t t -F b.md"',
     'cmd //c "gh pr create -t t -F b.md"',
-    'cmd //c "git add -A & git commit -m x"',
-    'export "$k=$v"; git commit -m x',
     "set -euo pipefail; cat > c.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t -F c.md",
   ]
   for (const command of commands) {
     expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
     expect(lastEntry(seen).notes.some((n: string) => n.startsWith('not plain: '))).toBe(true)
+  }
+  // A cmd line split at `&`, or an environment variable named at run time: what runs is unknown.
+  for (const [command, reason] of [
+    ['cmd //c "git add -A & git commit -m x"', 'not through `cmd /c`'],
+    ['export "$k=$v"; git commit -m x', 'Type the name of each environment variable'],
+  ]) {
+    const deny = String((await bash($, command as string) as { deny?: string }).deny)
+    expect([command, deny]).toEqual([command, expect.stringContaining(reason as string)])
   }
   const credit = await bash($, `bash -c "git commit -m 'fix: x' -m '${AI_TRAILER}'"`)
   expect(String((credit as { deny?: string }).deny)).toContain('AI credit')

@@ -6,7 +6,8 @@ import { namesWrite, notPlain } from '../hooks/plain'
 const isNoted = (command: string, ps = false) => inspect(command, ps).notes.some(n => n.startsWith('not plain: '))
 
 // Spellings past rounds of review found a way around a reading with. A command that is not plain is read as
-// far as the reading goes and noted; a bypass route the reading finds in it is still refused.
+// far as the reading goes and noted; a bypass route in it is still refused, the reading's own or a hook skip
+// typed where git may get it.
 test('a bypass route in a command that is not plain is still refused', () => {
   for (const [command, ps] of [
     ['HUSKY=0 git commit -m x', false],
@@ -15,14 +16,28 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['coproc C { git commit --no-verify -m x; }', false],
     ["eval 'git commit -m x'", false],
     ["bash -c 'git commit --no-verify -m x'", false],
+    ["echo 'git commit --no-verify -m x' | bash", false],
     ['git -c core.hooksPath=$X commit -m x', false],
+    // A program named by a glob, and launchers that run their quoted argument as shell text.
+    ["/usr/bin/g[i]t commit -n -m 'x'", false],
+    ["/mingw64/bin/g?t commit -n -m 'x'", false],
+    ['$G commit -n -m x', false],
+    ["flock /tmp/l -c 'git commit --no-verify -m x'", false],
+    ["watch 'git commit --no-verify -m x'", false],
+    ["parallel 'git commit --no-verify -m x' ::: 1", false],
+    ["script -c 'git commit --no-verify -m x' /dev/null", false],
+    ["ssh host 'git commit --no-verify -m x'", false],
     ["iex 'git commit -m x'", true],
     ['git commit -m x --% --no-verify', true],
+    ["& (gcm g?t) commit -n -m 'x'", true],
+    [". (Get-Command g*t) commit -n -m 'x'", true],
     // Windows PowerShell splits an unquoted dash word at its first dot: git gets `--no-verify .`.
     ["git commit -m 'fix: x' --no-verify.", true],
     // Windows PowerShell reads curly quotes as quote marks: the text after one is code.
     ["git commit -m 'fix: x’ --no-verify ‘'", true],
     ["echo 'x’; git commit --no-verify -m y; ‘'", true],
+    // Windows PowerShell hands a native program a word holding `"` broken apart: git gets `--no-verify`.
+    ["git commit -m 'a \"b\" --no-verify'", true],
   ] as const) {
     const plan = inspect(command, ps)
     expect([command, plan.block]).toEqual([command, expect.any(String)])
@@ -57,18 +72,54 @@ test('any other command that is not plain is noted and left to the reading', () 
     ['git commit -m x &', false],
     ['env git commit -m x', false],
     ['command git commit -m x', false],
+    ['\\git commit -m x', false],
     ['git commit -m x # trailing', false],
+    ['git commit -m x *', false],
     ['. ./hooks.sh; git push', false],
+    ['source ./x.sh && git push', false],
     ['npm run build && git commit -m x', false],
-    ["echo '[core]' >> ~/.gitconfig && git commit -m 'fix: x'", false],
-    ["echo 'commit-msg:' > lefthook-local.yml; git commit -m 'fix: x'", false],
-    ["{gi,commi}t -n -m 'x'", false],
-    ["flock /tmp/l -c 'git commit --no-verify -m x'", false],
+    ["echo 'x \"$(cat <<'EOF'\n'; HUSKY=0 npm x; echo '\nEOF\n)\"'; git commit -m 'fix: y'", false],
+    // A message that mentions a hook skip is text.
+    ['npm test && git commit -m "docs: explain --no-verify"', false],
     ["$m = 'fix: x'; git commit -m $m", true],
     ["& git commit -m 'x'", true],
+    ["git commit -m ''", true],
     ["if ($?) { git commit -m 'x' }", true],
+    ["$r = [ref]$m; git commit -m 'x'", true],
     ["Set-Variable -Name $n -Value $out; git commit -m 'x'", true],
     ['git commit -m "don’t stop"', true],
+    ['git push origin x && gh pr create --title t --body-file b.md', true],
+  ] as const) {
+    const plan = inspect(command, ps)
+    expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])
+    expect([command, isNoted(command, ps)]).toEqual([command, true])
+  }
+})
+
+// Out of reach, as for the shipped hook: hook files and git config files written directly (setting hooks up
+// is ordinary work, and a path may be built at run time), and a program named by a brace expansion. Each is
+// noted, so the log shows it.
+test('hook files written directly and brace-expanded program names are noted', () => {
+  for (const [command, ps] of [
+    ["echo x > .git/hooks/commit-msg; git commit -m 'fix: x'", false],
+    ["echo 'exit 0' > '.git/hooks/commit-msg'; 'git' commit -m 'fix: x'", false],
+    ["rm '.git/hooks/commit-msg'; 'git' commit -m 'fix: x'", false],
+    ["rm .git/hooks/commit-msg; g''it commit -m 'fix: x'", false],
+    ["cd .git/hooks && echo 'exit 0' > commit-msg; cd ../..; git commit -m 'fix: x'", false],
+    ["pushd .husky && echo 'exit 0' > commit-msg; popd; git commit -m 'fix: x'", false],
+    ["cd .git; echo '[core]' >> config; cd ..; git commit -m 'fix: x'", false],
+    ["echo '[core]' >> ~/.gitconfig && git commit -m 'fix: x'", false],
+    ["echo '[core]' > ~/.config/git/config; git commit -m 'fix: x'", false],
+    ["echo 'commit-msg:' > lefthook-local.yml; git commit -m 'fix: x'", false],
+    ["echo 'repos: []' > .pre-commit-config.yaml; git commit -m 'fix: x'", false],
+    ["echo 'hooksPath = /dev/null' >> ~/.gitconfig", false],
+    ["echo 'exit 0' > commit-msg; git commit -m 'fix: x'", false],
+    ["cd .githooks && echo 'exit 0' > pre-push; cd ..; git push", false],
+    ["cd ~/.config/git && echo '[core]' > config; git commit -m 'fix: x'", false],
+    ['cp hook.sh .git/', false],
+    ["{gi,commi}t -n -m 'x'", false],
+    ["Remove-Item '.git\\hooks\\commit-msg'; & 'git' commit -m 'fix: x'", true],
+    ["cd .git/hooks; 'exit 0' > commit-msg; cd ..\\..; git commit -m 'fix: x'", true],
   ] as const) {
     const plan = inspect(command, ps)
     expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])
