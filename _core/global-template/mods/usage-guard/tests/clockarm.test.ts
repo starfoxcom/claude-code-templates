@@ -21,7 +21,7 @@ function nothingPending(seen: World): void {
 
 const saved = (seen: World) => JSON.parse(seen.files.get(ARM_FILE) ?? 'null')
 
-test('a clock arm says its full date and how far off it is, and wakes then with its reason', async ($, on) => {
+test('a clock arm says its full date and how far off it is, and wakes then with its reason', LONG, async ($, on) => {
   const seen = world(on)
   nothingPending(seen)
   await start($)
@@ -40,7 +40,7 @@ test('a clock arm says its full date and how far off it is, and wakes then with 
   expect(saved(seen)).toBeNull()
 })
 
-test('a clock arm without a reason and nothing pending only says so at its wake', async ($, on) => {
+test('a clock arm without a reason and nothing pending only says so at its wake', LONG, async ($, on) => {
   const seen = world(on)
   nothingPending(seen)
   await start($)
@@ -62,7 +62,7 @@ test('a reset arm hands its reason on at the reset', LONG, async ($, on) => {
   expect(resumes(seen)[0]).toContain(REASON_LINE)
 })
 
-test('a new arm replaces the standing one and says which', async ($, on) => {
+test('a new arm replaces the standing one and says which', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   await arm($, '10:30')
@@ -82,7 +82,7 @@ test('a 12-hour time or an unquoted reason arms nothing', async ($, on) => {
   expect(seen.files.get(ARM_FILE)).toBeUndefined()
 })
 
-test('the arm tool is registered and arms like the command', async ($, on) => {
+test('the arm tool is registered and arms like the command', LONG, async ($, on) => {
   const seen = world(on)
   await start($)
   expect(tools).toContain('arm')

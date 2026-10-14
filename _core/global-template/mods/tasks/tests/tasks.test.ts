@@ -306,7 +306,14 @@ test("a subagent's turn ending mid-turn leaves main's turn running", async ($, o
   await create($, 'one')
   await update($, '1', 'in_progress')
   await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
-  await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await $.turn.complete({
+    turnId: 's1',
+    agentId: 'a1',
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    reason: 'answer',
+  } as never)
   // A prompt queued while main's turn still runs gets no notes.
   const answer = (await $.prompt.submit({ text: 'next' } as never)) as never as { context?: string[] }
   expect((answer.context ?? []).join(' ')).not.toContain('Still in progress')
