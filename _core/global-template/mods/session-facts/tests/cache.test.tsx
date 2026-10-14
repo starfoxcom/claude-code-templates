@@ -503,6 +503,8 @@ const OFF_SWITCHES: [string, (w: ReturnType<typeof world>) => void, Record<strin
   ['DISABLE_AUTO_COMPACT set', () => {}, { DISABLE_AUTO_COMPACT: '1' }],
   ['DISABLE_COMPACT set', () => {}, { DISABLE_COMPACT: 'true' }],
   ['auto-compact off in the settings', w => void (w.settings.autoCompactEnabled = false)],
+  // Claude Code 2.1.299's own switch for idle compaction alone.
+  ['idle compaction off in the settings', w => void (w.settings.idleCompaction = false)],
   ['auto-compact off in /config', w => w.files.set('C:/Users/me/.claude.json', '{"autoCompactEnabled":false}')],
   // Read while another session rewrites it, or missing: the off switch may be in it.
   ['the global config torn', w => w.files.set('C:/Users/me/.claude.json', '{"autoCompactEnabled":fal')],

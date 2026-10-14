@@ -306,13 +306,17 @@ async function idleCompact($: EngineInterface): Promise<void> {
 }
 
 // The person's own off switches for automatic compaction: `DISABLE_AUTO_COMPACT` or `DISABLE_COMPACT`, or
-// auto-compact turned off in /config (`autoCompactEnabled`, kept in the global config, not the settings).
+// auto-compact turned off in /config (`autoCompactEnabled`, kept in the global config, not the settings), or
+// idle compaction alone turned off (`"idleCompaction": false` in the settings, Claude Code 2.1.299+).
 async function isAutoCompactOn($: EngineInterface): Promise<boolean> {
   const isSet = (value: string | undefined) => Boolean(value) && !/^(0|false)$/i.test(value ?? '')
   if (isSet(await $.env.get('DISABLE_AUTO_COMPACT').catch(() => undefined))) return false
   if (isSet(await $.env.get('DISABLE_COMPACT').catch(() => undefined))) return false
-  const settings = (await $.settings.read().catch(() => ({}))) as { autoCompactEnabled?: unknown }
-  if (settings.autoCompactEnabled === false) return false
+  const settings = (await $.settings.read().catch(() => ({}))) as {
+    autoCompactEnabled?: unknown
+    idleCompaction?: unknown
+  }
+  if (settings.autoCompactEnabled === false || settings.idleCompaction === false) return false
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.'
   const file = configured ? `${configured}/.claude.json` : `${home}/.claude.json`
