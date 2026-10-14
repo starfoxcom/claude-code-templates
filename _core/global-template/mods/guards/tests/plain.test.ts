@@ -115,6 +115,15 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['/usr/bin/g?t difftool --ext cmd', false],
     ['g[i]t submodule --quiet foreach make', false],
     ["g?h -R o/r alias set ci 'pr checks'", false],
+    // `env -S` and a piped-in shell past a wrapper, with script arguments, or fed by a here-doc.
+    ["sudo env -S 'git commit --no-veri -m x'", false],
+    ["timeout 5 env -S 'git commit -ac HEAD'", false],
+    ["$SUDO env -S 'git commit --no-veri -m x'", false],
+    ["echo 'git commit --no-veri -m x' | sudo bash", false],
+    ["echo 'git commit --no-veri -m x' | timeout 5 bash", false],
+    ["printf 'git commit -ac HEAD' | sh -s x", false],
+    ["echo 'git commit --no-veri -m x' | bash -s --", false],
+    ["cat <<'EOF' | bash\ngit commit --no-veri -m x\nEOF", false],
     // A PowerShell launcher on the right of an assignment.
     ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$out = ssh host 'git commit --no-veri -m x'", true],

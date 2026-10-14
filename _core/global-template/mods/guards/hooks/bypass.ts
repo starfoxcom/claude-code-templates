@@ -304,6 +304,28 @@ export const SHELL_TEXT =
   "a git or gh call in text a wrapper runs as a shell command (`sudo -s '...'`) cannot be read. Run the git " +
   'or gh call directly, as its own command.'
 const baseName = (text: string) => (text.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
+const namesCall = (text: string) => NAMES_CALL.test(text.replace(/['"]/g, ' '))
+
+// `env -S '...'` past any wrapper (`sudo env -S '...'`): the text after `-S` runs as a command line.
+function splitText(st: Statement): string | undefined {
+  const at = st.words.findIndex((w, i) => i > 0 && /^(-S|--split-string)/.test(w.text) && isEnvBefore(st, i))
+  const word = st.words[at]?.text ?? ''
+  const value = /^(?:-S|--split-string=?)(.+)$/s.exec(word)?.[1] ?? st.words[at + 1]?.text ?? ''
+  return at !== -1 && namesCall(value) ? SHELL_TEXT : undefined
+}
+const isEnvBefore = (st: Statement, i: number) => st.words.slice(0, i).some(w => baseName(w.text) === 'env')
+
+// A shell fed its script through a pipe, past any wrapper (`echo '...' | sudo bash`, `| sh -s x`, `cat <<EOF |
+// bash`): with no `-c` and no script file of its own, it runs what the statement before it prints, unread.
+function pipedScript(st: Statement, name: string, args: Word[], prev?: Statement): string | undefined {
+  if (!SHELL.test(name) || !st.pipeIn || !prev || st.heredocs.length > 0) return undefined
+  if (args.some(a => /^-[a-z]*c[a-z]*$/i.test(a.text))) return undefined
+  // A first word past the options is a script file, unless `-s` or `--` makes it an argument.
+  const file = args.findIndex(a => !a.text.startsWith('-'))
+  if (file !== -1 && !args.slice(0, file).some(a => /^-[a-z]*s/.test(a.text) || a.text === '--')) return undefined
+  const fed = [...prev.words.map(w => w.text), ...prev.heredocs].join(' ')
+  return namesCall(fed) ? launched(name) : undefined
+}
 
 /**
  * As `bypassOf`, and for a git or gh call another program runs: a launcher past any wrapper or keyword
@@ -312,8 +334,8 @@ const baseName = (text: string) => (text.split(/[\\/]/).pop() ?? '').toLowerCase
  * ...`) is checked as one typed on its own; a shell run that way (`find . -exec sh -c '...'`) or a program
  * named at run time there (`find . -exec "$GIT" commit ...`) is refused when its words name or make a call.
  */
-export function bypassIn(st: Statement, name: string, args: Word[], state: HookState = {}): string | undefined {
-  const own = bypassOf(st, name, args, state)
+export function bypassIn(st: Statement, name: string, args: Word[], state: HookState = {}, prev?: Statement) {
+  const own = bypassOf(st, name, args, state) ?? splitText(st) ?? pipedScript(st, name, args, prev)
   if (own || FOLLOWED.test(name) || PRINTS.test(name)) return own
   const head = st.words[st.words.length - args.length - 1]
   // A program word built at run time (`$G config --unset-a core.hooksPath`) or by a Bash glob (`g[i]t`) may be

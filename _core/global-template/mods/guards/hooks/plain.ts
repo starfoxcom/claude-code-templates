@@ -80,7 +80,6 @@ export function launcherIn(command: string): string | undefined {
     const name = word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
     const at = (m.index ?? 0) + m[0].length - word.length
     if (/\{[^}]*,/.test(word)) return name
-    if (pipedScript(code, masked, at, name)) return name
     if (!LAUNCHERS.test(name)) continue
     // Only a launcher whose own statement runs git or gh counts.
     const end = masked.slice(at).search(/[;&|\n]/)
@@ -91,19 +90,6 @@ export function launcherIn(command: string): string | undefined {
 
 // A statement's text with quotes and expansion marks taken out, where git or gh is found as a program word.
 const callText = (text: string) => text.toLowerCase().replace(/['"`^\\${}()]/g, ' ')
-
-// A shell fed its script through a pipe (`echo 'git commit ...' | bash`) with no script of its own, whose
-// feeding statement names git or gh: the text runs unread.
-function pipedScript(code: string, masked: string, at: number, name: string): boolean {
-  if (!/^(bash|sh|zsh|dash|ksh|fish)$/i.test(name)) return false
-  const before = masked.slice(0, at)
-  if (!/(?:^|[^|])\|[ \t]*$/.test(before)) return false
-  const end = masked.slice(at).search(/[;&|\n]/)
-  if (!/^\S+(?:[ \t]+-[a-z]*)*[ \t]*$/i.test(masked.slice(at, end === -1 ? undefined : at + end))) return false
-  const pipe = before.lastIndexOf('|')
-  const start = Math.max(...[';', '&', '\n', '|'].map(c => masked.lastIndexOf(c, pipe - 1))) + 1
-  return NAMES_CALL.test(callText(code.slice(start, pipe)))
-}
 
 // The curly quotes Windows PowerShell reads as quote marks: no plain reading follows them.
 const SMART_QUOTES = /[‘-„]/

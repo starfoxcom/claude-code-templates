@@ -233,7 +233,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
-  plan.block ??= bypassIn(st, name, args, r)
+  plan.block ??= bypassIn(st, name, args, r, prev)
   for (const what of builtReasons(st, name, args, r)) unreadCall(r, what)
   const moves = repoMoves(st, name, args)
   r.mayRewrite ||= setsRunner(st)

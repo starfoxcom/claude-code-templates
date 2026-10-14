@@ -187,12 +187,13 @@ test('the whole command text of a write is checked for credit, whatever spelling
     // Writes the reading does not see as writes: in backticks, or fed to a shell on stdin.
     `OUT=\`git commit -m '${AI_TRAILER}'\``,
     `bash <<'EOF'\ngit commit -m '${AI_TRAILER}'\nEOF`,
-    `echo "git commit -m '${AI_TRAILER}'" | bash`,
     `URL=\`gh pr create --title t --body '${AI_TRAILER}'\``,
     `X=\`gh api repos/o/r/issues -f body='${AI_TRAILER}'\``,
   ]) {
     expect(verdict(command, true)).toBe('credit')
   }
+  // A git call printed into a shell on stdin is refused outright, its text unread.
+  expect(readCommand(`echo "git commit -m '${AI_TRAILER}'" | bash`, false).block).toContain('run through `bash`')
   // A read-only command is not checked, and paths in a write never read as credit.
   expect(readCommand(`echo '${AI_TRAILER}'`, false).texts).toEqual([])
   expect(
