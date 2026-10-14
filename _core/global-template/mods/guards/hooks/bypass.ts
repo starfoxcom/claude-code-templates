@@ -288,7 +288,7 @@ export function bypassOf(st: Statement, name: string, args: Word[], state: HookS
 }
 
 // Programs whose arguments the reading follows itself: git and gh, the shells (`bash -c`), `eval` and `trap`.
-const FOLLOWED = /^(git|gh|bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|eval|iex|invoke-expression|trap)$/
+const FOLLOWED = /^(git|gh|bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval|iex|invoke-expression|trap)$/
 const SHELL = /^(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd)$/
 // Programs that only print or match their words: a git word among them is data (`echo git commit -n`).
 export const PRINTS = /^(echo|printf|write-output|write-host|grep|egrep|fgrep|rg|select-string|sls|sed)$/

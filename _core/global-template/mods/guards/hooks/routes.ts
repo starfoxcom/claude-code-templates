@@ -10,18 +10,12 @@ import type { Statement, Word } from './statement'
 // A hooks setting through git's environment.
 const HOOKS_ENV = String.raw`\bGIT_CONFIG_(?:PARAMETERS|KEY_\d+)\s*\+?=\s*['"]*[^\s]*(?:core\.hookspath|hooks\.)`
 
+// A hook manager's switch (`HUSKY=0`, `SKIP=`) counts only where it reaches a git call that runs hooks, which
+// the reading judges on its statements, and `callRoute` in text it never parsed: a switch in front of `npm ci`
+// skips no gate, so no text form of it is here.
 const ROUTES: [RegExp, string][] = [
   [new RegExp(String.raw`${HOOKS_ENV}|--config-env[=\s]+(?:core\.hookspath|hooks\.)`, 'i'), HOOK_SKIP],
-  [
-    new RegExp(
-      String.raw`\b(?:LEFTHOOK|HUSKY)\s*\+?=\s*['"]?(?:0|false)\b|\b(?:HUSKY_SKIP_HOOKS|SKIP_SIMPLE_GIT_HOOKS|` +
-        String.raw`LEFTHOOK_EXCLUDE)\b|\b(?:lefthook|husky|pre-commit)\s+uninstall\b`,
-      'i',
-    ),
-    HOOKS_OFF,
-  ],
-  // pre-commit's `SKIP` names the hooks to skip; the name is upper case, so code's `skip = 1` is none.
-  [/(?:^|[\s;&|('"])SKIP\s*\+?=\s*\S/, HOOKS_OFF],
+  [/\b(?:lefthook|husky|pre-commit)\s+uninstall\b/i, HOOKS_OFF],
 ]
 
 /** The first route around the check the text names, or undefined. */
@@ -32,7 +26,10 @@ export function routeIn(text: string): string | undefined {
 // git or gh as a program word anywhere in the text (a launcher's quoted text, a here-doc a shell runs, a
 // Windows path), with quotes taken out.
 // A path names a folder before git (`/usr/bin/git`, `C:\Git\cmd\git.exe`); a pattern's `/git ...` names none.
-const CALL = /(?:^|[\s;&|(`])(?:[\\/]?(?:[\w.~:-]+[\\/])+)?(git|gh)(?:\.exe)?(?=[ \t])/gi
+// The `NAME=value` words typed in front of it are its environment (`HUSKY=0 git commit`).
+const CALL = /(?:^|[\s;&|(`])((?:[A-Za-z_]\w*=\S*[ \t]+)*)(?:[\\/]?(?:[\w.~:-]+[\\/])+)?(git|gh)(?:\.exe)?(?=[ \t])/gi
+
+const wordOf = (text: string): Word => ({ text, dynamic: /[$`]/.test(text), bodies: [] })
 
 /** Each git or gh call the text names, its words up to the end of its statement, checked by the same rules a
  * typed call meets (`bypassOf`): every spelling git or gh accepts for a route is caught, not only the
@@ -42,11 +39,11 @@ export function callRoute(text: string): string | undefined {
   for (const m of plain.matchAll(CALL)) {
     const rest = plain.slice((m.index ?? 0) + m[0].length)
     const end = rest.search(/[;&|\n`)]/)
-    const words = (end === -1 ? rest : rest.slice(0, end)).split(/[ \t]+/).filter(Boolean)
-    const args: Word[] = words.map(w => ({ text: w, dynamic: /[$`]/.test(w), bodies: [] }))
-    const name = (m[1] as string).toLowerCase()
-    const head: Word = { text: name, dynamic: false, bodies: [] }
-    const st: Statement = { words: [head, ...args], heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }
+    const args = (end === -1 ? rest : rest.slice(0, end)).split(/[ \t]+/).filter(Boolean).map(wordOf)
+    const name = (m[2] as string).toLowerCase()
+    const env = (m[1] ?? '').split(/[ \t]+/).filter(Boolean).map(wordOf)
+    const words = [...env, wordOf(name), ...args]
+    const st: Statement = { words, heredocs: [], writes: [], reads: [], pipeIn: false, inner: [] }
     const reason = bypassOf(st, name, args)
     if (reason) return reason
   }

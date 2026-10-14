@@ -19,7 +19,7 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["echo 'git commit --no-verify -m x' | bash", false],
     ['git -c core.hooksPath=$X commit -m x', false],
     // The commit-message form inside a single-quoted string opens no here-doc: the lines after it are code.
-    ["echo 'x \"$(cat <<'EOF'\n'; HUSKY=0 npm x; echo '\nEOF\n)\"'; git commit -m 'fix: y'", false],
+    ["echo 'x \"$(cat <<'EOF'\n'; HUSKY=0 git commit -m z; echo '\nEOF\n)\"'; git commit -m 'fix: y'", false],
     // A program named by a glob, and launchers that run their quoted argument as shell text.
     ["/usr/bin/g[i]t commit -n -m 'x'", false],
     ["/mingw64/bin/g?t commit -n -m 'x'", false],
@@ -202,6 +202,10 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['time make && git commit -F - <<EOF\ndocs: git commit -n is refused\nEOF', false],
     ["awk '/git commit -n/' CHANGELOG.md", false],
     ["perl -ne 'print if /git commit -n/' CHANGELOG.md", false],
+    // A hook manager's switch in front of a program that runs no git hooks.
+    ['HUSKY=0 npm ci && git push', false],
+    ['make SKIP=tests && git commit -m x', false],
+    ['LEFTHOOK=0 npm ci && git commit -m x', false],
   ] as const) {
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
   }
