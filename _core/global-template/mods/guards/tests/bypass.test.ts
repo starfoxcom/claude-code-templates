@@ -708,7 +708,7 @@ test('a word or value that may turn into more options is noted', () => {
   }
   const quoted = inspect('gh pr create -t t --body-file b.md --base "$B"', false).notes
   expect(quoted.filter(n => !n.startsWith('not plain: '))).toEqual([])
-  expect(inspect('ARGS=(--no-verify); git commit -m x "${ARGS[@]}"', false).block).toContain('skipping git hooks')
+  expect(inspect('ARGS=(--no-verify); git commit -m x "${ARGS[@]}"', false).block).toContain('a flag held in a variable')
   // A git option that splits at run time may carry any option before the subcommand: refused.
   for (const command of ["git -c user.name=$N commit -m 'fix: x'", 'git -C $DIR commit -m x']) {
     expect([command, inspect(command, false).unread]).toEqual([command, ['a git option built at run time']])

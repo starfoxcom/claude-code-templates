@@ -29,7 +29,9 @@ export function inspect(command: string, powershell: boolean): Plan {
   // a typed call meets in every command; the route table counts where the reading left a note.
   const scan = scanText(command, plan, why, powershell)
   const noted = plan.notes.length > 0 ? routeIn(withoutPrints(scan)) : undefined
-  const route = callRoute(withoutPrints(scan, true)) ?? noted
+  // Windows PowerShell hands git a word holding `"` broken apart: the git statement's own text is what git gets.
+  const isBroken = why?.startsWith('a word Windows PowerShell passes on changed') ?? false
+  const route = callRoute(withoutPrints(scan, !isBroken)) ?? noted
   // A git or gh call inside a launcher's quoted text runs unread, as one inside `eval` does; a flag word built at run
   // time from a variable the command sets to a flag (`ARGS=(-n); git commit -m x "${ARGS[@]}"`) is unread too.
   const launcher = launcherIn(command)

@@ -186,6 +186,12 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['rg -n -- --no-verify .', false],
     ["rg -e '--no-verify' . && git status", false],
     ['sls -Pattern --no-verify hooks/', true],
+    // A read message, and a read call's search text, in a command that is not plain.
+    ['source x.sh && git commit -F - <<EOF\ndocs: explain --no-verify\nEOF', false],
+    ["time bun test && git commit -m \"$(cat <<'EOF'\nfix: refuse --no-verify\nEOF\n)\"", false],
+    ['npm test && git log --grep "git commit -n"', false],
+    ["npm test && git log -S '--no-verify'", false],
+    ['make && gh issue list --search "git commit --no-verify"', false],
   ] as const) {
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
   }
