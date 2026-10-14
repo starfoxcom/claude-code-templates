@@ -96,20 +96,55 @@ export function launcherIn(command: string): string | undefined {
 /** The text without the statements of programs that only print or match their words (`echo`, `grep`): a git
  * call named there is data. A shell they feed is judged on its own statement (`bypassIn`). */
 export function withoutPrints(text: string, isCallRead = false): string {
-  const masked = text.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
+  const bodies = bodiesIn(text)
+  // Bodies blanked first, so an apostrophe in one opens no string; then the quoted strings.
+  let code = text
+  for (const b of bodies) code = code.slice(0, b.from) + blank(code.slice(b.from, b.to)) + code.slice(b.to)
+  const masked = code.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
   let out = text
   for (const m of masked.matchAll(PROGRAM_WORD)) {
     const word = m[1] as string
     const name = word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, '')
-    // With `isCallRead`, a git or gh statement goes too: the reading checked its own words, and the text
-    // inside them (`git log --grep "git commit -n"`) is its data.
-    if (!PRINTS.test(name) && !(isCallRead && /^(git|gh)$/.test(name))) continue
     const at = (m.index ?? 0) + m[0].length - word.length
+    // A here-doc body line is no statement, whatever word it starts with.
+    if (bodies.some(b => at >= b.from && at < b.to)) continue
+    // With `isCallRead`, a git or gh statement goes too, with a here-doc it is fed (its message): the reading
+    // checked its own words, and the text inside them (`git log --grep "git commit -n"`) is its data.
+    const isCall = isCallRead && /^(git|gh)$/.test(name)
+    if (!PRINTS.test(name) && !isCall) continue
     const end = masked.slice(at).search(/[;&|\n]/)
-    const to = end === -1 ? text.length : at + end
+    const lineEnd = end === -1 ? text.length : at + end
+    const fed = isCall ? bodies.find(b => b.open >= at && b.open < lineEnd) : undefined
+    const to = fed ? fed.to : lineEnd
     out = out.slice(0, at) + ' '.repeat(to - at) + out.slice(to)
   }
   return out
+}
+
+const blank = (text: string) => text.replace(/[^\n]/g, ' ')
+// A quoted string on one line, but a here-doc's quoted delimiter.
+const LINE_QUOTED = /(?<!<<-?[ \t]*)(?:'[^']*'|"(?:[^"\\]|\\.)*")/g
+
+// Each here-doc body in the text, found line by line as `withoutBodies` finds them: where it starts and ends,
+// and where its `<<` stands.
+function bodiesIn(text: string): { open: number; from: number; to: number }[] {
+  const found: { open: number; from: number; to: number }[] = []
+  const lines = text.split('\n')
+  const starts = lines.map((_, i) => lines.slice(0, i).reduce((n, l) => n + l.length + 1, 0))
+  for (let i = 0; i < lines.length; i++) {
+    // Quoted text blanked to the same length, so a `<<` in a message opens nothing and positions hold.
+    const bare = (lines[i] as string).replace(LINE_QUOTED, s => 'x'.repeat(s.length))
+    const doc = ANY_HEREDOC.exec(bare)
+    if (!doc) continue
+    const end = lines.findIndex((l, j) => j > i && l.replace(/^\t+/, '') === doc[2])
+    const stop = end === -1 ? lines.length : end
+    const from = starts[i + 1] ?? text.length
+    const to = Math.max(from, (starts[stop] ?? text.length + 1) - 1)
+    found.push({ open: (starts[i] ?? 0) + doc.index, from, to })
+    if (end === -1) break
+    i = end
+  }
+  return found
 }
 
 // A statement's text with quotes and expansion marks taken out, where git or gh is found as a program word.

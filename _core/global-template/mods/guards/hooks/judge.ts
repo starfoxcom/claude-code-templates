@@ -50,8 +50,9 @@ const MAY_HOLD_FLAG = /may be a flag|may carry more options|a word built at run 
 // A variable the command sets to a flag: `X=-n`, `X=$'-n'`, `X=(-C HEAD)`, `printf -v X -- -n`, `for X in -n`,
 // `set -- -n`, `mapfile -t X <<< -n`, a default (`${X:--n}`, `${X:=-n}`) or an element (`A[0]=-n`).
 const FLAG_HELD = new RegExp(
-  // PowerShell: `$a = '-n'`, `$a = @('-n')`, `$a += '-n','-m'`.
+  // PowerShell: `$a = '-n'`, `$a = @('-n')`, `$a += '-n','-m'`, `Set-Variable a '-n'`, `sv a -Value '-n'`.
   String.raw`\$\w+\s*\+?=\s*@?\(?\s*['"]?-|` +
+  String.raw`\b(?:[Ss]et-[Vv]ariable|[Nn]ew-[Vv]ariable|sv|nv)\b[^;&|\n]*?\s@?\(?['"]-|` +
   String.raw`\b\w+(?:\[[^\]]*\])?\+?=(?:\((?:[^)]*?[\s'"])?-|\$?['"]?-)|\$\{\w+:?[-=+?]['"]?-|` +
     String.raw`\b(?:printf\s+-v|for\s+\w+\s+in|set\s+--|(?:mapfile|readarray|read)\b[^;&|\n]*<<<)` +
     String.raw`[^;&|\n]*?[\s<]\$?['"]?-`,

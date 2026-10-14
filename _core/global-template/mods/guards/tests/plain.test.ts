@@ -132,6 +132,12 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["$p = Start-Process C:\\Git\\cmd\\git.exe -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$a = @('-n'); git commit -m 'x' $a", true],
     ["$a = '-n','-m','x'; git commit $a", true],
+    ["Set-Variable a '-n'; git commit -m x $a", true],
+    ["sv a -Value '-n'; git commit -m x $a", true],
+    // A launcher fed its script by a here-doc.
+    ["ssh host <<'EOF'\ngit commit -n -m x\nEOF", false],
+    ["cat <<'EOF' | ssh host\ngit commit --no-veri -m x\nEOF", false],
+    ["ssh host bash <<'EOF'\ngit commit -ac HEAD\nEOF", false],
     // A PowerShell launcher on the right of an assignment.
     ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$out = ssh host 'git commit --no-veri -m x'", true],
@@ -192,6 +198,10 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['npm test && git log --grep "git commit -n"', false],
     ["npm test && git log -S '--no-verify'", false],
     ['make && gh issue list --search "git commit --no-verify"', false],
+    ["source x.sh && git commit -F - <<'EOF'\ndocs(guards): say why git commit -n is refused\nEOF", false],
+    ['time make && git commit -F - <<EOF\ndocs: git commit -n is refused\nEOF', false],
+    ["awk '/git commit -n/' CHANGELOG.md", false],
+    ["perl -ne 'print if /git commit -n/' CHANGELOG.md", false],
   ] as const) {
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
   }

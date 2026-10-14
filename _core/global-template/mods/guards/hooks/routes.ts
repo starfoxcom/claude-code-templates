@@ -31,7 +31,8 @@ export function routeIn(text: string): string | undefined {
 
 // git or gh as a program word anywhere in the text (a launcher's quoted text, a here-doc a shell runs, a
 // Windows path), with quotes taken out.
-const CALL = /(?:^|[\s;&|(`])(?:[\w.~:-]*[\\/])?(git|gh)(?:\.exe)?(?=[ \t])/gi
+// A path names a folder before git (`/usr/bin/git`, `C:\Git\cmd\git.exe`); a pattern's `/git ...` names none.
+const CALL = /(?:^|[\s;&|(`])(?:[\\/]?(?:[\w.~:-]+[\\/])+)?(git|gh)(?:\.exe)?(?=[ \t])/gi
 
 /** Each git or gh call the text names, its words up to the end of its statement, checked by the same rules a
  * typed call meets (`bypassOf`): every spelling git or gh accepts for a route is caught, not only the
