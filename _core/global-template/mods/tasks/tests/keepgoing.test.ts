@@ -2,7 +2,14 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { hasEngineWake, hasPendingWake, isPauseHolding, keepGoingText, workable } from '../hooks/keepgoing'
+import {
+  hasEngineWake,
+  hasPendingWake,
+  isPauseHolding,
+  keepGoingText,
+  PUSH_RESTART_MS,
+  workable,
+} from '../hooks/keepgoing'
 import type { Mirror, MirrorTask } from '../hooks/register'
 
 // Keep going: a turn that ends with work nobody waits for gets a prompt to carry on.
@@ -45,6 +52,18 @@ test('a CI watch still running, or settled and not yet sent, is a pending wake',
   expect(hasPendingWake(JSON.stringify({ watches: [{ outcome: 'passed' }] }))).toBe(false)
   expect(hasPendingWake(JSON.stringify({ watches: [{}] }))).toBe(true)
   expect(hasPendingWake(JSON.stringify({ watches: [{ outcome: 'failed', wakePending: true }] }))).toBe(true)
+})
+
+// Right after a push GitHub can still name the old head: ci-watch stamps the settled watch and restarts it
+// at its next poll. Until then the push is a pending wake (PR #304, 2026-10-14: two false prompts).
+test('a settled watch pushed to again a moment ago is a pending wake; an old push is not', () => {
+  const state = (pushedAt: number) => JSON.stringify({ watches: [{ outcome: 'failed', settledAt: 1_000, pushedAt }] })
+  const NOW = 1_000_000
+  expect(hasPendingWake(state(NOW - 3_000), NOW)).toBe(true)
+  expect(hasPendingWake(state(NOW - PUSH_RESTART_MS), NOW)).toBe(true)
+  // The push that settled it, or one long enough ago that the watch would have restarted by now.
+  expect(hasPendingWake(state(500), NOW)).toBe(false)
+  expect(hasPendingWake(state(NOW - PUSH_RESTART_MS - 1), NOW)).toBe(false)
 })
 
 test('a plan-limit pause holds the prompt back until its wake: active, or cancelled by the person', () => {

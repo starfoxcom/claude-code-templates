@@ -615,7 +615,8 @@ async function keepGoing($: EngineInterface): Promise<void> {
   const mirror = await mirrorOf($)
   const tasks = workable(mirror)
   if (tasks.length === 0 || live.hasEngineWake) return
-  if (hasPendingWake(await peerFile($, 'ci-watch', `${await $.session.id()}.json`))) return
+  const ciWatch = await peerFile($, 'ci-watch', `${await $.session.id()}.json`)
+  if (hasPendingWake(ciWatch, await $.clock.now())) return
   if (isPauseHolding(await peerFile($, 'usage-guard', 'pause.json'), await $.clock.now())) return
   const isIdle = live.idlePrompts > 0 && live.promptedAt === mirror.changedAt
   if (isIdle && live.idlePrompts >= MAX_IDLE_PROMPTS) return
