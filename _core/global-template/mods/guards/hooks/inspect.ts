@@ -17,7 +17,7 @@
 // - another program's output used as a message (`git log --format=%B | git commit -F -`): unread, refused;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
-import { bypassOf, EVAL, functionsOf, hooksOffReason } from './bypass'
+import { bypassIn, EVAL, functionsOf, hooksOffReason } from './bypass'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import {
@@ -233,7 +233,7 @@ function readStatement(typed: Statement, prev: Statement | undefined, r: Reading
   }
   const { name, args } = programOf(st)
   // The routes around the check, refused outright: history rewrites, skipped hooks and the like.
-  plan.block ??= bypassOf(st, name, args, r)
+  plan.block ??= bypassIn(st, name, args, r)
   for (const what of builtReasons(st, name, args, r)) unreadCall(r, what)
   const moves = repoMoves(st, name, args)
   r.mayRewrite ||= setsRunner(st)

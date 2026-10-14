@@ -6,6 +6,7 @@
 // reading misses is noted; a route around the check named in it is still refused (routes.ts). Pure, no
 // engine access.
 
+import { launched } from './bypass'
 import { readCommand } from './inspect'
 import type { Plan } from './plan'
 import { launcherIn, namesWrite, notPlain, runsShellText, withoutBodies } from './plain'
@@ -27,7 +28,7 @@ export function inspect(command: string, powershell: boolean): Plan {
   // A git or gh call inside a launcher's quoted text runs unread, as one inside `eval` does; a flag word built at run
   // time from a variable the command sets to a flag (`ARGS=(-n); git commit -m x "${ARGS[@]}"`) is unread too.
   const launcher = launcherIn(command)
-  const isFlagHeld = plan.notes.some(n => /may be a flag|may carry more options/.test(n)) && FLAG_HELD.test(command)
+  const isFlagHeld = plan.notes.some(n => MAY_HOLD_FLAG.test(n)) && FLAG_HELD.test(command)
   const reason = route ?? (launcher ? launched(launcher) : isFlagHeld ? FLAG_IN_VARIABLE : undefined)
   if (reason) {
     plan.isWrite = true
@@ -36,10 +37,17 @@ export function inspect(command: string, powershell: boolean): Plan {
   return plan
 }
 
-const FLAG_HELD = /\b\w+\+?=(?:\((?:[^)]*?[\s'"])?-|['"]?-)/
+// The notes a word that may be a flag leaves: one `walk` or `take` could not place, or one in a call it never
+// walks (`git rebase "${ARGS[@]}" main`).
+const MAY_HOLD_FLAG = /may be a flag|may carry more options|a word built at run time/
+// A variable the command sets to a flag: `X=-n`, `X=$'-n'`, `X=(-C HEAD)`, `printf -v X -- -n`, `for X in -n`,
+// `set -- -n`, `mapfile -t X <<< -n`.
+const FLAG_HELD = new RegExp(
+  String.raw`\b\w+\+?=(?:\((?:[^)]*?[\s'"])?-|\$?['"]?-)|` +
+    String.raw`\b(?:printf\s+-v|for\s+\w+\s+in|set\s+--|(?:mapfile|readarray|read)\b[^;&|\n]*<<<)` +
+    String.raw`[^;&|\n]*?[\s<]\$?['"]?-`,
+)
 const FLAG_IN_VARIABLE = 'a flag held in a variable cannot be read. Type the flags of the git or gh call out.'
-const launched = (name: string) =>
-  `a git or gh call run through \`${name}\` cannot be read. Run the git or gh call directly, as its own command.`
 
 // The command's text, quoted text included, less the messages the reading read and, unless a program in it
 // runs shell text, the bodies of quoted here-docs. Windows PowerShell breaks a word holding `"` apart

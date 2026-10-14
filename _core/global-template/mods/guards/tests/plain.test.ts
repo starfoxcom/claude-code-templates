@@ -61,9 +61,29 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["flock /tmp/l -c 'HUSKY=$H git commit -m x'", false],
     ["saps git 'commit -n -m x'", true],
     ["Start-Process git -ArgumentList 'commit -n -m x'", true],
-    // A flag held in a variable the command sets.
+    // A git call another program runs from its arguments is checked as one typed on its own.
+    ['find . -name "*.md" -exec git commit --no-veri -m x \\;', false],
+    ['find . -execdir git commit --trail "a: b" -m x \\;', false],
+    ['find . -ok git commit -ac HEAD \\;', false],
+    ['find . -exec git config set core.hooksPath /x \\;', false],
+    ['unbuffer git commit --no-veri -m x', false],
+    ['ionice -c3 git commit --no-veri -m x', false],
+    ['chronic git commit -ac HEAD', false],
+    ['uv run git commit --trail x -m y', false],
+    ['taskset 1 /usr/bin/git commit --reu HEAD', false],
+    // A shell run by another program runs its text unread; an alias runs its value.
+    ["find . -exec sh -c 'git commit --no-veri -m x' \\;", false],
+    ["unbuffer bash -c 'git commit --no-veri -m x'", false],
+    ['alias g="git commit --no-veri -m x"; g', false],
+    // A flag held in a variable the command sets, in any spelling that sets it.
     ['ARGS=(-n); git commit -m x "${ARGS[@]}"', false],
     ['ARGS=(-C HEAD~1); git commit "${ARGS[@]}"', false],
+    ['ARGS=(--exec make); git rebase "${ARGS[@]}" main', false],
+    ['ARGS=(-x make); git rebase "${ARGS[@]}" main', false],
+    ['printf -v X -- -n; git commit -m x $X', false],
+    ['for X in -n; do git commit -m x $X; done', false],
+    ['set -- -n; git commit -m x "$@"', false],
+    ['mapfile -t A <<< "-n"; git commit -m x "${A[@]}"', false],
     // A skip at the end of the quoted text, and one beside a message that is a fragment of the flag.
     ["flock /tmp/l -c 'git commit -m x -n'", false],
     ['ssh host "git commit -m x -n"', false],
@@ -99,6 +119,11 @@ test('a read that names a route in a command that is not plain passes', () => {
     'git config --get core.hooksPath; ls "$D"',
     'sh "$(git config --get core.hooksPath)/commit-msg" m.txt',
     'git config --show-origin --get core.hooksPath; ls .git/hooks | head; which lefthook',
+    // A git call another program runs that names no route, and a git word that is only data.
+    'find . -name "*.md" -exec git add {} + && git commit -m x',
+    'find . -path ./.git -prune -o -name "*.ts" -print; git commit -am x',
+    'grep -rn git . -n; git commit -m x',
+    'uv run git status; git commit -m x',
   ]) {
     const plan = inspect(command, false)
     expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])

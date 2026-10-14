@@ -67,7 +67,8 @@ function hidesProgram(code: string, powershell: boolean): boolean {
 // Programs that run their quoted argument as a command the reading does not follow (`flock -c '...'`,
 // `ssh host '...'`, `Start-Process git -ArgumentList '...'`), `env -S`, and a program word Bash builds from a
 // brace expansion (`{gi,commi}t` runs `git commit`).
-const LAUNCHERS = /^(flock|watch|parallel|script|ssh|su|setsid|stdbuf|doas|runas|wsl|fish|start-process|saps|start)$/i
+const LAUNCHERS =
+  /^(flock|watch|parallel|script|ssh|su|setsid|stdbuf|doas|runas|wsl|fish|start-process|saps|start|alias)$/i
 const SPLIT_ENV = /(?:^|[;&|\n({])[ \t]*env(?:[ \t]+-\S+)*?[ \t]+(?:-S|--split-string)\b/
 
 /** The launcher or built program word in the command whose text the reading cannot follow, or undefined. */

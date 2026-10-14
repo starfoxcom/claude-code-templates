@@ -22,6 +22,8 @@ export const RUNS_COMMAND =
 export const HOOKS_OFF =
   "switching the repo's git hooks off (lefthook, husky, pre-commit or simple-git-hooks) is not allowed: they " +
   'hold its commit gates.'
+export const launched = (name: string) =>
+  `a git or gh call run through \`${name}\` cannot be read. Run the git or gh call directly, as its own command.`
 
 // git's global options that take the next word as their value; the subcommand comes after them.
 const GIT_VALUE_OPTIONS = new Set([
@@ -283,4 +285,25 @@ export function bypassOf(st: Statement, name: string, args: Word[], state: HookS
   if (/^git-filter-(repo|branch)$/.test(name)) return HISTORY_REWRITE
   const own = name === 'git' ? gitReason(args) : name === 'gh' ? ghReason(args) : undefined
   return envReason(st, name, args, state) ?? own
+}
+
+// Programs whose arguments the reading follows itself: git and gh, the shells (`bash -c`), `eval` and `trap`.
+const FOLLOWED = /^(git|gh|bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd|eval|iex|invoke-expression|trap)$/
+const SHELL = /^(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd)$/
+const baseName = (text: string) => (text.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
+
+/**
+ * As `bypassOf`, and for a git or gh call another program runs from its arguments (`find . -exec git commit
+ * ...`, `unbuffer git ...`, `uv run git ...`): that call is checked as one typed on its own. A shell run that
+ * way (`find . -exec sh -c '...'`) runs its text unread, so a git or gh call in it is refused, as `eval` is.
+ */
+export function bypassIn(st: Statement, name: string, args: Word[], state: HookState = {}): string | undefined {
+  const own = bypassOf(st, name, args, state)
+  if (own || FOLLOWED.test(name)) return own
+  const at = args.findIndex(a => !a.dynamic && (/^(git|gh)$/.test(baseName(a.text)) || SHELL.test(baseName(a.text))))
+  if (at === -1) return undefined
+  const inner = baseName(args[at]?.text ?? '')
+  const rest = args.slice(at + 1)
+  if (!SHELL.test(inner)) return bypassOf(st, inner, rest, state)
+  return rest.some(a => /\b(git|gh)\b/i.test(a.text)) ? launched(name) : undefined
 }
