@@ -70,6 +70,24 @@ test('a run with a missing step gets one follow-up naming it', async ($, on) => 
   expect(seen.prompts.length).toBe(1)
 })
 
+test("a subagent's turn ending mid-run is not the run's end", async ($, on) => {
+  const seen = world(on)
+  await runSkill($)
+  await shell($, 'python tools/board/board_check.py')
+  await $.turn.complete({
+    turnId: 's',
+    agentId: 'a1',
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    reason: 'done',
+  } as never)
+  expect(seen.prompts).toEqual([])
+  await shell($, 'git commit -q -F msg.txt')
+  await endTurn($)
+  expect(seen.prompts).toEqual([])
+})
+
 test('a skill with no contract is left alone', async ($, on) => {
   const seen = world(on)
   await $.skill.prompt({ skill: 'find', text: '' })

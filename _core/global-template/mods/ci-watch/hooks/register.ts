@@ -2,18 +2,24 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
-import { isPushOrPr, mergedNumber, targetFolder } from './command'
+import { isPush, isPushOrPr, mergedNumber, pushesBranch, targetFolder } from './command'
 import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
+import { FILE_WRITERS, namesRounds, recordRound, redStreak, refusalText, ROUND_LIMIT, ROUNDS_FILE } from './rounds'
+import { ROUNDS_OWN, writesRounds } from './rounds'
+import type { PrRounds } from './rounds'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
+import { FAILED, isSameRun, PENDING, reconcile, settle } from './settle'
 import { keyOf, phoneText, registerView, STOP_PREFIX, summary } from './view'
 
-
 const PR_URL = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/
-const PENDING = new Set(['pending'])
-const FAILED = new Set(['fail', 'cancel'])
-const SETTLE_POLLS = 2
-const KEEP_SETTLED_MS = 60 * 60_000
-const HINT = '[help | settings | set | stop | phone]'
+// For an hour after this session pushed to a PR (or asked to watch it), a new head on it is the session's own
+// and wakes it; later, it is someone else's push and only updates the row. Past that hour a settled watch
+// asks GitHub about its PR every RECHECK_MS instead of every poll.
+const OWN_HEAD_MS = 60 * 60_000
+const RECHECK_MS = 10 * 60_000
+/** Whether a head that shows now was pushed by someone else: the session's last push is past the hour. */
+const isForeign = (watch: Watch, now: number) => now - (watch.pushedAt ?? watch.startedAt) >= OWN_HEAD_MS
+const HINT = '[help | settings | set | stop | phone | rounds]'
 export const HELP = [
   "/ci-watch: watches a PR's checks and wakes the session once when they settle.",
   '  /ci-watch           the watched PRs and their checks',
@@ -21,6 +27,9 @@ export const HELP = [
   '  /ci-watch settings  open the settings pane',
   '  /ci-watch set       change a setting: set <name> <value>; alone, list them',
   '  /ci-watch phone     the same as text, for phone chats',
+  `  /ci-watch rounds    the fix rounds in a row without green checks on this branch's PR (or rounds <pr>,`,
+  `                      a number or owner/name#N); pushes are refused at ${ROUND_LIMIT}, until you type:`,
+  '                      rounds reset <pr>',
   '  /ci-watch help      this list',
 ].join('\n')
 
@@ -28,6 +37,8 @@ const live = {
   pollMs: 30_000,
   timeoutMs: 60 * 60_000,
   watches: [] as Watch[],
+  /** When each long-settled watch (by id) last asked GitHub about its PR: memory only. */
+  rechecked: new Map<string, number>(),
   /** The load's one start: claim, sweep, load, poll. Every hook awaits it, so none acts mid-claim. */
   started: undefined as Promise<void> | undefined,
   /** The last save failed: memory holds watches the file may lack. */
@@ -36,52 +47,6 @@ const live = {
   generation: 0,
   /** Saved with the watches: a reload mid-turn loads it, since that turn started in the old module. */
   isTurnRunning: false,
-}
-
-// The poll's results laid over the watches as they are now: a watch started meanwhile is kept, one
-// stopped or dropped meanwhile stays gone. A pending wake is memory's: one sent meanwhile stays sent. So is
-// an incident's note, while the watch is still unsettled on the same head (the poll drops it otherwise).
-// The polled copy itself is kept whenever nothing differs: the poll finds its settled watches by identity.
-function reconcile(current: Watch[], polled: Watch[]): Watch[] {
-  const same = (a: Watch, b: Watch) =>
-    a.id !== undefined ? a.id === b.id : b.id === undefined && a.repo === b.repo && a.number === b.number
-  return current.map(w => {
-    const p = polled.find(p => same(p, w))
-    if (!p) return w
-    const isNoteMemorys = !p.outcome && p.headSha === w.headSha
-    const incidentPending = isNoteMemorys ? w.incidentPending : p.incidentPending
-    // A note made meanwhile (another poll of this load noted and sent it) is kept, or it would be made again.
-    const incident = isNoteMemorys ? (w.incident ?? p.incident) : p.incident
-    const isKept =
-      Boolean(p.wakePending) === Boolean(w.wakePending) &&
-      Boolean(p.incidentPending) === Boolean(incidentPending) &&
-      p.incident === incident
-    return isKept ? p : { ...p, wakePending: w.wakePending, incidentPending, incident }
-  })
-}
-
-export function settle(
-  watch: Watch,
-  checks: Record<string, string>,
-  now: number,
-  timeoutMs: number,
-  quietMs: number,
-): Watch {
-  const names = Object.keys(checks)
-  const isQuiet = names.length > 0 && names.every(name => !PENDING.has(checks[name] ?? ''))
-  const stablePolls = isQuiet ? watch.stablePolls + 1 : 0
-  const quietSince = isQuiet ? (watch.quietSince ?? now) : undefined
-  const next: Watch = { ...watch, checks, stablePolls, quietSince }
-  // Nothing wakes the session while any check or workflow still runs: a fix pushed mid-run restarts the
-  // rest. The checks must stay quiet for two polls a full poll interval apart: right after a push GitHub
-  // can still answer with the old commit's results, and a check can go back to pending seconds after it
-  // finished (a review that escalates to a deeper one). Instances left by a hot reload poll seconds apart.
-  const hasFailed = names.some(name => FAILED.has(checks[name] ?? ''))
-  const isConfirmed = stablePolls >= SETTLE_POLLS && now - (quietSince ?? now) >= quietMs
-  if (isQuiet && isConfirmed)
-    return { ...next, outcome: hasFailed ? 'failed' : 'passed', settledAt: now }
-  if (now - watch.startedAt > timeoutMs) return { ...next, outcome: 'timeout', settledAt: now }
-  return next
 }
 
 // How long ago the checks finished, so a late wake shows its delay.
@@ -266,18 +231,27 @@ async function gh($: EngineInterface, args: readonly string[], cwd?: string): Pr
   return stdout.trim()
 }
 
+// The branch's PR, or the PR `number` names, in the repo of the folder.
+// `inRepo` (owner/name) looks the PR up in that repo instead of the folder's.
 async function prOfBranch(
   $: EngineInterface,
   cwd?: string,
-): Promise<{ repo: string; number: number; headSha: string } | undefined> {
+  number?: string,
+  inRepo?: string,
+): Promise<{ repo: string; number: number; headSha: string; state?: string; branch?: string } | undefined> {
   try {
-    const view = JSON.parse(await gh($, ['pr', 'view', '--json', 'number,url,headRefOid'], cwd)) as {
+    const where = [...(number ? [number] : []), ...(inRepo ? ['--repo', inRepo] : [])]
+    const args = ['pr', 'view', ...where, '--json', 'number,url,headRefOid,state,headRefName']
+    const view = JSON.parse(await gh($, args, cwd)) as {
       number: number
       url: string
       headRefOid: string
+      state?: string
+      headRefName?: string
     }
     const repo = PR_URL.exec(view.url)?.[1]
-    return repo ? { repo, number: view.number, headSha: view.headRefOid } : undefined
+    const found = { repo, number: view.number, headSha: view.headRefOid, state: view.state, branch: view.headRefName }
+    return repo ? { ...found, repo } : undefined
   } catch {
     return undefined
   }
@@ -301,6 +275,98 @@ async function headOf($: EngineInterface, repo: string, number: number): Promise
   }
 }
 
+// The fix-round limit (rounds.ts). Each PR's rounds live beside the session files, shared by every session.
+async function roundsPath($: EngineInterface): Promise<string> {
+  const path = await statePath($)
+  return `${path.slice(0, path.lastIndexOf('/'))}/${ROUNDS_FILE}`
+}
+
+async function readRounds($: EngineInterface): Promise<Record<string, PrRounds>> {
+  const all = await $.fs.read(await roundsPath($)).then(text => JSON.parse(String(text))).catch(() => undefined)
+  return all && typeof all === 'object' ? (all as Record<string, PrRounds>) : {}
+}
+
+// The PR's rounds changed by `change`, applied to the file as read right before the write, with nothing
+// awaited between the two: a reset another session wrote meanwhile is the state the change starts from.
+async function updateRounds($: EngineInterface, key: string, change: (pr?: PrRounds) => PrRounds) {
+  const path = await roundsPath($)
+  await ensureDir($, path.slice(0, path.lastIndexOf('/')))
+  const all = await readRounds($)
+  await $.fs.write(path, JSON.stringify({ ...all, [key]: change(all[key]) }))
+}
+
+// Each watch that settled on a pushed head is one round: red when a check failed. A watch that ran out of
+// time says nothing about the checks and is no round. A failed write leaves the count as it was.
+async function recordRounds($: EngineInterface, settled: readonly Watch[]): Promise<void> {
+  for (const w of settled) {
+    // A silent watch follows a head someone else pushed: no round of this session's.
+    if (w.isSilent || (w.outcome !== 'failed' && w.outcome !== 'passed')) continue
+    const red = w.outcome === 'failed'
+    await updateRounds($, `${w.repo}#${w.number}`, pr => recordRound(pr, w.headSha, red)).catch(() => undefined)
+  }
+}
+
+const redRoundsOf = async ($: EngineInterface, pr: { repo: string; number: number }) =>
+  redStreak((await readRounds($))[`${pr.repo}#${pr.number}`])
+
+// A push to a PR past the limit: why it is refused. Only the open PR of the folder the push runs in, and
+// only a push that updates that PR's branch; a PR GitHub cannot be asked about is not refused.
+async function roundRefusal($: EngineInterface, command: string, isPowerShell: boolean) {
+  const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
+  const pr = await prOfBranch($, folder)
+  if (!pr || pr.state !== 'OPEN' || !pr.branch || !pushesBranch(command, pr.branch, isPowerShell)) return undefined
+  const red = await redRoundsOf($, pr)
+  return red >= ROUND_LIMIT ? `BLOCKED (ci-watch): ${refusalText(`${pr.repo}#${pr.number}`, red)}` : undefined
+}
+
+// After a `gh pr merge` (`merged`: its PR number, 0 for the branch's PR, so every finished watch is a
+// candidate). A watch is dropped only once GitHub says its PR is merged or closed: `--auto` only queues the
+// merge, and a refused merge leaves the PR open, and either way the watch still has to wake the session.
+async function forgetMerged($: EngineInterface, merged: number): Promise<void> {
+  const candidates = live.watches.filter(w => (merged ? w.number === merged : w.outcome))
+  const gone: Watch[] = []
+  for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
+  if (gone.length === 0) return
+  live.watches = live.watches.filter(w => !gone.some(g => isSameRun(g, w)))
+  live.generation++
+  await save($)
+}
+
+// After a push or `gh pr create`: `gh pr create` prints the new PR's URL; otherwise ask about the branch in
+// the folder the command ran in.
+async function watchPushed($: EngineInterface, command: string, isPowerShell: boolean, output: unknown) {
+  const created = PR_URL.exec(JSON.stringify(output ?? ''))
+  if (created) {
+    const [, repo, number] = created
+    await startWatch($, repo!, Number(number), await headOf($, repo!, Number(number)))
+    return
+  }
+  const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
+  const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
+  if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
+}
+
+// `/ci-watch rounds [reset] [<pr>]`, the PR as a number in this folder's repo or as `owner/name#N` in any
+// (the key a refusal names: a push into another folder may be another repo's PR). A reset counts only when
+// the user typed it (at the prompt or from the phone): a command a plugin or the session runs never clears
+// the limit.
+async function roundsCommand($: EngineInterface, args: string, origin: { kind: string }): Promise<string> {
+  const match = /^rounds(\s+reset)?(?:\s+(?:([\w.-]+\/[\w.-]+)#|#)?(\d+))?\s*$/.exec(args)
+  if (!match) return HELP
+  const [, reset, repo, number] = match
+  const pr = await prOfBranch($, undefined, number, repo)
+  if (!pr && number) return repo ? `No PR ${repo}#${number}.` : `No PR #${number} in this folder's repo.`
+  if (!pr) return "This folder's branch has no PR."
+  const key = `${pr.repo}#${pr.number}`
+  if (!reset) {
+    const red = await redRoundsOf($, pr)
+    return `${key}: ${red} fix round(s) in a row without every check green; pushes are refused at ${ROUND_LIMIT}.`
+  }
+  if (origin.kind !== 'composer' && origin.kind !== 'bridge') return 'Only the user resets the fix-round count.'
+  await updateRounds($, key, () => ({ rounds: [] }))
+  return `Reset the fix-round count of ${key}: the next round counts from zero.`
+}
+
 // A push that moves no commit (tags, "Everything up-to-date") keeps the watch on that head, settled or
 // not, so it wakes the session once. `isAsked`: the watch tool, which starts over on request.
 async function startWatch(
@@ -310,22 +376,36 @@ async function startWatch(
   headSha: string,
   isAsked = false,
 ): Promise<Watch> {
-  const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
-  if (same && !isAsked) return same
   const startedAt = await $.clock.now()
+  // Found after the last wait and replaced in the same step: a poll that lands during a wait swaps the
+  // watch's object, so a match taken before it would stamp a copy no longer listed.
+  const same = live.watches.find(w => w.repo === repo && w.number === number && w.headSha === headSha)
+  if (same && !isAsked) {
+    // GitHub may not name the pushed commit yet: the head that shows within the hour is this session's.
+    const pushed = { ...same, pushedAt: startedAt, isSilent: undefined }
+    live.watches = live.watches.map(w => (w === same ? pushed : w))
+    live.generation++
+    await save($)
+    return pushed
+  }
   const id = `${startedAt}-${Math.random().toString(36).slice(2)}`
-  const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id }
+  const fresh: Watch = { repo, number, headSha, startedAt, checks: {}, stablePolls: 0, id, pushedAt: startedAt }
   live.watches = [...live.watches.filter(w => !(w.repo === repo && w.number === number)), fresh]
   live.generation++
   await save($)
   return fresh
 }
 
-// A settled watch is kept an hour so a second instance does not wake for it again. A merge made outside
-// this session (the web page) drops it. A head that moved restarts it: right after a push GitHub can
-// still name the old commit, so the push found the settled watch, and its new commit is caught here.
+// A settled watch stays on the row until its PR is merged or closed, here or outside this session (the web
+// page), or the user stops it: a PR that is still open is unfinished work, red or green. A head that moved
+// restarts it: right after a push GitHub can still name the old commit, so the push found the settled
+// watch, and its new commit is caught here. Past OWN_HEAD_MS the new head is someone else's push: the
+// restarted watch keeps the row current and wakes no session.
 async function recheckSettled($: EngineInterface, watch: Watch, now: number): Promise<Watch | undefined> {
-  if (now - (watch.settledAt ?? now) >= KEEP_SETTLED_MS) return undefined
+  const isOwn = !isForeign(watch, now)
+  const key = watch.id ?? `${watch.repo}#${watch.number}`
+  if (!isOwn && now - (live.rechecked.get(key) ?? -Infinity) < RECHECK_MS) return watch
+  if (!isOwn) live.rechecked.set(key, now)
   let view: { state?: string; headRefOid?: string } = {}
   try {
     view = JSON.parse(
@@ -338,7 +418,9 @@ async function recheckSettled($: EngineInterface, watch: Watch, now: number): Pr
   const head = String(view.headRefOid ?? '')
   if (!head || head === watch.headSha) return watch
   const id = `${now}-${Math.random().toString(36).slice(2)}`
-  return { repo: watch.repo, number: watch.number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
+  const { repo, number } = watch
+  const fresh: Watch = { repo, number, headSha: head, startedAt: now, checks: {}, stablePolls: 0, id }
+  return { ...fresh, pushedAt: watch.pushedAt ?? watch.startedAt, ...(isOwn ? {} : { isSilent: true }) }
 }
 
 // GitHub's status, read at most every few minutes and only while some watch waits long past a normal run.
@@ -360,7 +442,8 @@ async function noteIncidents($: EngineInterface, now: number): Promise<boolean> 
     const buckets = Object.values(w.checks)
     return buckets.length === 0 || buckets.some(bucket => PENDING.has(bucket))
   }
-  const isWaiting = (w: Watch) => !w.outcome && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
+  const isWaiting = (w: Watch) =>
+    !w.outcome && !w.isSilent && !w.incident && now - w.startedAt > STUCK_MS && isPending(w)
   if (!live.watches.some(isWaiting)) return false
   const incident = await readIncident($, now)
   if (!incident) return false
@@ -404,12 +487,16 @@ async function poll($: EngineInterface): Promise<void> {
         ? {
             ...current,
             headSha: head,
+            // Pinned as recheckSettled pins it: a watch saved before pushes were stamped keeps its push's
+            // time, never the restart's, so a later head is judged from the same push.
+            pushedAt: current.pushedAt ?? current.startedAt,
             startedAt: now,
             stablePolls: 0,
             checks: {},
             quietSince: undefined,
             incident: undefined,
             incidentPending: undefined,
+            isSilent: isForeign(current, now) || undefined,
           }
         : current
     let checks: Record<string, string> | undefined
@@ -436,9 +523,12 @@ async function poll($: EngineInterface): Promise<void> {
     changed = true
     if (next.outcome) settled.push(next)
   }
+  await recordRounds($, settled)
   // A push, a stop or a merge while this poll waited on gh changed the list: lay the results over it.
   live.watches = live.generation === generation ? kept : reconcile(live.watches, kept)
-  const toWake = settled.filter(w => live.watches.includes(w))
+  // Found by watch and head, not identity: a push made meanwhile is laid onto the polled copy, and the
+  // watch as it is now decides whether it is silent. One stopped or restarted meanwhile is not found.
+  const toWake = live.watches.filter(w => w.outcome && !w.isSilent && settled.some(s => isSameRun(s, w)))
   // GitHub's status is read before the retirement check: the read can take seconds, and a load retired
   // meanwhile must not save over the newer one's file afterwards.
   const isIncidentNoted = await noteIncidents($, now)
@@ -450,8 +540,10 @@ async function poll($: EngineInterface): Promise<void> {
   // instance's record is written before its prompt goes out.
   const recorded = toWake.length > 0 ? await readSaved($) : undefined
   // Each wake is marked pending in the same save that records its outcome; sendHeld sends it.
-  const due = new Set(toWake.filter(w => !isRecorded(recorded, w) && claimWake(w)))
-  if (due.size > 0) live.watches = live.watches.map(w => (due.has(w) ? { ...w, wakePending: true } : w))
+  const due = toWake.filter(w => !isRecorded(recorded, w) && claimWake(w))
+  // Marked by watch and head too: a same-head push made during the reads above replaced the object.
+  const isDue = (w: Watch) => due.some(d => isSameRun(d, w))
+  if (due.length > 0) live.watches = live.watches.map(w => (isDue(w) ? { ...w, wakePending: true } : w))
   if (changed || isIncidentNoted || live.isUnsaved) await save($)
   if (!live.isTurnRunning) await sendHeld($)
 }
@@ -614,6 +706,8 @@ export const register: Register = (on, options) => {
   // startPolling first: a freshly loaded instance claims the owner file before any check.
   on('turn.start', async ($, e, next) => {
     await startPolling($)
+    // A subagent's turn (2.1.299+) has no main turn.complete after it, so it never marks a turn running.
+    if ((e as { agentId?: string }).agentId !== undefined) return next(e)
     if (!(await isRetired($))) await setTurnRunning($, true)
     return next(e)
   })
@@ -621,6 +715,8 @@ export const register: Register = (on, options) => {
   // A reload mid-turn ends the turn in the new module: it loads the watches, pending wakes included.
   on('turn.complete', async ($, e, next) => {
     await startPolling($)
+    // A subagent's turn ends inside main's or after it: main's turn is not over.
+    if (e.agentId !== undefined) return next(e)
     if (await isRetired($)) return next(e)
     await setTurnRunning($, false)
     // What is still pending (no tool result carried it) goes out from the next poll, between turns: a
@@ -629,7 +725,8 @@ export const register: Register = (on, options) => {
   })
 
   // The other common tools carry a finished watch into the running turn too.
-  on('tool.call', { tool: ['Read', 'Edit', 'Write', 'Grep', 'Glob'] }, async ($, e, next) => {
+  on('tool.call', { tool: ['Read', 'Grep', 'Glob', ...FILE_WRITERS] }, async ($, e, next) => {
+    if (writesRounds(e)) return { deny: ROUNDS_OWN }
     await startPolling($)
     if (await isRetired($)) return next(e)
     const result = await next(e)
@@ -639,42 +736,26 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+    const command = String((e as { command?: unknown }).command ?? '')
+    const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
+    // Held by every instance, retired or not: no instance lets the count's file be written.
+    if (namesRounds(command)) return { deny: ROUNDS_OWN }
     await startPolling($)
     if (await isRetired($)) return next(e)
+    // Only the live instance judges a push, with the newest code: an older one left by a hot reload never
+    // refuses what the update fixed. With no owner on record, no instance is retired and each one judges.
+    const refusal = isPush(command, isPowerShell) ? await roundRefusal($, command, isPowerShell) : undefined
+    if (refusal) return { deny: refusal }
     const answered = await next(e)
     // A finished watch rides on this result; a subagent's call or a refused one carries none.
     const notes = e.agentId !== undefined || 'deny' in answered ? [] : await takeNotes($)
     const isPlain = 'deny' in answered || notes.length === 0
     const result = isPlain ? answered : { ...answered, context: [...(answered.context ?? []), ...notes] }
-    const command = String((e as { command?: unknown }).command ?? '')
-    const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
     if (result.deny !== undefined || result.isError) return result
+    // One command can merge a PR and push or open the next: forget the one, then watch the other.
     const merged = mergedNumber(command, isPowerShell)
-    if (merged !== undefined) {
-      // No number: the branch's PR, so every finished watch is a candidate. A watch is dropped only once
-      // GitHub says its PR is merged or closed: `--auto` only queues the merge, and a refused merge
-      // leaves the PR open, and either way the watch still has to wake the session.
-      const candidates = live.watches.filter(w => (merged ? w.number === merged : w.outcome))
-      const gone: Watch[] = []
-      for (const w of candidates) if (await isClosed($, w.repo, w.number)) gone.push(w)
-      if (gone.length > 0) {
-        live.watches = live.watches.filter(w => !gone.includes(w))
-        live.generation++
-        await save($)
-      }
-      return result
-    }
-    if (!isPushOrPr(command, isPowerShell)) return result
-    // `gh pr create` prints the new PR's URL; otherwise ask about the branch in the folder the command ran in.
-    const created = PR_URL.exec(JSON.stringify(result.result ?? ''))
-    if (created) {
-      const [, repo, number] = created
-      await startWatch($, repo!, Number(number), await headOf($, repo!, Number(number)))
-      return result
-    }
-    const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
-    const pr = (await prOfBranch($, folder)) ?? (await prOfBranch($))
-    if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
+    if (merged !== undefined) await forgetMerged($, merged)
+    if (isPushOrPr(command, isPowerShell)) await watchPushed($, command, isPowerShell, result.result)
     return result
   })
 
@@ -695,6 +776,7 @@ export const register: Register = (on, options) => {
     // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
     // row draws: the bare command answers with the phone text.
     const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
+    if (/^rounds\b/.test(verb)) return { text: await roundsCommand($, verb, e.origin ?? { kind: 'unclassified' }) }
     if (!['', 'settings', 'stop', 'phone'].includes(verb)) return { text: HELP }
     if (verb === 'settings') {
       await $.ui.open({ id: SETTINGS_PANE, title: 'CI watch settings', focus: true })
