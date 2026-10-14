@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { inspect, readCommand } from '../hooks/inspect'
+import { readCommand } from '../hooks/inspect'
+import { inspect } from '../hooks/judge'
 
 // Each route around the check, refused: `[command, part of the reason, PowerShell]`.
 const REFUSED: [string, string, boolean?][] = [
@@ -586,7 +587,6 @@ test('a tag or merge message that reads like a flag is a message', () => {
 // expansion, a name set by a command the reading does not follow, a word that may turn into a flag.
 const RUN_TIME_UNREAD: [string, string][] = [
   ['MSG=("$OUT"); git commit -m "$MSG"', 'the commit message'],
-  ['ARGS=(--no-verify); git commit -m x "${ARGS[@]}"', 'the commit message'],
   ["M='fix: x'; M+=\" $OUT\"; git commit -m \"$M\"", 'the commit message'],
   ['X=OUT; git commit -m "${!X}"', 'the commit message'],
   ['git commit -m "${X:-$OUT}"', 'the commit message'],
@@ -596,8 +596,6 @@ const RUN_TIME_UNREAD: [string, string][] = [
   ['for M in "$OUT"; do git commit -m "$M"; done', 'the commit message'],
   ['M=a; unset M; git commit -m "$M"', 'the commit message'],
   ['(case $x\nin a) M=b;; esac); git commit -m "$M"', 'the commit message'],
-  ['git commit -m x $NV', 'the commit message'],
-  ['git commit -m x "$@"', 'the commit message'],
   ['git $C -m x', 'a git subcommand built at run time'],
   ['gh pr $A -t t -b x', 'a gh subcommand built at run time'],
   ['git -c "$K" commit -m x', 'a git setting built at run time'],
@@ -679,24 +677,36 @@ test('a backslash here-doc, a mktemp body file, a plain setting and pushd/popd p
     'the commit message',
   ])
   expect(read("git -c \"user.name=$N\" commit -m 'fix: x'").unread).toEqual([])
-  expect(read('git -c "alias.ci=$A" ci').unread).toEqual(['a git setting built at run time'])
+  expect(read('git -c "alias.ci=$A" ci').unread).toEqual([
+    'the git alias, include or config file the command sets',
+    'a git setting built at run time',
+  ])
   const popped = read('pushd sub && popd && git commit -F m.txt')
   expect([popped.unread, popped.files[0]?.folder]).toEqual([[], { isUnknown: false }])
   expect(read('git config --get core.hooksPath').block).toBeUndefined()
 })
 
-// A value the shell splits at run time, a config word built at run time, a file matched to the wrong
-// writer, and a folder moved by a stack option or inside a subshell.
-test('a value that may split into more options is unread', () => {
-  for (const [command, what] of [
+// A word or value the shell builds at run time where a flag could stand is noted, as the shipped hook
+// passes it; a hook skip typed outside quotes in such a command is refused, as the hook refuses it.
+test('a word or value that may turn into more options is noted', () => {
+  const MORE = 'a flag value built at run time may carry more options'
+  for (const [command, note] of [
+    ['git commit -m x $NV', 'the commit message: a word built at run time may be a flag'],
+    ['git commit -m x "$@"', 'the commit message: a word built at run time may be a flag'],
     ["git -c user.name=$N commit -m 'fix: x'", 'a git option built at run time'],
     ['git -C $DIR commit -m x', 'a git option built at run time'],
-    ["git commit --date $D -m 'fix: x'", 'the commit message'],
-    ['gh pr create -t t --body-file b.md --base $B', 'the PR text'],
+    ["git commit --date $D -m 'fix: x'", `the commit message: ${MORE}`],
+    ['gh pr create -t t --body-file b.md --base $B', `the PR text: ${MORE}`],
   ]) {
-    expect(readCommand(command as string, false).unread).toContain(what)
+    const plan = inspect(command as string, false)
+    const noted = expect.arrayContaining([note])
+    expect([command, plan.block, plan.unread, plan.notes]).toEqual([command, undefined, [], noted])
   }
-  expect(readCommand('gh pr create -t t --body-file b.md --base "$B"', false).unread).toEqual([])
+  const quoted = inspect('gh pr create -t t --body-file b.md --base "$B"', false).notes
+  expect(quoted.filter(n => !n.startsWith('not plain: '))).toEqual([])
+  expect(inspect('ARGS=(--no-verify); git commit -m x "${ARGS[@]}"', false).block).toContain('skipping git hooks')
+  // Typed inside a message, the flag is text.
+  expect(inspect('git commit -m "docs: explain --no-verify" $NV', false).block).toBeUndefined()
 })
 
 test('a git config word built at run time where the key stands, or beside a hooks key, is refused', () => {
@@ -930,7 +940,7 @@ test('a git alias, include or config file set in the command makes its git calls
     'git config --global include.path /tmp/h.cfg; git commit -m x',
     'GIT_CONFIG_GLOBAL=/tmp/h.cfg git commit -m x',
   ]
-  const setting = expect.arrayContaining(['a git setting built at run time'])
+  const setting = expect.arrayContaining(['the git alias, include or config file the command sets'])
   for (const command of unread) expect([command, readCommand(command, false).unread]).toEqual([command, setting])
   expect(readCommand("git -c user.name=me commit -m 'fix: x'", false).unread).toEqual([])
 })
@@ -1044,7 +1054,7 @@ test('a word named like a git alias or include is no setting', () => {
     expect([command, plan.unread, plan.block]).toEqual([command, [], undefined])
   }
   expect(readCommand("export GIT_CONFIG_GLOBAL=/tmp/h.cfg; git commit -m 'fix: x'", false).unread).toEqual([
-    'a git setting built at run time',
+    'the git alias, include or config file the command sets',
   ])
 })
 

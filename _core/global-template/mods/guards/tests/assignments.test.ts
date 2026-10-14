@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { inspect, readCommand } from '../hooks/inspect'
+import { readCommand } from '../hooks/inspect'
+import { inspect } from '../hooks/judge'
 import { notPlain } from '../hooks/plain'
 import { wayOut } from '../hooks/register'
 
@@ -434,30 +435,16 @@ test('names keep their case in Bash, plain dollars stay text, and a new branch a
 })
 
 // Every kind of unread entry other than a message names a way out of its own.
-test('each unread kind has its own way out', () => {
+test('each unread body file kind and an inline git config have their own way out', () => {
   for (const where of [
-    'a word built at run time',
-    'a git setting built at run time',
-    'an environment variable named at run time',
-    'a program named at run time',
-    'a bash script built at run time',
-    'a pwsh script built at run time',
-    'a cmd script built at run time',
-    'a git option built at run time',
-    'a git subcommand built at run time',
-    'a gh subcommand built at run time',
-    'a flag value built at run time',
-    'the new branch name',
+    'the git alias, include or config file the command sets',
     'the PR text (in a folder unknown before it runs)',
     'the PR text (in a folder unknown before it runs, and another program in this command may write b.md)',
     'the PR text (another program in this command may write b.md)',
     "the PR text (Git Bash's /tmp did not map to a folder the guard reads)",
-    'the lines the commit adds (in a folder or repo built at run time)',
   ]) {
     expect([where, wayOut(where)]).toEqual([where, expect.any(String)])
   }
-  expect(wayOut('a cmd script built at run time')).toContain('not through `cmd /c`')
-  expect(wayOut('a bash script built at run time')).toContain('not through a shell')
   expect(wayOut('the commit message')).toBeUndefined()
 })
 

@@ -10,7 +10,7 @@ import type { Spec } from './specs'
 import type { Statement, Word } from './shell'
 
 const HISTORY_REWRITE = 'history rewriting tools (git filter-repo, git filter-branch) are not allowed from a session.'
-const HOOK_SKIP = 'skipping git hooks (--no-verify, commit -n, a hooks setting) is not allowed.'
+export const HOOK_SKIP = 'skipping git hooks (--no-verify, commit -n, a hooks setting) is not allowed.'
 const TRAILER = '--trailer is not allowed; write the message body directly.'
 const REUSE = "reusing another commit's message (-C, -c, --reuse-message, --reedit-message) cannot be read."
 const CONFIG_UNREAD = 'a git config setting built at run time cannot be read.'

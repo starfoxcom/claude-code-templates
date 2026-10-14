@@ -2,22 +2,18 @@
 // to history, the body files it hands over, the branches it creates, and whether a commit's added
 // lines need a look. Pure, no engine access.
 //
-// A command that names a git or GitHub write, a hook switch, a git or hook config file, or a program built
-// at run time is first held to the plain rule (plain.ts): one that is not plain is refused outright, so
-// the reading below only ever sees plain git, gh and read-only calls. The reading (`readCommand`) follows
-// what the shell runs: messages from `-m`, `-F` files, here-docs and the `$(cat <<'EOF' ...)` form, and
-// body files the command writes itself. Where a message exists but its text is made by something the
-// reading cannot follow, the message is named in `unread`, and the call is refused: what reaches history
-// unread is never passed.
+// The reading (`readCommand`) follows what the shell runs: messages from `-m`, `-F` files, here-docs and the
+// `$(cat <<'EOF' ...)` form, and body files the command writes itself. Where a message exists but its text
+// is made by something the reading cannot follow, the message is named in `unread`; judge.ts sorts what it
+// names into refusals and notes.
 // What it cannot see at all (also listed in mods/README.md):
 // - commands run from a script file or fed to a shell from a file or a pipe, an alias or shell function,
 //   a git alias (`git ci -m ...`), `ssh host ...`, a command held in a variable from outside it
 //   (`eval "$CMD"`, `bash -c "$CMD"`), or any other program that writes to GitHub on its own (a Python
 //   script, an SDK);
-// - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): the
-//   file does not exist yet, so it reports that it could not read it, and any body file in a command that
-//   runs a program that may write files is refused as unread; one that inline script code in the
-//   command may write is noted instead, and passes;
+// - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): one already
+//   on disk is read as it is before the command runs, as the shipped hook reads it, and the rewrite is
+//   noted; one not there yet is refused, unless inline script code in the command may write it (noted);
 // - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
 //   unread and refused, its text never checked;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
@@ -77,7 +73,6 @@ import {
 } from './specs'
 import type { Kind, Spec } from './specs'
 import { emptyPlan, type Plan } from './plan'
-import { namesWrite, NOT_PLAIN, notPlain } from './plain'
 import type { Statement, Word } from './shell'
 
 export type { Plan } from './plan'
@@ -130,14 +125,7 @@ type Reading = VarState & {
   functions?: Set<string>
 }
 
-export function inspect(command: string, powershell: boolean): Plan {
-  // A command naming a history write is read only when it is plain: anything else is refused (plain.ts).
-  const why = namesWrite(command, powershell) ? notPlain(command, powershell) : undefined
-  if (why) return { ...emptyPlan(), isWrite: true, block: `${NOT_PLAIN} Not plain here: ${why}.` }
-  return readCommand(command, powershell)
-}
-
-/** The reading itself, of a plain command or one that names no history write. */
+/** The reading itself: what the command writes, as far as it can be followed. */
 export function readCommand(command: string, powershell: boolean): Plan {
   const plan = emptyPlan()
   const r: Reading = {
@@ -695,8 +683,10 @@ function walk(args: Word[], spec: Spec, r: Reading, where: string, sub?: string)
       }
       continue
     }
-    // A word built at run time where a flag could stand may turn into one (`$NV`, `"$@"`).
-    if (where && mayBeFlag(w) && !r.plan.unread.includes(where)) r.plan.unread.push(where)
+    // A word built at run time where a flag could stand may turn into one (`$NV`, `"$@"`). The hook passes it,
+    // and the whole command text is still checked for credit: noted.
+    const flagNote = `${where}: a word built at run time may be a flag`
+    if (where && mayBeFlag(w) && !r.plan.notes.includes(flagNote)) r.plan.notes.push(flagNote)
     positional.push(w)
   }
   return positional
@@ -712,7 +702,12 @@ function take(kind: Kind, value: Word, r: Reading, where: string) {
   const { plan } = r
   // A value the shell splits at run time may carry more options (`--base $B` with `B='main -F x'`).
   const isMany = splitsAt(value) || isSplat(value, r.ps)
-  if (isMany && /^(skip|repo|method)$/.test(kind)) unreadCall(r, where || 'a flag value built at run time')
+  // The hook passes such a value and the whole command text is still checked for credit: noted.
+  if (isMany && /^(skip|repo|method)$/.test(kind)) {
+    r.plan.isWrite = true
+    const note = `${where || 'a write'}: a flag value built at run time may carry more options`
+    if (!plan.notes.includes(note)) plan.notes.push(note)
+  }
   // A PowerShell list hands a write its first item as the value and the rest as more words.
   if (value.list && (where || kind === 'branch')) unreadCall(r, 'a flag value built at run time')
   switch (kind) {

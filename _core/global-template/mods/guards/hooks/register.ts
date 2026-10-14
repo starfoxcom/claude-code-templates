@@ -2,7 +2,7 @@ import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import { foldDots } from './folders'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
-import { inspect } from './inspect'
+import { inspect } from './judge'
 import type { Folder, Plan, Target } from './inspect'
 import { describeName, findName, readNameRules } from './names'
 import type { NameRule } from './names'
@@ -148,12 +148,10 @@ async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRul
       }
       return `could not read the body file ${full} for ${where}. Write the file first, or check the path.`
     }
-    // On disk already, but an earlier program of the command may rewrite it: the text read now is not the
-    // text the call sends.
-    if (named) {
-      plan.unread.push(`${where} (another program in this command may write ${path})`)
-      continue
-    }
+    // On disk already, but another program of the command may rewrite it: the text read now is checked, as
+    // the shipped attribution hook checks it, and the rewrite is noted (its code is in the command text,
+    // which is under the credit check).
+    if (named) plan.notes.push(`${where} (another program in this command may write ${path})`)
     const reason = textReason(text, `${where} (file ${path})`, rules)
     if (reason) return reason
   }
@@ -228,7 +226,7 @@ async function checkPr($: Engine, plan: Plan, session: string, repo: string | un
   }
 }
 
-// The way out for each kind of unread entry; a message's is the last.
+// The way out for each kind of unread body file or git config; a message's is the last.
 const WAYS_OUT: [RegExp, string][] = [
   [
     /in a folder unknown before it runs, and another program/,
@@ -239,35 +237,10 @@ const WAYS_OUT: [RegExp, string][] = [
     'Give the body file its full path, or run the command in a folder named out (`cd <path>`).',
   ],
   [/Git Bash's \/tmp did not map/, "Give the body file's Windows path."],
-  [
-    /^an environment variable named at run time/,
-    'Type the name of each environment variable the command sets (`export NAME=value`, `$env:NAME = ...`).',
-  ],
-  [
-    /^a cmd script built at run time/,
-    'Run the git or gh call directly, not through `cmd /c`, with every word typed out (no `%NAME%`).',
-  ],
-  [
-    /^a \w+ script built at run time/,
-    'Run the git or gh call directly, not through a shell, with every word typed out (no variable or `$(...)`).',
-  ],
-  [
-    /folder or repo built at run time/,
-    'Run it in a folder named out (`cd <path>` or `git -C <path>`), with no git folder or repo set at run time.',
-  ],
-  [/^the new branch name/, 'Type the branch name out.'],
+  [/^the git alias, include or config file/, 'Leave the git alias, include or config file out of the command.'],
   [
     /another program in this command may write/,
     'Write the body file in an earlier command, or in this one with `>` or a here-doc, which the guard reads.',
-  ],
-  [/^a program named at run time/, 'Name the program itself (`git`, `gh`).'],
-  [
-    /^a git setting built at run time/,
-    'Leave the git alias, include or config file out of the command, and write each `-c` setting out.',
-  ],
-  [
-    /^a .* built at run time$/,
-    'Write each word of the git or gh call out: no variable, `$(...)`, list or splat in it.',
   ],
 ]
 
@@ -311,13 +284,14 @@ async function rulesFor($: Engine, repos: (string | undefined)[]): Promise<TextR
 }
 
 // Each commit's added lines, read in the folder it runs in: the first credit line found, or undefined.
-// A commit whose folder or repo is built at run time cannot be scanned, so it is named unread.
+// A commit whose folder or repo is built at run time cannot be scanned: noted, as the shipped attribution
+// hook scans no added lines at all.
 async function diffReason($: Engine, plan: Plan, session: string, isBash: boolean) {
   for (const { folder, diff } of plan.targets) {
     if (!diff) continue
     const where = 'the lines the commit adds (in a folder or repo built at run time)'
     if (folder.isUnknown) {
-      if (!plan.unread.includes(where)) plan.unread.push(where)
+      if (!plan.notes.includes(where)) plan.notes.push(where)
       continue
     }
     const args = diff === 'all' ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color']

@@ -1,115 +1,89 @@
 import { expect, test } from 'claude-code/testing'
 
-import { inspect } from '../hooks/inspect'
+import { inspect } from '../hooks/judge'
 import { namesWrite, notPlain } from '../hooks/plain'
 
-const refused = (command: string, ps = false) => inspect(command, ps).block ?? ''
+const isNoted = (command: string, ps = false) => inspect(command, ps).notes.some(n => n.startsWith('not plain: '))
 
-// Every spelling past rounds of review found a way around a reading with: each is refused before any reading.
-test('a command naming a history write that is not plain is refused outright', () => {
-  for (const command of [
-    'HUSKY=0 git commit -m x',
-    'export HUSKY=0; git commit -m x',
-    "M='fix: x'; git commit -m \"$M\"",
-    'git commit -m "$(echo x)"',
-    'git commit -m `echo x`',
-    'f() { git commit -m x; }; f',
-    'a.b() { git commit -m x; }; HUSKY=0 a.b',
-    'for i in 1 2; do git commit -m x; done',
-    '(git commit -m x)',
-    '{ git commit -m x; }',
-    'coproc C { git commit --no-verify -m x; }',
-    "trap 'git commit -m x' EXIT",
-    "eval 'git commit -m x'",
-    "bash -c 'git commit --no-verify -m x'",
-    "sh -c 'git push --force'",
-    "echo 'git commit --no-verify -m x' | bash",
-    'git commit -m x &',
-    'xargs git commit -m < m.txt',
-    'env git commit -m x',
-    'command git commit -m x',
-    '\\git commit -m x',
-    'git commit -m x # trailing',
-    'git commit -m x *',
-    '. ./hooks.sh; git push',
-    'source ./x.sh && git push',
-    "M='fix: x'; declare -n R=M; R=$OUT; git commit -m \"$M\"",
-    'git commit -F - <<EOF\n$BODY\nEOF',
-    'npm run build && git commit -m x',
-    "echo x > .git/hooks/commit-msg; git commit -m 'fix: x'",
-    'git -c core.hooksPath=$X commit -m x',
-    // The commit-message form inside a single-quoted string opens no here-doc: the lines after it are code.
-    "echo 'x \"$(cat <<'EOF'\n'; HUSKY=0 npm x; echo '\nEOF\n)\"'; git commit -m 'fix: y'",
-    // A quoted or split program word may be git, and the hook files around it are then judged too.
-    "echo 'exit 0' > '.git/hooks/commit-msg'; 'git' commit -m 'fix: x'",
-    "rm '.git/hooks/commit-msg'; 'git' commit -m 'fix: x'",
-    "rm .git/hooks/commit-msg; g''it commit -m 'fix: x'",
-    // A cd into a hooks or git folder, then a plain redirect there.
-    "cd .git/hooks && echo 'exit 0' > commit-msg; cd ../..; git commit -m 'fix: x'",
-    "pushd .husky && echo 'exit 0' > commit-msg; popd; git commit -m 'fix: x'",
-    "cd .git; echo '[core]' >> config; cd ..; git commit -m 'fix: x'",
-    // git's own config files and the hook managers' configs.
-    "echo '[core]' >> ~/.gitconfig && git commit -m 'fix: x'",
-    "echo '[core]' > ~/.config/git/config; git commit -m 'fix: x'",
-    "echo 'commit-msg:' > lefthook-local.yml; git commit -m 'fix: x'",
-    "echo 'repos: []' > .pre-commit-config.yaml; git commit -m 'fix: x'",
-    "echo 'hooksPath = /dev/null' >> ~/.gitconfig",
-    // A file named after a git hook, wherever it sits, a hooks folder of its own, or a copy into `.git`.
-    "echo 'exit 0' > commit-msg; git commit -m 'fix: x'",
-    "cd .githooks && echo 'exit 0' > pre-push; cd ..; git push",
-    "cd ~/.config/git && echo '[core]' > config; git commit -m 'fix: x'",
-    'cp hook.sh .git/',
-    // A program name Bash builds from a brace expansion or a glob.
-    "{gi,commi}t -n -m 'x'",
-    "/usr/bin/g[i]t commit -n -m 'x'",
-    "/mingw64/bin/g?t commit -n -m 'x'",
-    // Launchers that run their quoted argument as shell text.
-    "flock /tmp/l -c 'git commit --no-verify -m x'",
-    "watch 'git commit --no-verify -m x'",
-    "parallel 'git commit --no-verify -m x' ::: 1",
-    "script -c 'git commit --no-verify -m x' /dev/null",
-  ]) {
-    expect([command, refused(command)]).toEqual([command, expect.stringContaining('not plain')])
-  }
-})
-
-test('a PowerShell command naming a history write that is not plain is refused outright', () => {
-  for (const command of [
-    "$m = 'fix: x'; git commit -m $m",
-    'git commit -m "$m"',
-    "& git commit -m 'x'",
-    "iex 'git commit -m x'",
-    "git commit -m 'a \"b\" --no-verify'",
-    "git commit -m ''",
-    'git commit -m x --% --no-verify',
-    "if ($?) { git commit -m 'x' }",
-    "@('a') | % { git commit -m $_ }",
-    "$r = [ref]$m; git commit -m 'x'",
-    "Set-Variable -Name $n -Value $out; git commit -m 'x'",
+// Spellings past rounds of review found a way around a reading with. A command that is not plain is read as
+// far as the reading goes and noted; a bypass route the reading finds in it is still refused.
+test('a bypass route in a command that is not plain is still refused', () => {
+  for (const [command, ps] of [
+    ['HUSKY=0 git commit -m x', false],
+    ['export HUSKY=0; git commit -m x', false],
+    ['a.b() { git commit -m x; }; HUSKY=0 a.b', false],
+    ['coproc C { git commit --no-verify -m x; }', false],
+    ["eval 'git commit -m x'", false],
+    ["bash -c 'git commit --no-verify -m x'", false],
+    ['git -c core.hooksPath=$X commit -m x', false],
+    ["iex 'git commit -m x'", true],
+    ['git commit -m x --% --no-verify', true],
+    // Windows PowerShell splits an unquoted dash word at its first dot: git gets `--no-verify .`.
+    ["git commit -m 'fix: x' --no-verify.", true],
     // Windows PowerShell reads curly quotes as quote marks: the text after one is code.
-    "git commit -m 'fix: x’ --no-verify ‘'",
-    "echo 'x’; git commit --no-verify -m y; ‘'",
-    "Remove-Item '.git\\hooks\\commit-msg'; & 'git' commit -m 'fix: x'",
-    "cd .git/hooks; 'exit 0' > commit-msg; cd ..\\..; git commit -m 'fix: x'",
-    'git push origin x && gh pr create --title t --body-file b.md',
-    "& (gcm g?t) commit -n -m 'x'",
-    ". (Get-Command g*t) commit -n -m 'x'",
-    // Windows PowerShell splits an unquoted dash word at its first dot: git would get `--no-verify .`.
-    "git commit -m 'fix: x' --no-verify.",
-    'gh pr create --title t --body-file=b.md',
-  ]) {
-    expect([command, refused(command, true)]).toEqual([command, expect.stringContaining('not plain')])
+    ["git commit -m 'fix: x’ --no-verify ‘'", true],
+    ["echo 'x’; git commit --no-verify -m y; ‘'", true],
+  ] as const) {
+    const plan = inspect(command, ps)
+    expect([command, plan.block]).toEqual([command, expect.any(String)])
+    expect([command, isNoted(command, ps)]).toEqual([command, true])
   }
 })
 
-test('the refusal names what is not plain', () => {
-  expect(refused('M=x; git commit -m "$M"')).toContain('Not plain here: `$` inside double quotes.')
-  expect(refused('npm test && git push')).toContain('`npm`, which is not one of the programs a plain command runs')
-  expect(refused("git push origin x | sed 's/a/b/'")).toContain('`sed`')
-  // The advice works in Windows PowerShell, which has no &&.
-  const chained = refused('git push origin x && gh pr create --title t --body-file b.md', true)
-  expect(chained).toContain('Windows PowerShell has no && or ||')
-  expect(chained).toContain('In PowerShell, run each git or gh call as its own tool call')
+test('a message built at run time in a command that is not plain is named unread', () => {
+  for (const [command, ps] of [
+    ['git commit -m "$(echo x)"', false],
+    ['git commit -m `echo x`', false],
+    ['xargs git commit -m < m.txt', false],
+    ["M='fix: x'; declare -n R=M; R=$OUT; git commit -m \"$M\"", false],
+    ['git commit -F - <<EOF\n$BODY\nEOF', false],
+    ['git commit -m "$m"', true],
+    ["@('a') | % { git commit -m $_ }", true],
+  ] as const) {
+    expect([command, inspect(command, ps).unread]).toEqual([command, ['the commit message']])
+  }
+})
+
+// The shipped attribution hook passes these, and the whole command text is still checked for credit.
+test('any other command that is not plain is noted and left to the reading', () => {
+  for (const [command, ps] of [
+    ["M='fix: x'; git commit -m \"$M\"", false],
+    ['f() { git commit -m x; }; f', false],
+    ['for i in 1 2; do git commit -m x; done', false],
+    ['(git commit -m x)', false],
+    ['{ git commit -m x; }', false],
+    ["trap 'git commit -m x' EXIT", false],
+    ["sh -c 'git push --force'", false],
+    ['git commit -m x &', false],
+    ['env git commit -m x', false],
+    ['command git commit -m x', false],
+    ['git commit -m x # trailing', false],
+    ['. ./hooks.sh; git push', false],
+    ['npm run build && git commit -m x', false],
+    ["echo '[core]' >> ~/.gitconfig && git commit -m 'fix: x'", false],
+    ["echo 'commit-msg:' > lefthook-local.yml; git commit -m 'fix: x'", false],
+    ["{gi,commi}t -n -m 'x'", false],
+    ["flock /tmp/l -c 'git commit --no-verify -m x'", false],
+    ["$m = 'fix: x'; git commit -m $m", true],
+    ["& git commit -m 'x'", true],
+    ["if ($?) { git commit -m 'x' }", true],
+    ["Set-Variable -Name $n -Value $out; git commit -m 'x'", true],
+    ['git commit -m "don’t stop"', true],
+  ] as const) {
+    const plan = inspect(command, ps)
+    expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])
+    expect([command, isNoted(command, ps)]).toEqual([command, true])
+  }
+})
+
+test('the note names what is not plain', () => {
+  expect(inspect('M=x; git commit -m "$M"', false).notes).toContain('not plain: `$` inside double quotes')
+  const npm = inspect('npm test && git push', false).notes.join('\n')
+  expect(npm).toContain('`npm`, which is not one of the programs a plain command runs')
+  expect(inspect("git push origin x | sed 's/a/b/'", false).notes.join('\n')).toContain('`sed`')
+  const chained = inspect('git push origin x && gh pr create --title t --body-file b.md', true).notes
+  const noAnd = 'not plain: Windows PowerShell has no && or ||: run each git or gh call as its own tool call'
+  expect(chained).toContain(noAnd)
 })
 
 // A file a writer copies holds what was written before that writer ran, never what a later one writes.
@@ -179,7 +153,11 @@ test('a write named only in data, or a command that names none, is left to the r
   expect(namesWrite('C:\\tmp\\lv\\run_mem.ps1 -Tag a -GpuIndex 1', true)).toBe(false)
   expect(namesWrite("$env:X = ''; & C:\\tmp\\lv\\run_mem.ps1 -Tag a", true)).toBe(false)
   expect(namesWrite('g`it commit -m x', true)).toBe(true)
-  for (const command of ['g=gi; ${g}t commit -m x', '$G push', 'V=1 `echo git` push', 'x; "$g" push']) {
-    expect([command, refused(command)]).toEqual([command, expect.stringContaining('not plain')])
+  // A program word built at run time is read where the command sets it, and noted where it cannot be.
+  expect(inspect('g=gi; ${g}t commit -m x', false).isWrite).toBe(true)
+  for (const command of ['$G push', 'V=1 `echo git` push', 'x; "$g" push']) {
+    const plan = inspect(command, false)
+    const named = expect.arrayContaining(['a program named at run time'])
+    expect([command, plan.block, plan.notes]).toEqual([command, undefined, named])
   }
 })

@@ -218,7 +218,7 @@ export function builtReasons(st: Statement, name: string, args: Word[], state: B
   // Once the command sets a git alias, include or config file, any git call may be a write the reading
   // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
   state.isConfigMoved ||= setsGitConfig(st, name, args, state.ps)
-  if (state.isConfigMoved && name === 'git') reasons.push('a git setting built at run time')
+  if (state.isConfigMoved && name === 'git') reasons.push('the git alias, include or config file the command sets')
   // An environment variable named at run time may be any (`LEFTHOOK`, `GIT_DIR`): later git and gh calls.
   state.isEnvUnknown ||= !state.ps && setsEnvAtRunTime(name, args)
   if (state.isEnvUnknown && /^(git|gh)$/.test(name)) reasons.push('an environment variable named at run time')

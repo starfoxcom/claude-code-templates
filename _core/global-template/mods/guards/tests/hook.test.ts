@@ -110,7 +110,7 @@ test(
     const refused = [
       [`git commit -m 'feat: port the Oldkeep sky'`, '"Oldkeep" named in the commit message'],
       ['git commit --no-verify -m "fix: x"', 'skipping git hooks'],
-      ['cd "$REPO" && gh pr create --title t --body-file body.md', 'not plain'],
+      ['cd "$REPO" && gh pr create --title t --body-file body.md', 'in a folder unknown before it runs'],
       [['gh', 'run', 'watch', '123'].join(' '), 'streams a live log'],
     ]
     for (const [command, reason] of refused) {
@@ -175,12 +175,13 @@ test(
       expect((result as { deny?: string }).deny).toBeUndefined()
     }
     expect(seen.ran).toHaveLength(2)
-    // A `popd` with no `pushd` before it leaves the folder unknown: the file and the lines the commit adds
-    // are named unread and refused.
+    // A `popd` with no `pushd` before it leaves the folder unknown: the file is named unread and refused, and
+    // the lines the commit adds, which the shipped hook never scans, are noted.
     const popped = await bash($, 'popd; git commit -F m.txt')
     expect(String((popped as { deny?: string }).deny)).toContain(FOLDER_OUT)
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-    expect(entry.unread).toEqual(['the commit message (in a folder unknown before it runs)', UNSCANNED])
+    expect(entry.unread).toEqual(['the commit message (in a folder unknown before it runs)'])
+    expect(entry.notes).toContain(UNSCANNED)
   },
 )
 
@@ -202,7 +203,7 @@ test('a body file the same command writes is read from the command text', async 
   expect(next.notes).toEqual(['the PR edit (file /tmp/c.md)'])
 })
 
-test('a relative body file under a folder built at run time is refused as not plain', async ($, on) => {
+test('a relative body file under a folder built at run time is refused as unread', async ($, on) => {
   const seen = world(on)
   for (const command of [
     'cd "$REPO" && gh pr create --title t --body-file body.md',
@@ -210,13 +211,13 @@ test('a relative body file under a folder built at run time is refused as not pl
   ]) {
     await bash($, command)
     const entry = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-    expect(entry.mod).toContain('not plain')
+    expect(entry.mod).toContain('in a folder unknown before it runs')
   }
   // A file of the same name in the session folder is a different file: never read.
   seen.files.set('C:/Repos/my-game/body.md', '## What\n- clean\n')
   await bash($, 'cd "$REPO" && gh pr create --title t --body-file body.md')
   const sameName = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-  expect(sameName.mod).toContain('not plain')
+  expect(sameName.mod).toContain('in a folder unknown before it runs')
   // A literal folder still refuses a file that is not there.
   await bash($, 'cd C:/Repos/other && gh pr create --title t --body-file body.md')
   const literal = JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
@@ -237,8 +238,8 @@ test('each commit is scanned in the folder it runs in, never the first one the c
     ["git -C ../other fetch && git commit -m 'fix: x'", ['C:/Repos/my-game']],
     ["cd ../site && cd ../my-game && git commit -m 'fix: x'", ['C:/Repos/my-game/../site/../my-game']],
     ["git commit -m 'fix: x' && git -C ../lib commit -m 'fix: y'", ['C:/Repos/my-game', 'C:/Repos/my-game/../lib']],
-    // Not plain: refused before any scan.
-    ["(cd ../site && make); git commit -m 'fix: x'", []],
+    // A subshell's cd stays inside it.
+    ["(cd ../site && make); git commit -m 'fix: x'", ['C:/Repos/my-game']],
   ]
   for (const [command, folders] of routes) {
     seen.runs.length = 0
@@ -248,13 +249,15 @@ test('each commit is scanned in the folder it runs in, never the first one the c
   }
 })
 
-test('a commit in a folder or repo built at run time is refused', { options: { mode: 'enforce' } }, async ($, on) => {
+// The shipped hook scans no added lines at all: a commit whose folder or repo is built at run time is noted.
+test('a commit in a folder or repo built at run time is noted', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on)
   for (const command of ['cd "$R" && git commit -m "fix: x"', 'GIT_DIR=../x/.git git commit -m "fix: x"']) {
     const deny = ((await bash($, command)) as { deny?: string }).deny
-    expect([command, deny]).toEqual([command, expect.stringContaining('not plain')])
+    expect([command, deny]).toEqual([command, undefined])
+    expect(lastEntry(seen).notes).toContain(UNSCANNED)
   }
-  expect(seen.ran).toEqual([])
+  expect(seen.ran).toHaveLength(2)
 })
 
 test("a repo's banned names apply where its commits run", { options: { mode: 'enforce' } }, async ($, on) => {
@@ -265,8 +268,8 @@ test("a repo's banned names apply where its commits run", { options: { mode: 'en
   expect(await deny("git commit -m 'fix: a' && git -C ../lib commit -m 'fix: Oldkeep port'")).toContain('Oldkeep')
   // The commit runs back in the session's repo, which keeps no such list.
   expect(await deny("pushd ../lib && popd && git commit -m 'fix: the Oldkeep loader'")).toBeUndefined()
-  // Where the commit lands is unknown: not plain, refused before any list is read.
-  expect(await deny('cd "$R" && git commit -m "fix: Oldkeep port"')).toContain('not plain')
+  // Where the commit lands is unknown: every repo's list applies.
+  expect(await deny('cd "$R" && git commit -m "fix: Oldkeep port"')).toContain('"Oldkeep" named in')
 })
 
 test('a diff past the output cap names the rest of the added lines unread', async ($, on) => {
@@ -344,8 +347,8 @@ test('a relative body file under a folder built at run time is never judged from
 }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/b.md': '## What\n- add it\n' })
   const result = await bash($, 'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md')
-  // Refused as not plain, never for the format of the session folder's b.md.
-  expect(String((result as { deny?: string }).deny)).toContain('not plain')
+  // Refused as unread, never for the format of the session folder's b.md.
+  expect(String((result as { deny?: string }).deny)).toContain('in a folder unknown before it runs')
   expect(String((result as { deny?: string }).deny)).not.toContain('PR-body contract')
   expect(seen.ran).toEqual([])
 })
@@ -370,16 +373,16 @@ test('a PR body that cannot be read exactly is named unread, never blocked', { o
   const command = 'cat b.md > c.md && gh pr create --title "feat: x" --body-file c.md'
   expect((await bash($, command) as { deny?: string }).deny).toBeUndefined()
   expect(isPrUnread(seen)).toBe(true)
-  // Not plain: printf (it expands escapes), a PR call fed through a pipe or a `<`.
-  for (const refused of [
+  // Not plain: printf (it expands escapes), a PR call fed through a pipe or a `<`. Noted, never judged.
+  for (const command of [
     `printf '## What\\n- add it\\n' > /tmp/b.md && gh pr create --title t --body-file /tmp/b.md`,
     'cat b.md | gh pr create --title "feat: x" --body-file -',
     'gh pr create --title "feat: x" --body-file - < b.md',
   ]) {
-    const deny = (await bash($, refused) as { deny?: string }).deny
-    expect([refused, deny]).toEqual([refused, expect.stringContaining('not plain')])
+    const deny = (await bash($, command) as { deny?: string }).deny
+    expect([command, deny, isPrUnread(seen)]).toEqual([command, undefined, true])
   }
-  expect(seen.ran).toHaveLength(1)
+  expect(seen.ran).toHaveLength(4)
 })
 
 // Only a command that is the PR call alone is judged: two body files, or a PR named by its link, could
@@ -388,7 +391,8 @@ const NOT_ALONE = [
   'gh pr create -t t -F a.md -F short.md',
   'gh pr edit https://github.com/o/other/pull/5 --body-file short.md',
 ]
-// Not plain at all: a variable, a subshell, or an unquoted here-doc whose `\` joins two lines.
+// Not plain: a variable, a subshell, or an unquoted here-doc whose `\` joins two lines. The body is noted,
+// never judged; a body file the guard cannot find, or name, is refused.
 const NOT_PLAIN_PR = [
   'F=short.md; gh pr create --title "feat: x" --body-file "$F"',
   '(cd sub && git status) && gh pr create --title "feat: x" --body-file short.md',
@@ -396,17 +400,22 @@ const NOT_PLAIN_PR = [
   'gh pr create -R "$OWNER/$REPO" -t t --body x',
   'gh pr create -t "feat: x" -F - <<EOF\n## What\n- add it\\\n## Why\nb\n\nResolves #1\nEOF',
   "gh pr create --title \"feat: x\" -F - <<< $'## What\\n- a\\n\\n## Why\\nb\\n\\nResolves #1'",
-  // The file `name.txt` holds the body file's name, not the body.
-  'gh pr create --title "feat: x" --body-file "$(cat name.txt)"',
-  'cd "$REPO" && gh pr create --title "feat: x" --body-file b.md',
 ]
-test('a PR call that is not plain is refused before any reading', { options: { mode: 'enforce' } }, async ($, on) => {
+test('a PR call that is not plain is noted, its body never judged', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, { [RULES]: ROW_RULE, 'C:/Repos/my-game/short.md': '## What\n- add it\n' })
   for (const command of NOT_PLAIN_PR) {
     const deny = (await bash($, command) as { deny?: string }).deny
-    expect([command, deny]).toEqual([command, expect.stringContaining('not plain')])
+    expect([command, deny, isPrUnread(seen)]).toEqual([command, undefined, true])
   }
-  expect(seen.ran).toEqual([])
+  expect(seen.ran).toHaveLength(NOT_PLAIN_PR.length)
+  // The file `name.txt` holds the body file's name, not the body; `$REPO` is a folder named at run time.
+  for (const [command, reason] of [
+    ['gh pr create --title "feat: x" --body-file "$(cat name.txt)"', 'is built in a way the guard cannot read'],
+    ['cd "$REPO" && gh pr create --title "feat: x" --body-file b.md', 'in a folder unknown before it runs'],
+  ]) {
+    const deny = (await bash($, command as string) as { deny?: string }).deny
+    expect([command, deny]).toEqual([command, expect.stringContaining(reason as string)])
+  }
 })
 for (const command of NOT_ALONE) {
   test(`a PR call that is not plain and alone is named unread, never blocked: ${command}`, {
@@ -423,7 +432,7 @@ for (const command of NOT_ALONE) {
 
 const NOT_PLAIN = 'the PR body (format check, create: not a single plain PR call)'
 
-// PowerShell hands gh a hashtable as `-key:value` words, never the typed text: refused either way.
+// PowerShell hands gh a hashtable as `-key:value` words, never the typed text: the PR text is unread either way.
 test('a PowerShell splat on a write is refused, set in the command or not', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
@@ -432,10 +441,10 @@ test('a PowerShell splat on a write is refused, set in the command or not', {
   await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
   const set = "$params = @{ Title = 'feat: x' }; gh pr create @params"
   const typed = await $.tool.call({ tool: 'PowerShell', command: set } as never)
-  expect(String((typed as { deny?: string }).deny)).toContain('not plain')
+  expect(String((typed as { deny?: string }).deny)).toContain('the PR text is built in a way the guard cannot read')
   expect(lastEntry(seen).enforced).toBe(true)
   const outside = await $.tool.call({ tool: 'PowerShell', command: 'gh pr create @params' } as never)
-  expect(String((outside as { deny?: string }).deny)).toContain('not plain')
+  expect(String((outside as { deny?: string }).deny)).toContain('the PR text is built in a way the guard cannot read')
 })
 
 // Only a command whose one gh statement is the PR call is judged: with more, the repo, the body file or
@@ -456,10 +465,10 @@ test('another gh call naming a repo leaves the PR unread', { options: { mode: 'e
   expect(lastEntry(seen).notes).toContain(NOT_PLAIN)
 })
 
-test('a title built at run time is refused as not plain', { options: { mode: 'enforce' } }, async ($, on) => {
+test('a title built at run time is refused as unread', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, SHORT)
   const result = await bash($, 'gh pr create --title "$T" --body-file short.md')
-  expect(String((result as { deny?: string }).deny)).toContain('not plain')
+  expect(String((result as { deny?: string }).deny)).toContain('the PR text is built in a way the guard cannot read')
   expect(seen.ran).toEqual([])
 })
 
@@ -603,10 +612,11 @@ test('a refusal names the way out for what it could not read', { options: { mode
   const deny = async (command: string) => String(((await bash($, command)) as { deny?: string }).deny)
   expect(await deny('git -c alias.ci=commit ci -m x')).toContain('Leave the git alias')
   expect(await deny('git commit -F -')).toContain('use a here-doc')
-  // Not plain: the refusal names the spot.
-  // A new branch is no history write: the reading itself refuses a name built at run time.
-  expect(await deny('git checkout -b "$NAME"')).toContain('Type the branch name out')
-  expect(await deny('git push origin $REFS')).toContain('Not plain here: `$` outside quotes.')
+  expect(await deny('cd "$R" && git commit -F m.txt')).toContain(FOLDER_OUT)
+  // A word the reading cannot place is the shipped hook's blind spot too: noted, never refused.
+  for (const command of ['git checkout -b "$NAME"', 'git push origin $REFS']) {
+    expect([command, await deny(command)]).toEqual([command, 'undefined'])
+  }
 })
 
 // A written file is found where its writer ran, whatever spelling and folder it is named from later.
@@ -633,13 +643,14 @@ test('a body file written in another folder is read from its writer, by where it
   expect(String((other as { deny?: string }).deny)).toContain('could not read the body file')
 })
 
-test('a script before a GitHub call is not plain; the call alone reads its file', {
+test('a script before a GitHub call writes the file the call reads; the call alone reads it from disk', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
   const seen = world(on)
   const result = await bash($, SCRIPT_THEN_API)
-  expect(String((result as { deny?: string }).deny)).toContain('`python`, which is not one of the programs')
-  expect(seen.ran).toEqual([])
+  expect((result as { deny?: string }).deny).toBeUndefined()
+  expect(lastEntry(seen).notes).toContain('the GitHub API call (written by this command, by its script)')
+  expect(seen.ran).toHaveLength(1)
   // Alone, a missing file is refused.
   const missing = await bash($, 'gh api graphql --input su.json')
   expect(String((missing as { deny?: string }).deny)).toContain('could not read the body file')
@@ -654,22 +665,26 @@ test('a credit line in the script that writes the body file is still refused', {
   expect(String((result as { deny?: string }).deny)).toContain('BLOCKED (guards)')
 })
 
-// Any program before a GitHub call, a script file or inline code, makes the command not plain.
-const BEFORE_API = [
-  'python gen.py',
-  'node build.js',
-  'ruby -c gen.rb',
-  'python -c "$CODE"',
-  `python -c "open('su.json','w').write('x')"`,
-  `node -e "require('fs').writeFileSync('su.json','x')"`,
+// A program before a GitHub call may write the file the call reads. Inline code is in the command text,
+// under the credit check, so the file it writes is noted; a script file's output cannot be read, so a body
+// file missing before the command runs is refused, as the shipped hook refuses it.
+const BEFORE_API: [string, string | undefined][] = [
+  ['python gen.py', 'could not read the body file'],
+  ['node build.js', 'could not read the body file'],
+  ['ruby -c gen.rb', 'could not read the body file'],
+  ['python -c "$CODE"', 'could not read the body file'],
+  [`python -c "open('su.json','w').write('x')"`, undefined],
+  [`node -e "require('fs').writeFileSync('su.json','x')"`, undefined],
 ]
-test('a program before a GitHub call is refused as not plain', { options: { mode: 'enforce' } }, async ($, on) => {
-  const seen = world(on)
-  for (const before of BEFORE_API) {
+test('a program before a GitHub call is read for the file it may write', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  world(on)
+  for (const [before, reason] of BEFORE_API) {
     const deny = (await bash($, `${before} && gh api graphql --input su.json`) as { deny?: string }).deny
-    expect([before, deny]).toEqual([before, expect.stringContaining('not plain')])
+    expect([before, deny]).toEqual([before, reason === undefined ? undefined : expect.stringContaining(reason)])
   }
-  expect(seen.ran).toEqual([])
 })
 
 // From the second shadow trial: the shapes where the mod and the guard scripts beside it disagreed.
@@ -678,11 +693,12 @@ test('a GitHub API call whose text uses a variable from outside the command is r
 }, async ($, on) => {
   const seen = world(on)
   const loop = 'for id in A B; do gh api graphql -f query="mutation { x(id: \\"$id\\") { y } }"; done'
-  expect(String((await bash($, loop) as { deny?: string }).deny)).toContain('not plain')
+  const deny = String((await bash($, loop) as { deny?: string }).deny)
+  expect(deny).toContain('the GitHub API call is built in a way the guard cannot read')
   expect(seen.ran).toEqual([])
 })
 
-test('a body file written under its full path in the same command passes; under a variable, not plain', {
+test('a body file written in the same command is read, under its full path or a variable set there', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
   const seen = world(on)
@@ -697,11 +713,12 @@ test('a body file written under its full path in the same command passes; under 
   const credit = await bash($, command.replace('Row 9.72 measured.', AI_TRAILER))
   expect(String((credit as { deny?: string }).deny)).toContain('AI credit')
   const named = 'S="C:/Users/me/scratch"; cat > "$S/i.md" <<\'EOF\'\nRow\nEOF\ngh issue comment 3 --body-file "$S/i.md"'
-  expect(String((await bash($, named) as { deny?: string }).deny)).toContain('not plain')
-  expect(seen.ran).toHaveLength(1)
+  expect((await bash($, named) as { deny?: string }).deny).toBeUndefined()
+  expect(String((await bash($, named.replace('Row', AI_TRAILER)) as { deny?: string }).deny)).toContain('AI credit')
+  expect(seen.ran).toHaveLength(2)
 })
 
-test('a PowerShell field file is read from its full path; named by a variable it is not plain', {
+test('a PowerShell field file is read from its full path, or from a variable set in the command', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
   const seen = world(on, { 'C:/Users/me/q/rows.graphql': 'query { viewer { login } }' })
@@ -712,7 +729,7 @@ test('a PowerShell field file is read from its full path; named by a variable it
   expect(seen.files.has(LOG)).toBe(false)
   const named = String.raw`$q = "C:\Users\me\q\rows.graphql"; gh api graphql -F query=@$q`
   const result = await $.tool.call({ tool: 'PowerShell', command: named } as never)
-  expect(String((result as { deny?: string }).deny)).toContain('not plain')
+  expect((result as { deny?: string }).deny).toBeUndefined()
 })
 
 test('history rewriting is refused even when it only asks for the version', {
@@ -730,14 +747,16 @@ test('a message the command hides is refused in enforce mode', { options: { mode
   expect(String((hidden as { deny?: string }).deny)).toContain('is built in a way the guard cannot read')
   for (const command of ['git commit -m "fix: $(date)"', '(S=/safe); gh pr create -t t --body-file "$S/b.md"']) {
     const result = await bash($, command)
-    expect([command, String((result as { deny?: string }).deny)]).toEqual([command, expect.stringContaining('not plain')])
+    const hidden = expect.stringContaining('is built in a way the guard cannot read')
+    expect([command, String((result as { deny?: string }).deny)]).toEqual([command, hidden])
   }
   expect(seen.ran).toEqual([])
 })
 
-// A body file already on disk that an earlier program of the command may rewrite: the text there now is not
-// the text the call sends, so it is refused with its way out. A program that only reads it changes nothing.
-const REWRITE = 'a body file an earlier program of the command may rewrite is refused'
+// A body file already on disk that another program of the command may rewrite: the text there now is read
+// and checked, as the shipped hook reads it, and the rewrite is noted. A program that only reads it changes
+// nothing.
+const REWRITE = 'a body file another program of the command may rewrite is read as it is now, and noted'
 test(REWRITE, { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on, { 'C:/Repos/my-game/b.md': '## What\n- clean\n' })
   for (const before of [
@@ -746,13 +765,17 @@ test(REWRITE, { options: { mode: 'enforce' } }, async ($, on) => {
     `python -c "open('b.md','w').write('x')"`,
   ]) {
     const result = await bash($, `${before} && gh pr create --title t --body-file b.md`)
-    expect([before, String((result as { deny?: string }).deny)]).toEqual([before, expect.stringContaining('not plain')])
+    expect([before, (result as { deny?: string }).deny]).toEqual([before, undefined])
+    expect(lastEntry(seen).notes).toContain('the PR text (another program in this command may write b.md)')
   }
   for (const before of ['cat b.md', 'git add b.md', 'wc -l b.md']) {
     const result = await bash($, `${before} && gh pr create --title t --body-file b.md`)
     expect([before, (result as { deny?: string }).deny]).toEqual([before, undefined])
   }
-  expect(seen.ran.length).toBeGreaterThan(0)
+  expect(seen.ran).toHaveLength(6)
+  seen.files.set('C:/Repos/my-game/b.md', `## What\n- x\n\n${AI_TRAILER}\n`)
+  const credit = await bash($, 'cp other.md b.md && gh pr create --title t --body-file b.md')
+  expect(String((credit as { deny?: string }).deny)).toContain('AI credit')
 })
 
 // A file the command writes with `>` while another program of it may rewrite the file, in either order (a
@@ -763,50 +786,52 @@ test('a body file written with > beside a program that may rewrite it is refused
   world(on)
   const command = "cat > b.md <<'EOF'\n## What\n- clean\nEOF\ncp other.md b.md\ngh pr create --title t --body-file b.md"
   const result = await bash($, command)
-  expect(String((result as { deny?: string }).deny)).toContain('`cp`, which is not one of the programs')
+  const rewrites = 'the PR text (another program in this command may write b.md) cannot be read'
+  expect(String((result as { deny?: string }).deny)).toContain(rewrites)
   const before = "cp other.md b.md\ncat > b.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create --title t --body-file b.md"
-  expect(String((await bash($, before) as { deny?: string }).deny)).toContain('not plain')
+  expect(String((await bash($, before) as { deny?: string }).deny)).toContain(rewrites)
   // Programs that write no file leave it as the here-doc wrote it.
   const reads = "cat > b.md <<'EOF'\n## What\n- clean\nEOF\ngit status\ngh pr create --title t --body-file b.md"
   expect((await bash($, reads) as { deny?: string }).deny).toBeUndefined()
 })
 
-// A folder made with mkdir leaves a here-doc body file as it was written; mktemp's name is not typed out.
-test('a here-doc body file beside mkdir passes; under a mktemp name it is not plain', {
+// A folder made with mkdir leaves a here-doc body file as it was written, and so does a name mktemp gives;
+// a folder named at run time is not known.
+test('a here-doc body file beside mkdir or mktemp passes; under a folder named at run time it is unread', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
   world(on)
-  const made = "mkdir -p .tmp && cat > .tmp/b.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t -F .tmp/b.md"
-  expect((await bash($, made) as { deny?: string }).deny).toBeUndefined()
   for (const command of [
+    "mkdir -p .tmp && cat > .tmp/b.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t -F .tmp/b.md",
     "F=$(mktemp); cat > \"$F\" <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t --body-file \"$F\"",
-    "cd \"$(git rev-parse --show-toplevel)\"; cat > b.md <<'EOF'\nclean\nEOF\ngh pr create -t t --body-file b.md",
   ]) {
-    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([
-      command,
-      expect.stringContaining('not plain'),
-    ])
+    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
   }
+  const moved =
+    "cd \"$(git rev-parse --show-toplevel)\"; cat > b.md <<'EOF'\nclean\nEOF\ngh pr create -t t --body-file b.md"
+  expect(String((await bash($, moved) as { deny?: string }).deny)).toContain('in a folder unknown before it runs')
 })
 
-// Wrapper shells, exports, `set` and `cmd` lines are not plain: the git or gh call runs on its own instead.
-test('a GitHub or git call inside a wrapper shell, after export or set, is not plain', {
+// Wrapper shells, exports, `set` and `cmd` lines are not plain: noted, as the shipped hook passes them, with
+// the whole command text under the credit check.
+test('a GitHub or git call inside a wrapper shell, after export or set, is noted', {
   options: { mode: 'enforce' },
 }, async ($, on) => {
-  world(on, { 'C:/Repos/my-game/b.md': '## What\n- clean\n' })
-  for (const command of [
+  const seen = world(on, { 'C:/Repos/my-game/b.md': '## What\n- clean\n' })
+  const commands = [
     "bash -c 'gh pr create -t t -F b.md'",
     'powershell -Command "gh pr create -t t -F b.md"',
     'cmd //c "gh pr create -t t -F b.md"',
     'cmd //c "git add -A & git commit -m x"',
     'export "$k=$v"; git commit -m x',
     "set -euo pipefail; cat > c.md <<'EOF'\n## What\n- clean\nEOF\ngh pr create -t t -F c.md",
-  ]) {
-    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([
-      command,
-      expect.stringContaining('not plain'),
-    ])
+  ]
+  for (const command of commands) {
+    expect([command, (await bash($, command) as { deny?: string }).deny]).toEqual([command, undefined])
+    expect(lastEntry(seen).notes.some((n: string) => n.startsWith('not plain: '))).toBe(true)
   }
+  const credit = await bash($, `bash -c "git commit -m 'fix: x' -m '${AI_TRAILER}'"`)
+  expect(String((credit as { deny?: string }).deny)).toContain('AI credit')
 })
 
 // PowerShell's plain way to write a body file, a value sent to it with `>`, passes once it is clean.

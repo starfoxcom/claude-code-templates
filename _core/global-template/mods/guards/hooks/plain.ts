@@ -1,17 +1,8 @@
 // The plain-command rule. A command whose text names a git history write, a GitHub write or a hook switch
-// is judged only when it is plain: git, gh and a few read-only programs, joined by `&&`, `||`, `;`, a newline
-// or a pipe, with each word typed out (plain or in quotes, with no `$` or backtick). Anything else that
-// names such a write is refused outright. Reading every spelling a shell allows never converged: each fix
-// exposed the next spelling. Refusing what cannot be read for sure does, and a refused command costs only a
-// plainer retry. Pure, no engine access.
-
-export const NOT_PLAIN =
-  'this command names a git or GitHub write but is not plain, so the guard cannot read it for sure. Run the ' +
-  'git or gh call with its words typed out, each word plain or in quotes, with no $ or backtick, and no ' +
-  'variables, groups, loops, functions or other programs. In Bash, git, gh and cd calls may be joined by && ' +
-  'or ;. In PowerShell, run each git or gh call as its own tool call (; would run the next one even after a ' +
-  'failure). Write a message or PR body to a file first (with the Write tool) and pass it with -F or ' +
-  "--body-file, or in a quoted here-doc (<<'EOF')."
+// is plain when it is git, gh and a few read-only programs, joined by `&&`, `||`, `;`, a newline or a pipe,
+// with each word typed out (plain or in quotes, with no `$` or backtick). A command that is not plain is
+// still read as far as the reading goes, and the reason is noted in the log: refusing it blocked ordinary
+// work the shipped attribution hook passes. Pure, no engine access.
 
 // What the text names, read with quotes, escapes and expansion marks taken out.
 const NAMES_GIT = /\bgit\b/
