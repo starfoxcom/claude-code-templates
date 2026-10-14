@@ -522,6 +522,8 @@ export const register: Register = (on, options) => {
   // A compaction later in a turn starts the cache over for that turn only; by its end the cache is warm.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    // A subagent's turn end is not a reply of main's: main's cache still runs from main's last reply.
+    if (e.agentId !== undefined) return result
     live.isWindowFresh = false
     live.hasReplied = true
     live.lastResponseAt = await $.clock.now()

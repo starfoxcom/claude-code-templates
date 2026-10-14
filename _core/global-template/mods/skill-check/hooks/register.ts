@@ -105,7 +105,8 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     const run = live.run
-    if (!run || e.isAborted) return result
+    // A subagent's turn ends inside main's: the skill's run goes on.
+    if (!run || e.isAborted || e.agentId !== undefined) return result
     if (missingSteps(run).length === 0 || run.isFollowedUp) {
       live.run = undefined
       return result
