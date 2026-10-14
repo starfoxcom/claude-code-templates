@@ -64,6 +64,30 @@ function hidesProgram(code: string, powershell: boolean): boolean {
   return false
 }
 
+// Programs that run their quoted argument as a command the reading does not follow (`flock -c '...'`,
+// `ssh host '...'`, `Start-Process git -ArgumentList '...'`), `env -S`, and a program word Bash builds from a
+// brace expansion (`{gi,commi}t` runs `git commit`).
+const LAUNCHERS = /^(flock|watch|parallel|script|ssh|su|setsid|stdbuf|doas|runas|wsl|fish|start-process|saps|start)$/i
+const SPLIT_ENV = /(?:^|[;&|\n({])[ \t]*env(?:[ \t]+-\S+)*?[ \t]+(?:-S|--split-string)\b/
+
+/** The launcher or built program word in the command whose text the reading cannot follow, or undefined. */
+export function launcherIn(command: string): string | undefined {
+  const code = withoutBodies(command)
+  const masked = code.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
+  if (SPLIT_ENV.test(masked)) return 'env -S'
+  for (const m of masked.matchAll(PROGRAM_WORD)) {
+    const word = m[1] as string
+    const name = word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
+    if (!LAUNCHERS.test(name) && !/\{[^}]*,/.test(word)) continue
+    // Only a launcher whose own statement runs git or gh counts.
+    const at = (m.index ?? 0) + m[0].length - word.length
+    const end = masked.slice(at).search(/[;&|\n]/)
+    const text = code.slice(at, end === -1 ? undefined : at + end).toLowerCase().replace(/['"`^\\${}()]/g, '')
+    if (NAMES_GIT.test(text) || NAMES_GH.test(text) || /\{[^}]*,/.test(word)) return name
+  }
+  return undefined
+}
+
 // The curly quotes Windows PowerShell reads as quote marks: no plain reading follows them.
 const SMART_QUOTES = /[‘-„]/
 

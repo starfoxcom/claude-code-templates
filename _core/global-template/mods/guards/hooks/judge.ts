@@ -8,7 +8,7 @@
 
 import { readCommand } from './inspect'
 import type { Plan } from './plan'
-import { namesWrite, notPlain, runsShellText, withoutBodies } from './plain'
+import { launcherIn, namesWrite, notPlain, runsShellText, withoutBodies } from './plain'
 import { routeIn } from './routes'
 
 // The unread kinds real work produces (2026-10-14 replay) that only the shell can fill in, and that the
@@ -24,12 +24,22 @@ export function inspect(command: string, powershell: boolean): Plan {
   // Where the reading could not follow every word, a route around the check named anywhere in the command is
   // refused (`flock /tmp/l -c 'git filter-repo --force'`, `ARGS=(--no-verify); git commit -m x "${ARGS[@]}"`).
   const route = plan.notes.length > 0 ? routeIn(scanText(command, plan, why)) : undefined
-  if (route) {
+  // A git or gh call inside a launcher's quoted text runs unread, as one inside `eval` does; a flag word built at run
+  // time from a variable the command sets to a flag (`ARGS=(-n); git commit -m x "${ARGS[@]}"`) is unread too.
+  const launcher = launcherIn(command)
+  const isFlagHeld = plan.notes.some(n => /may be a flag|may carry more options/.test(n)) && FLAG_HELD.test(command)
+  const reason = route ?? (launcher ? launched(launcher) : isFlagHeld ? FLAG_IN_VARIABLE : undefined)
+  if (reason) {
     plan.isWrite = true
-    plan.block ??= route
+    plan.block ??= reason
   }
   return plan
 }
+
+const FLAG_HELD = /\b\w+\+?=(?:\((?:[^)]*?[\s'"])?-|['"]?-)/
+const FLAG_IN_VARIABLE = 'a flag held in a variable cannot be read. Type the flags of the git or gh call out.'
+const launched = (name: string) =>
+  `a git or gh call run through \`${name}\` cannot be read. Run the git or gh call directly, as its own command.`
 
 // The command's text, quoted text included, less the messages the reading read and, unless a program in it
 // runs shell text, the bodies of quoted here-docs. Windows PowerShell breaks a word holding `"` apart

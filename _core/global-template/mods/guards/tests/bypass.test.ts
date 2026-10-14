@@ -601,6 +601,9 @@ const RUN_TIME_UNREAD: [string, string][] = [
   ['gh run $A 12', 'a gh subcommand built at run time'],
   // `-n` is a release's notes text.
   ['gh release $A v1 -n notes', 'the gh call (its subcommand built at run time)'],
+  ['gh pr $A 5 --comment hi', 'the gh call (its subcommand built at run time)'],
+  ['gh repo $A -d text', 'the gh call (its subcommand built at run time)'],
+  ['gh pr $A 5 --subject s', 'the gh call (its subcommand built at run time)'],
   ['git -c "$K" commit -m x', 'a git setting built at run time'],
   ['A=create; gh pr $A -t t -b "$OUT"', 'the PR text'],
   ['git checkout -b "$B"', 'the new branch name'],

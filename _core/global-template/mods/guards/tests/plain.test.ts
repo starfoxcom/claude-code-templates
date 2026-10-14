@@ -53,6 +53,17 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['{gi,commi}t -C HEAD~1', false],
     ['{gi,commi}t --reuse-message=HEAD', false],
     ['{gi,commi}t --fixup=amend:HEAD', false],
+    // A write in a launcher's quoted text runs unread, as one in eval does, in any spelling git accepts.
+    ["flock /tmp/l -c 'git commit --no-verif -m x'", false],
+    ["flock /tmp/l -c 'git commit --trail \"a: b\" -m m'", false],
+    ["ssh host 'git config set core.hooksPath /dev/null'", false],
+    ["flock /tmp/l -c 'git commit -ac HEAD'", false],
+    ["flock /tmp/l -c 'HUSKY=$H git commit -m x'", false],
+    ["saps git 'commit -n -m x'", true],
+    ["Start-Process git -ArgumentList 'commit -n -m x'", true],
+    // A flag held in a variable the command sets.
+    ['ARGS=(-n); git commit -m x "${ARGS[@]}"', false],
+    ['ARGS=(-C HEAD~1); git commit "${ARGS[@]}"', false],
     // A skip at the end of the quoted text, and one beside a message that is a fragment of the flag.
     ["flock /tmp/l -c 'git commit -m x -n'", false],
     ['ssh host "git commit -m x -n"', false],
@@ -73,6 +84,9 @@ test('a bypass route in a command that is not plain is still refused', () => {
     expect([command, plan.block ?? plan.unread[0]]).toEqual([command, expect.any(String)])
     expect([command, isNoted(command, ps)]).toEqual([command, true])
   }
+  // A git or gh call in a launcher's quoted text is refused even when it names no write.
+  expect(inspect("flock /tmp/l -c 'git submodule --quiet foreach make'", false).block).toContain('run through `flock`')
+  expect(inspect("ssh host 'gh -R o/r alias import aliases.yml'", false).block).toContain('run through `ssh`')
 })
 
 // The routes are looked for where git gets them: a read that only names one is no route.

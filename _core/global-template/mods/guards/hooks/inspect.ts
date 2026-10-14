@@ -14,8 +14,7 @@
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): one already
 //   on disk is read as it is before the command runs, as the shipped hook reads it, and the rewrite is
 //   noted; one not there yet is refused, unless inline script code in the command may write it (noted);
-// - the output of another program used as a message (`git log --format=%B | git commit -F -`): named
-//   unread and refused, its text never checked;
+// - another program's output used as a message (`git log --format=%B | git commit -F -`): unread, refused;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
 import { bypassOf, EVAL, functionsOf, hooksOffReason } from './bypass'
@@ -70,6 +69,7 @@ import {
   PS_WEB,
   RAW_WRITES,
   SWITCH,
+  TEXT_FLAG,
 } from './specs'
 import type { Kind, Spec } from './specs'
 import { emptyPlan, type Plan } from './plan'
@@ -576,9 +576,9 @@ function ghApi(st: Statement, args: Word[], r: Reading): string | undefined {
 }
 
 // A gh call whose subcommand is built at run time: unread when it hands over text or a file.
+const GH_BUILT = 'a gh subcommand built at run time'
 function ghUnknown(args: Word[], r: Reading) {
-  const isText = args.some(w => /^(?:-[bFfmnt]|--(?:body|title|field|raw-field|input|message|notes))/.test(w.text))
-  unreadCall(r, isText ? 'the gh call (its subcommand built at run time)' : 'a gh subcommand built at run time')
+  unreadCall(r, args.some(w => TEXT_FLAG.test(w.text)) ? 'the gh call (its subcommand built at run time)' : GH_BUILT)
 }
 
 function gh(st: Statement, args: Word[], r: Reading): string | undefined {

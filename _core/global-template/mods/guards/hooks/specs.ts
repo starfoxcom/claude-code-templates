@@ -280,3 +280,6 @@ export function ghSpec(group: string, action: string): Spec {
   if (group === 'pr' && action === 'merge') return GH_MERGE
   return action === 'close' || action === 'reopen' ? GH_CLOSE : GH_BODY
 }
+
+// The gh flags that hand over text or a file, in any subcommand (`-b`, `--comment`, `-dF b.md`).
+export const TEXT_FLAG = /^(?:-[bcdFfmnt]|--(?:body|title|field|raw-field|input|message|notes|comment|desc|subject))/
