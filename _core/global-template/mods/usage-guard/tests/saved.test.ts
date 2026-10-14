@@ -23,7 +23,14 @@ const SAVED: SavedWork = {
 }
 const OLD_FILE = `${CLAIMS_DIR}/work-${KEY}-sess-old/saved.json`
 const RESUME_CLAIM = `resume-${KEY}-sess-old`
-const DONE: Pause = { status: 'done', kinds: ['five_hour'], percentUsed: 92, resetsAt: RESET, wakeAt: SAVED.wakeAt, triggeredBy: 'x' }
+const DONE: Pause = {
+  status: 'done',
+  kinds: ['five_hour'],
+  percentUsed: 92,
+  resetsAt: RESET,
+  wakeAt: SAVED.wakeAt,
+  triggeredBy: 'x',
+}
 
 function leaveSaved(seen: World, record: object | null = SAVED, file = OLD_FILE): void {
   seen.files.set(file, JSON.stringify(record))
@@ -46,7 +53,13 @@ test('saved work is picked only from another session here, past its wake and rec
     ['another session, ten minutes past', [SAVED], none, undefined, 'sess-old'],
     ["this session's own", [{ ...SAVED, session: 'sess-a' }], none, undefined, undefined],
     ['another project', [{ ...SAVED, root: 'C:/Repos/other' }], none, undefined, undefined],
-    ['the same project, spelled another way', [{ ...SAVED, root: 'c:\\Repos\\my-game\\' }], none, undefined, 'sess-old'],
+    [
+      'the same project, spelled another way',
+      [{ ...SAVED, root: 'c:\\Repos\\my-game\\' }],
+      none,
+      undefined,
+      'sess-old',
+    ],
     ['kept for its own session', [{ ...SAVED, isKept: true }], none, undefined, undefined],
     ['already resumed', [SAVED], new Set([RESUME_CLAIM]), undefined, undefined],
     ['inside the grace', [at(ADOPT_GRACE_MS - 1)], none, undefined, undefined],
@@ -85,7 +98,8 @@ test('the wrap-up files the saved work in its claim, naming the project', async 
   seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
   await endTurn($)
   const record = parseSaved(seen.files.get(`${CLAIMS_DIR}/work-${KEY}-sess-a/saved.json`) ?? '')
-  expect(record).toEqual({ session: 'sess-a', root: ROOT, key: KEY, resetsAt: RESET, wakeAt: WAKE, kinds: ['five_hour'] })
+  const expected = { session: 'sess-a', root: ROOT, key: KEY, resetsAt: RESET, wakeAt: WAKE, kinds: ['five_hour'] }
+  expect(record).toEqual(expected)
 })
 
 test('a session that changed nothing files no saved work', async ($, on) => {
@@ -188,7 +202,7 @@ for (const key of ['usage-adopt-take', 'usage-adopt-keep', 'usage-adopt-drop']) 
   })
 }
 
-test('saved work a closed session misses shows just past the reset, without the 15-minute wait', LONG, async ($, on) => {
+test('saved work a closed session misses shows just past the reset, with no 15-minute wait', LONG, async ($, on) => {
   const seen = world(on)
   const pause: Pause = { ...DONE, status: 'active', wakeAt: WAKE }
   seen.files.set(PAUSE_FILE, JSON.stringify(pause))
