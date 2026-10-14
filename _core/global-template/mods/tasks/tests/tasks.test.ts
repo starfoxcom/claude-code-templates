@@ -300,6 +300,18 @@ test("a subagent's turn mid-turn does not restart main's count", async ($, on) =
   expect(notes[0]).toContain('ran 3 tool calls with no task list')
 })
 
+test("a subagent's turn ending mid-turn leaves main's turn running", async ($, on) => {
+  world(on)
+  await turn($)
+  await create($, 'one')
+  await update($, '1', 'in_progress')
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  // A prompt queued while main's turn still runs gets no notes.
+  const answer = (await $.prompt.submit({ text: 'next' } as never)) as never as { context?: string[] }
+  expect((answer.context ?? []).join(' ')).not.toContain('Still in progress')
+})
+
 test('the nudge count saved in the settings file applies from the session start', async ($, on) => {
   const seen = world(on)
   seen.files.set('plugin.json', JSON.stringify({ userConfig: { nudgeAfterTools: { type: 'number' } } }))
