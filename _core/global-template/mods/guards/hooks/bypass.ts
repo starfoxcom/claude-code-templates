@@ -343,11 +343,11 @@ export function bypassIn(st: Statement, name: string, args: Word[], state: HookS
   const isBuilt = head?.dynamic || (!state.ps && /[*?[]/.test(head?.text ?? '') && !/^\[\[?$/.test(head?.text ?? ''))
   const asCall = name && isBuilt ? (bypassOf(st, 'git', args, state) ?? bypassOf(st, 'gh', args, state)) : undefined
   if (asCall) return asCall
-  if (LAUNCHERS.test(name) && args.some(a => NAMES_CALL.test(a.text.replace(/['"]/g, ' ')))) return launched(name)
+  const isGit = (a: Word) => /^(git|gh)$/.test(baseName(a.text))
+  if (LAUNCHERS.test(name) && args.some(a => isGit(a) || namesCall(a.text))) return launched(name)
   if (!state.ps && name && /\s/.test(head?.text ?? '') && NAMES_CALL.test(head?.text ?? '')) return SHELL_TEXT
   // PowerShell runs a literal git or gh word among another program's arguments (`uv run git ...`) the same way;
   // its variables, quoted strings and script blocks are read by the PowerShell reading instead.
-  const isGit = (a: Word) => /^(git|gh)$/.test(baseName(a.text))
   const runs = (a: Word) => a.dynamic || isGit(a) || SHELL.test(baseName(a.text)) || LAUNCHERS.test(baseName(a.text))
   const at = args.findIndex(a => (state.ps ? !a.dynamic && isGit(a) : runs(a)))
   const word = args[at]

@@ -68,13 +68,18 @@ function hidesProgram(code: string, powershell: boolean): boolean {
 
 // The launchers (`bypass.ts`) at a statement's head, `env -S`, and a program word Bash builds from a brace
 // expansion (`{gi,commi}t` runs `git commit`). A launcher behind a wrapper is found on the reading's statement.
-const SPLIT_ENV = /(?:^|[;&|\n({])[ \t]*env(?:[ \t]+-\S+)*?[ \t]+(?:-S|--split-string)\b/
+const SPLIT_ENV = /(?:^|[;&|\n({])[ \t]*env(?:[ \t]+-\S+)*?[ \t]+(?:-S|--split-string)\b/g
 
 /** The launcher or built program word in the command whose text the reading cannot follow, or undefined. */
 export function launcherIn(command: string): string | undefined {
   const code = withoutBodies(command)
   const masked = code.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
-  if (SPLIT_ENV.test(masked)) return 'env -S'
+  // `env -S` counts only when its own statement runs git or gh.
+  for (const m of masked.matchAll(SPLIT_ENV)) {
+    const at = (m.index ?? 0) + m[0].length
+    const end = masked.slice(at).search(/[;&|\n]/)
+    if (NAMES_CALL.test(callText(code.slice(at, end === -1 ? undefined : at + end)))) return 'env -S'
+  }
   for (const m of masked.matchAll(PROGRAM_WORD)) {
     const word = m[1] as string
     const name = word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
@@ -142,7 +147,9 @@ export function namesWrite(command: string, powershell = false): boolean {
   const code = withoutBodies(command)
   if (hidesProgram(code, powershell)) return true
   const own = withoutData(code)
-  const t = (RUNNERS.test(own) || RUNS_GIT.test(own) ? command : own).toLowerCase().replace(/['"`^\\${}()]/g, '')
+  // A Windows path's backslashes read as separators, so `C:\Git\cmd\git.exe` names git.
+  const text = (RUNNERS.test(own) || RUNS_GIT.test(own) ? command : own).toLowerCase()
+  const t = text.replace(/\\(?=[\w.-])/g, '/').replace(/['"`^\\${}()]/g, '')
   if (OTHER_WRITES.test(t)) return true
   if (NAMES_GIT.test(t) && GIT_WRITES.test(t)) return true
   return NAMES_GH.test(t) && (GH_WRITES.test(t) || GH_API_WRITE.test(t))

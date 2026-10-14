@@ -129,6 +129,9 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['uv run git commit --no-veri -m x', true],
     ['poetry run git commit --trail x -m y', true],
     ['git --% commit -m %M%', true],
+    ["$p = Start-Process C:\\Git\\cmd\\git.exe -ArgumentList 'commit -n -m x' -PassThru", true],
+    ["$a = @('-n'); git commit -m 'x' $a", true],
+    ["$a = '-n','-m','x'; git commit $a", true],
     // A PowerShell launcher on the right of an assignment.
     ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$out = ssh host 'git commit --no-veri -m x'", true],
@@ -197,6 +200,8 @@ test('a read that names a route in a command that is not plain passes', () => {
     "ssh deploy 'ls /srv/app.git'; git commit -m x",
     'watch ls build.git',
     'cat setup.sh | bash; git commit -m x',
+    // `env -S` that runs no git or gh call.
+    "env -S 'FOO=1 python x.py'; git commit -m x",
   ]) {
     const plan = inspect(command, false)
     expect([command, plan.block, plan.unread]).toEqual([command, undefined, []])
