@@ -286,6 +286,32 @@ test('a long turn with no task list is asked for one, once', async ($, on) => {
   expect(notes[0]).toContain('ran 3 tool calls with no task list')
 })
 
+// Since Claude Code 2.1.299 a subagent's turn fires turn.start too; it is not a new main turn.
+test("a subagent's turn mid-turn does not restart main's count", async ($, on) => {
+  world(on)
+  await turn($)
+  const notes: string[] = []
+  for (let i = 0; i < 3; i++) {
+    if (i === 2) await $.turn.start({ turnId: 's', agentId: 'a1' } as never)
+    const result = (await $.tool.call({ tool: 'Read', file_path: 'a' } as never)) as never as { context?: string[] }
+    notes.push(...(result.context ?? []))
+  }
+  expect(notes.length).toBe(1)
+  expect(notes[0]).toContain('ran 3 tool calls with no task list')
+})
+
+test("a subagent's turn ending mid-turn leaves main's turn running", async ($, on) => {
+  world(on)
+  await turn($)
+  await create($, 'one')
+  await update($, '1', 'in_progress')
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  // A prompt queued while main's turn still runs gets no notes.
+  const answer = (await $.prompt.submit({ text: 'next' } as never)) as never as { context?: string[] }
+  expect((answer.context ?? []).join(' ')).not.toContain('Still in progress')
+})
+
 test('the nudge count saved in the settings file applies from the session start', async ($, on) => {
   const seen = world(on)
   seen.files.set('plugin.json', JSON.stringify({ userConfig: { nudgeAfterTools: { type: 'number' } } }))

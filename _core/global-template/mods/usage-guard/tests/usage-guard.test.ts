@@ -52,7 +52,9 @@ test('crossing the line wraps up, stops background work and resumes after the re
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   expect(cardOf(seen)?.text).toContain('Fri 2026-10-02 12:02 (America/Phoenix)')
 
-  await seen.clock.advance(WAKE - NOW)
+  // In 10-minute steps: one two-hour jump (thousands of 2-second ticks) stopped short of the wake on a slow
+  // CI runner, about 10 s in (2026-10-08 and 2026-10-14).
+  for (let left = WAKE - NOW; left > 0; left -= 10 * 60_000) await seen.clock.advance(Math.min(10 * 60_000, left))
   // The session goes on by itself: no /session-start, whose plan would wait for the person's OK.
   expect(resumes(seen)).toHaveLength(1)
   expect(resumes(seen)[0]).toContain('do not wait for a plan approval')
@@ -510,6 +512,34 @@ test('crossing the line mid-turn waits for the turn to end before the wrap-up ru
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
   // Once only: later checks find the wrap-up done.
   await seen.clock.advance(60_000)
+  await endTurn($)
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
+// Since Claude Code 2.1.299 a subagent's turn fires turn.start too, with no main turn.complete after it.
+test("a subagent's turn between main's turns does not hold the wrap-up", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await doWork($)
+  await endTurn($)
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+
+  expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
+})
+
+test("a subagent's turn ending mid-turn does not start the wrap-up beside main's turn", async ($, on) => {
+  const seen = world(on)
+  await start($)
+  await $.turn.start({ turnId: 't1' } as never)
+  await doWork($)
+  seen.limits = [{ kind: 'five_hour', percentUsed: 91, resetsAt: RESET }]
+  await seen.clock.advance(60_000)
+  await $.turn.start({ turnId: 's1', agentId: 'a1' } as never)
+  await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  expect(seen.commands).toEqual([])
+
   await endTurn($)
   expect(seen.commands).toEqual([{ command: 'session-close', args: WRAP_UP_ARGS }])
 })
