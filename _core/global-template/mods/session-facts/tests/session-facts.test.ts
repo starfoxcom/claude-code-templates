@@ -52,6 +52,37 @@ test('every prompt carries the local time, the context fill to compaction and pl
   expect(seen[0]).toContain('| ctx 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ 57% · 181k to compact |')
   expect(seen[0]).toContain('plan used: 5-hour 3%, week 20%')
   expect(seen[0]).not.toContain('2026-10-04')
+  expect(seen[0]).not.toContain('keep working')
+})
+
+// Sessions stopped or held work on a red bar right before compaction (Emberholm 2026-10-13).
+test('a bar near compaction tells the model to keep working through it', async ($, on) => {
+  mock.clock(on, { now: NOON_UTC })
+  on('process.run', () => {
+    throw new Error('no node')
+  })
+  on('session.usage', ($, e) => ({
+    value: {
+      startedAt: 0,
+      context: { tokens: 430_000, window: 1_000_000, ...(e.breakdown ? { breakdown: BREAKDOWN } : {}) },
+      rateLimits: [],
+    },
+  }))
+  mock.env(on, { USERPROFILE: 'C:/Users/me' })
+  on('fs.write', () => ({ value: undefined }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } as never }))
+  let seen: readonly string[] = []
+  on('prompt.submit', ($, e) => {
+    seen = e.context ?? []
+    return { text: e.text, context: e.context }
+  })
+
+  await $.session.start({ cwd: 'C:/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: 'hello' } as never)
+
+  expect(seen[0]).toContain('· 37k to compact')
+  expect(seen[0]).toContain('| compaction is expected: keep working')
 })
 
 test('an unreadable host zone and window fall back instead of failing the prompt', async ($, on) => {

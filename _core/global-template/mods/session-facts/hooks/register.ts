@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, TurnUsage } from 'claude-code'
 
 import type { Budgets, CacheCheck } from '../types'
-import { compactedMark, contextText, phoneText, registerBudgetsView } from './budgets'
+import { compactedMark, contextText, fillTone, phoneText, registerBudgetsView } from './budgets'
 import {
   checkCache,
   IDLE_COMPACT_MIN_TOKENS,
@@ -89,18 +89,32 @@ function contextPart(tokens: number | undefined, fullWindow: number, now: number
 // `isPartial`: a figure is unknown or borrowed, so a later line in the same turn can do better.
 type FactsLine = { text: string; isPartial: boolean }
 
+// Sessions read a yellow or red bar as a cue to wrap up, and stopped or held work right before the
+// compaction (Emberholm 2026-10-13). The note sits outside the ctx text the State line copies.
+const KEEP_WORKING =
+  ' | compaction is expected: keep working through it at full depth; never stop, hold a task, ' +
+  'hand off or end the turn on "Next:" because of it'
+
+function nearCompactionNote(tokens: number | undefined, fullWindow: number): string {
+  if (tokens === undefined) return ''
+  const ratio = tokens / (live.window?.compactsAt ?? live.window?.size ?? fullWindow)
+  return fillTone(ratio) === 'green' ? '' : KEEP_WORKING
+}
+
 // While the compaction is still finishing, the engine's fill can be the one from before it.
 async function factsLine($: EngineInterface, isCompacting = false): Promise<FactsLine> {
   const now = await $.clock.now()
   const time = formatLocal(now, live.zone)
   try {
     const { context, rateLimits } = await $.session.usage()
-    const ctx = contextPart(isCompacting ? undefined : context.tokens, context.window, now)
+    const tokens = isCompacting ? undefined : context.tokens
+    const ctx = contextPart(tokens, context.window, now)
     const borrowedAt = live.sharedPlan && formatLocal(live.sharedPlan.at, live.zone).slice(11, 16)
     const plan = planPart(rateLimits, live.hasReplied, live.sharedPlan, borrowedAt)
     const [pausedUntil, armAt] = await Promise.all([readPausedUntil($), readArmAt($)])
     const wake = wakePart(now, live.zone.offsetMinutes, pausedUntil, armAt)
-    return { text: `${time} | ${ctx.text}${plan.text}${wake}`, isPartial: !ctx.isKnown || !plan.isOwn }
+    const note = nearCompactionNote(tokens, context.window)
+    return { text: `${time} | ${ctx.text}${plan.text}${wake}${note}`, isPartial: !ctx.isKnown || !plan.isOwn }
   } catch {
     return { text: `${time} | ctx unreadable`, isPartial: true }
   }
