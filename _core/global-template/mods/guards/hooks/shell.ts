@@ -153,6 +153,14 @@ class Reader {
     const isCoproc = now[0]?.text === 'coproc' && now.length === 2 && w.text === '{'
     if (isPlain && !this.powershell && (isCoproc || now.every(x => KEYWORDS.has(x.text)))) this.keyword(w.text)
     this.continues = false
+    // Windows PowerShell splits an unquoted word that starts with a dash at its first dot: `--no-verify.`
+    // reaches git as `--no-verify` and `.`.
+    const dot = w.text.indexOf('.')
+    if (isPlain && this.powershell && !w.quoted && /^-[^\d.]/.test(w.text) && dot > 0) {
+      const literals = w.literals?.filter(at => at < dot)
+      this.st.words.push({ ...w, text: w.text.slice(0, dot), literals }, sliceWord(w, dot))
+      return
+    }
     this.st.words.push(w)
   }
 
@@ -752,6 +760,9 @@ class Reader {
 /** A PowerShell assignment operator: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `??=`. */
 export const PS_OPERATOR = /^(?:[-+*/%]|\?\?)?=$/
 
+// Windows PowerShell reads curly quotes as quote marks: `'fix: x’ --no-verify ‘'` passes the flag on.
+const toPsQuotes = (command: string) => command.replace(/[‘-‛]/g, "'").replace(/[“-„]/g, '"')
+
 export function parse(command: string, powershell: boolean): Statement[] {
-  return new Reader(command, powershell).run()
+  return new Reader(powershell ? toPsQuotes(command) : command, powershell).run()
 }
