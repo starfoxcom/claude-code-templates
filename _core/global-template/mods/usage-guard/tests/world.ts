@@ -19,6 +19,7 @@ export const CARD_FILE = 'C:/Users/me/.claude/mods-data/usage-guard/card.json'
 export const TASKS_DIR = 'C:/Users/me/.claude/mods-data/tasks'
 export const ARMS_DIR = 'C:/Users/me/.claude/mods-data/usage-guard/arms'
 export const ARM_FILE = `${ARMS_DIR}/sess-a.json`
+export const CLAIMS_DIR = 'C:/Users/me/.claude/mods-data/usage-guard/claims'
 export const KEY = String(Date.parse(RESET))
 export const SUMMARY = [{ role: 'user' as const, text: 'summary', toolUses: [] }]
 
@@ -87,6 +88,12 @@ export function world(on: On, root = 'C:/Repos/my-game'): World {
       const inside = [...seen.files.keys()].filter(p => p.startsWith(`${ARMS_DIR}/`))
       const names = inside.map(p => p.slice(ARMS_DIR.length + 1))
       return { value: names.map(name => ({ name, kind: 'file', size: 0, mtimeMs: 0 })) as never }
+    }
+    // The claim folders: the ones the helper made, and any a file was written into.
+    if (key(e.path) === CLAIMS_DIR) {
+      const inside = [...seen.files.keys()].filter(p => p.startsWith(`${CLAIMS_DIR}/`))
+      const names = new Set([...seen.claims, ...inside.map(p => p.slice(CLAIMS_DIR.length + 1).split('/')[0])])
+      return { value: [...names].map(name => ({ name, kind: 'dir', size: 0, mtimeMs: 0 })) as never }
     }
     if (!seen.hasTasksMod || key(e.path) !== TASKS_DIR) throw new Error('ENOENT')
     return { value: [] as never }
