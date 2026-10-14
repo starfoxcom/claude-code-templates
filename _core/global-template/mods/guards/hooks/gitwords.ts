@@ -214,7 +214,7 @@ export function builtReasons(st: Statement, name: string, args: Word[], state: B
   const isRaw = state.ps && args.some(a => a.text === '--%')
   // Raw mode hides even the subcommand (`git --% %S% -m x`), so any git or gh call in it is unread.
   if (/^(git|gh)$/.test(name) && (isRaw || (flags.some(splitsAt) && writesHistory(name, args, state.ps))))
-    reasons.push('a word built at run time')
+    reasons.push(isRaw ? 'a raw word built at run time' : 'a word built at run time')
   // Once the command sets a git alias, include or config file, any git call may be a write the reading
   // cannot follow (`git -c alias.ci="commit --no-verify" ci`).
   state.isConfigMoved ||= setsGitConfig(st, name, args, state.ps)

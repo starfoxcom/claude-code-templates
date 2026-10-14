@@ -124,6 +124,11 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["printf 'git commit -ac HEAD' | sh -s x", false],
     ["echo 'git commit --no-veri -m x' | bash -s --", false],
     ["cat <<'EOF' | bash\ngit commit --no-veri -m x\nEOF", false],
+    // PowerShell: a git call another program runs from its arguments, and a message in raw mode.
+    ['uv run git commit -ac HEAD', true],
+    ['uv run git commit --no-veri -m x', true],
+    ['poetry run git commit --trail x -m y', true],
+    ['git --% commit -m %M%', true],
     // A PowerShell launcher on the right of an assignment.
     ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$out = ssh host 'git commit --no-veri -m x'", true],

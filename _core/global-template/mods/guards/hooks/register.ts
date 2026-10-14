@@ -261,6 +261,7 @@ const WAYS_OUT: [RegExp, string][] = [
     /^a git setting built at run time/,
     'Leave the git alias, include or config file out of the command, and write each `-c` setting out.',
   ],
+  [/^a raw word built at run time$/, 'Leave `--%` out and write each word of the git or gh call out.'],
   [
     /^a .* built at run time$/,
     'Write each word of the git or gh call out: no variable, `$(...)`, list or splat in it.',
