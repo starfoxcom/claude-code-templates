@@ -95,22 +95,33 @@ test('in enforce mode a block is refused, counted and logged', { options: { mode
   expect(Object.values(stats)).toMatchObject([{ checked: 1, mod: 1, scripts: 0 }])
 })
 
-// Attribution is opt-out: with it off, credit and the routes around the check pass; the rest stays.
+// Attribution is opt-out: off drops only the credit and product-name checks. Banned names and the PR-body
+// contract read the same text, so every refusal that keeps it readable stays.
 test(
-  'with attribution off, AI credit passes and the streaming CI watcher is still refused',
-  { options: { mode: 'enforce', attribution: 'off' } },
+  'with attribution off, AI credit and the product name pass; every other refusal stays',
+  { options: { mode: 'enforce', attribution: 'off', mentionRepos: '' } },
   async ($, on) => {
-    const seen = world(on)
-    for (const command of [`git commit -m 'fix: x' -m '${AI_TRAILER}'`, 'git commit --no-verify -m "fix: x"']) {
+    const seen = world(on, { 'C:/Users/me/.claude/mods-data/guards/names.json': NAME_RULE_OFF })
+    for (const command of [`git commit -m 'fix: x' -m '${AI_TRAILER}'`, `git commit -m 'docs: the Claude setup'`]) {
       const result = await bash($, command)
       expect((result as { deny?: string }).deny).toBeUndefined()
     }
     expect(seen.ran).toHaveLength(2)
-    const watch = await bash($, ['gh', 'run', 'watch', '123'].join(' '))
-    expect(String((watch as { deny?: string }).deny)).toContain('streams a live log')
+    const refused = [
+      [`git commit -m 'feat: port the Oldkeep sky'`, '"Oldkeep" named in the commit message'],
+      ['git commit --no-verify -m "fix: x"', 'skipping git hooks'],
+      ['cd "$REPO" && gh pr create --title t --body-file body.md', 'not plain'],
+      [['gh', 'run', 'watch', '123'].join(' '), 'streams a live log'],
+    ]
+    for (const [command, reason] of refused) {
+      const result = await bash($, command as string)
+      expect(String((result as { deny?: string }).deny)).toContain(reason as string)
+    }
     expect(seen.ran).toHaveLength(2)
   },
 )
+
+const NAME_RULE_OFF = JSON.stringify({ repos: { 'my-game': { names: ['oldkeep'] } } })
 
 test('writes the reading misses are still refused in enforce mode', { options: { mode: 'enforce' } }, async ($, on) => {
   const seen = world(on)
