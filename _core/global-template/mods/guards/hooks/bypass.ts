@@ -316,8 +316,11 @@ export function bypassIn(st: Statement, name: string, args: Word[], state: HookS
   const own = bypassOf(st, name, args, state)
   if (own || FOLLOWED.test(name) || PRINTS.test(name)) return own
   const head = st.words[st.words.length - args.length - 1]
-  // A program word built at run time (`$G config --unset-a core.hooksPath`) may be git or gh: their routes count.
-  if (name && head?.dynamic) return bypassOf(st, 'git', args, state) ?? bypassOf(st, 'gh', args, state)
+  // A program word built at run time (`$G config --unset-a core.hooksPath`) or by a Bash glob (`g[i]t`) may be
+  // git or gh: their routes count, and the scan below still runs on its arguments.
+  const isBuilt = head?.dynamic || (!state.ps && /[*?[]/.test(head?.text ?? '') && !/^\[\[?$/.test(head?.text ?? ''))
+  const asCall = name && isBuilt ? (bypassOf(st, 'git', args, state) ?? bypassOf(st, 'gh', args, state)) : undefined
+  if (asCall) return asCall
   if (LAUNCHERS.test(name) && args.some(a => NAMES_CALL.test(a.text.replace(/['"]/g, ' ')))) return launched(name)
   if (state.ps) return undefined
   if (name && /\s/.test(head?.text ?? '') && NAMES_CALL.test(head?.text ?? '')) return SHELL_TEXT

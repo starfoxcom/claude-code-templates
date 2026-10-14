@@ -107,6 +107,14 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['$G submodule --quiet foreach make', false],
     ['$G bisect --no-checkout run make', false],
     ["$GH -R o/r alias set ci 'pr checks'", false],
+    ["$SUDO ssh host 'git commit --no-veri -m x'", false],
+    ["$WRAP sh -c 'git commit --no-veri -m x'", false],
+    ["$TIMEOUT 5 flock /tmp/l -c 'git commit -ac HEAD'", false],
+    // A program word spelled as a glob takes every spelling too.
+    ['/usr/bin/g[i]t config --unset-a core.hooksPath', false],
+    ['/usr/bin/g?t difftool --ext cmd', false],
+    ['g[i]t submodule --quiet foreach make', false],
+    ["g?h -R o/r alias set ci 'pr checks'", false],
     // A PowerShell launcher on the right of an assignment.
     ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$out = ssh host 'git commit --no-veri -m x'", true],
