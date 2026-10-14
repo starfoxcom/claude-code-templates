@@ -95,12 +95,15 @@ export function launcherIn(command: string): string | undefined {
 
 /** The text without the statements of programs that only print or match their words (`echo`, `grep`): a git
  * call named there is data. A shell they feed is judged on its own statement (`bypassIn`). */
-export function withoutPrints(text: string): string {
+export function withoutPrints(text: string, isCallRead = false): string {
   const masked = text.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
   let out = text
   for (const m of masked.matchAll(PROGRAM_WORD)) {
     const word = m[1] as string
-    if (!PRINTS.test(word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, ''))) continue
+    const name = word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, '')
+    // With `isCallRead`, a git or gh statement goes too: the reading checked its own words, and the text
+    // inside them (`git log --grep "git commit -n"`) is its data.
+    if (!PRINTS.test(name) && !(isCallRead && /^(git|gh)$/.test(name))) continue
     const at = (m.index ?? 0) + m[0].length - word.length
     const end = masked.slice(at).search(/[;&|\n]/)
     const to = end === -1 ? text.length : at + end

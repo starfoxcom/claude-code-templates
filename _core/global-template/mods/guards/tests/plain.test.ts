@@ -175,7 +175,20 @@ test('a bypass route in a command that is not plain is still refused', () => {
   ]) {
     expect([command, inspect(command, false).block]).toEqual([command, expect.any(String)])
   }
-  expect(inspect('grep -e "git commit -n" notes.md -n', false).block).toBeUndefined()
+  for (const [command, ps] of [
+    ['grep -e "git commit -n" notes.md -n', false],
+    ['git log --grep "git commit -n"', false],
+    ["git log -S 'git commit --no-verify'", false],
+    ['git grep -n "git commit -n"', false],
+    ['gh search issues "git commit --no-verify"', false],
+    ['gh issue list --search "gh alias set"', false],
+    ["sed -n '/git commit -n/p' README.md", false],
+    ['rg -n -- --no-verify .', false],
+    ["rg -e '--no-verify' . && git status", false],
+    ['sls -Pattern --no-verify hooks/', true],
+  ] as const) {
+    expect([command, inspect(command, ps).block]).toEqual([command, undefined])
+  }
   // A git or gh call in a launcher's quoted text is refused even when it names no write.
   expect(inspect("flock /tmp/l -c 'git submodule --quiet foreach make'", false).block).toContain('run through `flock`')
   expect(inspect("ssh host 'gh -R o/r alias import aliases.yml'", false).block).toContain('run through `ssh`')

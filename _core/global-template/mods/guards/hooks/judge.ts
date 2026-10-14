@@ -28,7 +28,8 @@ export function inspect(command: string, powershell: boolean): Plan {
   // A git or gh call named anywhere in the text, a launcher's or a wrapper's quoted text included, meets the rules
   // a typed call meets in every command; the route table counts where the reading left a note.
   const scan = scanText(command, plan, why, powershell)
-  const route = callRoute(withoutPrints(scan)) ?? (plan.notes.length > 0 ? routeIn(scan) : undefined)
+  const noted = plan.notes.length > 0 ? routeIn(withoutPrints(scan)) : undefined
+  const route = callRoute(withoutPrints(scan, true)) ?? noted
   // A git or gh call inside a launcher's quoted text runs unread, as one inside `eval` does; a flag word built at run
   // time from a variable the command sets to a flag (`ARGS=(-n); git commit -m x "${ARGS[@]}"`) is unread too.
   const launcher = launcherIn(command)
