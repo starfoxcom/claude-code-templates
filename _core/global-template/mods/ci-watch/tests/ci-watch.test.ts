@@ -859,7 +859,14 @@ test("a subagent's turn ending mid-turn keeps the wake on main's next tool resul
   await $.tool.call({ tool: 'Bash', command: 'git push origin feature/x' } as never)
   await $.turn.start({ turnId: 't1', prompt: 'work' } as never)
   await $.turn.start({ turnId: 's1', prompt: '', agentId: 'a1' } as never)
-  await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await $.turn.complete({
+    turnId: 's1',
+    agentId: 'a1',
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    reason: 'answer',
+  } as never)
   seen.bucket = 'pass'
   for (let i = 0; i < 4; i++) await clock.advance(POLL_MS)
   expect(seen.prompts).toEqual([])
