@@ -74,7 +74,14 @@ test("a subagent's turn ending mid-run is not the run's end", async ($, on) => {
   const seen = world(on)
   await runSkill($)
   await shell($, 'python tools/board/board_check.py')
-  await $.turn.complete({ turnId: 's', agentId: 'a1', answer: '', durationMs: 1, isAborted: false, reason: 'done' } as never)
+  await $.turn.complete({
+    turnId: 's',
+    agentId: 'a1',
+    answer: '',
+    durationMs: 1,
+    isAborted: false,
+    reason: 'done',
+  } as never)
   expect(seen.prompts).toEqual([])
   await shell($, 'git commit -q -F msg.txt')
   await endTurn($)
