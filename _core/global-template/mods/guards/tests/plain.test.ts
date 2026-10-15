@@ -142,6 +142,8 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["printf 'git commit -n -m x' | sh /dev/fd/0", false],
     ["echo 'git commit --no-verify -m x' | tee run.log | bash", false],
     ["ssh host 'git commit -m \"fix(x): y\" -n'", false],
+    ["ssh host <<'EOF'\ngit commit -m $(date) -n\nEOF", false],
+    ['git --config-env=core.hooksPath=HP commit -m x', true],
     // A PowerShell launcher on the right of an assignment.
     ["$p = Start-Process git -ArgumentList 'commit -n -m x' -PassThru", true],
     ["$out = ssh host 'git commit --no-veri -m x'", true],

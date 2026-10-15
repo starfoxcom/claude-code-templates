@@ -37,7 +37,11 @@ const wordOf = (text: string): Word => ({ text, dynamic: /[$`]/.test(text), bodi
  * spellings the table above lists. */
 export function callRoute(text: string): string | undefined {
   // A separator inside quotes ends no statement (`-m "fix(x): y" -n`): blanked before the quotes go.
-  const plain = text.replace(QUOTED_STRING, s => s.replace(/[;&|()`\n]/g, ' ')).replace(/['"]/g, ' ')
+  // A `$(...)` or backtick span is one word of the call (`-m $(date) -n`), so its `)` ends nothing.
+  const plain = text
+    .replace(QUOTED_STRING, s => s.replace(/[;&|()`\n]/g, ' '))
+    .replace(/\$\([^()\n]*\)|`[^`\n]*`/g, 'X')
+    .replace(/['"]/g, ' ')
   for (const m of plain.matchAll(CALL)) {
     const rest = plain.slice((m.index ?? 0) + m[0].length)
     const end = rest.search(/[;&|\n`)]/)

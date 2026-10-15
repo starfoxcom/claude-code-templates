@@ -156,7 +156,9 @@ class Reader {
     // Windows PowerShell splits an unquoted word that starts with a dash at its first dot: `--no-verify.`
     // reaches git as `--no-verify` and `.`.
     const dot = w.text.indexOf('.')
-    if (isPlain && this.powershell && !w.quoted && /^-[^\d.]/.test(w.text) && dot > 0) {
+    // A word with `=` before its dot (`--config-env=core.hooksPath=HP`, `--body-file=b.md`) is kept whole.
+    const isValued = w.text.slice(0, dot).includes('=')
+    if (isPlain && this.powershell && !w.quoted && /^-[^\d.]/.test(w.text) && dot > 0 && !isValued) {
       const literals = w.literals?.filter(at => at < dot)
       this.st.words.push({ ...w, text: w.text.slice(0, dot), literals }, sliceWord(w, dot))
       return
