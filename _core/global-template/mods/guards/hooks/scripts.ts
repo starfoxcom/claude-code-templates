@@ -11,15 +11,9 @@ export type Verdict = { reason?: string; errors: string[] }
 
 // The interpreters SETUP.md § 7c tries, in its order, and its check: Python 3.8+ outside any virtual or
 // conda environment, since the guard serves every project and a project's environment can vanish.
-const PYTHONS = [
-  ['python'],
-  ['python3'],
-  ['py', '-3'],
-  ...[13, 12, 11, 10, 9, 8].map(minor => [`python3.${minor}`]),
-  ['/usr/bin/python3'],
-  ['/usr/local/bin/python3'],
-  ['/opt/homebrew/bin/python3'],
-]
+const PYTHONS = [['python'], ['python3'], ['py', '-3'], ...[13, 12, 11, 10, 9, 8].map(minor => [`python3.${minor}`])]
+// Tried last, after conda's own interpreter.
+const LAST_PYTHONS = [['/usr/bin/python3'], ['/usr/local/bin/python3'], ['/opt/homebrew/bin/python3']]
 const PYTHON_CHECK = [
   'import os, sys',
   'assert sys.version_info >= (3, 8) and sys.prefix == sys.base_prefix',
@@ -31,14 +25,30 @@ const PYTHON_CHECK = [
 // `python <file>` exits 2, which blocks. `-I` keeps the session folder, PYTHONPATH and the user site out.
 const LAUNCH = ['-I', '-c', "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')"]
 
-// The full path of the first Python 3.8+ that runs, or '' when none does.
+// What `code` prints on an interpreter: its output when it exits 0, '' when it fails, undefined when the
+// interpreter does not start.
+function ask($: Engine, argv: string[], code: string): Promise<string | undefined> {
+  return $.process
+    .run([...argv, '-I', '-c', code], { timeoutMs: 10_000 })
+    .then(r => (r.exitCode === 0 ? r.stdout.trim().replace(/\\/g, '/') : ''))
+    .catch(() => undefined)
+}
+const BASE_CHECK = 'import sys; assert sys.version_info >= (3, 8); print(sys.base_prefix)'
+
+// The full path of the first Python 3.8+ that passes the check, or '' when none does. As in § 7c, a
+// candidate that runs inside an environment is followed by the interpreter that environment came from, and
+// conda's own interpreter ($CONDA_PYTHON_EXE) comes before the last fixed paths.
 export async function findPython($: Engine): Promise<string> {
-  for (const candidate of PYTHONS) {
-    const found = await $.process
-      .run([...candidate, '-I', '-c', PYTHON_CHECK], { timeoutMs: 10_000 })
-      .then(r => (r.exitCode === 0 ? r.stdout.trim() : ''))
-      .catch(() => '')
-    if (found) return found.replace(/\\/g, '/')
+  const conda = await $.env.get('CONDA_PYTHON_EXE').catch(() => undefined)
+  for (const candidate of [...PYTHONS, ...(conda ? [[conda]] : []), ...LAST_PYTHONS]) {
+    const found = await ask($, candidate, PYTHON_CHECK)
+    if (found) return found
+    if (found === undefined) continue
+    const base = await ask($, candidate, BASE_CHECK)
+    for (const from of base ? [`${base}/bin/python3`, `${base}/python.exe`] : []) {
+      const fromBase = await ask($, [from], PYTHON_CHECK)
+      if (fromBase) return fromBase
+    }
   }
   return ''
 }

@@ -43,8 +43,11 @@ type World = {
   scripts: Record<string, Script>
   // What each interpreter's version check prints; one missing from the map does not run.
   pythons: Record<string, string>
+  // Interpreters that run inside an environment, with the base they came from (sys.base_prefix).
+  inEnv: Record<string, string>
   // The interpreters the set-up checked, in order.
   probed: string[]
+  env: Record<string, string>
 }
 
 const PYTHON = 'C:/Python/python.exe'
@@ -63,9 +66,11 @@ function world(on: On, os = 'Windows_NT'): World {
     broken: new Set(),
     scripts: { ...STAND_INS },
     pythons: { python: 'C:\\Python\\python.exe\n' },
+    inEnv: {},
     probed: [],
+    env: { USERPROFILE: 'C:/Users/me', OS: os },
   }
-  const env: Record<string, string> = { USERPROFILE: 'C:/Users/me', OS: os }
+  const env = seen.env
   const unless = (call: string) => {
     if (seen.broken.has(call)) throw new Error(`${call} is down`)
   }
@@ -93,8 +98,13 @@ function world(on: On, os = 'Windows_NT'): World {
       const candidate = e.argv.slice(0, e.argv.indexOf('-I')).join(' ')
       seen.probed.push(candidate)
       const printed = seen.pythons[candidate]
-      if (printed === undefined) throw new Error('not found')
-      answer = { exitCode: 0, stdout: printed }
+      if (candidate in seen.inEnv) answer = { exitCode: 1 }
+      else if (printed === undefined) throw new Error('not found')
+      else answer = { exitCode: 0, stdout: printed }
+    } else if (file.includes('print(sys.base_prefix)')) {
+      const base = seen.inEnv[e.argv.slice(0, e.argv.indexOf('-I')).join(' ')]
+      if (base === undefined) throw new Error('not found')
+      answer = { exitCode: 0, stdout: `${base}\n` }
     } else if (file.endsWith('.py')) {
       unless('python')
       const sent = JSON.parse(String(e.init?.stdin))
@@ -155,6 +165,30 @@ test('the scripts run on the first Python 3.8+ found, in the setup guide order',
   expect(new Set(seen.started.map(s => s.argv[0]))).toEqual(new Set(['/usr/bin/python3.11']))
   expect(seen.started).toHaveLength(3)
   expect(seen.probed).toEqual(['python', 'python3', 'py -3', 'python3.13', 'python3.12', 'python3.11'])
+})
+
+// SETUP.md § 7c: a candidate inside an environment is followed by the interpreter the environment came from.
+test("a Python inside a virtual environment hands over to the one it was built from", async ($, on) => {
+  const seen = world(on)
+  seen.inEnv = { python: 'C:\\Python312' }
+  seen.pythons = { 'C:/Python312/python.exe': 'C:\\Python312\\python.exe\n' }
+  await call($, 'ls')
+  expect(seen.probed).toEqual(['python', 'C:/Python312/bin/python3', 'C:/Python312/python.exe'])
+  expect(new Set(seen.started.map(s => s.argv[0]))).toEqual(new Set(['C:/Python312/python.exe']))
+})
+
+// A conda environment's base is the environment itself; conda's own interpreter comes before the fixed paths.
+test("inside a conda environment the scripts run on conda's own Python", async ($, on) => {
+  const seen = world(on)
+  seen.inEnv = { python: 'C:/Miniconda3/envs/game' }
+  seen.env.CONDA_PYTHON_EXE = 'C:\\Miniconda3\\python.exe'
+  seen.pythons = {
+    'C:\\Miniconda3\\python.exe': 'C:\\Miniconda3\\python.exe\n',
+    '/usr/bin/python3': '/usr/bin/python3\n',
+  }
+  await call($, 'ls')
+  expect(seen.probed.at(-1)).toBe('C:\\Miniconda3\\python.exe')
+  expect(new Set(seen.started.map(s => s.argv[0]))).toEqual(new Set(['C:/Miniconda3/python.exe']))
 })
 
 // After a hot reload no session.start runs: the first call sets up, and one sent beside it waits for that.
