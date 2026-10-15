@@ -43,6 +43,8 @@ test('a launcher or a shell fed on stdin is followed back through programs that 
     "echo 'git commit -n -m x' | tee a.log | sort | bash",
     "cat <<'EOF' | ssh host\ngit status\nEOF",
     "docker exec -i c sh <<'EOF'\ngit commit -n -m x\nEOF",
+    "fish <<'EOF'\ngit commit -n -m x\nEOF",
+    "pwsh <<'EOF'\ngit commit -n -m x\nEOF",
   ]) {
     expect([command, inspect(command, false).block]).toEqual([command, expect.stringContaining('cannot be read')])
   }
@@ -94,6 +96,9 @@ test('a variable is a held flag only when the command typed a flag for it', () =
   for (const [command, ps] of [
     ['X=(-q -n); git commit -m x "${X[@]}"', false],
     ["$o = '-q','-n'; git commit -m x $o", true],
+    ['declare -a A=(-n); git commit -m x "${A[@]}"', false],
+    ['ARGS+=(-n); git commit -m x "${ARGS[@]}"', false],
+    ['read -r A B <<< "-n x"; git commit -m x $A', false],
   ] as const) {
     const held = expect.stringContaining('a flag held in a variable')
     expect([command, inspect(command, ps).block]).toEqual([command, held])

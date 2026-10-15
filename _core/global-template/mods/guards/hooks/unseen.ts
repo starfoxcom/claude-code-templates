@@ -8,6 +8,7 @@
 import { bypassOf, launched, runsHooks } from './bypass'
 import type { HookState } from './bypass'
 import { programOf } from './programs'
+import { SHELLS as READ_SHELLS } from './scripts'
 import { parse } from './shell'
 import type { Statement, Word } from './shell'
 import { holdsFlag } from './vars'
@@ -76,7 +77,8 @@ function stdinScript(st: Statement, name: string, args: Word[], state: Feed, pre
   const runner = at === -1 ? name : baseName(args[at]?.text ?? '')
   if (!SHELL.test(runner) && !LAUNCHERS.test(runner)) return undefined
   const own = args.slice(at + 1)
-  if (SHELL.test(runner) && st.heredocs.length > 0 && at === -1) return undefined
+  // The reading follows a here-doc fed to the shells it reads (`bash <<EOF`); any other shell runs it unread.
+  if (READ_SHELLS.test(runner) && st.heredocs.length > 0 && at === -1) return undefined
   if (SHELL.test(runner) && own.some(a => /^-[a-z]*c[a-z]*$/i.test(a.text))) return undefined
   // A first word past the options is a script file, unless `-s` or `--` makes it an argument.
   // `/dev/stdin` and its kin name the pipe itself, not a script file.

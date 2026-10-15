@@ -17,7 +17,7 @@ export type Script = {
   isBody?: boolean
 }
 
-const SHELLS = /^(bash|sh|zsh|dash|ksh)$/
+export const SHELLS = /^(bash|sh|zsh|dash|ksh)$/
 // How many following words a shell option takes as values: one per `o`/`O` in a bundle (`-euo pipefail`,
 // `+o history`), one for `--rcfile`/`--init-file`.
 const shellValues = (t: string) =>

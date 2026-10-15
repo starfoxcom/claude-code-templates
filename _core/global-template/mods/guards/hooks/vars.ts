@@ -334,19 +334,21 @@ function assignNow(st: Statement, name: string, args: Word[], r: VarState): bool
     // several the text is split among them, so each is unknown.
     const held = { text: e.unresolved ? body : e.text, literal: !e.unresolved, scope: r.scope }
     if (names.length === 1) store(r, names[0]?.text ?? '', held)
-    else for (const n of names) setVar(r, n.text, undefined)
+    else for (const n of names) store(r, n.text, { ...held, literal: false })
     return true
   }
   return false
 }
 
 // One `NAME=value` or `NAME+=value`: an append keeps a known value known only when both parts are.
+// A value left unknown keeps the text typed for it (`declare -a A=(-n)`, `A+=(-n)`): see `holdsFlag`.
 function setPair(r: VarState, name: string, value: Word, isAppend: boolean, exported: boolean, changes: boolean) {
-  if (changes) return setVar(r, name, undefined, exported)
+  const typed = (text: string) => store(r, name, { text, literal: false, scope: r.scope }, exported)
+  if (changes) return typed(value.text)
   if (!isAppend) return setVar(r, name, value, exported)
   const old = lookup(r, name)
-  const isKnown = old?.literal && !value.dynamic
-  setVar(r, name, isKnown ? { ...value, text: `${old.text}${value.text}` } : undefined, exported)
+  if (old?.literal && !value.dynamic) return setVar(r, name, { ...value, text: `${old.text}${value.text}` }, exported)
+  typed(`${old?.text ?? ''} ${value.text}`)
 }
 
 // A PowerShell value whose text the reading knows as typed. A hashtable (`@{ title = 't' }`) is kept as
