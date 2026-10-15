@@ -1,0 +1,38 @@
+# Throwaway probe, never merged: one headless run on the org API key, to see
+# on the Console whether a CI run of the CLI bills the plan's monthly API credits.
+name: API credits probe
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/api-credits-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install Claude Code
+        shell: bash
+        env:
+          CLI_VERSION: "2.1.280"
+        run: |
+          set -euo pipefail
+          curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: One headless prompt on the API key
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          claude --version
+          claude -p "Reply with the single word OK." \
+            --model claude-fable-5-1 \
+            --max-turns 1 \
+            --output-format json \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print({k: d.get(k) for k in ("is_error","result","total_cost_usd","usage","modelUsage")})'
