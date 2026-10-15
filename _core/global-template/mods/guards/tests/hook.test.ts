@@ -229,6 +229,17 @@ test('the set-up tests each shipped script with a call it must refuse', async ($
   expect(text).toContain(`Scripts run on ${PYTHON}.`)
 })
 
+test("the set-up tests the shipped scripts even where the machine's own copy is looser", async ($, on) => {
+  const seen = world(on)
+  seen.own.add('block-gh-run-watch.py')
+  seen.scripts['own block-gh-run-watch.py'] = refuses(['WATCH'], 'BLOCKED (own): `gh run watch`')
+  expect((await call($, 'gh run WATCH')).deny).toBeUndefined()
+  expect(lastEntry(seen)).toMatchObject({ mod: 'BLOCKED (own): `gh run watch`' })
+  expect(stats(seen)).toMatchObject([{ checked: 1, failed: 0 }])
+  const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
+  expect(text).toContain(`Scripts run on ${PYTHON}.`)
+})
+
 // Both shipped scripts exit 0 silently on an input they cannot read, so a lost stdin would pass every call.
 test('a hook input lost on the way is caught at set-up: no call counts as checked', {
   options: { mode: 'enforce' },

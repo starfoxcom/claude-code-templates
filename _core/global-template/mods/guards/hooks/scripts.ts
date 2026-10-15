@@ -71,7 +71,11 @@ async function scriptFile($: Engine, name: string, dataDir: string): Promise<str
     () => false,
   )
   if (isOwn) return own
-  return OWN_ONLY.has(name) ? undefined : `${$.plugin.root.replace(/\\/g, '/')}/scripts/${name}`
+  return OWN_ONLY.has(name) ? undefined : shippedFile($, name)
+}
+
+function shippedFile($: Engine, name: string): string {
+  return `${$.plugin.root.replace(/\\/g, '/')}/scripts/${name}`
 }
 
 type Answer = { reason?: string; error?: string }
@@ -95,11 +99,11 @@ function stopReason(name: string, out: Record<string, unknown>): string | undefi
 // a JSON object as `stopReason` reads it, exit 0 with anything else (none, plain text) lets it run. Any
 // other end is a non-blocking hook error, as there: a script that cannot start, runs past the limit or
 // exits with another code lets the call run. The engine's own hook budget stops while a process runs, so
-// only SCRIPT_TIMEOUT_MS bounds a script.
-async function scriptAnswer($: Engine, name: string, call: HookCall, at: Setup): Promise<Answer> {
+// only SCRIPT_TIMEOUT_MS bounds a script. `isShipped` runs the shipped copy even where the machine has its own.
+async function scriptAnswer($: Engine, name: string, call: HookCall, at: Setup, isShipped = false): Promise<Answer> {
   if (!at.python) return { error: NO_PYTHON }
   try {
-    const file = await scriptFile($, name, at.dataDir)
+    const file = isShipped ? shippedFile($, name) : await scriptFile($, name, at.dataDir)
     if (file === undefined) return {}
     // Started in the session's folder, as Claude Code starts a command hook.
     const { exitCode, stdout, stderr } = await $.process.run([at.python, ...LAUNCH, file], {
@@ -152,7 +156,9 @@ export async function verdict($: Engine, tool: string, command: string, setup: S
 
 // SETUP.md § 7c's verify step, run at set-up: each shipped script gets a call it must refuse. A clean pass
 // means the hook input never reached the scripts or their answer was lost, so a pass on a real call proves
-// nothing. A script that fails to run is left to the calls, which count each failure.
+// nothing. The shipped copies run even where the machine has its own: the check is of the path to the
+// scripts, which every copy shares, not of a copy's rules. A script that fails to run is left to the calls,
+// which count each failure.
 const AI_TRAILER = `Co-${'Authored-By'}: Cla${'ude'} <noreply@anthro${'pic'}.com>`
 const TEST_CALLS = [
   ['no-ai-attribution.py', `git commit -m "docs: x" -m "${AI_TRAILER}"`],
@@ -166,7 +172,7 @@ export async function selfCheck($: Engine, setup: Setup): Promise<string> {
   try {
     const passed = await Promise.all(
       TEST_CALLS.map(async ([name = '', command = '']) => {
-        const answer = await scriptAnswer($, name, await hookInput($, 'Bash', command), setup)
+        const answer = await scriptAnswer($, name, await hookInput($, 'Bash', command), setup, true)
         return answer.reason === undefined && answer.error === undefined ? [name] : []
       }),
     )
