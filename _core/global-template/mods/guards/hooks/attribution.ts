@@ -1,4 +1,4 @@
-// The shipped attribution hook (`no-ai-attribution.py`), copied rule for rule: the same patterns, the same
+// The global attribution hook (`reference/no-ai-attribution.py`), copied rule for rule: the same patterns, the same
 // order of checks and the same reasons, so guards refuses exactly what the hook refuses and passes exactly
 // what it passes. Python's regex flags are spelled out where JavaScript has none (`(?i:...)` as letter
 // classes, `\Z` as the end of the text). Pure but for the file reads it is handed.

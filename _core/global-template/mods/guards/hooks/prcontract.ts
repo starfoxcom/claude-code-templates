@@ -1,4 +1,4 @@
-// The shipped PR-body hook (`pr-body-contract.py`), copied rule for rule: a `gh pr create` or `gh pr edit`
+// The global PR-body hook (`reference/pr-body-contract.py`), copied rule for rule: a `gh pr create` or `gh pr edit`
 // on a listed repo must send its body from a file, and the body must carry `## What` with a bullet, `## Why`
 // with text, no empty `## Notes`, and the repo's board-row line unless the title is exempt. The repos come
 // from mods-data/guards/pr-body.json instead of the script's own table:

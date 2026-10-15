@@ -1,4 +1,4 @@
-// File paths as the shipped hook scripts resolve them: Python 3.9's `os.path` (`ntpath` on Windows,
+// File paths as the global hook scripts in `reference/` resolve them: Python 3.9's `os.path` (`ntpath` on Windows,
 // `posixpath` elsewhere), then the file their `open()` reads. A Git Bash path such as `/c/Users/x` is a
 // rooted path to Python on Windows, so it opens `C:\c\Users\x`, exactly as the scripts do. Pure.
 

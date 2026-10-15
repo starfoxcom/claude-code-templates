@@ -1,4 +1,4 @@
-// The shipped `gh run watch` hook (`block-gh-run-watch.py`), copied: `watch` must be the subcommand word
+// The global `gh run watch` hook (`reference/block-gh-run-watch.py`), copied: `watch` must be the subcommand word
 // itself, `gh run watch`, with only repo flags allowed around `run`. No repo scoping. Pure.
 
 const REPO = String.raw`(?:\s+(?:-R|--repo)(?:\s+|=)\S+)*`

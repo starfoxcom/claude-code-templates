@@ -7,7 +7,7 @@ import type { PrRules } from './prcontract'
 import { runWatchReason } from './runwatch'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
-// guards: one in-process check on every Bash and PowerShell call, replacing the shipped attribution,
+// guards: one in-process check on every Bash and PowerShell call, replacing the global attribution,
 // `gh run watch` and PR-body scripts. Each check is a rule-for-rule copy of its script (attribution.ts,
 // runwatch.ts, prcontract.ts), so it refuses exactly what the scripts refuse and passes what they pass.
 // Opt-in per repo: the PR-body contract (mods-data/guards/pr-body.json). Opt-in by setting: helper agents
@@ -239,7 +239,7 @@ function caughtError(error: { kind: string; message?: string }): string {
 
 const ARGUMENT_HINT = '[help | settings | set | helpers]'
 const HELP = [
-  '/guards: runs the attribution, PR-body and `gh run watch` checks of the shipped hook scripts on every shell call.',
+  '/guards: runs copies of the attribution, PR-body and `gh run watch` hooks on every shell call.',
   '  /guards           the mode and what it caught',
   '  /guards settings  open the settings pane',
   '  /guards set       change a setting: set <name> <value>; alone, list them',
@@ -278,7 +278,7 @@ async function statusText($: Engine): Promise<string> {
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
     live.isAttribution
-      ? 'AI credit is blocked everywhere, as the shipped attribution hook blocks it.'
+      ? 'AI credit is blocked everywhere, as the global attribution hook blocks it.'
       : 'Attribution check: off (setting attribution = off); AI credit is not checked.',
     helpersLine(await helperState($), isEnforced),
     line('Today (UTC)', sumDays(stats, now, 1)),
