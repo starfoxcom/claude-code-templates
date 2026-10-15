@@ -47,7 +47,7 @@ test('/guards shows its arguments in the menu and lists them on help', async ($,
   expect(answer).toEqual(expect.objectContaining({ text: 'Opened the guards settings.' }))
 })
 
-test('/guards names the mode, where the product may appear, and the counts for today and the week', async ($, on) => {
+test('/guards names the mode, the attribution check and the counts for today and the week', async ($, on) => {
   world(on, {
     [DAY(0)]: { checked: 12, mod: 1, scripts: 2, lastAt: NOW },
     [DAY(6)]: { checked: 5, mod: 0, scripts: 1, lastAt: NOW },
@@ -57,7 +57,7 @@ test('/guards names the mode, where the product may appear, and the counts for t
   const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
   expect(text.split('\n')).toEqual([
     'Guards: shadow (never blocks; logs what it would block).',
-    'The product name may appear in every repo; AI credit is blocked everywhere.',
+    'AI credit is blocked everywhere, as the shipped attribution hook blocks it.',
     'Helper agents are allowed (setting helpers = allow).',
     'Today (UTC): 12 writes checked, 1 it would block, 2 the guard scripts blocked.',
     'Last 7 days (UTC): 17 writes checked, 1 it would block, 3 the guard scripts blocked.',

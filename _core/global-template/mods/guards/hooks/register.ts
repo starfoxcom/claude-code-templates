@@ -1,24 +1,18 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { foldDots } from './folders'
+import { attributionReason } from './attribution'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
-import { inspect } from './judge'
-import type { Folder, Plan, Target } from './inspect'
-import { describeName, findName, readNameRules } from './names'
-import type { NameRule } from './names'
-import { checkAddedLines, checkBranch, checkText, describe } from './policy'
-import { checkBody, checkCall, hasRow, ruleFor } from './prbody'
-import type { PrCall, PrRules } from './prbody'
+import { prReason } from './prcontract'
+import type { PrRules } from './prcontract'
+import { runWatchReason } from './runwatch'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
-// guards: one in-process check on every Bash and PowerShell call, replacing the attribution,
-// `gh run watch` and PR-body scripts. It reads the command (which program, which flags, which message) instead of
-// scanning raw text, so paths, branch names and flags never trip it. Hot reload watches this file only:
-// change it after editing shell.ts, inspect.ts or policy.ts. Opt-in per repo, from files in
-// mods-data/guards: the PR-body contract (pr-body.json) and banned names (names.json). Opt-in by
-// setting: helper agents (`helpers` = block refuses Agent and Workflow calls; see helpers.ts). Opt-out by
-// setting: `attribution` = off drops the AI-credit and product-name checks; every other check stays, since
-// banned names and the PR-body contract read the same text and need its refusals.
+// guards: one in-process check on every Bash and PowerShell call, replacing the shipped attribution,
+// `gh run watch` and PR-body scripts. Each check is a rule-for-rule copy of its script (attribution.ts,
+// runwatch.ts, prcontract.ts), so it refuses exactly what the scripts refuse and passes what they pass.
+// Opt-in per repo: the PR-body contract (mods-data/guards/pr-body.json). Opt-in by setting: helper agents
+// (`helpers` = block refuses Agent and Workflow calls; see helpers.ts). Opt-out by setting: `attribution` =
+// off drops the AI-credit scan; the routes around the commit gates stay refused.
 //
 // mode `shadow` (the default while it is new): never blocks; it logs what it would block, and what the
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
@@ -27,11 +21,9 @@ const LOG_CAP = 256 * 1024
 const live = {
   mode: 'shadow',
   isAttribution: true,
-  mentionRepos: ['*'] as string[],
   home: '',
   dir: '',
   isWindows: false,
-  temp: '',
 }
 // The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
 // hooks worker forgets them, which errs toward the block).
@@ -49,313 +41,38 @@ async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
-  live.temp = ((await $.env.get('TEMP')) ?? (await $.env.get('TMP')) ?? '').replace(/\\/g, '/').replace(/\/$/, '')
   live.dir = `${(configured ?? `${live.home}/.claude`).replace(/\\/g, '/')}/mods-data/guards`
   // The engine's fs writes no missing folders; node makes it once per session.
   await $.process.run(['node', '-e', MARK_LOADED, live.dir, live.mode], { timeoutMs: 10_000 }).catch(() => undefined)
-}
-
-// Bash on Windows writes /c/Users/...; the engine's fs takes C:/Users/... Only on Windows: elsewhere
-// `/u/me` is a real one-letter folder. Git Bash also mounts the Windows temp folder at /tmp, so a body
-// file a Bash command names there is read from TEMP (PowerShell has no such mount).
-function osPath(path: string, cwd: string, isBash = false): string {
-  let p = path.replace(/\\/g, '/')
-  if (p.startsWith('~/')) p = live.home + p.slice(1)
-  if (isBash && live.isWindows && live.temp && /^\/tmp(?:\/|$)/.test(p)) p = live.temp + p.slice(4)
-  const drive = live.isWindows ? /^\/([a-zA-Z])\//.exec(p) : null
-  if (drive) p = `${drive[1]?.toUpperCase()}:/${p.slice(3)}`
-  if (!/^[a-zA-Z]:\//.test(p) && !p.startsWith('/')) p = `${cwd.replace(/\\/g, '/').replace(/\/$/, '')}/${p}`
-  return p
-}
-
-// `isCut`: the output went past the engine's cap, so what came back is only its start.
-async function gitRun($: Engine, cwd: string, args: string[]): Promise<{ out: string; isCut: boolean }> {
-  try {
-    const run = await $.process.run(['git', '-C', cwd, ...args], { timeoutMs: 8_000 })
-    return run.exitCode === 0 ? { out: run.stdout, isCut: Boolean(run.isStdoutTruncated) } : { out: '', isCut: false }
-  } catch {
-    return { out: '', isCut: false }
-  }
-}
-
-async function git($: Engine, cwd: string, args: string[]): Promise<string> {
-  return (await gitRun($, cwd, args)).out
-}
-
-// A folder the command moved to, as a full path; none is the session folder.
-function folderAt(folder: Folder | undefined, session: string, isBash: boolean) {
-  return folder?.path === undefined ? session : osPath(folder.path, session, isBash)
-}
-
-// A body file's full path: from the folder in effect where it is named.
-function fileAt(path: string, folder: Folder | undefined, session: string, isBash: boolean) {
-  return osPath(path, folderAt(folder, session, isBash), isBash)
-}
-
-// A relative path under a folder built at run time (`cd "$REPO"`) cannot be found from here, and a file
-// of the same name in the session folder is a different file: it is never read.
-function isUnplaced(path: string, folder: Folder | undefined): boolean {
-  return Boolean(folder?.isUnknown) && !/^([a-zA-Z]:)?[\\/]|^~/.test(path)
-}
-
-// What message text is checked for besides AI credit: the product name unless the repo may name it,
-// and the repo's banned names.
-type TextRules = { mayName: boolean; banned?: NameRule }
-
-// One message text: AI credit first, then the product name, then the repo's banned names.
-function textReason(text: string, where: string, rules: TextRules, creditOnly = false): string | undefined {
-  const v = live.isAttribution ? checkText(text, rules.mayName || creditOnly) : undefined
-  if (v) return describe(v, where)
-  const name = rules.banned && !creditOnly ? findName(text, rules.banned) : undefined
-  return name ? describeName(name, where) : undefined
-}
-
-// The body files the command reads: the first reason to block, or undefined. Files that cannot be read
-// for a known cause are named unread instead.
-async function checkFiles($: Engine, plan: Plan, session: string, rules: TextRules, isBash: boolean) {
-  // Each written file where its writer ran, `.` and `..` folded in on both sides.
-  const placed = (path: string, folder: Folder) => foldDots(fileAt(path, folder, session, isBash)).toLowerCase()
-  const written = new Set(plan.written.filter(w => !isUnplaced(w.path, w.folder)).map(w => placed(w.path, w.folder)))
-  for (const { where, path, written: fromCommand, folder, scripted, named } of plan.files) {
-    const full = fileAt(path, folder, session, isBash)
-    if (isUnplaced(path, folder)) {
-      const rewrites = named ? `, and another program in this command may write ${path}` : ''
-      if (!fromCommand || named) plan.unread.push(`${where} (in a folder unknown before it runs${rewrites})`)
-      continue
-    }
-    let text: string
-    try {
-      text = String(await $.fs.read(full))
-    } catch {
-      // A body file this same command writes does not exist yet: what it writes was read from the
-      // command text above. One written under another spelling of its path is left as a note: the
-      // command text, here-doc included, is under the credit check.
-      // Unless another program rewrote it after that (`cat > b.md ...; cp x b.md`).
-      if (fromCommand && named) plan.unread.push(`${where} (another program in this command may write ${path})`)
-      if (fromCommand) continue
-      // Likewise a file a script whose code is in the command (`python - <<EOF`, `node -e`) may write: that
-      // code is under the credit check.
-      if (written.has(foldDots(full).toLowerCase()) || scripted) {
-        plan.notes.push(`${where} (written by this command, ${scripted ? 'by its script' : 'under another spelling'})`)
-        continue
-      }
-      // A Bash /tmp path on Windows is mapped by a guess (Git Bash's mount of TEMP): a miss cannot be read.
-      const isTmpGuess = isBash && live.isWindows && /^\/tmp(?:\/|$)/.test(path.replace(/\\/g, '/'))
-      // The refusal names the way out: the file may exist where Git Bash put it, under another folder.
-      if (isTmpGuess) {
-        plan.unread.push(`${where} (Git Bash's /tmp did not map to a folder the guard reads)`)
-        continue
-      }
-      return `could not read the body file ${full} for ${where}. Write the file first, or check the path.`
-    }
-    // On disk already, but another program of the command may rewrite it: the text read now is checked, as
-    // the shipped attribution hook checks it, and the rewrite is noted (its code is in the command text,
-    // which is under the credit check).
-    if (named) plan.notes.push(`${where} (another program in this command may write ${path})`)
-    const reason = textReason(text, `${where} (file ${path})`, rules)
-    if (reason) return reason
-  }
-  return undefined
 }
 
 // The repos whose PRs follow the PR-body contract, from mods-data/guards/pr-body.json; none without it.
 async function prRules($: Engine): Promise<PrRules | undefined> {
   try {
     const rules = JSON.parse(String(await $.fs.read(`${live.dir}/pr-body.json`))) as PrRules
-    return rules && typeof rules.repos === 'object' ? rules : undefined
+    return rules && typeof rules.repos === 'object' && rules.repos !== null ? rules : undefined
   } catch {
     return undefined
   }
 }
 
-// The repos' banned names, from mods-data/guards/names.json; none without it, or when it is malformed.
-async function nameRules($: Engine) {
-  try {
-    return readNameRules(String(await $.fs.read(`${live.dir}/names.json`)))
-  } catch {
-    return undefined
-  }
-}
+// A command the scripts look at: a git or gh call, or a GitHub API call through curl or PowerShell. Only
+// these are counted, so stats.json keeps the shadow comparison's denominator.
+const NAMES_WRITE = /\b(git|gh|curl|lefthook)\b|Invoke-(RestMethod|WebRequest)|LEFTHOOK/i
 
-// The PR body exactly as it will be sent: a literal here-doc on stdin, or a file already on disk where
-// the command's folder is known. Undefined for any other route, among them a body file this same command
-// writes (its text as the command reading holds it may differ from what lands in the file).
-async function prBody($: Engine, plan: Plan, call: PrCall, session: string, isBash: boolean) {
-  if (call.bodyFile === '-') return call.stdinBody
-  // Another statement naming the same path may sit in another folder: which entry is the PR's is a guess.
-  const files = plan.files.filter(f => f.path === call.filePath)
-  const file = files.length === 1 ? files[0] : undefined
-  if (!file || file.written || isUnplaced(file.path, file.folder)) return undefined
-  try {
-    return String(await $.fs.read(fileAt(file.path, file.folder, session, isBash)))
-  } catch {
-    return undefined
-  }
-}
-
-// The PR call, judged only in its plain form: the command's one gh statement, with a title written out.
-// With other gh statements the repo, the body file or the title may belong to one of them, so the
-// body is left as a note instead, which the shadow log shows; it never blocks and never passes in silence.
-async function checkPr($: Engine, plan: Plan, session: string, repo: string | undefined, isBash: boolean) {
-  const [call] = plan.prs
-  if (!call) return undefined
-  const isPlain =
-    plan.prs.length === 1 && plan.ghCalls === 1 && call.isAlone && !call.isTitleDynamic && !call.isUnknown
-  const rules = await prRules($)
-  if (!rules) return undefined
-  // Before the repo's rule: another statement's `--repo` may have named the wrong repo.
-  if (!isPlain) return void plan.notes.push(`the PR body (format check, ${call.action}: not a single plain PR call)`)
-  if (repo === undefined)
-    return void plan.notes.push(`the PR body (format check, ${call.action}: repo built at run time)`)
-  const rule = ruleFor(rules, repo)
-  if (!rule) return undefined
-  const early = checkCall(call)
-  if (early) return early
-  if (call.bodyFile === undefined) return undefined
-  const text = await prBody($, plan, call, session, isBash)
-  if (text === undefined) return void plan.notes.push(`the PR body (format check, ${call.action})`)
-  try {
-    const reason = checkBody(text, call.hasTitle ? call.title : undefined, rule)
-    // No title: whether this PR may skip the board row is unknown, so a missing row is left as a note.
-    if (!reason && !call.hasTitle && rule.row && !hasRow(text, rule))
-      plan.notes.push(`the PR body's board row (format check, ${call.action}: no --title to judge it)`)
-    return reason
-  } catch {
-    // A pattern in pr-body.json that does not compile: the body goes unjudged, the other checks still run.
-    return void plan.notes.push(`the PR body (pr-body.json has an invalid pattern for ${repo})`)
-  }
-}
-
-// The way out for each kind of unread entry; a message's is the last.
-const WAYS_OUT: [RegExp, string][] = [
-  [
-    /in a folder unknown before it runs, and another program/,
-    'Give the body file its full path, and write it in an earlier command.',
-  ],
-  [
-    /in a folder unknown before it runs\)$/,
-    'Give the body file its full path, or run the command in a folder named out (`cd <path>`).',
-  ],
-  [/Git Bash's \/tmp did not map/, "Give the body file's Windows path."],
-  [
-    /^an environment variable named at run time/,
-    'Type the name of each environment variable the command sets (`export NAME=value`, `$env:NAME = ...`).',
-  ],
-  [
-    /^a cmd script built at run time/,
-    'Run the git or gh call directly, not through `cmd /c`, with every word typed out (no `%NAME%`).',
-  ],
-  [
-    /^a \w+ script built at run time/,
-    'Run the git or gh call directly, not through a shell, with every word typed out (no variable or `$(...)`).',
-  ],
-  [/^the new branch name/, 'Type the branch name out.'],
-  [/its subcommand built at run time\)$/, 'Type the gh subcommand out.'],
-  [/^the git alias, include or config file/, 'Leave the git alias, include or config file out of the command.'],
-  [
-    /another program in this command may write/,
-    'Write the body file in an earlier command, or in this one with `>` or a here-doc, which the guard reads.',
-  ],
-  [/^a program named at run time/, 'Name the program itself (`git`, `gh`).'],
-  [
-    /^a git setting built at run time/,
-    'Leave the git alias, include or config file out of the command, and write each `-c` setting out.',
-  ],
-  [/^a raw word built at run time$/, 'Leave `--%` out and write each word of the git or gh call out.'],
-  [
-    /^a .* built at run time$/,
-    'Write each word of the git or gh call out: no variable, `$(...)`, list or splat in it.',
-  ],
-]
-
-/** The way out for an unread entry of its own kind; undefined for a message, which gets the shared one. */
-export const wayOut = (where: string) => WAYS_OUT.find(([kind]) => kind.test(where))?.[1]
-
-function unreadReason(where: string): string {
-  const way = wayOut(where)
-  if (way) return `${where} cannot be read. ${way}`
-  return (
-    `${where} is built in a way the guard cannot read (a variable set outside this command, another ` +
-    "program's output, a file it cannot find, a script built at run time). Write the text out, use a " +
-    'here-doc, or write the body file in an earlier command.'
-  )
-}
-
-// The repo each write lands in, lowercased: the one `--repo` names, or its folder's; undefined where that
-// is built at run time. A command with no write is judged as the session folder's repo.
-async function reposOf($: Engine, targets: Target[], session: string, isBash: boolean) {
-  const all = targets.length > 0 ? targets : [{ folder: { isUnknown: false } }]
-  return Promise.all(
-    all.map(async ({ folder, repo }: Target) => {
-      if (repo !== undefined) return repo.toLowerCase()
-      if (folder.isUnknown) return undefined
-      const top = (await git($, folderAt(folder, session, isBash), ['rev-parse', '--show-toplevel'])).trim()
-      return (top.split(/[\\/]/).pop() ?? '').toLowerCase()
-    }),
-  )
-}
-
-// The text rules of every repo the command writes to, the strictest of them: the product name only where
-// each repo may name it, and the banned names of all. A repo that cannot be known takes every repo's.
-async function rulesFor($: Engine, repos: (string | undefined)[]): Promise<TextRules> {
-  const mayName =
-    live.mentionRepos.includes('*') || repos.every(repo => repo !== undefined && live.mentionRepos.includes(repo))
-  const names = await nameRules($)
-  const each = repos.flatMap(repo => (repo === undefined ? Object.values(names?.repos ?? {}) : [ruleFor(names, repo)]))
-  const found = each.filter((rule): rule is NameRule => rule !== undefined)
-  if (found.length === 0) return { mayName }
-  return { mayName, banned: { names: found.flatMap(f => f.names ?? []), words: found.flatMap(f => f.words ?? []) } }
-}
-
-// Each commit's added lines, read in the folder it runs in: the first credit line found, or undefined.
-// A commit whose folder or repo is built at run time cannot be scanned: noted, as the shipped attribution
-// hook scans no added lines at all.
-async function diffReason($: Engine, plan: Plan, session: string, isBash: boolean) {
-  for (const { folder, diff } of plan.targets) {
-    if (!diff) continue
-    const where = 'the lines the commit adds (in a folder or repo built at run time)'
-    if (folder.isUnknown) {
-      if (!plan.notes.includes(where)) plan.notes.push(where)
-      continue
-    }
-    const args = diff === 'all' ? ['diff', 'HEAD', '-U0', '--no-color'] : ['diff', '--cached', '-U0', '--no-color']
-    const run = await gitRun($, folderAt(folder, session, isBash), args)
-    const hit = live.isAttribution ? checkAddedLines(run.out) : undefined
-    if (hit) return `AI credit line added to ${hit.file}: "${hit.line}". Remove it before committing.`
-    // A diff past the output cap was read only in part: the rest is noted, never passed as clean.
-    const cut = 'the lines the commit adds past the first part of its diff'
-    if (run.isCut && !plan.notes.includes(cut)) plan.notes.push(cut)
-  }
-  return undefined
-}
-
-// The first reason to block, or undefined.
-async function verdict($: Engine, plan: Plan, isBash = false): Promise<string | undefined> {
-  if (plan.block) return plan.block
-  const session = await $.session.cwd()
-  const repos = await reposOf($, plan.targets, session, isBash)
-  const rules = await rulesFor($, repos)
-  for (const { where, text, creditOnly } of plan.texts) {
-    const reason = textReason(text, where, rules, creditOnly)
-    if (reason) return reason
-  }
-  const fileReason = await checkFiles($, plan, session, rules, isBash)
-  if (fileReason) return fileReason
-  for (const branch of plan.branches) {
-    const where = `the new branch name "${branch}" (it lands in merge commit titles)`
-    const v = live.isAttribution ? checkBranch(branch, rules.mayName) : undefined
-    if (v) return describe(v, where)
-    const name = rules.banned ? findName(branch, rules.banned) : undefined
-    if (name) return describeName(name, where)
-  }
-  const diff = await diffReason($, plan, session, isBash)
-  if (diff) return diff
-  // A message the reading could not follow is refused: what reaches history unread is never passed.
-  const [unread] = plan.unread
-  if (unread) return unreadReason(unread)
-  // Last: a credit anywhere outranks the PR format. A plain PR call is the command's one write.
-  const prReason = await checkPr($, plan, session, repos[0], isBash)
-  return prReason ? `PR-body contract: ${prReason}` : undefined
+// The first reason to block, in the order the scripts run (settings.json): attribution, `gh run watch`,
+// then the PR-body contract. Each runs as its script does, from the session folder.
+async function verdict($: Engine, tool: string, command: string): Promise<string | undefined> {
+  const cwd = await $.session.cwd()
+  const host = { isWindows: live.isWindows, home: live.home }
+  const read = async (path: string) => String(await $.fs.read(path))
+  const at = { cwd, powershell: tool === 'PowerShell', host, read, isCredit: live.isAttribution }
+  const credit = await attributionReason(command, at)
+  if (credit) return `no AI attribution: ${credit}`
+  const watch = runWatchReason(command)
+  if (watch) return watch
+  const pr = await prReason(command, { cwd, host, read, rules: await prRules($) })
+  return pr ? `PR-body contract: ${pr}` : undefined
 }
 
 async function log($: Engine, entry: Record<string, unknown>) {
@@ -414,16 +131,12 @@ async function failed($: Engine, tool: string, command: string, error: string, r
 }
 
 async function guard($: Engine, tool: string, command: string, run: () => Promise<any>) {
-  const plan = inspect(command, tool === 'PowerShell')
-  // A write the reading missed still carries the command-text backstop, so text alone is reason to check; a
-  // note (a command naming a write that is not plain) is logged.
-  const isQuiet = plan.texts.length === 0 && plan.branches.length === 0 && plan.notes.length === 0
-  if (!plan.isWrite && isQuiet && !plan.block) return run()
+  if (!NAMES_WRITE.test(command)) return run()
   // A hot reload starts the module over without a new session.start: set up on first use.
   if (!live.dir) await setUp($)
   let reason: string | undefined
   try {
-    reason = await verdict($, plan, tool === 'Bash')
+    reason = await verdict($, tool, command)
   } catch (err) {
     return failed($, tool, command, String(err), run)
   }
@@ -435,7 +148,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
     ? undefined
     : (result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined))
   await count($, Boolean(reason), Boolean(scripts))
-  if (reason || scripts || plan.unread.length > 0 || plan.notes.length > 0) {
+  if (reason || scripts) {
     await log($, {
       at: Date.now(),
       session: await $.session.id(),
@@ -443,8 +156,6 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
       mod: reason ?? null,
       scripts: scripts ? String(scripts).slice(0, 300) : null,
       ...(isBlocked ? { enforced: true } : {}),
-      unread: plan.unread,
-      notes: plan.notes,
       command: command.slice(0, 2000),
     })
   }
@@ -483,10 +194,6 @@ export const register: Register = (on, options) => {
   settings(on, options, values => {
     live.mode = String(values.mode ?? 'shadow') === 'enforce' ? 'enforce' : 'shadow'
     live.isAttribution = String(values.attribution ?? 'on') !== 'off'
-    live.mentionRepos = String(values.mentionRepos ?? '*')
-      .split(',')
-      .map(s => s.trim().toLowerCase())
-      .filter(Boolean)
     helpers.setting = String(values.helpers ?? 'allow') === 'block' ? 'block' : 'allow'
   })
 
@@ -532,8 +239,8 @@ function caughtError(error: { kind: string; message?: string }): string {
 
 const ARGUMENT_HINT = '[help | settings | set | helpers]'
 const HELP = [
-  '/guards: reads every shell command that writes history (commits, PRs, issues, releases) for AI credit.',
-  '  /guards           the mode, where the product may be named, and what it caught',
+  '/guards: runs the attribution, PR-body and `gh run watch` checks of the shipped hook scripts on every shell call.',
+  '  /guards           the mode and what it caught',
   '  /guards settings  open the settings pane',
   '  /guards set       change a setting: set <name> <value>; alone, list them',
   '  /guards helpers   helper agents: allow or block them for this session',
@@ -564,18 +271,15 @@ async function statusText($: Engine): Promise<string> {
     // Nothing checked yet.
   }
   const isEnforced = live.mode === 'enforce'
-  const names = live.mentionRepos.includes('*') ? 'every repo' : live.mentionRepos.join(', ') || 'no repo'
   const line = (label: string, c: DayCount) =>
     `${label}: ${c.checked} writes checked, ${c.mod} ${isEnforced ? 'blocked' : 'it would block'}, ` +
     `${c.scripts} the guard scripts blocked.`
   const now = await $.clock.now()
-  const banned = Object.keys((await nameRules($))?.repos ?? {})
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
     live.isAttribution
-      ? `The product name may appear in ${names}; AI credit is blocked everywhere.`
-      : 'Attribution check: off (setting attribution = off); AI credit and the product name are not checked.',
-    ...(banned.length > 0 ? [`Banned names (names.json) are checked in: ${banned.join(', ')}.`] : []),
+      ? 'AI credit is blocked everywhere, as the shipped attribution hook blocks it.'
+      : 'Attribution check: off (setting attribution = off); AI credit is not checked.',
     helpersLine(await helperState($), isEnforced),
     line('Today (UTC)', sumDays(stats, now, 1)),
     line('Last 7 days (UTC)', sumDays(stats, now, 7)),
