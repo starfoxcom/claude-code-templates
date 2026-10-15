@@ -561,9 +561,12 @@ jobs:
       # it gets the bot's token the way the action does (an OIDC token
       # exchanged at Anthropic's GitHub app endpoint), because comments posted
       # with the job's own token would not start the deep-review workflow.
-      # Any failure here (no key, credits or the workspace cap spent, the
+      # The step succeeds only when a verdict comment from this run is on the
+      # PR. No verdict (no key, credits or the workspace cap spent, the
       # exchange refused, an API error) leaves the review to the action steps
-      # below, which run on the subscription exactly as before.
+      # below, which run on the subscription exactly as before. A verdict from
+      # a run that then broke sets `halt` and fails the job instead: a second
+      # review would post a second verdict, and Evaluate reads the newest one.
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
         continue-on-error: true
@@ -572,12 +575,36 @@ jobs:
           CLI_VERSION: "2.1.300"
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::notice::No ANTHROPIC_API_KEY secret: the review runs on the subscription"
             exit 1
           fi
+
+          # The CLI acts on config it finds in its working folder (hooks,
+          # settings, MCP servers), and the PR controls those files. Like the
+          # review action, run it in a copy of the checkout whose config comes
+          # from the base branch; the checkout itself stays as it is for the
+          # fallback steps. `--setting-sources user --strict-mcp-config` below
+          # also keeps the restored project settings from loading.
+          wt="$RUNNER_TEMP/credits-review"
+          bot_token=""
+          cleanup() {
+            if [ -n "$bot_token" ]; then
+              GH_TOKEN="$bot_token" gh api -X DELETE /installation/token >/dev/null 2>&1 || true
+            fi
+            git worktree remove --force "$wt" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          git worktree add --quiet --detach "$wt" HEAD
+          for p in .claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md .husky; do
+            rm -rf "${wt:?}/$p"
+            git -C "$wt" checkout "origin/$BASE_REF" -- "$p" 2>/dev/null || true
+          done
 
           oidc=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
@@ -591,8 +618,7 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$bot_token"
-          # The token lives for an hour; hand it back as soon as the run ends.
-          trap 'GH_TOKEN="$bot_token" gh api -X DELETE /installation/token >/dev/null 2>&1 || true' EXIT
+          # The token lives for an hour; cleanup hands it back when the step ends.
 
           for attempt in 1 2 3; do
             if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
@@ -616,15 +642,18 @@ jobs:
 
           out="$RUNNER_TEMP/claude-credits-output.json"
           status=0
-          GH_TOKEN="$bot_token" "$cli" -p "$ROUTINE_REVIEW_PROMPT" \
+          since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          (cd "$wt" && GH_TOKEN="$bot_token" "$cli" -p "$ROUTINE_REVIEW_PROMPT" \
+            --setting-sources user --strict-mcp-config \
             --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" \
             --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" \
             --max-turns 120 --model claude-fable-5-1 --effort low \
-            --output-format json > "$out" || status=$?
+            --output-format json) > "$out" || status=$?
           # Only fields the CLI writes are printed: the error flag, the API's
           # status, the cost and the turn count. On an error the result text is
           # the API's message, never the model's words.
-          python3 - "$out" "$status" <<'PYEOF'
+          clean=true
+          python3 - "$out" "$status" <<'PYEOF' || clean=false
           import json, sys
           path, status = sys.argv[1], int(sys.argv[2])
           try:
@@ -643,9 +672,35 @@ jobs:
           print(f'::notice::Reviewed on the API credits: ${cost} over {turns} turns')
           PYEOF
 
+          # Same selector as Evaluate, floored at this run's start. `jq -s add`
+          # joins the pages `--paginate` prints as separate arrays.
+          if ! comments=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments"); then
+            echo "halt=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Could not read the PR comments to see whether the credits run posted a verdict"
+            exit 1
+          fi
+          verdict=$(printf '%s' "$comments" \
+            | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.body | test("Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
+            | grep -E "🔴|🟢" | tail -n 1 || true)
+          if [ -z "$verdict" ]; then
+            echo "::warning::The credits run posted no verdict: the review runs on the subscription"
+            exit 1
+          fi
+          if [ "$clean" != true ]; then
+            echo "halt=true" >> "$GITHUB_OUTPUT"
+            echo "::error::The credits run posted a verdict but did not finish, so the deep-review label and request may be missing"
+            exit 1
+          fi
+
+      - name: Fail when the credits run stopped after posting
+        if: steps.claude-review-credits.outputs.halt == 'true'
+        run: |
+          echo "::error::The credits run stopped after posting (see its step). Re-run this job; a second review here would post a second verdict."
+          exit 1
+
       - name: Run Claude Code Review
         id: claude-review
-        if: steps.claude-review-credits.outcome != 'success'
+        if: steps.claude-review-credits.outcome != 'success' && steps.claude-review-credits.outputs.halt != 'true'
         # Pinned to the v1 tag's resolved SHA (v1.0.213; its CLI 2.1.258 is the
         # first the API accepts for Fable 5.1). The bare `@v1` floats. Update via
         #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
@@ -733,7 +788,7 @@ jobs:
       #     review in progress" — branch protection blocks merge until
       #     claude.yml PATCHes to success/failure.
       - name: Resolve Claude On-Demand check post-routine
-        if: always() && steps.claude-review.conclusion != 'cancelled'
+        if: always() && steps.claude-review-credits.conclusion != 'cancelled' && steps.claude-review.conclusion != 'cancelled'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
