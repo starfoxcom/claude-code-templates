@@ -61,17 +61,15 @@ Options are `userConfig` fields in each mod's `.claude-plugin/plugin.json`: thos
 
 ### PR-body contract (guards, opt-in)
 
-The shipped `guards/scripts/pr-body-contract.py` lists no repo, so it checks nothing. To hold your repos to the PR format, copy it to `mods-data/guards/scripts/pr-body-contract.py` and fill its `REPOS` table (a repo keyword, the issue-line pattern, the titles that carry no issue line; the file holds an example), `SEGMENT_KEYS` (keys that must match a whole folder or repo name) and `SKIP` (`--repo` values never checked). A script in `mods-data/guards/scripts/` runs in place of the shipped one of the same name, so the same goes for the other two.
-
-There, `gh pr create` and `gh pr edit` must pass the body as a file (`--body-file` or `-F`, never inline `--body`, `--fill` or `--web`), and the body needs `## What` with a bullet, `## Why` with text, no empty `## Notes`, and the repo's issue line unless the title is exempt. A `gh pr edit` that sets no body passes.
+No PR-body script ships: a PR-body contract names your own repos. To hold them to the PR format, put your PreToolUse hook script for it at `mods-data/guards/scripts/pr-body-contract.py`; `guards` runs it on every Bash and PowerShell call like the shipped scripts, and skips it while that file is missing. A script in `mods-data/guards/scripts/` also runs in place of a shipped one of the same name.
 
 ### What guards checks
 
-`guards` runs three hook scripts, kept in `guards/scripts/`, on every Bash and PowerShell call before the call runs, the way Claude Code runs a command hook: through SETUP.md § 7c's isolated launcher (`python -I -c "import runpy, ..." <script>`, so a missing script never reads as a block), the hook's input on stdin (`hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input.command`; `CLAUDE_PROJECT_DIR` in the environment), its answer read as Claude Code reads it (a deny, the older `decision: "block"` or `continue: false`; an `ask` blocks too, since the mod cannot ask), with the script's own reason. The scripts decide, so `guards` refuses exactly what they refuse. A script that cannot start, fails, prints no answer or runs past 10 seconds is a non-blocking error, as it is for a command hook: the call runs, and `/guards` counts it as not checked and shows the last error (`stats.json`). With no Python found, `/guards` says nothing is checked.
+`guards` runs the hook scripts in `guards/scripts/` (and your own PR-body script, when you have one) on every Bash and PowerShell call before the call runs, the way Claude Code runs a command hook: through SETUP.md § 7c's isolated launcher (`python -I -c "import runpy, ..." <script>`, so a missing script never reads as a block), the hook's input on stdin (`hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input.command`; `CLAUDE_PROJECT_DIR` in the environment), its answer read as Claude Code reads it (a deny, the older `decision: "block"` or `continue: false`; an `ask` blocks too, since the mod cannot ask), with the script's own reason. The scripts decide, so `guards` refuses exactly what they refuse. A script that cannot start, fails, prints no answer or runs past 10 seconds is a non-blocking error, as it is for a command hook: the call runs, and `/guards` counts it as not checked and shows the last error (`stats.json`). With no Python found, `/guards` says nothing is checked.
 
 - `no-ai-attribution.py`: the global template's own attribution hook (`hooks/no-ai-attribution.py`, the same file): AI attribution in a git or gh write's text or in a message or body file it names, such as an AI co-author trailer, a "generated with" line, a session link or the robot emoji. Plain mentions pass ("compatible with Claude Code", a human co-author);
 - `block-gh-run-watch.py`: the streaming `gh run watch`, pointing to the watchers in `.claude/rules/token-efficiency.md`;
-- `pr-body-contract.py`: the PR format, for the repos its table lists.
+- `pr-body-contract.py` (your own copy only): the PR format, for the repos it lists.
 
 For stricter rules (no mention of an AI at all, refused `--no-verify`), put your own copy of a script in `mods-data/guards/scripts/`.
 

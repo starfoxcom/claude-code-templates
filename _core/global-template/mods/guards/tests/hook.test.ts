@@ -48,7 +48,8 @@ const LAUNCH = ['-I', '-c', "import runpy, sys; runpy.run_path(sys.argv[1], run_
 function world(on: On, os = 'Windows_NT'): World {
   const seen: World = {
     files: new Map(),
-    own: new Set(),
+    // The PR-body script ships no copy: the machine holds its own, as one that uses it does.
+    own: new Set(['pr-body-contract.py']),
     ran: [],
     started: [],
     broken: new Set(),
@@ -91,7 +92,8 @@ function world(on: On, os = 'Windows_NT'): World {
       const input = JSON.parse(String(e.init?.stdin))
       seen.started.push({ argv: [...e.argv], input, timeoutMs: e.init?.timeoutMs, env: e.init?.env })
       const name = file.slice(file.lastIndexOf('/') + 1)
-      answer = seen.scripts[file.startsWith(DATA) ? `own ${name}` : name]?.(input) ?? answer
+      const script = (file.startsWith(DATA) && seen.scripts[`own ${name}`]) || seen.scripts[name]
+      answer = script?.(input) ?? answer
     }
     const { exitCode, stdout = '', stderr = '' } = answer
     return { value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }
@@ -246,6 +248,13 @@ test("a machine's own copy of a script runs in place of the shipped one", { opti
   const files = seen.started.map(s => String(s.argv.at(-1))).sort()
   expect(files).toHaveLength(3)
   expect(files.filter(f => f.endsWith('/pr-body-contract.py'))).toEqual([`${DATA}/scripts/pr-body-contract.py`])
+})
+
+test('without its own copy, the PR-body script never starts', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  seen.own.clear()
+  expect((await call($, 'gh pr create BODY')).deny).toBeUndefined()
+  expect([...names(seen)].sort()).toEqual(['block-gh-run-watch.py', 'no-ai-attribution.py'])
 })
 
 test('the empty command starts no script', { options: { mode: 'enforce' } }, async ($, on) => {

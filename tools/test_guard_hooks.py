@@ -345,19 +345,6 @@ class GuardsScriptsTest(unittest.TestCase):
     def script(self, name):
         return os.path.join(GUARDS, name)
 
-    def pr_script(self, root):
-        """A copy of the PR-body script with one repo listed, as a machine's own copy would be."""
-        with open(self.script("pr-body-contract.py"), encoding="utf-8") as f:
-            source = f.read()
-        table = ('REPOS = {"my-game": (re.compile(r"^(Resolves|Part of) #\\d+\\s*$", re.M), '
-                 're.compile(r"^(docs|chore)(\\(|:)"))}')
-        self.assertIn("REPOS = {}\n", source)
-        source = source.replace("REPOS = {}\n", table + "\n").replace("SKIP = ()", 'SKIP = ("board",)')
-        path = os.path.join(root, "pr-body-contract.py")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(source)
-        return path
-
     def test_a_missing_script_is_a_non_blocking_error(self):
         # Exit 2 would block every call; the launcher turns a missing file into exit 1.
         result = self.launch(os.path.join(GUARDS, "no-such-script.py"), {"tool_input": {"command": "ls"}})
@@ -385,45 +372,6 @@ class GuardsScriptsTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(self.run_script(path, command))
 
-    def test_pr_body_script_ships_with_no_repo_listed(self):
-        path = self.script("pr-body-contract.py")
-        for folder in ("my-game", "gameproject-demo", "appproject"):
-            with self.subTest(folder=folder):
-                self.assertIsNone(self.run_script(path, 'gh pr create -t t --body "x"', cwd=os.path.join(REPO, folder)))
-
-    def test_pr_body_script_holds_a_listed_repo_to_the_format(self):
-        root = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        repo = os.path.join(root, "my-game")
-        os.makedirs(repo)
-        full = "## What\n- add the sky\n\n## Why\nIt was missing.\n\nResolves #12\n"
-        bodies = {"full.md": full, "short.md": "## What\n", "norow.md": full.replace("Resolves #12\n", ""),
-                  "emptynotes.md": full + "## Notes\n\n"}
-        for name, text in bodies.items():
-            with open(os.path.join(repo, name), "w", encoding="utf-8") as f:
-                f.write(text)
-        path = self.pr_script(root)
-        for command, reason in (('gh pr create -t "feat: x" --body "## What"', "inline `--body`"),
-                                ("gh pr create --fill", "`--fill*`"),
-                                ('gh pr create -t "feat: x"', "--body-file"),
-                                ('gh pr create -t "feat: x" --body-file short.md', "`## What`"),
-                                ('gh pr create -t "feat: x" --body-file norow.md', "no issue line"),
-                                ('gh pr create -t "feat: x" --body-file emptynotes.md', "`## Notes`"),
-                                ("gh pr edit 3 --body-file=short.md", "`## What`"),
-                                ('gh pr create --title="feat: x" --body-file=norow.md', "no issue line"),
-                                ('gh pr create --repo=o/my-game -t t --body "x"', "inline `--body`")):
-            with self.subTest(command=command):
-                self.assertIn(reason, self.run_script(path, command, cwd=repo) or "")
-        for command in ('gh pr create -t "feat: x" --body-file full.md',
-                        'gh pr create -t "docs: x" --body-file norow.md',
-                        "gh pr edit 3 --add-label bug",
-                        'gh pr create -R o/board -t t --body "x"',
-                        'gh pr create --repo=o/board -t t --body "x"',
-                        'gh pr create -t "feat: x" --body-file=full.md',
-                        'gh pr create --title="docs: x" --body-file=norow.md'):
-            with self.subTest(command=command):
-                self.assertIsNone(self.run_script(path, command, cwd=repo))
-
 
 class HookSourceTest(unittest.TestCase):
     """Every shipped hook and script compiles without a warning.
@@ -439,7 +387,7 @@ class HookSourceTest(unittest.TestCase):
     def test_compiles_without_warnings(self):
         files = [os.path.join(d, name) for d in self.DIRS
                  for name in sorted(os.listdir(os.path.join(REPO, d))) if name.endswith(".py")]
-        self.assertGreaterEqual(len(files), 10)
+        self.assertGreaterEqual(len(files), 9)
         for rel in files:
             with self.subTest(file=rel):
                 with open(os.path.join(REPO, rel), encoding="utf-8") as f:

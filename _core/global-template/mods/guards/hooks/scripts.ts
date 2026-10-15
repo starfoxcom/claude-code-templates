@@ -46,18 +46,22 @@ export async function findPython($: Engine): Promise<string> {
 // The hook scripts, in their settings.json order: the first deny in this order is the reason given.
 const SCRIPTS = ['no-ai-attribution.py', 'block-gh-run-watch.py', 'pr-body-contract.py']
 const ATTRIBUTION_SCRIPT = 'no-ai-attribution.py'
+// Scripts that ship no copy: they run only from a machine's own copy (a PR-body contract names its repos).
+const OWN_ONLY = new Set(['pr-body-contract.py'])
 // A command hook's default time limit in the global settings.
 const SCRIPT_TIMEOUT_MS = 10_000
 export const NO_PYTHON = 'no Python 3.8+ found outside a virtual or conda environment'
 
-// The machine's own copy of a script when it has one, else the shipped one.
-async function scriptFile($: Engine, name: string, dataDir: string): Promise<string> {
+// The machine's own copy of a script when it has one, else the shipped one; none for an own-only script
+// the machine has no copy of.
+async function scriptFile($: Engine, name: string, dataDir: string): Promise<string | undefined> {
   const own = `${dataDir}/scripts/${name}`
   const isOwn = await $.fs.stat(own).then(
     () => true,
     () => false,
   )
-  return isOwn ? own : `${$.plugin.root.replace(/\\/g, '/')}/scripts/${name}`
+  if (isOwn) return own
+  return OWN_ONLY.has(name) ? undefined : `${$.plugin.root.replace(/\\/g, '/')}/scripts/${name}`
 }
 
 type Answer = { reason?: string; error?: string }
@@ -83,6 +87,7 @@ async function scriptAnswer($: Engine, name: string, input: string, at: Setup): 
   if (!at.python) return { error: NO_PYTHON }
   try {
     const file = await scriptFile($, name, at.dataDir)
+    if (file === undefined) return {}
     const { exitCode, stdout, stderr } = await $.process.run([at.python, ...LAUNCH, file], {
       stdin: input,
       env: { CLAUDE_PROJECT_DIR: at.projectDir },
