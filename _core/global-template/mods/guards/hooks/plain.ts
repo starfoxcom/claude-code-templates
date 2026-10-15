@@ -104,7 +104,7 @@ export function withoutPrints(text: string, isCallRead = false): string {
   let out = text
   for (const m of masked.matchAll(PROGRAM_WORD)) {
     const word = m[1] as string
-    const name = word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, '')
+    const name = programAfter(masked, (m.index ?? 0) + m[0].length - word.length)
     const at = (m.index ?? 0) + m[0].length - word.length
     // A here-doc body line is no statement, whatever word it starts with.
     if (bodies.some(b => at >= b.from && at < b.to)) continue
@@ -127,6 +127,26 @@ export function withoutPrints(text: string, isCallRead = false): string {
 }
 
 const blank = (text: string) => text.replace(/[^\n]/g, ' ')
+// Keywords and wrappers the reading steps past to a statement's program (`do git log`, `time git log`).
+const STEPS = /^(do|then|else|elif|time|!|sudo|env|nohup|nice|xargs|exec|command|builtin|timeout)$/
+
+// The program a statement starting at `at` runs, past assignments, keywords and wrappers with their options.
+function programAfter(masked: string, at: number): string {
+  const words = (masked.slice(at).split(/[;&|\n]/)[0] ?? '').trim().split(/[ \t]+/)
+  const base = (w: string) => w.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, '')
+  for (let k = 0; k < words.length; ) {
+    const w = words[k] ?? ''
+    if (/^[A-Za-z_]\w*=/.test(w)) {
+      k++
+      continue
+    }
+    if (!STEPS.test(base(w))) return base(w)
+    k++
+    while ((words[k] ?? '').startsWith('-')) k++
+    if (base(w) === 'timeout') k++
+  }
+  return ''
+}
 // Programs whose text is data to them (`cat >> notes.md <<EOF`) or code in their own language (`node -e`).
 const DATA_PROGRAMS =
   /^(cat|tee|type|get-content|set-content|add-content|out-file|node|deno|python\d*(\.\d+)?|py|perl|ruby|php|awk|gawk)$/

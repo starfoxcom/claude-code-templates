@@ -5,6 +5,7 @@
 // are looked for by their text (`routeIn`). Pure, no engine access.
 
 import { bypassOf, HOOK_SKIP, HOOKS_OFF } from './bypass'
+import { QUOTED_STRING } from './plain'
 import type { Statement, Word } from './statement'
 
 // A hooks setting through git's environment.
@@ -35,7 +36,8 @@ const wordOf = (text: string): Word => ({ text, dynamic: /[$`]/.test(text), bodi
  * typed call meets (`bypassOf`): every spelling git or gh accepts for a route is caught, not only the
  * spellings the table above lists. */
 export function callRoute(text: string): string | undefined {
-  const plain = text.replace(/['"]/g, ' ')
+  // A separator inside quotes ends no statement (`-m "fix(x): y" -n`): blanked before the quotes go.
+  const plain = text.replace(QUOTED_STRING, s => s.replace(/[;&|()`\n]/g, ' ')).replace(/['"]/g, ' ')
   for (const m of plain.matchAll(CALL)) {
     const rest = plain.slice((m.index ?? 0) + m[0].length)
     const end = rest.search(/[;&|\n`)]/)
