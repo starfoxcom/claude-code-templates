@@ -1,7 +1,7 @@
 {
   "name": "guards",
   "version": "0.1.0",
-  "description": "Keeps AI credit out of commits, PRs, issues, comments and releases, holds PR bodies to the PR format, and stops the streaming CI log watcher: an in-process copy of the global hook scripts in `guards/reference/`. Optionally blocks helper agents.",
+  "description": "Keeps AI credit out of commits, PRs, issues, comments and releases, holds PR bodies to the PR format, and stops the streaming CI log watcher, by running the hook scripts in `guards/scripts/` on every shell call. Optionally blocks helper agents.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "mode": {
@@ -14,7 +14,7 @@
     "attribution": {
       "type": "string",
       "title": "Attribution check",
-      "description": "on (the default): AI credit is kept out of commits, PRs, issues, comments and releases, as the global attribution hook keeps it out. off: the credit scan is left out. Skipped git hooks, history rewrites, --trailer, message reuse and eval stay refused either way.",
+      "description": "on (the default): the attribution script runs on every shell call, keeping AI credit out of commits, PRs, issues, comments and releases and refusing the routes around the commit gates. off: that script does not run.",
       "options": ["on", "off"],
       "default": "on"
     },

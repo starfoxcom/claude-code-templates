@@ -57,10 +57,10 @@ test('/guards names the mode, the attribution check and the counts for today and
   const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
   expect(text.split('\n')).toEqual([
     'Guards: shadow (never blocks; logs what it would block).',
-    'AI credit is blocked everywhere, as the global attribution hook blocks it.',
+    'Attribution check: on; the attribution script checks every shell call.',
     'Helper agents are allowed (setting helpers = allow).',
-    'Today (UTC): 12 writes checked, 1 it would block, 2 the guard scripts blocked.',
-    'Last 7 days (UTC): 17 writes checked, 1 it would block, 3 the guard scripts blocked.',
+    'Today (UTC): 12 shell calls checked, 1 it would block, 2 the guard scripts blocked.',
+    'Last 7 days (UTC): 17 shell calls checked, 1 it would block, 3 the guard scripts blocked.',
   ])
 })
 

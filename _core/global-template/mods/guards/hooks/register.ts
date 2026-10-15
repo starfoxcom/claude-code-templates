@@ -1,18 +1,14 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { attributionReason, pyFold } from './attribution'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
-import { prReason } from './prcontract'
-import type { PrRules } from './prcontract'
-import { runWatchReason } from './runwatch'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
-// guards: one in-process check on every Bash and PowerShell call, replacing the global attribution,
-// `gh run watch` and PR-body scripts. Each check is a rule-for-rule copy of its script (attribution.ts,
-// runwatch.ts, prcontract.ts), so it refuses exactly what the scripts refuse and passes what they pass.
-// Opt-in per repo: the PR-body contract (mods-data/guards/pr-body.json). Opt-in by setting: helper agents
-// (`helpers` = block refuses Agent and Workflow calls; see helpers.ts). Opt-out by setting: `attribution` =
-// off drops the AI-credit scan; the routes around the commit gates stay refused.
+// guards: runs the global attribution, `gh run watch` and PR-body hook scripts (scripts/) on every Bash and
+// PowerShell call, the way Claude Code runs a command hook: the same Python, the same input, the same deny.
+// The scripts themselves decide, so guards refuses exactly what they refuse. A machine's own copy of a
+// script in mods-data/guards/scripts/ runs in place of the shipped one (the PR-body script holds the
+// machine's repo table). Opt-in by setting: helper agents (`helpers` = block refuses Agent and Workflow
+// calls; see helpers.ts). Opt-out by setting: `attribution` = off skips the attribution script.
 //
 // mode `shadow` (the default while it is new): never blocks; it logs what it would block, and what the
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
@@ -24,6 +20,8 @@ const live = {
   home: '',
   dir: '',
   isWindows: false,
+  // The Python the global hooks start with: `python` on Windows, `python3` elsewhere.
+  python: 'python3',
 }
 // The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
 // hooks worker forgets them, which errs toward the block).
@@ -40,39 +38,52 @@ const MARK_LOADED = [
 async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
+  live.python = live.isWindows ? 'python' : 'python3'
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
   live.dir = `${(configured ?? `${live.home}/.claude`).replace(/\\/g, '/')}/mods-data/guards`
   // The engine's fs writes no missing folders; node makes it once per session.
   await $.process.run(['node', '-e', MARK_LOADED, live.dir, live.mode], { timeoutMs: 10_000 }).catch(() => undefined)
 }
 
-// The repos whose PRs follow the PR-body contract, from mods-data/guards/pr-body.json; none without it.
-async function prRules($: Engine): Promise<PrRules | undefined> {
-  try {
-    const rules = JSON.parse(String(await $.fs.read(`${live.dir}/pr-body.json`))) as PrRules
-    return rules && typeof rules.repos === 'object' && rules.repos !== null ? rules : undefined
-  } catch {
-    return undefined
-  }
+// The hook scripts, in their settings.json order: the first deny in this order is the reason given.
+const SCRIPTS = ['no-ai-attribution.py', 'block-gh-run-watch.py', 'pr-body-contract.py']
+const ATTRIBUTION_SCRIPT = 'no-ai-attribution.py'
+// A command hook's default time limit in the global settings.
+const SCRIPT_TIMEOUT_MS = 10_000
+
+// The machine's own copy of a script when it has one, else the shipped one.
+async function scriptFile($: Engine, name: string): Promise<string> {
+  const own = `${live.dir}/scripts/${name}`
+  const isOwn = await $.fs.stat(own).then(
+    () => true,
+    () => false,
+  )
+  return isOwn ? own : `${$.plugin.root.replace(/\\/g, '/')}/scripts/${name}`
 }
 
-// A command the scripts look at: a git or gh call, or a GitHub API call through curl or PowerShell. Only
-// these are counted, so stats.json keeps the shadow comparison's denominator.
-const NAMES_WRITE = /\b(git|gh|curl|lefthook)\b|Invoke-(RestMethod|WebRequest)|LEFTHOOK/i
+// One script's answer as Claude Code reads a command hook's: exit 2 denies with stderr, exit 0 with a
+// `permissionDecision` of deny denies with its reason, anything else passes. A script that cannot start,
+// runs past the limit or exits with another code throws: `failed` decides.
+async function scriptReason($: Engine, name: string, input: string): Promise<string | undefined> {
+  const file = await scriptFile($, name)
+  const { exitCode, stdout, stderr } = await $.process.run([live.python, file], {
+    stdin: input,
+    timeoutMs: SCRIPT_TIMEOUT_MS,
+  })
+  if (exitCode === 2) return stderr.trim() || `${name} refused the call`
+  if (exitCode !== 0) throw new Error(`${name} exited ${exitCode}: ${stderr.trim().slice(0, 200)}`)
+  if (!stdout.trim()) return undefined
+  const decision = (JSON.parse(stdout) as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput
+  return decision?.permissionDecision === 'deny' ? String(decision.permissionDecisionReason ?? name) : undefined
+}
 
-// The first reason to block, in the order the scripts run (settings.json): attribution, `gh run watch`,
-// then the PR-body contract. Each runs as its script does, from the session folder.
+// The first reason to block. The scripts run side by side, as Claude Code runs the hooks of one event.
 async function verdict($: Engine, tool: string, command: string): Promise<string | undefined> {
   const cwd = await $.session.cwd()
-  const host = { isWindows: live.isWindows, home: live.home }
-  const read = async (path: string) => String(await $.fs.read(path))
-  const at = { cwd, powershell: tool === 'PowerShell', host, read, isCredit: live.isAttribution }
-  const credit = await attributionReason(command, at)
-  if (credit) return `no AI attribution: ${credit}`
-  const watch = runWatchReason(command)
-  if (watch) return watch
-  const pr = await prReason(command, { cwd, host, read, rules: await prRules($) })
-  return pr ? `PR-body contract: ${pr}` : undefined
+  const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { command }, cwd })
+  const names = SCRIPTS.filter(name => live.isAttribution || name !== ATTRIBUTION_SCRIPT)
+  const reasons = await Promise.all(names.map(name => scriptReason($, name, input)))
+  return reasons.find(reason => reason !== undefined)
 }
 
 async function log($: Engine, entry: Record<string, unknown>) {
@@ -131,7 +142,8 @@ async function failed($: Engine, tool: string, command: string, error: string, r
 }
 
 async function guard($: Engine, tool: string, command: string, run: () => Promise<any>) {
-  if (!NAMES_WRITE.test(pyFold(command))) return run()
+  // An empty command gets the scripts' own answer without starting them: they pass it.
+  if (!command) return run()
   // A hot reload starts the module over without a new session.start: set up on first use.
   if (!live.dir) await setUp($)
   let reason: string | undefined
@@ -143,7 +155,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   // An enforced block is counted and logged like any other decision: it is the one a false block is
   // debugged from. The command never ran, so the scripts' answer is unknown.
   const isBlocked = live.mode === 'enforce' && reason !== undefined
-  const result = isBlocked ? { deny: `BLOCKED (guards): ${reason}` } : await run()
+  const result = isBlocked ? { deny: reason } : await run()
   const scripts = isBlocked
     ? undefined
     : (result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined))
@@ -239,7 +251,7 @@ function caughtError(error: { kind: string; message?: string }): string {
 
 const ARGUMENT_HINT = '[help | settings | set | helpers]'
 const HELP = [
-  '/guards: runs copies of the attribution, PR-body and `gh run watch` hooks on every shell call.',
+  '/guards: runs the attribution, `gh run watch` and PR-body hook scripts on every shell call.',
   '  /guards           the mode and what it caught',
   '  /guards settings  open the settings pane',
   '  /guards set       change a setting: set <name> <value>; alone, list them',
@@ -272,14 +284,14 @@ async function statusText($: Engine): Promise<string> {
   }
   const isEnforced = live.mode === 'enforce'
   const line = (label: string, c: DayCount) =>
-    `${label}: ${c.checked} writes checked, ${c.mod} ${isEnforced ? 'blocked' : 'it would block'}, ` +
+    `${label}: ${c.checked} shell calls checked, ${c.mod} ${isEnforced ? 'blocked' : 'it would block'}, ` +
     `${c.scripts} the guard scripts blocked.`
   const now = await $.clock.now()
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
     live.isAttribution
-      ? 'AI credit is blocked everywhere, as the global attribution hook blocks it.'
-      : 'Attribution check: off (setting attribution = off); AI credit is not checked.',
+      ? 'Attribution check: on; the attribution script checks every shell call.'
+      : 'Attribution check: off (setting attribution = off); the attribution script does not run.',
     helpersLine(await helperState($), isEnforced),
     line('Today (UTC)', sumDays(stats, now, 1)),
     line('Last 7 days (UTC)', sumDays(stats, now, 7)),

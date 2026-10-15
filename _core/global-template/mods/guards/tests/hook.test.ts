@@ -2,21 +2,45 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-const AI_TRAILER = 'Co-' + 'Authored-By: Cla' + 'ude <noreply@anthro' + 'pic.com>'
+// Tests run with no processes, so each script's answer is faked here in the hook protocol the real scripts
+// speak (a deny on stdout, or exit 2 with stderr). What the scripts decide is theirs: these tests hold the
+// mod to starting them as Claude Code starts a command hook and to reading their answer as it does.
 const DATA = 'C:/Users/me/.claude/mods-data/guards'
 const LOG = `${DATA}/decisions.jsonl`
-const PR_RULES = JSON.stringify({
-  repos: {
-    'my-game': { row: String.raw`^(Resolves|Part of) #\d+\s*$`, noRow: String.raw`^(docs|chore)(\(|:)` },
-    tiny: { row: String.raw`^Resolves #\d+$`, noRow: '^docs', segment: true },
-  },
-  skip: ['board'],
-})
-const FULL_BODY = '## What\n- add the sky\n\n## Why\nIt was missing.\n\nResolves #12\n'
+const SHIPPED = ['no-ai-attribution.py', 'block-gh-run-watch.py', 'pr-body-contract.py']
 
-// `seen.broken`: calls that throw. Files are keyed by the path the engine is asked for, with forward slashes.
-function world(on: On, files: Record<string, string> = {}, os = 'Windows_NT', cwd = 'C:/Repos/my-game') {
-  const seen = { files: new Map(Object.entries(files)), ran: [] as string[], broken: new Set<string>() }
+type Answer = { exitCode: number; stdout?: string; stderr?: string }
+type Script = (input: { tool_name: string; tool_input: { command: string }; cwd: string }) => Answer | undefined
+const deny = (reason: string): Answer => ({
+  exitCode: 0,
+  stdout: JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
+  }),
+})
+// Stand-ins for the shipped scripts: each refuses one marker word.
+const refuses =
+  (word: string, reason: string): Script =>
+  i =>
+    i.tool_input.command.includes(word) ? deny(reason) : undefined
+const STAND_INS: Record<string, Script> = {
+  'no-ai-attribution.py': refuses('CREDIT', 'BLOCKED (no AI attribution): x'),
+  'block-gh-run-watch.py': refuses('WATCH', 'BLOCKED: `gh run watch`'),
+  'pr-body-contract.py': refuses('BODY', 'BLOCKED (PR-body contract): y'),
+}
+
+type World = {
+  files: Map<string, string>
+  own: Set<string>
+  ran: string[]
+  started: Array<{ argv: string[]; input: Record<string, unknown>; timeoutMs?: number }>
+  broken: Set<string>
+  scripts: Record<string, Script>
+}
+
+// `seen.own`: scripts the machine has its own copy of. `seen.broken`: calls that throw.
+function world(on: On, os = 'Windows_NT'): World {
+  const seen: World = { files: new Map(), own: new Set(), ran: [], started: [], broken: new Set(), scripts: {} }
+  seen.scripts = { ...STAND_INS }
   const env: Record<string, string> = { USERPROFILE: 'C:/Users/me', OS: os }
   const unless = (call: string) => {
     if (seen.broken.has(call)) throw new Error(`${call} is down`)
@@ -24,19 +48,32 @@ function world(on: On, files: Record<string, string> = {}, os = 'Windows_NT', cw
   mock.clock(on)
   on('env.get', ($, e) => (unless('env.get'), { value: env[e.name] }))
   on('session.id', () => (unless('session.id'), { value: 'sess-a' }))
-  on('session.cwd', () => (unless('session.cwd'), { value: cwd }) as never)
+  on('session.cwd', () => (unless('session.cwd'), { value: 'C:/Repos/my-game' }) as never)
   on('fs.read', ($, e) => {
     const path = e.path.replaceAll('\\', '/')
-    // The manifest, wherever the plugin root is: a test that needs it lists it as `plugin.json`.
     const text = seen.files.get(path.endsWith('/plugin.json') ? 'plugin.json' : path)
     if (text === undefined) throw new Error('ENOENT')
     return { value: text }
   })
-  on('fs.write', ($, e) => {
-    seen.files.set(e.path.replaceAll('\\', '/'), e.text)
-    return { value: undefined }
+  on('fs.write', ($, e) => (seen.files.set(e.path.replaceAll('\\', '/'), e.text), { value: undefined }))
+  on('fs.stat', ($, e) => {
+    const name = e.path.replaceAll('\\', '/').replace(`${DATA}/scripts/`, '')
+    if (!seen.own.has(name)) throw new Error('ENOENT')
+    return { value: { kind: 'file' } as never }
   })
-  on('process.run', () => ({ value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false } }) as never)
+  on('process.run', ($, e) => {
+    const [, file = ''] = e.argv
+    let answer: Answer = { exitCode: 0 }
+    if (file.endsWith('.py')) {
+      unless('python')
+      const input = JSON.parse(String(e.init?.stdin))
+      seen.started.push({ argv: [...e.argv], input, timeoutMs: e.init?.timeoutMs })
+      const name = file.slice(file.lastIndexOf('/') + 1)
+      answer = seen.scripts[file.startsWith(DATA) ? `own ${name}` : name]?.(input) ?? answer
+    }
+    const { exitCode, stdout = '', stderr = '' } = answer
+    return { value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   const ran = (command: unknown) => (seen.ran.push(String(command)), { result: {} as never })
@@ -49,180 +86,142 @@ async function call($: Engine, command: string, tool: 'Bash' | 'PowerShell' = 'B
   await $.session.start({ cwd: 'C:/Repos/my-game', surface: 'terminal', isInteractive: true })
   return (await $.tool.call({ tool, command } as never)) as { deny?: string }
 }
-const lastEntry = (seen: { files: Map<string, string> }) =>
-  JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+const lastEntry = (seen: World) => JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
+const names = (seen: World) => seen.started.map(s => s.argv[1]?.replace(/^.*\//, ''))
+
+test('each shell call starts the three scripts as Claude Code starts a command hook', async ($, on) => {
+  const seen = world(on)
+  await call($, 'git status', 'PowerShell')
+  expect([...names(seen)].sort()).toEqual([...SHIPPED].sort())
+  for (const { argv, input, timeoutMs } of seen.started) {
+    expect(argv[0]).toBe('python')
+    expect(argv[1]).toContain('/scripts/')
+    expect(input).toEqual({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'PowerShell',
+      tool_input: { command: 'git status' },
+      cwd: 'C:/Repos/my-game',
+    })
+    expect(timeoutMs).toBe(10_000)
+  }
+  expect(seen.ran).toEqual(['git status'])
+})
+
+test('off Windows the scripts start with python3', async ($, on) => {
+  const seen = world(on, 'Linux')
+  await call($, 'ls')
+  expect(seen.started.map(s => s.argv[0])).toEqual(['python3', 'python3', 'python3'])
+})
 
 test("the mode saved in the mod's settings file applies from the session's start", async ($, on) => {
-  const manifest = JSON.stringify({ userConfig: { mode: { type: 'string', options: ['shadow', 'enforce'] } } })
-  const seen = world(on, { 'plugin.json': manifest, [`${DATA}/settings.json`]: '{"mode":"enforce"}' })
-  const result = await call($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
-  expect(String(result.deny)).toContain('BLOCKED (guards)')
+  const seen = world(on)
+  const mode = { type: 'string', options: ['shadow', 'enforce'] }
+  seen.files.set('plugin.json', JSON.stringify({ userConfig: { mode } }))
+  seen.files.set(`${DATA}/settings.json`, '{"mode":"enforce"}')
+  const result = await call($, 'git commit -m CREDIT')
+  expect(String(result.deny)).toContain('BLOCKED (no AI attribution)')
   expect(seen.ran).toEqual([])
 })
 
-test('in shadow mode a credit is logged, never blocked', async ($, on) => {
+test("in enforce mode a script's deny refuses the call with its own reason", { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
   const seen = world(on)
-  await call($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
-  expect(seen.ran).toHaveLength(1)
-  expect(lastEntry(seen).mod).toContain('attribution marker')
-  expect(lastEntry(seen).scripts).toBeNull()
-})
-
-test('in enforce mode a block is refused, counted and logged', { options: { mode: 'enforce' } }, async ($, on) => {
-  const seen = world(on)
-  const result = await call($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
+  expect((await call($, 'git commit -m CREDIT')).deny).toBe('BLOCKED (no AI attribution): x')
+  expect((await call($, 'gh run WATCH')).deny).toBe('BLOCKED: `gh run watch`')
+  expect((await call($, 'gh pr create BODY')).deny).toBe('BLOCKED (PR-body contract): y')
   expect(seen.ran).toEqual([])
-  expect(String(result.deny)).toContain('BLOCKED (guards): no AI attribution')
-  expect(lastEntry(seen)).toMatchObject({ enforced: true })
+  expect(lastEntry(seen)).toMatchObject({ enforced: true, mod: 'BLOCKED (PR-body contract): y' })
   const stats = JSON.parse(seen.files.get(`${DATA}/stats.json`) ?? '{}')
-  expect(Object.values(stats)).toMatchObject([{ checked: 1, mod: 1, scripts: 0 }])
+  expect(Object.values(stats)).toMatchObject([{ checked: 3, mod: 3, scripts: 0 }])
 })
 
-// The shipped attribution hook's own rules, from its docstring and the live replays: what it refuses.
-test('every route the attribution hook refuses is refused', { options: { mode: 'enforce' } }, async ($, on) => {
-  world(on, { 'C:/Repos/my-game/body.md': `## What\n- x\n\n${AI_TRAILER}\n` })
-  for (const [command, reason, tool] of [
-    ['git commit -m x --no-verify', 'git hook bypass'],
-    ['git commit -n -m x', 'git hook bypass'],
-    ['git merge -n feature', 'git hook bypass'],
-    ['git -c core.hooksPath=/dev/null commit -m x', 'git hook bypass'],
-    ['LEFTHOOK=0 git commit -m x', 'git hook bypass'],
-    ['npx lefthook uninstall', 'disabling lefthook'],
-    ['git commit --trailer "a: b" -m x', '--trailer is not allowed'],
-    ['git commit -C HEAD~1', 'reusing another commit'],
-    ['git commit --reuse-message=HEAD', 'reusing another commit'],
-    ['eval git commit -m x', 'eval builds the command'],
-    ['git filter-repo --force', 'history rewriting'],
-    ['git commit -m "$MSG"', 'shell expansion'],
-    ['git commit -m "$(cat msg.txt)"', 'shell expansion'],
-    ['git commit -m "`cat msg.txt`"', 'shell expansion'],
-    ['git commit -F - < msg.txt', '`-F -` reads the message from a pipe'],
-    ['echo git commit --no-verify -m x; git commit -m y', 'git hook bypass'],
-    ['gh pr create -t t --body-file body.md', 'attribution marker'],
-    // Python's case-blind matching reads long s, the Kelvin sign and dotless i as ASCII letters.
-    ['git commit -m "fix: x" -m "aſſiſted by AI"', 'attribution marker'],
-    ['git commit -m "fix: x" -m "made by copılot"', 'attribution marker'],
-    ['gıt commit --no-verify -m x', 'git hook bypass'],
-    ['git commit --meſſage="$MSG"', 'shell expansion'],
-    ['npx lefthooK uninstall', 'disabling lefthook'],
-    ['gh pr create -t t --body-file missing.md', 'could not read message/body file'],
-    ['gh pr comment 1 --body-file /c/Repos/my-game/body.md', 'could not read message/body file'],
-    ['gh api repos/o/r/issues/1/comments -f body="$B"', 'shell expansion'],
-    ["git commit -m 'x' -m $m", 'shell expansion', 'PowerShell'],
-    ['gh run watch 123', '`gh run watch` streams logs'],
-    ['gh -R o/r run watch', '`gh run watch` streams logs'],
-  ] as const) {
-    const result = await call($, command, (tool ?? 'Bash') as 'Bash')
-    expect([command, String(result.deny)]).toEqual([command, expect.stringContaining(reason)])
-  }
+test('when several scripts deny, the first in settings order gives the reason', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  world(on)
+  expect((await call($, 'gh pr create BODY WATCH CREDIT')).deny).toBe('BLOCKED (no AI attribution): x')
+  expect((await call($, 'gh pr create BODY WATCH')).deny).toBe('BLOCKED: `gh run watch`')
 })
 
-// And what it passes: text inside a message, a here-doc or a here-string is described, never run.
-test('every command the attribution hook passes runs', { options: { mode: 'enforce' } }, async ($, on) => {
-  const seen = world(on, { 'C:/Repos/my-game/body.md': '## What\n- x\n', 'C:/Repos/my-game/sub/m.txt': 'fix: y' })
-  const commands = [
-    "git commit -m 'docs: explain --no-verify and eval'",
-    "git commit -F - <<'EOF'\nfix: say why $HOME stays literal\nEOF",
-    'git tag -n',
-    'git cherry-pick -n abc123',
-    'git merge $SHA',
-    'gh pr create -f',
-    'gh issue create --template "Bug report"',
-    'gh api repos/o/r/issues -F key=@-',
-    'git commit -m "fix: the CLAUDE.md wording"',
-    'cd sub && git commit -F m.txt',
-    'gh pr create -t t --body-file body.md',
-    'git push origin feature/ci-watch-incident',
-    'ls ~/.claude/hooks && cat /c/Users/me/.claude/x',
-    'npm test 2>$null',
-  ]
-  for (const command of commands) expect([command, (await call($, command)).deny]).toEqual([command, undefined])
-  expect(seen.ran).toHaveLength(commands.length)
+test('exit 2 refuses with what the script wrote to stderr', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  seen.scripts['pr-body-contract.py'] = () => ({ exitCode: 2, stderr: 'no body file\n' })
+  expect((await call($, 'gh pr create')).deny).toBe('no body file')
 })
 
-test('with attribution off, AI credit passes; every route around the gates stays refused', {
+test('in shadow mode a deny is logged and counted, never blocked', async ($, on) => {
+  const seen = world(on)
+  await call($, 'git commit -m CREDIT')
+  expect(seen.ran).toHaveLength(1)
+  expect(lastEntry(seen)).toMatchObject({ mod: 'BLOCKED (no AI attribution): x', scripts: null })
+  expect(lastEntry(seen).enforced).toBeUndefined()
+})
+
+test('clean calls run untouched and log nothing', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  for (const command of ['git status', 'ls -la', 'gh pr view 3']) await call($, command)
+  expect(seen.ran).toHaveLength(3)
+  expect(seen.files.has(LOG)).toBe(false)
+  const stats = JSON.parse(seen.files.get(`${DATA}/stats.json`) ?? '{}')
+  expect(Object.values(stats)).toMatchObject([{ checked: 3, mod: 0, scripts: 0 }])
+})
+
+test('with attribution off, the attribution script never starts', {
   options: { mode: 'enforce', attribution: 'off' },
 }, async ($, on) => {
   const seen = world(on)
-  expect((await call($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)).deny).toBeUndefined()
-  expect((await call($, 'gh pr create -t t --body-file missing.md')).deny).toBeUndefined()
-  for (const [command, reason] of [
-    ['git commit --no-verify -m "fix: x"', 'git hook bypass'],
-    ['git commit -C HEAD', 'reusing another commit'],
-    [['gh', 'run', 'watch', '123'].join(' '), 'streams logs'],
-  ]) {
-    expect(String((await call($, command as string)).deny)).toContain(reason as string)
-  }
-  expect(seen.ran).toHaveLength(2)
+  expect((await call($, 'git commit -m CREDIT')).deny).toBeUndefined()
+  expect(String((await call($, 'gh run WATCH')).deny)).toContain('gh run watch')
+  expect(names(seen)).not.toContain('no-ai-attribution.py')
+  expect(seen.ran).toHaveLength(1)
 })
 
-test('read-only and clean commands run untouched and log nothing', async ($, on) => {
+test("a machine's own copy of a script runs in place of the shipped one", { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
   const seen = world(on)
-  const commands = ['git status', 'ls -la', 'git commit -m "fix: plain words"', 'gh pr view 3']
-  for (const command of commands) await call($, command)
-  expect(seen.ran).toHaveLength(4)
-  expect(seen.files.has(LOG)).toBe(false)
+  seen.own.add('pr-body-contract.py')
+  seen.scripts['own pr-body-contract.py'] = () => deny('own table')
+  expect((await call($, 'gh pr create')).deny).toBe('own table')
+  // The scripts start side by side, so in no fixed order.
+  const files = seen.started.map(s => String(s.argv[1])).sort()
+  expect(files).toHaveLength(3)
+  expect(files.filter(f => f.endsWith('/pr-body-contract.py'))).toEqual([`${DATA}/scripts/pr-body-contract.py`])
 })
 
-// A body file is found where the hook's Python `open()` finds it: from the first `cd`, else the session
-// folder; a Git Bash `/c/...` path is a rooted path to Python on Windows, so it is not found.
-test('a body file is read where the hook reads it', { options: { mode: 'enforce' } }, async ($, on) => {
-  world(on, { 'C:/Repos/other/b.md': AI_TRAILER, 'C:/c/Repos/my-game/b.md': AI_TRAILER, 'C:/Users/me/b.md': 'x' })
-  expect(String((await call($, 'cd ../other && gh pr comment 1 -F b.md')).deny)).toContain('attribution')
-  expect(String((await call($, 'cd C:/Repos/other && gh pr comment 1 -F b.md')).deny)).toContain('attribution')
-  expect(String((await call($, 'gh pr comment 1 -F /c/Repos/my-game/b.md')).deny)).toContain('attribution')
-  expect((await call($, 'gh pr comment 1 -F ~/b.md')).deny).toBeUndefined()
+test('the empty command starts no script', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  await call($, '')
+  expect(seen.started).toEqual([])
+  expect(seen.ran).toEqual([''])
 })
 
-test('off Windows a path is read as posix paths are', { options: { mode: 'enforce' } }, async ($, on) => {
-  world(on, { '/c/Repos/my-game/b.md': AI_TRAILER }, 'Linux', '/home/me')
-  expect(String((await call($, 'gh pr comment 1 -F /c/Repos/my-game/b.md')).deny)).toContain('attribution')
+test('a script that fails refuses in enforce and is logged', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  seen.scripts['block-gh-run-watch.py'] = () => ({ exitCode: 1, stderr: 'Traceback: boom' })
+  const result = await call($, 'git status')
+  expect(seen.ran).toEqual([])
+  expect(String(result.deny)).toContain('the check failed')
+  expect(lastEntry(seen).error).toContain('block-gh-run-watch.py exited 1: Traceback: boom')
 })
 
-test('the PR-body contract holds a listed repo to the PR format', { options: { mode: 'enforce' } }, async ($, on) => {
-  const seen = world(on, {
-    [`${DATA}/pr-body.json`]: PR_RULES,
-    'C:/Repos/my-game/full.md': FULL_BODY,
-    'C:/Repos/my-game/short.md': '## What\n',
-    'C:/Repos/my-game/norow.md': FULL_BODY.replace('Resolves #12\n', ''),
-    'C:/Repos/my-game/emptynotes.md': `${FULL_BODY}## Notes\n\n`,
-  })
-  for (const [command, reason] of [
-    ['gh pr create -t "feat: x" --body-file short.md', '`## What` is missing'],
-    ['gh pr create -t "feat: x" --body-file norow.md', 'no board-row line'],
-    ['gh pr create -t "feat: x" --body-file emptynotes.md', '`## Notes` is present but empty'],
-    ['gh pr create -t "feat: x" --body "## What"', 'inline `--body`'],
-    ['gh pr create --fill', '`--fill*`'],
-    ['gh pr create -t "feat: x"', 'needs `--body-file'],
-  ]) {
-    expect(String((await call($, command as string)).deny)).toContain(reason as string)
-  }
-  for (const command of [
-    'gh pr create -t "feat: x" --body-file full.md',
-    'gh pr create -t "docs: x" --body-file norow.md',
-    'gh pr edit 3 --add-label bug',
-    'gh pr create -R o/elsewhere -t t --body x',
-    'gh pr create -R o/board -t t --body x',
-  ]) {
-    expect([command, (await call($, command)).deny]).toEqual([command, undefined])
-  }
-  expect(seen.ran).toHaveLength(5)
+test('a script that fails lets the command run in shadow', async ($, on) => {
+  const seen = world(on)
+  seen.scripts['no-ai-attribution.py'] = () => ({ exitCode: 0, stdout: 'not json' })
+  expect((await call($, 'git status')).deny).toBeUndefined()
+  expect(seen.ran).toHaveLength(1)
+  expect(lastEntry(seen).error).toBeDefined()
 })
 
-test('a segment key matches a whole folder name only', { options: { mode: 'enforce' } }, async ($, on) => {
-  world(on, { [`${DATA}/pr-body.json`]: PR_RULES }, 'Windows_NT', 'C:/Repos/tiny')
-  expect(String((await call($, 'gh pr create -t t --body x')).deny)).toContain('inline `--body`')
-  expect((await call($, 'gh pr create -R o/tinyproject -t t --body x')).deny).toBeUndefined()
-})
-
-test('without the rules file, or with a pattern that does not compile, no PR body is judged', {
-  options: { mode: 'enforce' },
-}, async ($, on) => {
-  const seen = world(on, { 'C:/Repos/my-game/short.md': '## What\n' })
-  await call($, 'gh pr create -t t --body x')
-  seen.files.set(`${DATA}/pr-body.json`, JSON.stringify({ repos: { 'my-game': { row: '(', noRow: '^docs' } } }))
-  await call($, 'gh pr create -t t --body-file short.md')
-  expect(seen.ran).toHaveLength(2)
+test('a Python that cannot start refuses in enforce', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  seen.broken.add('python')
+  const result = await call($, 'git status')
+  expect(seen.ran).toEqual([])
+  expect(String(result.deny)).toContain('process.run')
 })
 
 test('in enforce mode a check that crashes refuses the command', { options: { mode: 'enforce' } }, async ($, on) => {
@@ -261,7 +260,7 @@ test('in enforce mode a check error refuses the command and is logged', { option
 test('a crash after the command ran keeps its result and never runs it twice', async ($, on) => {
   const seen = world(on)
   seen.broken.add('session.id')
-  const result = await call($, `git commit -m 'fix: x' -m '${AI_TRAILER}'`)
+  const result = await call($, 'git commit -m CREDIT')
   expect(seen.ran).toHaveLength(1)
   expect(result).toEqual({ result: {} })
 })
