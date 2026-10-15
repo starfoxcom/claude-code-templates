@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { findPython, NO_PYTHON, verdict } from './scripts'
+import { findPython, NO_PYTHON, selfCheck, verdict } from './scripts'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
@@ -22,8 +22,9 @@ const live = {
   dir: '',
   // The Python 3.8+ the scripts run on, found at set-up; empty when none runs.
   python: '',
-  // The folder the session started in: a command hook's CLAUDE_PROJECT_DIR.
-  projectDir: '',
+  // Why the scripts' answers cannot be trusted (scripts.ts selfCheck), or ''. The scripts still run and
+  // their refusals still count, but no call counts as checked.
+  fault: '',
 }
 // The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
 // hooks worker forgets them, which errs toward the block).
@@ -39,9 +40,10 @@ const MARK_LOADED = [
 
 async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
-  live.python = await findPython($)
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
   live.dir = `${(configured ?? `${live.home}/.claude`).replace(/\\/g, '/')}/mods-data/guards`
+  live.python = await findPython($)
+  live.fault = await selfCheck($, { python: live.python, dataDir: live.dir, isAttribution: true })
   // The engine's fs writes no missing folders; node makes it once per session.
   await $.process.run(['node', '-e', MARK_LOADED, live.dir, live.mode], { timeoutMs: 10_000 }).catch(() => undefined)
 }
@@ -116,8 +118,8 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   let reason: string | undefined
   let errors: string[]
   try {
-    const { python, dir: dataDir, projectDir, isAttribution } = live
-    ;({ reason, errors } = await verdict($, tool, command, { python, dataDir, projectDir, isAttribution }))
+    const { python, dir: dataDir, isAttribution } = live
+    ;({ reason, errors } = await verdict($, tool, command, { python, dataDir, isAttribution }))
   } catch (err) {
     return failed($, tool, command, String(err), run)
   }
@@ -128,7 +130,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   const scripts = isBlocked
     ? undefined
     : (result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined))
-  const error = errors.length > 0 ? errors.join('; ') : undefined
+  const error = [live.fault, ...errors].filter(Boolean).join('; ') || undefined
   await count($, { isModBlock: Boolean(reason), isScriptBlock: Boolean(scripts), error })
   if (reason || scripts) {
     await log($, {
@@ -184,7 +186,6 @@ export const register: Register = (on, options) => {
     // A settings file that cannot be read never costs the start: the loaded options stand.
     await readSettings($).catch(() => undefined)
     const result = await next(e)
-    live.projectDir = e.cwd
     await setUp($)
     await $.command.register({
       name: 'guards',
@@ -248,6 +249,14 @@ export function sumDays(stats: Record<string, DayCount>, now: number, days: numb
   return total
 }
 
+// Where the scripts run, or why no call counts as checked.
+function pythonLine(): string {
+  const capital = (text: string) => `${text[0]?.toUpperCase()}${text.slice(1)}`
+  if (!live.python) return `${capital(NO_PYTHON)}: nothing is checked.`
+  if (live.fault) return `Scripts run on ${live.python}, but ${live.fault}; no call counts as checked.`
+  return `Scripts run on ${live.python}.`
+}
+
 async function statusText($: Engine): Promise<string> {
   if (!live.dir) await setUp($)
   let stats: Record<string, DayCount> = {}
@@ -264,9 +273,7 @@ async function statusText($: Engine): Promise<string> {
   const now = await $.clock.now()
   return [
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
-    live.python
-      ? `Scripts run on ${live.python}.`
-      : `${NO_PYTHON[0]?.toUpperCase()}${NO_PYTHON.slice(1)}: nothing is checked.`,
+    pythonLine(),
     live.isAttribution
       ? 'Attribution check: on.'
       : 'Attribution check: off (setting attribution = off); the attribution script does not run.',

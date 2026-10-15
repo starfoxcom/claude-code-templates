@@ -3,9 +3,9 @@ import type { EngineInterface as Engine } from 'claude-code'
 // Running the hook scripts as Claude Code runs a PreToolUse command hook: on the first Python 3.8+ found,
 // through SETUP.md § 7c's launcher, the hook input on stdin, the answer read as Claude Code reads it.
 
-/** Where the scripts run: the Python, the mod's data folder (own copies), the session's start folder and
- * whether the attribution script runs. */
-export type Setup = { python: string; dataDir: string; projectDir: string; isAttribution: boolean }
+/** Where the scripts run: the Python, the mod's data folder (own copies) and whether the attribution script
+ * runs. */
+export type Setup = { python: string; dataDir: string; isAttribution: boolean }
 /** The first reason to stop the call, and the scripts that failed. */
 export type Verdict = { reason?: string; errors: string[] }
 
@@ -90,7 +90,6 @@ async function scriptAnswer($: Engine, name: string, input: string, at: Setup): 
     if (file === undefined) return {}
     const { exitCode, stdout, stderr } = await $.process.run([at.python, ...LAUNCH, file], {
       stdin: input,
-      env: { CLAUDE_PROJECT_DIR: at.projectDir },
       timeoutMs: SCRIPT_TIMEOUT_MS,
     })
     if (exitCode === 2) return { reason: stderr.trim() || `${name} refused the call` }
@@ -105,25 +104,56 @@ async function scriptAnswer($: Engine, name: string, input: string, at: Setup): 
   }
 }
 
-// The first reason to block, and the scripts that failed. The scripts run side by side, as Claude Code
-// runs the hooks of one event. Their input carries the fields a PreToolUse command hook gets that the
-// mod knows: hook_event_name, session_id, cwd, tool_name and tool_input.command.
-export async function verdict($: Engine, tool: string, command: string, setup: Setup): Promise<Verdict> {
+// The fields a PreToolUse command hook gets that the mod knows: hook_event_name, session_id, cwd (the
+// session's current folder, as Claude Code gives it), tool_name and tool_input.command.
+async function hookInput($: Engine, tool: string, command: string): Promise<string> {
   const cwd = await $.session.cwd()
   const session = await $.session.id()
-  const input = JSON.stringify({
+  return JSON.stringify({
     hook_event_name: 'PreToolUse',
     session_id: session,
     cwd,
     tool_name: tool,
     tool_input: { command },
   })
+}
+
+// The first reason to block, and the scripts that failed. The scripts run side by side, as Claude Code
+// runs the hooks of one event.
+export async function verdict($: Engine, tool: string, command: string, setup: Setup): Promise<Verdict> {
+  const input = await hookInput($, tool, command)
   const names = SCRIPTS.filter(name => setup.isAttribution || name !== ATTRIBUTION_SCRIPT)
-  // A hot reload keeps no start folder: the session's folder stands in.
-  const at = { ...setup, projectDir: setup.projectDir || cwd }
-  const answers = await Promise.all(names.map(name => scriptAnswer($, name, input, at)))
+  const answers = await Promise.all(names.map(name => scriptAnswer($, name, input, setup)))
   return {
     reason: answers.find(a => a.reason !== undefined)?.reason,
     errors: answers.flatMap(a => (a.error ? [a.error] : [])),
+  }
+}
+
+// SETUP.md § 7c's verify step, run at set-up: each shipped script gets a call it must refuse. A clean pass
+// means the hook input never reached the scripts or their answer was lost, so a pass on a real call proves
+// nothing. A script that fails to run is left to the calls, which count each failure.
+const AI_TRAILER = `Co-${'Authored-By'}: Cla${'ude'} <noreply@anthro${'pic'}.com>`
+const TEST_CALLS = [
+  ['no-ai-attribution.py', `git commit -m "docs: x" -m "${AI_TRAILER}"`],
+  ['block-gh-run-watch.py', 'gh run watch 1'],
+]
+
+// Why the scripts' answers cannot be trusted, or '' when every test call was refused. No Python, or a set-up
+// that cannot build the input, is left to the calls too: each one reports it.
+export async function selfCheck($: Engine, setup: Setup): Promise<string> {
+  if (!setup.python) return ''
+  try {
+    const passed = await Promise.all(
+      TEST_CALLS.map(async ([name = '', command = '']) => {
+        const answer = await scriptAnswer($, name, await hookInput($, 'Bash', command), setup)
+        return answer.reason === undefined && answer.error === undefined ? [name] : []
+      }),
+    )
+    const names = passed.flat()
+    if (names.length === 0) return ''
+    return `${names.join(' and ')} let through the call it must refuse at set-up (the hook input may not reach it)`
+  } catch {
+    return ''
   }
 }

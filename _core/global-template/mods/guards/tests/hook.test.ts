@@ -17,15 +17,17 @@ const deny = (reason: string): Answer => ({
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
   }),
 })
-// Stand-ins for the shipped scripts: each refuses one marker word.
+// Stand-ins for the shipped scripts: each refuses one marker word, and the shipped ones also the call the
+// set-up tests them with (scripts.ts TEST_CALLS).
 const refuses =
-  (word: string, reason: string): Script =>
+  (words: string[], reason: string): Script =>
   i =>
-    i.tool_input.command.includes(word) ? deny(reason) : undefined
+    words.some(word => i.tool_input.command.includes(word)) ? deny(reason) : undefined
+const TEST_CALL = /Authored-By|gh run watch 1$/
 const STAND_INS: Record<string, Script> = {
-  'no-ai-attribution.py': refuses('CREDIT', 'BLOCKED (no AI attribution): x'),
-  'block-gh-run-watch.py': refuses('WATCH', 'BLOCKED: `gh run watch`'),
-  'pr-body-contract.py': refuses('BODY', 'BLOCKED (PR-body contract): y'),
+  'no-ai-attribution.py': refuses(['CREDIT', 'Authored-By'], 'BLOCKED (no AI attribution): x'),
+  'block-gh-run-watch.py': refuses(['WATCH', 'gh run watch 1'], 'BLOCKED: `gh run watch`'),
+  'pr-body-contract.py': refuses(['BODY'], 'BLOCKED (PR-body contract): y'),
 }
 
 type World = {
@@ -33,6 +35,10 @@ type World = {
   own: Set<string>
   ran: string[]
   started: Array<{ argv: string[]; input: Record<string, unknown>; timeoutMs?: number; env?: unknown }>
+  // The set-up's test calls, by script name, kept apart from the calls' own runs.
+  tested: string[]
+  // Every script gets an empty input, as if the engine dropped stdin.
+  isInputLost: boolean
   broken: Set<string>
   scripts: Record<string, Script>
   // What each interpreter's version check prints; one missing from the map does not run.
@@ -52,6 +58,8 @@ function world(on: On, os = 'Windows_NT'): World {
     own: new Set(['pr-body-contract.py']),
     ran: [],
     started: [],
+    tested: [],
+    isInputLost: false,
     broken: new Set(),
     scripts: { ...STAND_INS },
     pythons: { python: 'C:\\Python\\python.exe\n' },
@@ -89,9 +97,11 @@ function world(on: On, os = 'Windows_NT'): World {
       answer = { exitCode: 0, stdout: printed }
     } else if (file.endsWith('.py')) {
       unless('python')
-      const input = JSON.parse(String(e.init?.stdin))
-      seen.started.push({ argv: [...e.argv], input, timeoutMs: e.init?.timeoutMs, env: e.init?.env })
+      const sent = JSON.parse(String(e.init?.stdin))
+      const input = seen.isInputLost ? { tool_name: '', tool_input: { command: '' }, cwd: '' } : sent
       const name = file.slice(file.lastIndexOf('/') + 1)
+      if (TEST_CALL.test(sent.tool_input.command)) seen.tested.push(name)
+      else seen.started.push({ argv: [...e.argv], input: sent, timeoutMs: e.init?.timeoutMs, env: e.init?.env })
       const script = (file.startsWith(DATA) && seen.scripts[`own ${name}`]) || seen.scripts[name]
       answer = script?.(input) ?? answer
     }
@@ -127,7 +137,7 @@ test('each shell call starts the three scripts as Claude Code starts a command h
       tool_name: 'PowerShell',
       tool_input: { command: 'git status' },
     })
-    expect(env).toEqual({ CLAUDE_PROJECT_DIR: 'C:/Repos/my-game' })
+    expect(env).toBeUndefined()
     expect(timeoutMs).toBe(10_000)
   }
   expect(seen.ran).toEqual(['git status'])
@@ -151,6 +161,37 @@ test('with no Python found nothing starts, the call runs and the status says so'
   expect(stats(seen)).toMatchObject([{ checked: 0, failed: 1, lastError: expect.stringContaining('no Python') }])
   const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
   expect(text).toContain('No Python 3.8+ found')
+})
+
+test('the set-up tests each shipped script with a call it must refuse', async ($, on) => {
+  const seen = world(on)
+  await call($, 'ls')
+  expect([...seen.tested].sort()).toEqual(['block-gh-run-watch.py', 'no-ai-attribution.py'])
+  expect(stats(seen)).toMatchObject([{ checked: 1, failed: 0 }])
+  const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
+  expect(text).toContain(`Scripts run on ${PYTHON}.`)
+})
+
+// Both shipped scripts exit 0 silently on an input they cannot read, so a lost stdin would pass every call.
+test('a hook input lost on the way is caught at set-up: no call counts as checked', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
+  const seen = world(on)
+  seen.isInputLost = true
+  expect((await call($, 'git commit -m CREDIT')).deny).toBeUndefined()
+  expect(stats(seen)).toMatchObject([{ checked: 0, failed: 1, lastError: expect.stringContaining('let through') }])
+  const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
+  expect(text).toContain('no call counts as checked')
+})
+
+test('a script that fails its set-up test still refuses what it refuses', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on)
+  seen.scripts['no-ai-attribution.py'] = refuses(['CREDIT'], 'BLOCKED (no AI attribution): x')
+  expect((await call($, 'git commit -m CREDIT')).deny).toBe('BLOCKED (no AI attribution): x')
+  expect(stats(seen)).toMatchObject([{ failed: 1, lastError: expect.stringMatching(/^no-ai-attribution\.py let/) }])
 })
 
 test('every way a hook says stop stops the call', { options: { mode: 'enforce' } }, async ($, on) => {

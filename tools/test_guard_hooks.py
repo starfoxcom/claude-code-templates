@@ -372,6 +372,18 @@ class GuardsScriptsTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(self.run_script(path, command))
 
+    def test_scripts_refuse_the_set_up_test_calls(self):
+        # scripts.ts TEST_CALLS: the mod's set-up sends these and reads a pass as a lost hook input.
+        with open(os.path.join(GUARDS, "..", "hooks", "scripts.ts"), encoding="utf-8") as f:
+            source = f.read()
+        self.assertIn("'block-gh-run-watch.py', 'gh run wat" + "ch 1'", source)
+        self.assertIn("""['no-ai-attribution.py', `git commit -m "docs: x" -m "${AI_TRAILER}"`]""", source)
+        self.assertIn("const AI_TRAILER = `Co-${'Authored-By'}: Cla${'ude'} <noreply@anthro${'pic'}.com>`", source)
+        for name, command in (("no-ai-attribution.py", f'git commit -m "docs: x" -m "{AI_TRAILER}"'),
+                              ("block-gh-run-watch.py", "gh run wat" + "ch 1")):
+            with self.subTest(name=name):
+                self.assertIsNotNone(self.run_script(self.script(name), command))
+
 
 class HookSourceTest(unittest.TestCase):
     """Every shipped hook and script compiles without a warning.
