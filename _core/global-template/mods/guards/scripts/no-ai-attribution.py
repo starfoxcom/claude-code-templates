@@ -1,40 +1,42 @@
 #!/usr/bin/env python3
 """PreToolUse guard: nothing authored from a Claude session carries AI
-attribution, on any repo, through any route.
+attribution when it is written the ordinary way.
 
-Founder rule (AppProject .claude/rules/git.md, GameProject equivalent): commits,
-PR titles and bodies, issue bodies, comments, reviews, releases and tags
-belong to the founder. No Co-Authored-By, no "Generated with Claude", no
-session links, no Anthropic addresses, no robot emoji sign-off. The harness
-injects a per-session note asking for exactly those trailers; this hook is
-the mechanical answer so the note can never win.
+Rule (.claude/rules/git.md): commits, PR titles and bodies, issue bodies,
+comments, reviews, releases and tags belong to the maintainer. The harness
+can inject a note asking for attribution trailers; this hook is the
+mechanical answer so the note can never win.
 
-What is scanned
-  * The full command text (inline -m / --body / --title / --notes /
-    here-docs / here-strings / PowerShell -Body all live there).
-  * Every file the command hands to git or gh as a message or body:
-    -F / --file / --body-file / --notes-file / --template (git only) /
-    --input, curl -d @file, PowerShell -InFile and Get-Content <file>,
-    spaced or `--flag=value`.
+The contract is "no attribution", not "no mention". Denied: a Co-Authored-By
+naming an AI, an Anthropic noreply address, "Generated with / written by
+<AI>", a line ending "via Claude Code" or "by Claude", a Claude Code session
+link or Claude-Session trailer, a session id, "AI-assisted / AI-generated"
+and the robot emoji. Plain mentions pass: "fix the Claude Code hook config",
+"compatible with Claude Code", "integration with LLM providers", CLAUDE.md,
+the repo's own name, a human Co-Authored-By.
 
-What is denied outright (bypass routes the hook cannot see through)
-  * --no-verify, or -n on git commit / merge / push; core.hooksPath
-    overrides; LEFTHOOK=0 / lefthook uninstall.
-  * --trailer (the trailer text can come from anywhere).
-  * Message reuse: -C / --reuse-message / --reedit-message / -c <commit>.
-  * A message or body value built by command substitution `$(...)`,
-    backticks (bash), process substitution `<(...)` or a variable, and
-    `eval`; or read from stdin `-F -` fed by anything other than a here-doc
-    in the same command.
+What is scanned, for any git write, gh write or GitHub API call:
+  * The full command text: inline -m / --body / --title / --notes values,
+    here-docs, here-strings and PowerShell -Body all live there.
+  * Every file the command names as a message or body: -F / --file /
+    --body-file / --notes-file / --template / --input / --message-file,
+    curl -d @file, PowerShell -InFile and Get-Content <file>. A file it
+    cannot read is denied, so a typo cannot slip a body through unread.
+    A flag named inside quoted text, a here-doc or a here-string is a
+    mention in a message, not an argument, and names no file.
 
-What passes
-  * Flags, variables and the word eval written INSIDE a quoted message, a
-    here-doc or a here-string: that is text being described, not an
-    argument. Single-quoted text and quoted here-docs never expand.
-  * Shell plumbing outside message values: `2>$null`, `$sha` as a merge
-    argument, `$LASTEXITCODE`.
-  * `gh ... --template "Bug report"` (a template name), `-F key=@-` (stdin),
-    lowercase -f (`git tag -f`, `gh pr create -f`).
+It is a safety net for attribution written the ordinary way, not a sandbox
+against a command built to slip past it. No text check can be one. These
+pass unread: text the shell builds at run time ($VAR, $(...), backticks,
+eval), a body piped in on stdin, a message reused from another commit
+(-C / --reuse-message), flags that skip git's own hooks, and text a program
+started by the command writes on its own. The repo's `attribution` settings
+switch off the harness's own trailers; this hook catches the ones written
+by hand.
+
+The repo registers this file through run-hook.sh, which skips it when
+~/.claude/hooks/no-ai-attribution.py exists and ~/.claude/settings.json
+names it outside a permission rule.
 
 Exit contract: JSON permissionDecision=deny on stdout, exit 0. Silent
 exit 0 otherwise. Never blocks read-only commands.
@@ -52,54 +54,46 @@ def _fuzzy(word):
     return _Z.join(re.escape(ch) for ch in word)
 
 
-# AI tool names that make a "made with / by" phrase a credit line.
-_TOOLS = r"ai|llm|assistant|copilot|codex|chat" + _Z + r"gpt|gpt|gemini"
+CLAUDE = _fuzzy("claude")
+ANTHROPIC = _fuzzy("anthropic")
+# Tool names that make a phrase attribution. `cursor` alone is an ordinary UI
+# word ("pointer with cursor"), so only "Cursor AI / IDE / agent" counts.
+AI = (r"(?:" + CLAUDE + "|" + ANTHROPIC + r"|ai|llm|assistant|copilot|codex|chat" + _Z + r"gpt|gpt|gemini|"
+      r"cursor" + _Z + r"(?:ai|ide|agent))")
+AN = r"(?:an?" + _Z + r")?"
 
+# The Attribution workflow (.github/workflows/attribution.yml on main) imports
+# ATTRIBUTION and strip_paths from develop's copy of this file: keep both names,
+# and keep importing it free of side effects (main() runs only as a script).
 ATTRIBUTION = re.compile(
     "|".join([
-        r"co" + _Z + r"-?" + _Z + r"authored" + _Z + r"-?" + _Z + r"by",
-        _fuzzy("claude"),
-        r"c[l1|]a[uü]de",              # c1aude / cl|ude style leet
-        _fuzzy("anthropic"),
-        r"noreply@",
-        r"generated" + _Z + r"(with|by)" + _Z + r"(an?" + _Z + r")?(claude|ai|llm|anthropic|copilot|cursor|codex|gpt)\b",
-        r"claude\.(ai|com)", r"anthropic\.com",
-        r"claude" + _Z + r"-?" + _Z + r"session",
-        r"session_[0-9a-z]{20,}",
-        r"\U0001F916",                       # robot emoji
-        r"ai" + _Z + r"-?" + _Z + r"(assisted|generated|written|authored)",
-        # Authorship phrasing: "written by an AI". A bare "integration with
-        # LLM providers" or "pointer with cursor" is a mention, not a credit.
-        r"\b(?:written|created|made|authored|produced|assisted|co-?written)" + _Z + r"(?:with|by|using|via)"
-        + _Z + r"(?:an?" + _Z + r")?(?:" + _TOOLS + r"|cursor" + _Z + r"(?:ai|ide|agent))\b",
+        # Co-Authored-By naming an AI; a human co-author passes.
+        r"co" + _Z + r"-?" + _Z + r"authored" + _Z + r"-?" + _Z + r"by\s*:?[^\n]*?\b" + AI + r"\b",
+        r"noreply@" + ANTHROPIC,
+        r"\b(?:generated|written|created|made|authored|produced|assisted|co-?written)" + _Z
+        + r"(?:with|by|using|via)" + _Z + r":?" + _Z + AN + AI + r"\b",
         # Trailer forms with a colon: "Assisted-by: <AI>:<model>", "Made-with: Cursor".
         r"\b(?:generated|written|created|made|authored|produced|assisted|co-?written)" + _Z
-        + r"(?:with|by|using|via)" + _Z + r":[ \t]*(?:an?" + _Z + r")?(?:" + _TOOLS + r"|cursor)\b",
+        + r"(?:with|by|using|via)" + _Z + r":[ \t]*" + AN + r"(?:" + AI + r"|cursor)\b",
+        # A line or quoted message that ends "via Claude Code" / "by Claude".
+        # Not "with" / "using": "compatible with Claude Code" is a mention.
+        r"\b(?:by|via)" + _Z + CLAUDE + r"(?:" + _Z + r"code)?(?=[\s.!)\]]*(?:$|['\"`]))",
+        r"claude\.(?:ai|com)/(?:code|claude-code)\b",
+        r"\b" + CLAUDE + r"[-_]session\s*:",
+        r"session_[0-9a-z]{20,}",
+        r"\U0001F916",                       # robot emoji
+        r"\bai" + _Z + r"-?" + _Z + r"(?:assisted|generated|written|authored)",
     ]),
-    re.I,
+    re.I | re.M,
 )
-
-HOOK_BYPASS = re.compile(
-    r"--no-verify\b|core\.hooksPath|LEFTHOOK\s*=\s*0|lefthook\s+uninstall|"
-    r"--no-hooks\b|hooks\.\w+\s*=|git\s+config[^|;&\n]*hooks",
-    re.I,
-)
-# -n means --no-verify only on these; `git tag -n` / `cherry-pick -n` differ.
-NO_VERIFY_N = re.compile(r"\bgit\b[^|;&\n]*?\b(?:commit|merge|push)\b[^|;&\n]*?(?<=\s)-n(?=\s|$)", re.I)
-TRAILER = re.compile(r"--trailer\b", re.I)
-REUSE = re.compile(r"\bcommit\b[^|;&\n]*?(?:--reuse-message\b|--reedit-message\b|\s-[Cc]\s+\S)", re.I)
-EVAL = re.compile(r"\beval\b", re.I)
 
 GIT_WRITE = re.compile(
-    r"\bgit\b[^|;&\n]*?\b(commit|merge|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace)\b",
-    re.I)
+    r"\bgit\b[^|;&\n]*?\b(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|replace)\b", re.I)
 GH_WRITE = re.compile(
     r"\bgh\b[^|;&\n]*?\b(pr|issue|release|gist|repo)\b[^|;&\n]*?\b(create|edit|comment|review|merge|close|reopen)\b",
     re.I)
-GH_API_WRITE = re.compile(r"\bgh\b[^|;&\n]*?\bapi\b(?=[^|;&\n]*?(-X\s*(POST|PATCH|PUT)|--method\s*(POST|PATCH|PUT)|(?<=\s)-[fF]\s|--field|--raw-field|--input))", re.I)
-CURL_GH = re.compile(r"\bcurl\b[^|;&\n]*api\.github\.com", re.I)
-PS_GH = re.compile(r"Invoke-(RestMethod|WebRequest)\b[^|;&\n]*api\.github\.com", re.I)
-FILTER_REPO = re.compile(r"\bgit\s+filter-repo\b|\bgit\s+filter-branch\b", re.I)
+GH_API = re.compile(r"\bgh\b[^|;&\n]*?\bapi\b", re.I)
+HTTP_GH = re.compile(r"\b(?:curl|Invoke-(?:RestMethod|WebRequest))\b[^|;&\n]*api\.github\.com", re.I)
 
 # Flags whose next token is a file the hook must read. `-F` is case-sensitive:
 # a lowercase `-f` is `git tag -f` (force) or `gh pr create -f` (fill). Long
@@ -113,30 +107,10 @@ FILE_FLAGS = re.compile(
     r"\s*=?\s*(?:\"(?P<dq>[^\"]+)\"|'(?P<sq>[^']+)'|(?P<bare>\S+))"
 )
 SEGMENT_START = re.compile(r"[;&|\n][^;&|\n]*$")
-
-# Message flags and their value: a double-quoted string, a single-quoted
-# string (literal, never expands) or a bare token, optionally behind a gh
-# field name (`-f body="..."`). Long forms first so `-b` never claims the
-# front of `-Body`. Inside double quotes the escape character is `\` in bash
-# and a backtick in PowerShell.
-def _msg_value(esc):
-    e = re.escape(esc)
-    return re.compile(
-        r"(?<=\s)(?:--message|--body|--title|--notes|--field|--raw-field|-Body|-m|-b|-t|-f|-F)(?=[\s=\"'])"
-        r"\s*=?\s*(?:[A-Za-z_][\w\[\].-]*=)?"
-        r"(?:\"(?P<dq>(?:[^\"" + e + r"]|" + e + r".)*)\"|'[^']*'|(?P<bare>[^\s'\"]+))",
-        re.I | re.S,
-    )
-
-
-MSG_VALUE = {"\\": _msg_value("\\"), "`": _msg_value("`")}
-BASH_SUBST = re.compile(r"\$\(|`[^`]+`|<\(|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?")
-PS_SUBST = re.compile(r"\$\(|\$\{?[A-Za-z_][A-Za-z0-9_:]*\}?")
-
-# Here-docs: quoted ones (<<'EOF') are literal, unquoted ones expand.
-HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\1[^\n]*\n(.*?)\n[ \t]*\2[ \t]*(?=\n|$)", re.S)
-# PowerShell here-strings: @'...'@ is literal, @"..."@ expands.
-HERESTRING = re.compile(r"@(['\"])[ \t]*\n(.*?)\n\1@", re.S)
+# Message text, not arguments: here-doc bodies and PowerShell here-strings.
+HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\1[^\n]*\n.*?\n[ \t]*\2[ \t]*(?=\n|$)", re.S)
+HERESTRING = re.compile(r"@(['\"])[ \t]*\n.*?\n\1@", re.S)
+PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
 
 
 def deny(reason):
@@ -145,39 +119,25 @@ def deny(reason):
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": "BLOCKED (no AI attribution): " + reason
-                + " Commits, PRs, issues, comments and releases belong to the founder; no Co-Authored-By, "
-                  "no Claude / Anthropic mention, no session link, no robot emoji.",
+                + " Commits, PRs, issues, comments and releases belong to the maintainer; no AI "
+                  "Co-Authored-By, no generated-with line, no session link, no robot emoji.",
         }
     }))
     sys.exit(0)
 
 
-PATH_TOKEN = re.compile(r"(?<!:/)(?<![\w])(?:[A-Za-z]:|~)?(?:[\\/][\w.\-]+)+")
-# Repo identifiers that legitimately carry the word: the instructions file,
-# the config directory, the two review workflow files, their check name, the
-# action they run and the templates repo's own name. Exact tokens only;
-# anything else stays denied.
-ALLOWED_NAMES = re.compile(
-    r"\bCLAUDE\.md\b|\.claude(?:[\\/][\w.\-]*)*|`?claude(?:-code-review)?\*?\.yml`?|"
-    r"`?Claude On-Demand`?|`?claude-code-action`?|`?Claude Code Review`?|\bclaude-code-templates\b"
-)
-
-
-def strip_paths(cmd):
-    """Mask file-system paths and the repo's own CLAUDE.md / .claude references.
-
-    URLs survive (the lookbehind skips the `//` after a scheme), so session
-    links are still caught; a scratch directory or hook path that happens to
-    contain "claude" is not.
-    """
-    cmd = PATH_TOKEN.sub("<path>", cmd)
-    return ALLOWED_NAMES.sub("<repo-file>", cmd)
+def strip_paths(text):
+    """Mask file-system paths so a scratch directory named after a session
+    cannot trip the scan. URLs survive (the lookbehind skips the `//` after a
+    scheme), so session links are still caught."""
+    return PATH_TOKEN.sub("<path>", text)
 
 
 def text_spans(cmd, esc):
     """Spans of quoted strings, here-doc bodies and here-strings: text a
     message carries, where a flag name is a mention, not an argument. `esc`
-    is the shell's escape character inside double quotes."""
+    is the shell's escape character inside double quotes: `\\` in bash, a
+    backtick in PowerShell."""
     spans = [m.span() for m in HEREDOC.finditer(cmd)] + [m.span() for m in HERESTRING.finditer(cmd)]
     i, n = 0, len(cmd)
     while i < n:
@@ -197,17 +157,8 @@ def text_spans(cmd, esc):
     return spans
 
 
-def mask(cmd, spans):
-    """The command with every quoted span blanked, same length: arguments only."""
-    chars = list(cmd)
-    for s, e in spans:
-        for k in range(s, min(e, len(chars))):
-            if chars[k] != "\n":
-                chars[k] = " "
-    return "".join(chars)
-
-
-def find_files(cmd, cwd, spans):
+def find_files(cmd, cwd, esc):
+    spans = text_spans(cmd, esc)
     for m in FILE_FLAGS.finditer(cmd):
         if any(s <= m.start() < e for s, e in spans):
             continue
@@ -234,29 +185,10 @@ def find_files(cmd, cwd, spans):
         yield path
 
 
-def expanded_values(cmd, spans, powershell):
-    """Message text the shell expands before git or gh sees it: double-quoted
-    or bare message values, unquoted here-doc bodies, @"..."@ here-strings."""
-    for m in MSG_VALUE["`" if powershell else "\\"].finditer(cmd):
-        if any(s <= m.start() < e for s, e in spans):
-            continue
-        if m.group("dq") is not None:
-            yield m.group("dq")
-        elif m.group("bare") and not m.group("bare").startswith("@"):
-            yield m.group("bare")
-    for m in HEREDOC.finditer(cmd):
-        if not m.group(1):
-            yield m.group(3)
-    if powershell:
-        for m in HERESTRING.finditer(cmd):
-            if m.group(1) == '"':
-                yield m.group(2)
-
-
 def scan_text(text, where):
     hit = ATTRIBUTION.search(strip_paths(text))
     if hit:
-        deny(f"attribution marker '{hit.group(0)}' found in {where}.")
+        deny(f"attribution marker '{hit.group(0).strip()}' found in {where}.")
 
 
 def main():
@@ -266,52 +198,18 @@ def main():
         sys.exit(0)
     cmd = (data.get("tool_input") or {}).get("command") or ""
     cwd = data.get("cwd") or os.getcwd()
-    powershell = (data.get("tool_name") or "") == "PowerShell"
-    if not cmd:
+    esc = "`" if data.get("tool_name") == "PowerShell" else "\\"
+    if not cmd or not (GIT_WRITE.search(cmd) or GH_WRITE.search(cmd) or GH_API.search(cmd)
+                       or HTTP_GH.search(cmd)):
         sys.exit(0)
-
-    spans = text_spans(cmd, "`" if powershell else "\\")
-    args = mask(cmd, spans)
-
-    is_git = GIT_WRITE.search(args)
-    is_gh = GH_WRITE.search(args) or GH_API_WRITE.search(args)
-    is_http = CURL_GH.search(args) or PS_GH.search(args)
-    if not (is_git or is_gh or is_http):
-        # Still refuse to weaken the git-side guard from any command.
-        if re.search(r"lefthook\s+uninstall|LEFTHOOK\s*=\s*0", args, re.I):
-            deny("disabling lefthook removes the commit-msg attribution check.")
-        sys.exit(0)
-
-    if FILTER_REPO.search(args):
-        deny("history rewriting tools are not allowed from a session.")
-    if is_git and (HOOK_BYPASS.search(args) or NO_VERIFY_N.search(args)):
-        deny("git hook bypass (--no-verify / -n / hooksPath) is not allowed.")
-    if is_git and TRAILER.search(args):
-        deny("--trailer is not allowed; write the message body directly.")
-    if is_git and REUSE.search(args):
-        deny("reusing another commit's message (-C / -c / --reuse-message) cannot be scanned.")
-    if EVAL.search(args):
-        deny("eval builds the command at run time, so the hook cannot read the message.")
 
     scan_text(cmd, "the command text")
-
-    # Message text must be literal. Any expansion hides content from the hook.
-    subst = PS_SUBST if powershell else BASH_SUBST
-    for value in expanded_values(cmd, spans, powershell):
-        if subst.search(re.sub(r"`." if powershell else r"\\.", "", value)):
-            deny("message/body text uses shell expansion ($VAR, $(...), backticks, <(...)) that the hook "
-                 "cannot read. Use a literal string, a here-doc, or --body-file <literal absolute path>.")
-
-    for path in find_files(cmd, cwd, spans):
+    for path in find_files(cmd, cwd, esc):
         try:
             text = open(path, encoding="utf-8-sig", errors="replace").read()
         except Exception as e:
             deny(f"could not read message/body file {path}: {e}. Use a literal absolute path.")
         scan_text(text, f"file {path}")
-
-    if is_git and re.search(r"(?<=\s)-F\s+-(?=\s|$)|--file[= ]-(?=\s|$)", args) and "<<" not in cmd:
-        deny("`-F -` reads the message from a pipe the hook cannot see. Use a here-doc in the same command.")
-
     sys.exit(0)
 
 

@@ -61,29 +61,40 @@ async function scriptFile($: Engine, name: string): Promise<string> {
   return isOwn ? own : `${$.plugin.root.replace(/\\/g, '/')}/scripts/${name}`
 }
 
+type Answer = { reason?: string; error?: string }
+
 // One script's answer as Claude Code reads a command hook's: exit 2 denies with stderr, exit 0 with a
-// `permissionDecision` of deny denies with its reason, anything else passes. A script that cannot start,
-// runs past the limit or exits with another code throws: `failed` decides.
-async function scriptReason($: Engine, name: string, input: string): Promise<string | undefined> {
-  const file = await scriptFile($, name)
-  const { exitCode, stdout, stderr } = await $.process.run([live.python, file], {
-    stdin: input,
-    timeoutMs: SCRIPT_TIMEOUT_MS,
-  })
-  if (exitCode === 2) return stderr.trim() || `${name} refused the call`
-  if (exitCode !== 0) throw new Error(`${name} exited ${exitCode}: ${stderr.trim().slice(0, 200)}`)
-  if (!stdout.trim()) return undefined
-  const decision = (JSON.parse(stdout) as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput
-  return decision?.permissionDecision === 'deny' ? String(decision.permissionDecisionReason ?? name) : undefined
+// `permissionDecision` of deny denies with its reason. Anything else is a non-blocking hook error, as there:
+// a script that cannot start, runs past the limit, exits with another code or prints no JSON lets the call
+// run, and the error is logged.
+async function scriptAnswer($: Engine, name: string, input: string): Promise<Answer> {
+  try {
+    const file = await scriptFile($, name)
+    const { exitCode, stdout, stderr } = await $.process.run([live.python, file], {
+      stdin: input,
+      timeoutMs: SCRIPT_TIMEOUT_MS,
+    })
+    if (exitCode === 2) return { reason: stderr.trim() || `${name} refused the call` }
+    if (exitCode !== 0) return { error: `${name} exited ${exitCode}: ${stderr.trim().slice(0, 200)}` }
+    if (!stdout.trim()) return {}
+    const decision = (JSON.parse(stdout) as { hookSpecificOutput?: Record<string, unknown> }).hookSpecificOutput
+    return decision?.permissionDecision === 'deny' ? { reason: String(decision.permissionDecisionReason ?? name) } : {}
+  } catch (err) {
+    return { error: `${name}: ${String(err).slice(0, 200)}` }
+  }
 }
 
-// The first reason to block. The scripts run side by side, as Claude Code runs the hooks of one event.
-async function verdict($: Engine, tool: string, command: string): Promise<string | undefined> {
+// The first reason to block, and the scripts that failed. The scripts run side by side, as Claude Code
+// runs the hooks of one event.
+async function verdict($: Engine, tool: string, command: string): Promise<{ reason?: string; errors: string[] }> {
   const cwd = await $.session.cwd()
   const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { command }, cwd })
   const names = SCRIPTS.filter(name => live.isAttribution || name !== ATTRIBUTION_SCRIPT)
-  const reasons = await Promise.all(names.map(name => scriptReason($, name, input)))
-  return reasons.find(reason => reason !== undefined)
+  const answers = await Promise.all(names.map(name => scriptAnswer($, name, input)))
+  return {
+    reason: answers.find(a => a.reason !== undefined)?.reason,
+    errors: answers.flatMap(a => (a.error ? [a.error] : [])),
+  }
 }
 
 async function log($: Engine, entry: Record<string, unknown>) {
@@ -147,8 +158,9 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   // A hot reload starts the module over without a new session.start: set up on first use.
   if (!live.dir) await setUp($)
   let reason: string | undefined
+  let errors: string[]
   try {
-    reason = await verdict($, tool, command)
+    ;({ reason, errors } = await verdict($, tool, command))
   } catch (err) {
     return failed($, tool, command, String(err), run)
   }
@@ -160,13 +172,14 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
     ? undefined
     : (result?.deny ?? (result?.isError && /BLOCKED/.test(String(result?.text)) ? String(result.text) : undefined))
   await count($, Boolean(reason), Boolean(scripts))
-  if (reason || scripts) {
+  if (reason || scripts || errors.length > 0) {
     await log($, {
       at: Date.now(),
       session: await $.session.id(),
       tool,
       mod: reason ?? null,
       scripts: scripts ? String(scripts).slice(0, 300) : null,
+      ...(errors.length > 0 ? { error: errors.join('; ') } : {}),
       ...(isBlocked ? { enforced: true } : {}),
       command: command.slice(0, 2000),
     })

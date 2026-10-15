@@ -1,51 +1,35 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: every pull request created or edited from a Claude
-session on the GameProject, AppProject or SiteProject repo carries a complete body in the PR format.
+"""PreToolUse guard: every pull request created or edited from a session on
+a repo listed in REPOS carries a complete body in the PR format.
 
-Contract (.claude/rules/git.md § PR format):
+Contract (.claude/rules/git.md § Pull requests):
   * `## What` with at least one bullet, `## Why` with text, optional
-    `## Notes` (never empty), and one issue line per board item the PR
-    touches: `Resolves starfoxcom/board#N` or `Part of ...#N`.
-    A `docs(...)` / `chore(...)` PR (context refresh, rules, CI, tooling) names no row.
+    `## Notes` (never empty), and the repo's issue line (for example
+    `Resolves #N` or `Part of #N`) unless the title is one the repo exempts.
   * The body must come from a file (`--body-file` / `-F`) so the hook can
-    read it. Inline `--body "..."` is denied: 86 PR bodies were silently
-    cut to a bare `## What` heading between 2026-07-26 and 2026-09-04 by
-    inline bodies whose newlines the shell mangled (founder-found
-    2026-09-07, all rebuilt the same night).
+    read it. Inline `--body "..."` is denied: a shell can mangle the
+    newlines of an inline body and cut it short without a warning.
 
-Scoped per repo (cwd or --repo). Matched on Bash|PowerShell.
-
-AppProject (2026-09-07 audit, same defects): issues live in the same repo, so the
-line is `Resolves #N` / `Part of #N`. Its default branch is `main` while work
-PRs target `develop`, so the keyword never auto-links; the line is read by
-humans and `tools/board_check.py`, and the link is added after the merge with
-`tools/board_link_pr.py`. `hotfix:` PRs and `(ci)`-scoped fixes carry no row
-(CI has no board row), and GitHub's own `Revert "..."` titles are exempt.
+Scoped per repo (session folder or --repo). Matched on Bash|PowerShell.
+REPOS ships empty, so nothing is checked until you list your repos.
 """
 import json
 import os
 import re
 import sys
 
-# repo keyword -> (issue-line shape, titles that carry no board row)
-REPOS = {
-    "gameproject": (
-        re.compile(r"^(Resolves|Part of) starfoxcom/board#\d+\s*$", re.M),
-        # docs / chore PRs (context refresh, rules, CI, tooling) carry no board row; every other type names its row.
-        re.compile(r"^(docs|chore)\("),
-    ),
-    "appproject": (
-        re.compile(r"^(Resolves|Part of) #\d+\s*$", re.M),
-        re.compile(r"^(docs|chore|hotfix)(\(|:)|^(fix|perf|feat|refactor)\(ci\)|^Revert "),
-    ),
-    # SiteProject: issues in the same repo; release PRs (develop into main) carry no row either.
-    "siteproject": (
-        re.compile(r"^(Resolves|Part of) #\d+\s*$", re.M),
-        re.compile(r"^(docs|chore|hotfix|release)(\(|:)|^\w+\(ci\)|^Revert "),
-    ),
-}
-# Keys matched as a whole path segment or repo name rather than a substring ("siteproject" is too short).
-SEGMENT_KEYS = {"siteproject"}
+# repo keyword -> (issue-line shape, titles that carry no issue line). A key
+# matches a repo whose --repo value or session folder contains it (lowercase).
+# Example:
+#   "my-game": (
+#       re.compile(r"^(Resolves|Part of) #\d+\s*$", re.M),
+#       re.compile(r"^(docs|chore)(\(|:)|^Revert "),
+#   ),
+REPOS = {}
+# Keys matched as a whole path segment or repo name rather than a substring.
+SEGMENT_KEYS = set()
+# --repo values never checked, by substring (a board or tracking repo).
+SKIP = ()
 
 
 def deny(reason):
@@ -63,7 +47,7 @@ def in_scope(cmd, cwd):
     """Return the matching REPOS entry, or None when the command is out of scope."""
     m = re.search(r"(?:--repo|-R)\s+([\w.-]+/[\w.-]+)", cmd)
     target = m.group(1).lower() if m else cwd.lower()
-    if m and "board" in target:
+    if m and any(word in target for word in SKIP):
         return None
     for name, spec in REPOS.items():
         if name in SEGMENT_KEYS:
@@ -98,9 +82,8 @@ def check_body(text, title, spec):
     if notes and not notes.group(1).strip():
         deny("`## Notes` is present but empty - drop the heading or fill it.")
     if not issue_line.search(text) and not exempt_title.search(title):
-        deny("no `Resolves ...#N` / `Part of ...#N` board-row line (GameProject: `starfoxcom/board#N`; "
-             "AppProject and SiteProject: `#N`). Every work PR names its board row; only docs / chore / hotfix / (ci) "
-             "PRs (and SiteProject release PRs) name none.")
+        deny("no issue line (`Resolves #N` / `Part of #N`, as this repo spells it). Every work PR names "
+             "its issue; only the titles this repo exempts name none.")
 
 
 def main():

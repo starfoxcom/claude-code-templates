@@ -199,29 +199,43 @@ test('the empty command starts no script', { options: { mode: 'enforce' } }, asy
   expect(seen.ran).toEqual([''])
 })
 
-test('a script that fails refuses in enforce and is logged', { options: { mode: 'enforce' } }, async ($, on) => {
+// A failing command hook is a non-blocking error to Claude Code: the call runs, and here the error is logged.
+test('a script that fails lets the call run, even in enforce, and is logged', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
   const seen = world(on)
   seen.scripts['block-gh-run-watch.py'] = () => ({ exitCode: 1, stderr: 'Traceback: boom' })
-  const result = await call($, 'git status')
-  expect(seen.ran).toEqual([])
-  expect(String(result.deny)).toContain('the check failed')
+  expect((await call($, 'git status')).deny).toBeUndefined()
+  expect(seen.ran).toEqual(['git status'])
   expect(lastEntry(seen).error).toContain('block-gh-run-watch.py exited 1: Traceback: boom')
 })
 
-test('a script that fails lets the command run in shadow', async ($, on) => {
+test('a script that prints no JSON lets the call run and is logged', async ($, on) => {
   const seen = world(on)
   seen.scripts['no-ai-attribution.py'] = () => ({ exitCode: 0, stdout: 'not json' })
   expect((await call($, 'git status')).deny).toBeUndefined()
   expect(seen.ran).toHaveLength(1)
-  expect(lastEntry(seen).error).toBeDefined()
+  expect(lastEntry(seen).error).toContain('no-ai-attribution.py')
 })
 
-test('a Python that cannot start refuses in enforce', { options: { mode: 'enforce' } }, async ($, on) => {
+test("a failing script never hides another script's deny", { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  seen.scripts['no-ai-attribution.py'] = () => ({ exitCode: 1, stderr: 'boom' })
+  expect((await call($, 'gh run WATCH')).deny).toBe('BLOCKED: `gh run watch`')
+  expect(lastEntry(seen)).toMatchObject({ mod: 'BLOCKED: `gh run watch`', enforced: true })
+  expect(lastEntry(seen).error).toContain('no-ai-attribution.py exited 1')
+})
+
+test('a Python that cannot start lets the call run and is logged', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
   const seen = world(on)
   seen.broken.add('python')
-  const result = await call($, 'git status')
-  expect(seen.ran).toEqual([])
-  expect(String(result.deny)).toContain('process.run')
+  expect((await call($, 'git status')).deny).toBeUndefined()
+  expect(seen.ran).toEqual(['git status'])
+  expect(lastEntry(seen).error).toContain('process.run')
 })
 
 test('in enforce mode a check that crashes refuses the command', { options: { mode: 'enforce' } }, async ($, on) => {

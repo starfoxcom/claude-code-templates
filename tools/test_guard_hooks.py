@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import warnings
@@ -319,6 +320,94 @@ class GuardHookTest(unittest.TestCase):
                 self.assert_passes(self.attr(command))
 
 
+GUARDS = os.path.join(REPO, "_core", "global-template", "mods", "guards", "scripts")
+
+
+class GuardsScriptsTest(unittest.TestCase):
+    """The hook scripts the guards mod runs, started as the mod starts them:
+    the script on its own, the tool call on stdin."""
+
+    def run_script(self, path, command, cwd=REPO, tool="Bash"):
+        payload = {"hook_event_name": "PreToolUse", "tool_name": tool,
+                   "tool_input": {"command": command}, "cwd": cwd}
+        result = subprocess.run([sys.executable, path], input=json.dumps(payload).encode("utf-8"),
+                                capture_output=True, cwd=cwd if os.path.isdir(cwd) else REPO, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout.decode("utf-8").strip()
+        return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"] if out else None
+
+    def script(self, name):
+        return os.path.join(GUARDS, name)
+
+    def pr_script(self, root):
+        """A copy of the PR-body script with one repo listed, as a machine's own copy would be."""
+        with open(self.script("pr-body-contract.py"), encoding="utf-8") as f:
+            source = f.read()
+        table = ('REPOS = {"my-game": (re.compile(r"^(Resolves|Part of) #\\d+\\s*$", re.M), '
+                 're.compile(r"^(docs|chore)(\\(|:)"))}')
+        self.assertIn("REPOS = {}\n", source)
+        source = source.replace("REPOS = {}\n", table + "\n").replace("SKIP = ()", 'SKIP = ("board",)')
+        path = os.path.join(root, "pr-body-contract.py")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(source)
+        return path
+
+    def test_attribution_script_is_the_shipped_global_hook(self):
+        with open(self.script("no-ai-attribution.py"), "rb") as a, \
+                open(os.path.join(REPO, "_core", "global-template", "hooks", "no-ai-attribution.py"), "rb") as b:
+            self.assertEqual(a.read(), b.read())
+
+    def test_attribution_script_refuses_credit_and_passes_mentions(self):
+        path = self.script("no-ai-attribution.py")
+        self.assertIn("attribution", self.run_script(path, f"git commit -m 'fix: x' -m '{AI_TRAILER}'") or "")
+        for command in ('git commit -m "docs: compatible with Cla' + 'ude Code"',
+                        f"git commit -m 'fix: x' -m '{HUMAN_TRAILER}'", "git status"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.run_script(path, command))
+
+    def test_run_watch_script_refuses_only_the_watch_subcommand(self):
+        path = self.script("block-gh-run-watch.py")
+        for command, tool in (("gh run wat" + "ch 123", "Bash"), ("gh -R o/r run wat" + "ch", "PowerShell")):
+            with self.subTest(command=command):
+                self.assertIn("Watching CI", self.run_script(path, command, tool=tool) or "")
+        for command in ("git push origin feature/ci-watch-incident", "gh run list --limit 5", "gh pr checks 3"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.run_script(path, command))
+
+    def test_pr_body_script_ships_with_no_repo_listed(self):
+        path = self.script("pr-body-contract.py")
+        for folder in ("my-game", "gameproject-demo", "appproject"):
+            with self.subTest(folder=folder):
+                self.assertIsNone(self.run_script(path, 'gh pr create -t t --body "x"', cwd=os.path.join(REPO, folder)))
+
+    def test_pr_body_script_holds_a_listed_repo_to_the_format(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        repo = os.path.join(root, "my-game")
+        os.makedirs(repo)
+        full = "## What\n- add the sky\n\n## Why\nIt was missing.\n\nResolves #12\n"
+        bodies = {"full.md": full, "short.md": "## What\n", "norow.md": full.replace("Resolves #12\n", ""),
+                  "emptynotes.md": full + "## Notes\n\n"}
+        for name, text in bodies.items():
+            with open(os.path.join(repo, name), "w", encoding="utf-8") as f:
+                f.write(text)
+        path = self.pr_script(root)
+        for command, reason in (('gh pr create -t "feat: x" --body "## What"', "inline `--body`"),
+                                ("gh pr create --fill", "`--fill*`"),
+                                ('gh pr create -t "feat: x"', "--body-file"),
+                                ('gh pr create -t "feat: x" --body-file short.md', "`## What`"),
+                                ('gh pr create -t "feat: x" --body-file norow.md', "no issue line"),
+                                ('gh pr create -t "feat: x" --body-file emptynotes.md', "`## Notes`")):
+            with self.subTest(command=command):
+                self.assertIn(reason, self.run_script(path, command, cwd=repo) or "")
+        for command in ('gh pr create -t "feat: x" --body-file full.md',
+                        'gh pr create -t "docs: x" --body-file norow.md',
+                        "gh pr edit 3 --add-label bug",
+                        'gh pr create -R o/board -t t --body "x"'):
+            with self.subTest(command=command):
+                self.assertIsNone(self.run_script(path, command, cwd=repo))
+
+
 class HookSourceTest(unittest.TestCase):
     """Every shipped hook and script compiles without a warning.
 
@@ -327,12 +416,13 @@ class HookSourceTest(unittest.TestCase):
     reaches stderr on every tool call."""
 
     DIRS = (".claude/hooks", "_core/global-template/hooks",
-            "_core/project-template/.claude/hooks", "_core/project-template/.claude/scripts")
+            "_core/project-template/.claude/hooks", "_core/project-template/.claude/scripts",
+            "_core/global-template/mods/guards/scripts")
 
     def test_compiles_without_warnings(self):
         files = [os.path.join(d, name) for d in self.DIRS
                  for name in sorted(os.listdir(os.path.join(REPO, d))) if name.endswith(".py")]
-        self.assertGreaterEqual(len(files), 7)
+        self.assertGreaterEqual(len(files), 10)
         for rel in files:
             with self.subTest(file=rel):
                 with open(os.path.join(REPO, rel), encoding="utf-8") as f:

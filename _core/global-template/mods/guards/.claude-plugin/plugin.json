@@ -14,7 +14,7 @@
     "attribution": {
       "type": "string",
       "title": "Attribution check",
-      "description": "on (the default): the attribution script runs on every shell call, keeping AI credit out of commits, PRs, issues, comments and releases and refusing the routes around the commit gates. off: that script does not run.",
+      "description": "on (the default): the attribution script runs on every shell call, keeping AI attribution out of commits, PRs, issues, comments and releases. off: that script does not run.",
       "options": ["on", "off"],
       "default": "on"
     },

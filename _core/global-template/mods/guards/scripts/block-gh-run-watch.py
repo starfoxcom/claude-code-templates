@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: deny `gh run watch` in Bash AND PowerShell.
+"""PreToolUse guard: deny `gh run watch` in Bash and PowerShell.
 
-Why: .claude/rules/token-efficiency.md says NEVER use streaming log
-watchers - `gh run watch` freezes the tool call on a live stream and
-burns tokens re-rendering it. The sanctioned pattern is the 7-minute
-background polling loop (same rules file, § CI monitoring + auto-merge).
+Why: `gh run watch` holds the tool call on a live log stream and spends
+tokens re-reading it. The toolkit's rule (.claude/rules/token-efficiency.md
+§ "Watching CI") watches a PR's checks with the ci-watch mod, the Monitor
+tool, or a bounded background loop over `gh pr checks`.
 
-This was a recall-only rule; like the workflow-routing guard, it is now
-deterministic. Matched on Bash|PowerShell in ~/.claude/settings.json -
-the workflow-routing guard was Bash-only and a PowerShell commit walked
-straight past it on 2026-08-02 (fourth recurrence of the drift it
-guards), so command guards cover both shells from now on.
-
-No repo scoping: `gh run watch` is the wrong tool in any repo.
+Matched on Bash|PowerShell, since a rule kept only in memory gets walked
+past in the other shell. No repo scoping: `gh run watch` is the wrong tool
+in any repo.
 """
 import json
 import re
@@ -49,10 +45,10 @@ def main():
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                "BLOCKED: `gh run watch` streams logs into the tool call - banned by "
-                ".claude/rules/token-efficiency.md (§ CI monitoring). Use the background "
-                "polling loop instead: `gh run list --branch <b> --json status,conclusion,headSha` "
-                "every 420s with run_in_background, then act on the completed result."
+                "BLOCKED: `gh run watch` streams logs into the tool call. Watch the PR's checks "
+                "as .claude/rules/token-efficiency.md § \"Watching CI\" says: the ci-watch mod "
+                "(it starts on its own after a push), the Monitor tool, or a bounded background "
+                "loop over `gh pr checks <pr> --json name,bucket`."
             ),
         }
     }))
