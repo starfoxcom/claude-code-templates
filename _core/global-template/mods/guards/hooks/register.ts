@@ -4,12 +4,12 @@ import { findPython, NO_PYTHON, selfCheck, verdict } from './scripts'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
-// guards: runs the attribution, `gh run watch` and PR-body hook scripts (scripts/, started by scripts.ts) on
-// every Bash and PowerShell call, the way Claude Code runs a command hook: same Python, input and deny.
-// The scripts themselves decide, so guards refuses exactly what they refuse. A machine's own copy of a
-// script in mods-data/guards/scripts/ runs in place of the shipped one (the PR-body script holds the
-// machine's repo table). Opt-in by setting: helper agents (`helpers` = block refuses Agent and Workflow
-// calls; see helpers.ts). Opt-out by setting: `attribution` = off skips the attribution script.
+// guards: runs the attribution and `gh run watch` hook scripts (scripts/, started by scripts.ts) on every
+// Bash and PowerShell call, the way Claude Code runs a command hook: same Python, input and deny. The
+// scripts themselves decide, so guards refuses exactly what they refuse. A machine's own copy of a script
+// in mods-data/guards/scripts/ runs in place of the shipped one, and a PR-body script runs only from
+// there (it holds the machine's repo table). Opt-in by setting: helper agents (`helpers` = block refuses
+// Agent and Workflow calls; see helpers.ts). Opt-out by setting: `attribution` = off skips the attribution script.
 //
 // mode `shadow` (the default while it is new): never blocks; it logs what it would block, and what the
 // scripts beside it blocked, to mods-data/guards/decisions.jsonl. mode `enforce`: blocks.
@@ -38,6 +38,17 @@ const MARK_LOADED = [
   'fs.writeFileSync(process.argv[1]+"/loaded.json",JSON.stringify({at,mode:process.argv[2]}))',
 ].join(';')
 
+// One set-up per module: calls that arrive while it runs (parallel shell calls after a hot reload) wait for
+// it, and a failed one is tried again by the next call.
+let ready: Promise<void> | undefined
+function setUpOnce($: Engine): Promise<void> {
+  ready ??= setUp($).catch(err => {
+    ready = undefined
+    throw err
+  })
+  return ready
+}
+
 async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
@@ -48,7 +59,20 @@ async function setUp($: Engine) {
   await $.process.run(['node', '-e', MARK_LOADED, live.dir, live.mode], { timeoutMs: 10_000 }).catch(() => undefined)
 }
 
-async function log($: Engine, entry: Record<string, unknown>) {
+// Calls run side by side, and each one reads a data file, adds to it and writes it back: the writes take
+// turns, so no call's line or count overwrites another's.
+let writes: Promise<unknown> = Promise.resolve()
+function inTurn(step: () => Promise<void>): Promise<void> {
+  const turn = writes.then(step, step)
+  writes = turn.catch(() => undefined)
+  return turn
+}
+
+function log($: Engine, entry: Record<string, unknown>): Promise<void> {
+  return inTurn(() => writeLog($, entry))
+}
+
+async function writeLog($: Engine, entry: Record<string, unknown>) {
   if (!live.dir) return
   const file = `${live.dir}/decisions.jsonl`
   let text = ''
@@ -70,7 +94,11 @@ type Tally = { isModBlock: boolean; isScriptBlock: boolean; error?: string }
 // shadow comparison (decisions.jsonl only holds the calls where the mod or the scripts would block). A call
 // where a script failed counts as `failed`, not `checked`, with the last error kept for `/guards`; the
 // log stays for blocks, so a broken Python never floods it.
-async function count($: Engine, tally: Tally) {
+function count($: Engine, tally: Tally): Promise<void> {
+  return inTurn(() => writeCount($, tally))
+}
+
+async function writeCount($: Engine, tally: Tally) {
   if (!live.dir) return
   const file = `${live.dir}/stats.json`
   let stats: Record<string, DayCount & { lastAt: number; lastError?: string }> = {}
@@ -114,7 +142,7 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   // An empty command gets the scripts' own answer without starting them: they pass it.
   if (!command) return run()
   // A hot reload starts the module over without a new session.start: set up on first use.
-  if (!live.dir) await setUp($)
+  await setUpOnce($)
   let reason: string | undefined
   let errors: string[]
   try {
@@ -156,7 +184,7 @@ async function helperState($: Engine) {
 // An Agent or Workflow call: refused in enforce, logged in shadow, while the setting blocks helpers.
 async function helperGuard($: Engine, tool: string, run: () => Promise<any>) {
   if (!isHelperChecked(await helperState($))) return run()
-  if (!live.dir) await setUp($)
+  await setUpOnce($)
   const isBlocked = live.mode === 'enforce'
   // Logged, never counted: stats.json counts shell writes, the denominator of the shadow comparison.
   const entry = { at: Date.now(), session: await $.session.id(), tool, mod: HELPER_BLOCK, scripts: null }
@@ -186,7 +214,8 @@ export const register: Register = (on, options) => {
     // A settings file that cannot be read never costs the start: the loaded options stand.
     await readSettings($).catch(() => undefined)
     const result = await next(e)
-    await setUp($)
+    ready = undefined
+    await setUpOnce($)
     await $.command.register({
       name: 'guards',
       description: 'The guard mode and what it caught. Also: settings, set, help',
@@ -224,7 +253,7 @@ function caughtError(error: { kind: string; message?: string }): string {
 
 const ARGUMENT_HINT = '[help | settings | set | helpers]'
 const HELP = [
-  '/guards: runs the attribution, `gh run watch` and PR-body hook scripts on every shell call.',
+  '/guards: runs the attribution and `gh run watch` hook scripts, and your own PR-body one, on every shell call.',
   '  /guards           the mode and what it caught',
   '  /guards settings  open the settings pane',
   '  /guards set       change a setting: set <name> <value>; alone, list them',
@@ -258,7 +287,7 @@ function pythonLine(): string {
 }
 
 async function statusText($: Engine): Promise<string> {
-  if (!live.dir) await setUp($)
+  await setUpOnce($)
   let stats: Record<string, DayCount> = {}
   try {
     stats = JSON.parse(String(await $.fs.read(`${live.dir}/stats.json`)))

@@ -34,7 +34,7 @@ type World = {
   files: Map<string, string>
   own: Set<string>
   ran: string[]
-  started: Array<{ argv: string[]; input: Record<string, unknown>; timeoutMs?: number; env?: unknown }>
+  started: Array<{ argv: string[]; input: Record<string, unknown>; cwd?: string; timeoutMs?: number; env?: unknown }>
   // The set-up's test calls, by script name, kept apart from the calls' own runs.
   tested: string[]
   // Every script gets an empty input, as if the engine dropped stdin.
@@ -101,7 +101,10 @@ function world(on: On, os = 'Windows_NT'): World {
       const input = seen.isInputLost ? { tool_name: '', tool_input: { command: '' }, cwd: '' } : sent
       const name = file.slice(file.lastIndexOf('/') + 1)
       if (TEST_CALL.test(sent.tool_input.command)) seen.tested.push(name)
-      else seen.started.push({ argv: [...e.argv], input: sent, timeoutMs: e.init?.timeoutMs, env: e.init?.env })
+      else {
+        const { cwd, timeoutMs, env } = e.init ?? {}
+        seen.started.push({ argv: [...e.argv], input: sent, cwd, timeoutMs, env })
+      }
       const script = (file.startsWith(DATA) && seen.scripts[`own ${name}`]) || seen.scripts[name]
       answer = script?.(input) ?? answer
     }
@@ -128,7 +131,7 @@ test('each shell call starts the three scripts as Claude Code starts a command h
   const seen = world(on)
   await call($, 'git status', 'PowerShell')
   expect([...names(seen)].sort()).toEqual([...SHIPPED].sort())
-  for (const { argv, input, timeoutMs, env } of seen.started) {
+  for (const { argv, input, cwd, timeoutMs, env } of seen.started) {
     expect(argv).toEqual([PYTHON, ...LAUNCH, expect.stringMatching(/\/scripts\/[a-z-]+\.py$/)])
     expect(input).toEqual({
       hook_event_name: 'PreToolUse',
@@ -137,6 +140,7 @@ test('each shell call starts the three scripts as Claude Code starts a command h
       tool_name: 'PowerShell',
       tool_input: { command: 'git status' },
     })
+    expect(cwd).toBe('C:/Repos/my-game')
     expect(env).toBeUndefined()
     expect(timeoutMs).toBe(10_000)
   }
@@ -151,6 +155,25 @@ test('the scripts run on the first Python 3.8+ found, in the setup guide order',
   expect(new Set(seen.started.map(s => s.argv[0]))).toEqual(new Set(['/usr/bin/python3.11']))
   expect(seen.started).toHaveLength(3)
   expect(seen.probed).toEqual(['python', 'python3', 'py -3', 'python3.13', 'python3.12', 'python3.11'])
+})
+
+// After a hot reload no session.start runs: the first call sets up, and one sent beside it waits for that.
+test('shell calls sent together after a hot reload all wait for the set-up', { options: { mode: 'enforce' } }, async (
+  $,
+  on,
+) => {
+  const seen = world(on)
+  const results = await Promise.all(
+    ['git commit -m CREDIT', 'ls', 'gh run WATCH'].map(command => $.tool.call({ tool: 'Bash', command } as never)),
+  )
+  expect((results as Array<{ deny?: string }>).map(r => r.deny)).toEqual([
+    'BLOCKED (no AI attribution): x',
+    undefined,
+    'BLOCKED: `gh run watch`',
+  ])
+  expect(seen.started).toHaveLength(9)
+  expect(seen.probed).toEqual(['python'])
+  expect(stats(seen)).toMatchObject([{ checked: 3, failed: 0 }])
 })
 
 test('with no Python found nothing starts, the call runs and the status says so', async ($, on) => {
@@ -210,6 +233,12 @@ test('every way a hook says stop stops the call', { options: { mode: 'enforce' }
     seen.scripts['pr-body-contract.py'] = () => out(json)
     expect((await call($, 'gh pr create')).deny).toBeUndefined()
   }
+  // No output, plain text or a JSON value that is not an object: the call runs, counted as checked.
+  for (const stdout of ['', 'all good', '"text"', 'null']) {
+    seen.scripts['pr-body-contract.py'] = () => ({ exitCode: 0, stdout })
+    expect((await call($, 'gh pr create')).deny).toBeUndefined()
+  }
+  expect(stats(seen)).toMatchObject([{ failed: 0 }])
 })
 
 test("the mode saved in the mod's settings file applies from the session's start", async ($, on) => {

@@ -65,6 +65,8 @@ async function scriptFile($: Engine, name: string, dataDir: string): Promise<str
 }
 
 type Answer = { reason?: string; error?: string }
+// The folder a call runs in and the hook input for it.
+type HookCall = { cwd: string; input: string }
 
 // What a PreToolUse hook's JSON says about the call: the reason it stops it, or undefined. Claude Code
 // stops the call on a `permissionDecision` of deny, on the older `decision: "block"` and on
@@ -80,23 +82,30 @@ function stopReason(name: string, out: Record<string, unknown>): string | undefi
 }
 
 // One script's answer as Claude Code reads a command hook's: exit 2 stops the call with stderr, exit 0 with
-// JSON as `stopReason` reads it. Anything else is a non-blocking hook error, as there: a script that cannot
-// start, runs past the limit, exits with another code or prints something other than JSON lets the call run.
-// The engine's own hook budget stops while a process runs, so only SCRIPT_TIMEOUT_MS bounds a script.
-async function scriptAnswer($: Engine, name: string, input: string, at: Setup): Promise<Answer> {
+// a JSON object as `stopReason` reads it, exit 0 with anything else (none, plain text) lets it run. Any
+// other end is a non-blocking hook error, as there: a script that cannot start, runs past the limit or
+// exits with another code lets the call run. The engine's own hook budget stops while a process runs, so
+// only SCRIPT_TIMEOUT_MS bounds a script.
+async function scriptAnswer($: Engine, name: string, call: HookCall, at: Setup): Promise<Answer> {
   if (!at.python) return { error: NO_PYTHON }
   try {
     const file = await scriptFile($, name, at.dataDir)
     if (file === undefined) return {}
+    // Started in the session's folder, as Claude Code starts a command hook.
     const { exitCode, stdout, stderr } = await $.process.run([at.python, ...LAUNCH, file], {
-      stdin: input,
+      cwd: call.cwd,
+      stdin: call.input,
       timeoutMs: SCRIPT_TIMEOUT_MS,
     })
     if (exitCode === 2) return { reason: stderr.trim() || `${name} refused the call` }
     if (exitCode !== 0) return { error: `${name} exited ${exitCode}: ${stderr.trim().slice(0, 200)}` }
-    if (!stdout.trim()) return {}
-    const out = JSON.parse(stdout) as unknown
-    if (typeof out !== 'object' || out === null) return { error: `${name} printed something other than a JSON object` }
+    let out: unknown
+    try {
+      out = JSON.parse(stdout)
+    } catch {
+      return {}
+    }
+    if (typeof out !== 'object' || out === null) return {}
     const reason = stopReason(name, out as Record<string, unknown>)
     return reason === undefined ? {} : { reason }
   } catch (err) {
@@ -106,24 +115,25 @@ async function scriptAnswer($: Engine, name: string, input: string, at: Setup): 
 
 // The fields a PreToolUse command hook gets that the mod knows: hook_event_name, session_id, cwd (the
 // session's current folder, as Claude Code gives it), tool_name and tool_input.command.
-async function hookInput($: Engine, tool: string, command: string): Promise<string> {
+async function hookInput($: Engine, tool: string, command: string): Promise<HookCall> {
   const cwd = await $.session.cwd()
   const session = await $.session.id()
-  return JSON.stringify({
+  const input = JSON.stringify({
     hook_event_name: 'PreToolUse',
     session_id: session,
     cwd,
     tool_name: tool,
     tool_input: { command },
   })
+  return { cwd, input }
 }
 
 // The first reason to block, and the scripts that failed. The scripts run side by side, as Claude Code
 // runs the hooks of one event.
 export async function verdict($: Engine, tool: string, command: string, setup: Setup): Promise<Verdict> {
-  const input = await hookInput($, tool, command)
+  const call = await hookInput($, tool, command)
   const names = SCRIPTS.filter(name => setup.isAttribution || name !== ATTRIBUTION_SCRIPT)
-  const answers = await Promise.all(names.map(name => scriptAnswer($, name, input, setup)))
+  const answers = await Promise.all(names.map(name => scriptAnswer($, name, call, setup)))
   return {
     reason: answers.find(a => a.reason !== undefined)?.reason,
     errors: answers.flatMap(a => (a.error ? [a.error] : [])),

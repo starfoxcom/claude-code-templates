@@ -1,7 +1,7 @@
 {
   "name": "guards",
   "version": "0.1.0",
-  "description": "Keeps AI credit out of commits, PRs, issues, comments and releases, holds PR bodies to the PR format, and stops the streaming CI log watcher, by running the hook scripts in `guards/scripts/` on every shell call. Optionally blocks helper agents.",
+  "description": "Keeps AI credit out of commits, PRs, issues, comments and releases and stops the streaming CI log watcher, by running the hook scripts in `guards/scripts/` on every shell call; a PR-body check runs from your own copy in `mods-data/guards/scripts/`. Optionally blocks helper agents.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "mode": {
