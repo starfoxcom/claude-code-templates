@@ -4,8 +4,6 @@
 // still read as far as the reading goes, and the reason is noted in the log: refusing it blocked ordinary
 // work the shipped attribution hook passes. Pure, no engine access.
 
-import { LAUNCHERS, NAMES_CALL, PRINTS } from './bypass'
-
 // What the text names, read with quotes, escapes and expansion marks taken out.
 const NAMES_GIT = /\bgit\b/
 const GIT_WRITES = /\b(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace)\b/
@@ -42,7 +40,7 @@ const RUNS_GIT = /\b(git|gh)\b/i
 // Each statement's program word, found on the command with every quoted string masked to marks of the same
 // length (so the data inside a string starts no statement) and then read from the command at that place. A
 // Bash assignment (`S="x"`) or a PowerShell one (`$s = 'x'`) is no program.
-export const QUOTED_STRING = /'[^']*'|"(?:[^"\\]|\\[\s\S])*"/g
+const QUOTED_STRING =/'[^']*'|"(?:[^"\\]|\\[\s\S])*"/g
 const PROGRAM_WORD = /(?:^|[;&|\n({])[ \t]*(?:[A-Za-z_]\w*=\S*[ \t]+)*(?![A-Za-z_]\w*=|\$[\w:]+[ \t]*=)([^\s;&|()]+)/g
 
 /** Whether a statement's program may be git or gh named so that no reading of its text sees it: built at
@@ -66,118 +64,6 @@ function hidesProgram(code: string, powershell: boolean): boolean {
   return false
 }
 
-// The launchers (`bypass.ts`) at a statement's head, `env -S`, and a program word Bash builds from a brace
-// expansion (`{gi,commi}t` runs `git commit`). A launcher behind a wrapper is found on the reading's statement.
-const SPLIT_ENV = /(?:^|[;&|\n({])[ \t]*env(?:[ \t]+-\S+)*?[ \t]+(?:-S|--split-string)\b/g
-
-/** The launcher or built program word in the command whose text the reading cannot follow, or undefined. */
-export function launcherIn(command: string): string | undefined {
-  const code = withoutBodies(command)
-  const masked = code.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
-  // `env -S` counts only when its own statement runs git or gh.
-  for (const m of masked.matchAll(SPLIT_ENV)) {
-    const at = (m.index ?? 0) + m[0].length
-    const end = masked.slice(at).search(/[;&|\n]/)
-    if (NAMES_CALL.test(callText(code.slice(at, end === -1 ? undefined : at + end)))) return 'env -S'
-  }
-  for (const m of masked.matchAll(PROGRAM_WORD)) {
-    const word = m[1] as string
-    const name = word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '')
-    const at = (m.index ?? 0) + m[0].length - word.length
-    if (/\{[^}]*,/.test(word)) return name
-    if (!LAUNCHERS.test(name)) continue
-    // Only a launcher whose own statement runs git or gh counts.
-    const end = masked.slice(at).search(/[;&|\n]/)
-    if (NAMES_CALL.test(callText(code.slice(at, end === -1 ? undefined : at + end)))) return name
-  }
-  return undefined
-}
-
-/** The text without the statements of programs that only print or match their words (`echo`, `grep`): a git
- * call named there is data. A shell they feed is judged on its own statement (`bypassIn`). */
-export function withoutPrints(text: string, isCallRead = false): string {
-  const bodies = bodiesIn(text)
-  // Bodies blanked first, so an apostrophe in one opens no string; then the quoted strings.
-  let code = text
-  for (const b of bodies) code = code.slice(0, b.from) + blank(code.slice(b.from, b.to)) + code.slice(b.to)
-  const masked = code.replace(QUOTED_STRING, s => '\u0001'.repeat(s.length))
-  let out = text
-  for (const m of masked.matchAll(PROGRAM_WORD)) {
-    const word = m[1] as string
-    const name = programAfter(masked, (m.index ?? 0) + m[0].length - word.length)
-    const at = (m.index ?? 0) + m[0].length - word.length
-    // A here-doc body line is no statement, whatever word it starts with.
-    if (bodies.some(b => at >= b.from && at < b.to)) continue
-    // With `isCallRead`, a git or gh statement goes too, with a here-doc it is fed (its message): the reading
-    // checked its own words, and the text inside them (`git log --grep "git commit -n"`) is its data.
-    const isCall = isCallRead && /^(git|gh)$/.test(name)
-    // A reader or another language's interpreter takes its text and here-doc as data or as its own code,
-    // unless it pipes them on (`cat <<'EOF' | ssh host`).
-    const isData = isCallRead && DATA_PROGRAMS.test(name)
-    if (!PRINTS.test(name) && !isCall && !isData) continue
-    const end = masked.slice(at).search(/[;&|\n]/)
-    const lineEnd = end === -1 ? text.length : at + end
-    // What a print or data program pipes on may feed a shell (`echo '...' | tee x | bash`): it stays.
-    if (!isCall && /^\|(?!\|)/.test(masked.slice(lineEnd))) continue
-    const fed = isCall || isData ? bodies.find(b => b.open >= at && b.open < lineEnd) : undefined
-    const to = fed ? fed.to : lineEnd
-    out = out.slice(0, at) + ' '.repeat(to - at) + out.slice(to)
-  }
-  return out
-}
-
-const blank = (text: string) => text.replace(/[^\n]/g, ' ')
-// Keywords and wrappers the reading steps past to a statement's program (`do git log`, `time git log`).
-const STEPS = /^(do|then|else|elif|time|!|sudo|env|nohup|nice|xargs|exec|command|builtin|timeout)$/
-
-// The program a statement starting at `at` runs, past assignments, keywords and wrappers with their options.
-function programAfter(masked: string, at: number): string {
-  const words = (masked.slice(at).split(/[;&|\n]/)[0] ?? '').trim().split(/[ \t]+/)
-  const base = (w: string) => w.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.exe$/, '')
-  for (let k = 0; k < words.length; ) {
-    const w = words[k] ?? ''
-    if (/^[A-Za-z_]\w*=/.test(w)) {
-      k++
-      continue
-    }
-    if (!STEPS.test(base(w))) return base(w)
-    k++
-    while ((words[k] ?? '').startsWith('-')) k++
-    if (base(w) === 'timeout') k++
-  }
-  return ''
-}
-// Programs whose text is data to them (`cat >> notes.md <<EOF`) or code in their own language (`node -e`).
-const DATA_PROGRAMS =
-  /^(cat|tee|type|get-content|set-content|add-content|out-file|node|deno|python\d*(\.\d+)?|py|perl|ruby|php|awk|gawk)$/
-// A quoted string on one line, but a here-doc's quoted delimiter.
-const LINE_QUOTED = /(?<!<<-?[ \t]*)(?:'[^']*'|"(?:[^"\\]|\\.)*")/g
-
-// Each here-doc body in the text, found line by line as `withoutBodies` finds them: where it starts and ends,
-// and where its `<<` stands.
-function bodiesIn(text: string): { open: number; from: number; to: number }[] {
-  const found: { open: number; from: number; to: number }[] = []
-  const lines = text.split('\n')
-  const starts = lines.map((_, i) => lines.slice(0, i).reduce((n, l) => n + l.length + 1, 0))
-  for (let i = 0; i < lines.length; i++) {
-    // Quoted text blanked to the same length, so a `<<` in a message opens nothing and positions hold.
-    const bare = (lines[i] as string).replace(LINE_QUOTED, s => 'x'.repeat(s.length))
-    const doc = ANY_HEREDOC.exec(bare)
-    if (!doc) continue
-    const end = lines.findIndex((l, j) => j > i && l.replace(/^\t+/, '') === doc[2])
-    const stop = end === -1 ? lines.length : end
-    const from = starts[i + 1] ?? text.length
-    const to = Math.max(from, (starts[stop] ?? text.length + 1) - 1)
-    found.push({ open: (starts[i] ?? 0) + doc.index, from, to })
-    if (end === -1) break
-    i = end
-  }
-  return found
-}
-
-// A statement's text with quotes and expansion marks taken out, where git or gh is found as a program word.
-const callText = (text: string) => text.toLowerCase().replace(/['"`^\\${}()]/g, ' ')
-
 // The curly quotes Windows PowerShell reads as quote marks: no plain reading follows them.
 const SMART_QUOTES = /[‘-„]/
 
@@ -185,31 +71,20 @@ const SMART_QUOTES = /[‘-„]/
 // on its line with the quoted text blanked (its delimiter's own quotes kept), so a `<<'X'` inside a message
 // opens nothing; one never closed keeps the whole text.
 const QUOTED_HEREDOC = /<<-?[ \t]*(['"])([A-Za-z_]\w*)\1/
-const ANY_HEREDOC = /(?<!<)<<-?[ \t]*(['"]?)([A-Za-z_]\w*)\1/
-export function withoutBodies(command: string, isLiteral = false): string {
+function withoutBodies(command: string): string {
   const lines = command.split('\n')
   const kept: string[] = []
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] as string
     kept.push(line)
     const bare = line.replace(/(?<!<<-?[ \t]*)(?:'[^']*'|"(?:[^"\\]|\\.)*")/g, '""')
-    const doc = (isLiteral ? ANY_HEREDOC : QUOTED_HEREDOC).exec(bare)
+    const doc = QUOTED_HEREDOC.exec(bare)
     if (!doc) continue
     const end = lines.findIndex((l, j) => j > i && l.replace(/^\t+/, '') === doc[2])
     if (end === -1) return command
-    // With `isLiteral`, an unquoted delimiter's body counts too when it expands nothing (no `$` or backtick).
-    if (!doc[1] && /[$`]/.test(lines.slice(i + 1, end).join('\n'))) continue
     i = end
   }
   return kept.join('\n')
-}
-
-/** The command without the here-doc and Windows PowerShell here-string bodies it only passes as data: a
- * quoted delimiter's, and one that expands nothing. */
-export function withoutDataBodies(command: string, powershell: boolean): string {
-  const text = withoutBodies(command, true)
-  if (!powershell) return text
-  return text.replace(/@'\r?\n[\s\S]*?\r?\n'@/g, "@''@").replace(/@"\r?\n[^$`]*?\r?\n"@/g, '@""@')
 }
 
 // That text without the strings it only passes as data: single-quoted ones and double-quoted ones that run
@@ -218,9 +93,6 @@ function withoutData(code: string): string {
   const text = code.replace(/'[^']*'|"(?:[^"`$\\]|\$(?!\()|\\[^\n])*"/g, ' ')
   return /['"]/.test(text) ? code : text
 }
-
-/** Whether the command runs a program that runs its quoted text as shell code (`flock -c '...'`, `ssh`). */
-export const runsShellText = (command: string) => RUNNERS.test(withoutData(withoutBodies(command)))
 
 /** Whether the command's text names a history write, a GitHub write or a hook switch, outside the text it
  * only passes as data (all of it, when it runs git, gh or shell text), or runs a program named at run time. */

@@ -229,15 +229,53 @@ const PRINTS = /^(git|gh|echo|cat|type|get-content|gc|write-output|write-host)$/
 export function forget(st: Statement, name: string, r: VarState) {
   if (PRINTS.test(name)) return
   if (name === 'source' || name === '.' || st.isSourced) r.isSourced = true
+  // Each name is unknown after it, and keeps the text it may have taken from the command (`for X in -n`,
+  // `A[0]=-n`, `mapfile -t A <<< -n`), so a flag typed there is still seen (`holdsFlag`).
+  const from = (i: number, rest = '') => [rest, ...st.words.slice(i + 1).map(w => w.text), ...st.heredocs].join(' ')
+  const unknown = (key: string, text: string) => store(r, key, { text, literal: false, scope: r.scope })
   unsure(st, r, () => {
-    for (const w of st.words) {
+    // `set -- -n` sets the positional parameters (`$@`, `$1`).
+    if (!r.ps && name === 'set') unknown('@', from(0))
+    st.words.forEach((w, i) => {
+      // A default assigned in place: `: ${X:=-n}`.
+      for (const m of w.text.matchAll(/\$\{([A-Za-z_]\w*):?=([^}]*)\}/g)) unknown(m[1] ?? '', m[2] ?? '')
       const m = (r.ps ? /^\$?(?:variable:)?([A-Za-z_]\w*)$/i : /^([A-Za-z_]\w*)(?:\+?=|\[|$)/).exec(w.text)
-      if (m && !w.dynamic) setVar(r, m[1] ?? '', undefined)
+      if (m && !w.dynamic) unknown(m[1] ?? '', from(i, w.text.slice(m[0].length - 1)))
       // A name attached to its option: `printf -vNAME`, `read -raNAME`.
       const attached = !r.ps && /^(printf|read)$/.test(name) ? /^-[a-zA-Z]*[va]([A-Za-z_]\w*)$/.exec(w.text) : null
-      if (attached && !w.dynamic) setVar(r, attached[1] ?? '', undefined)
-    }
+      if (attached && !w.dynamic) unknown(attached[1] ?? '', from(i))
+    })
   })
+}
+
+// A word that starts with a dash in a value as typed, past the commands a `$(...)` runs.
+const DASH_WORD = /(?:^|[\s(,='"])-/
+
+/** Whether a word built at run time may take a flag the command itself typed: a default in the word
+ * (`${X:--n}`), or a variable the command set to a value holding a word that starts with a dash (`ARGS=(-n)`,
+ * `for X in -n`, `set -- -n`). A value from outside the command is no text the command typed. */
+export function holdsFlag(w: Word, r: VarState): boolean {
+  // Only a word that starts with its expansion, or that the shell splits, can turn into a flag.
+  if (!w.dynamic || !(w.list || w.splits || /^[$`(-]/.test(w.text))) return false
+  if (/\$\{[\w@*]+(?:\[[^\]]*\])?:?[-=+?]['"]?-/.test(w.text)) return true
+  // A positional parameter (`$@`, `$1`) is kept under `@`.
+  const names = [...w.text.matchAll(/\$\{?([A-Za-z_]\w*|[@*0-9])/g)].map(m => m[1] ?? '')
+  const keys = names.map(n => (/^[@*0-9]$/.test(n) ? '@' : n))
+  return keys.some(k => (r.vars.get(keyOf(r, k ?? '')) ?? []).some(v => DASH_WORD.test(typedPart(v.text))))
+}
+
+// A value as typed, less the commands it runs (`$(...)`, backticks, nested to any depth): their output is
+// no text the command typed.
+function typedPart(text: string): string {
+  let out = ''
+  for (let i = 0, depth = 0; i < text.length; i++) {
+    const c = text[i] as string
+    if (c === '$' && text[i + 1] === '(') [depth, i] = [depth + 1, i + 1]
+    else if (depth > 0 && c === '(') depth++
+    else if (depth > 0 && c === ')') depth--
+    else if (depth === 0) out += c
+  }
+  return out.replace(/`[^`]*`/g, ' ')
 }
 
 /** What a child shell gets besides the exported values: the assignments in front of it (`M=x bash -c`,
@@ -485,7 +523,9 @@ export function assignPsTargets(st: Statement, a: PsAssignment, r: VarState) {
     if (one && isPlain) return setVar(r, one.name, value)
     const old = one && !isWhole && !a.command ? lookup(r, one.name) : undefined
     if (one && old) return markChanged(r, one.name, old, st.words)
-    for (const t of vars) setVar(r, t.name, undefined)
+    // The value is unknown, and keeps the text the command typed for it (`$a = '-n','-m'`): see `holdsFlag`.
+    const typed = a.command ? '' : a.value.map(w => w.text).join(' ')
+    for (const t of vars) store(r, t.name, { text: typed, literal: false, scope: r.scope })
   })
 }
 

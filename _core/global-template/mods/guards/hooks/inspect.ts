@@ -8,7 +8,7 @@
 // names into refusals and notes.
 // What it cannot see at all (also listed in mods/README.md):
 // - commands run from a script file or fed to a shell from a file or a pipe, an alias or shell function,
-//   a git alias (`git ci -m ...`), `ssh host ...`, a command held in a variable from outside it
+//   a git alias (`git ci -m ...`), a command held in a variable from outside it
 //   (`eval "$CMD"`, `bash -c "$CMD"`), or any other program that writes to GitHub on its own (a Python
 //   script, an SDK);
 // - a body file another program writes in the same command (`Set-Content`, `Out-File`, `tee`): one already
@@ -17,7 +17,8 @@
 // - another program's output used as a message (`git log --format=%B | git commit -F -`): unread, refused;
 // - AI credit hidden on purpose (assembled from pieces, encoded, fetched): out of scope.
 
-import { bypassIn, EVAL, functionsOf, hooksOffReason } from './bypass'
+import { EVAL, functionsOf, hooksOffReason, type HookState } from './bypass'
+import { bypassIn } from './unseen'
 import { stripPaths } from './policy'
 import { readPr } from './prbody'
 import {
@@ -83,8 +84,8 @@ export type { Folder, Target } from './folders'
 type Writer = { st: Statement; ps: boolean; scope: string; vars: (Var | undefined)[]; folder: Folder; path: string }
   & { seen: Seen; isLater: boolean; index: number }
 
-// The reading's working state while it walks one command.
-type Reading = VarState & {
+// The reading's working state while it walks one command; `HookState` holds what the routes need.
+type Reading = VarState & HookState & {
   plan: Plan
   /** The folder each `cd` so far leads to, and the `pushd` stack, by the scope that moved them. */
   places: Map<string, Place>
@@ -119,10 +120,6 @@ type Reading = VarState & {
   ranScript?: boolean
   /** A statement runs `eval` or `Invoke-Expression`. */
   hasEval?: boolean
-  /** A hook switch set, a hooked git call read, the functions defined: see `HookState`. */
-  hooksOff?: boolean
-  isHooked?: boolean
-  functions?: Set<string>
 }
 
 /** The reading itself: what the command writes, as far as it can be followed. */
@@ -196,6 +193,7 @@ function read(statements: Statement[], r: Reading, outer?: string) {
   statements.forEach((st, idx) => {
     const was = r.isDeferredRead
     r.isDeferredRead = was || st.isDeferred || st.isLooped
+    r.before = statements.slice(0, idx)
     readStatement(st, statements[idx - 1], r, outer)
     r.isDeferredRead = was
   })

@@ -171,7 +171,8 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ["git commit -m 'fix: x’ --no-verify ‘'", true],
     ["echo 'x’; git commit --no-verify -m y; ‘'", true],
     // Windows PowerShell hands a native program a word holding `"` broken apart: git gets `--no-verify`.
-    ["git commit -m 'a \"b\" --no-verify'", true],
+    ["git commit -m 'a \"b --no-verify'", true],
+    ["git commit -m 'x\\\" --no-verify'", true],
   ] as const) {
     const plan = inspect(command, ps)
     expect([command, plan.block ?? plan.unread[0]]).toEqual([command, expect.any(String)])
@@ -219,6 +220,13 @@ test('a bypass route in a command that is not plain is still refused', () => {
     ['cat >> CLAUDE.md <<EOF\nNever run husky uninstall in $REPO.\nEOF\ngit commit -m x', false],
     ['for d in a b; do git log --grep "git commit -n"; done', false],
     ["time git log -S '--no-verify'; git commit -m x", false],
+    // A comment, and a message Windows PowerShell hands git whole (`a b --no-verify`), are text.
+    ['git status # never git commit -n here', false],
+    ["npm test # then git commit --no-verify\ngit commit -m x", false],
+    ["git commit -m 'a \"b\" --no-verify'", true],
+    // A variable holding a value with no flag, set in the command.
+    ['B=$(git branch --show-current); git push origin "$B"', false],
+    ['for b in main develop; do git push origin "$b"; done', false],
   ] as const) {
     expect([command, inspect(command, ps).block]).toEqual([command, undefined])
   }

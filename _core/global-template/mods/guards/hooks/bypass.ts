@@ -61,8 +61,18 @@ const RUNNERS = /^(npx|pnpx|bunx|pnpm|yarn|bun|npm|pipx|uvx|uv)$/
 const MANAGER_TOOL = /^((@evilmartians\/)?lefthook|husky|pre-commit|pre_commit)(@\S*)?$/
 
 /** What the reading keeps between statements: a hook manager's switch was set (`export HUSKY=0`), a git
- * call that runs hooks was read, and the functions the command defines (a prefix on one reaches its body). */
-export type HookState = { hooksOff?: boolean; isHooked?: boolean; functions?: Set<string>; ps?: boolean }
+ * call that runs hooks was read, the functions the command defines (a prefix on one reaches its body), and
+ * the statements read before this one at its level (`before`), so a pipe is followed back to what feeds it. */
+export type HookState = {
+  hooksOff?: boolean
+  isHooked?: boolean
+  functions?: Set<string>
+  ps?: boolean
+  before?: Statement[]
+}
+
+/** Whether a git call's subcommand runs git's hooks or writes history (`commit`, `push`, `rebase`). */
+export const runsHooks = (args: Word[]) => HOOKED.has(gitParts(args).sub)
 
 /** A switch set anywhere in the command reaches every hooked git call in it: a trap action, a function or
  * a loop body may run after the switch though it is read before. */
@@ -285,82 +295,4 @@ export function bypassOf(st: Statement, name: string, args: Word[], state: HookS
   if (/^git-filter-(repo|branch)$/.test(name)) return HISTORY_REWRITE
   const own = name === 'git' ? gitReason(args) : name === 'gh' ? ghReason(args) : undefined
   return envReason(st, name, args, state) ?? own
-}
-
-// Programs whose arguments the reading follows itself: git and gh, the shells (`bash -c`), `eval` and `trap`.
-const FOLLOWED = /^(git|gh|bash|sh|zsh|dash|ksh|pwsh|powershell|cmd|eval|iex|invoke-expression|trap)$/
-const SHELL = /^(bash|sh|zsh|dash|ksh|fish|pwsh|powershell|cmd)$/
-// Programs that only print or match their words: a git word among them is data (`echo git commit -n`).
-export const PRINTS = /^(echo|printf|write-output|write-host|grep|egrep|fgrep|rg|select-string|sls|sed)$/
-// Programs that run their quoted argument as a command the reading does not follow (`flock -c '...'`,
-// `ssh host '...'`, `Start-Process git -ArgumentList '...'`, an alias's value).
-export const LAUNCHERS =
-  /^(flock|watch|parallel|script|ssh|su|setsid|stdbuf|doas|runas|wsl|fish|start-process|saps|start|alias)$/i
-// git or gh as a program word in a text, quotes taken out: not `git@github.com` or `app.git`.
-export const NAMES_CALL = /(?:^|[\s;&|(])(?:[\w.~-]*\/)*(?:git|gh)(?:\.exe)?(?=[\s;&|)]|$)/i
-const WRITE_WORD =
-  /^(commit|merge|push|tag|notes|am|cherry-pick|revert|rebase|filter-branch|filter-repo|replace|pr|issue|release|api)$/
-export const SHELL_TEXT =
-  "a git or gh call in text a wrapper runs as a shell command (`sudo -s '...'`) cannot be read. Run the git " +
-  'or gh call directly, as its own command.'
-const baseName = (text: string) => (text.split(/[\\/]/).pop() ?? '').toLowerCase().replace(/\.exe$/, '')
-const namesCall = (text: string) => NAMES_CALL.test(text.replace(/['"]/g, ' '))
-
-// `env -S '...'` past any wrapper (`sudo env -S '...'`): the text after `-S` runs as a command line.
-function splitText(st: Statement): string | undefined {
-  const at = st.words.findIndex((w, i) => i > 0 && /^(-S|--split-string)/.test(w.text) && isEnvBefore(st, i))
-  const word = st.words[at]?.text ?? ''
-  const value = /^(?:-S|--split-string=?)(.+)$/s.exec(word)?.[1] ?? st.words[at + 1]?.text ?? ''
-  return at !== -1 && namesCall(value) ? SHELL_TEXT : undefined
-}
-const isEnvBefore = (st: Statement, i: number) => st.words.slice(0, i).some(w => baseName(w.text) === 'env')
-
-// A shell fed its script through a pipe, past any wrapper (`echo '...' | sudo bash`, `| sh -s x`, `cat <<EOF |
-// bash`): with no `-c` and no script file of its own, it runs what the statement before it prints, unread.
-function pipedScript(st: Statement, name: string, args: Word[], prev?: Statement): string | undefined {
-  if (!SHELL.test(name) || !st.pipeIn || !prev || st.heredocs.length > 0) return undefined
-  if (args.some(a => /^-[a-z]*c[a-z]*$/i.test(a.text))) return undefined
-  // A first word past the options is a script file, unless `-s` or `--` makes it an argument.
-  // `/dev/stdin` and its kin name the pipe itself, not a script file.
-  const isPipe = (a: Word) => /^\/(dev\/stdin|dev\/fd\/0|proc\/self\/fd\/0)$/.test(a.text)
-  const file = args.findIndex(a => !a.text.startsWith('-') && !isPipe(a))
-  if (file !== -1 && !args.slice(0, file).some(a => /^-[a-z]*s/.test(a.text) || a.text === '--')) return undefined
-  const fed = [...prev.words.map(w => w.text), ...prev.heredocs].join(' ')
-  return namesCall(fed) ? launched(name) : undefined
-}
-
-/**
- * As `bypassOf`, and for a git or gh call another program runs: a launcher past any wrapper or keyword
- * (`sudo ssh host '...'`, `if flock ...`) is refused as `eval` is, and so is a shell text a wrapper runs
- * (`sudo -s '...'`). One run from another program's arguments (`find . -exec git commit ...`, `unbuffer git
- * ...`) is checked as one typed on its own; a shell run that way (`find . -exec sh -c '...'`) or a program
- * named at run time there (`find . -exec "$GIT" commit ...`) is refused when its words name or make a call.
- */
-export function bypassIn(st: Statement, name: string, args: Word[], state: HookState = {}, prev?: Statement) {
-  const own = bypassOf(st, name, args, state) ?? splitText(st) ?? pipedScript(st, name, args, prev)
-  if (own || FOLLOWED.test(name) || PRINTS.test(name)) return own
-  const head = st.words[st.words.length - args.length - 1]
-  // A program word built at run time (`$G config --unset-a core.hooksPath`) or by a Bash glob (`g[i]t`) may be
-  // git or gh: their routes count, and the scan below still runs on its arguments.
-  const isBuilt = head?.dynamic || (!state.ps && /[*?[]/.test(head?.text ?? '') && !/^\[\[?$/.test(head?.text ?? ''))
-  const asCall = name && isBuilt ? (bypassOf(st, 'git', args, state) ?? bypassOf(st, 'gh', args, state)) : undefined
-  if (asCall) return asCall
-  const isGit = (a: Word) => /^(git|gh)$/.test(baseName(a.text))
-  if (LAUNCHERS.test(name) && args.some(a => isGit(a) || namesCall(a.text))) return launched(name)
-  if (!state.ps && name && /\s/.test(head?.text ?? '') && NAMES_CALL.test(head?.text ?? '')) return SHELL_TEXT
-  // PowerShell runs a literal git or gh word among another program's arguments (`uv run git ...`) the same way;
-  // its variables, quoted strings and script blocks are read by the PowerShell reading instead.
-  const runs = (a: Word) => a.dynamic || isGit(a) || SHELL.test(baseName(a.text)) || LAUNCHERS.test(baseName(a.text))
-  const at = args.findIndex(a => (state.ps ? !a.dynamic && isGit(a) : runs(a)))
-  const word = args[at]
-  if (!word) return undefined
-  const rest = args.slice(at + 1)
-  // A word built at run time counts as the program when a typed git or gh write follows it.
-  const next = rest.find(a => !a.text.startsWith('-'))
-  if (word.dynamic) return next && !next.dynamic && WRITE_WORD.test(next.text) ? launched(name) : undefined
-  const inner = baseName(word.text)
-  if (/^(git|gh)$/.test(inner)) return bypassOf(st, inner, rest, state)
-  // A shell or a launcher run from the arguments (`find . -exec ssh host '...'`) runs its text unread.
-  const isCalled = rest.some(a => NAMES_CALL.test(a.text.replace(/['"]/g, ' ')))
-  return isCalled ? launched(SHELL.test(inner) ? name : inner) : undefined
 }
