@@ -114,7 +114,6 @@ const MOD_TAGS = [
   'skill-check',
   'usage-guard',
   'compact-handoff',
-  'guards',
 ]
 const INJECTED_LINE = new RegExp(`^\\[(?:${MOD_TAGS.join('|')})\\](?: |$)`)
 // The same list as ENGINE_TAG in hooks/register.ts: the engine's own tags, never any `<`.
