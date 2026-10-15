@@ -21,7 +21,6 @@ global-template/
     ├── README.md                          # What each mod does, install, options, tests
     ├── ci-watch/                          # Watches a pushed PR's checks, wakes the session once
     ├── compact-handoff/                   # Compaction as a focused hand-off, plus a recall tool
-    ├── guards/                            # In-process attribution and CI-watcher guard
     ├── session-facts/                     # Time, context fill and plan usage on every prompt
     ├── shared-pc/                         # One session at a time runs heavy work on the machine
     ├── skill-check/                       # Follows up when a skill's run skips a required step
