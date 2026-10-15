@@ -9,8 +9,15 @@ import type { Host } from './hostpath'
 /** Reads a file's text; throws when it cannot. */
 export type ReadFile = (path: string) => Promise<string>
 
+// Letters Python's case-blind matching also reads as an ASCII one (long s, Kelvin sign, dotted and dotless i);
+// JavaScript's `i` flag does not. Each is one UTF-16 unit, so folding them keeps every match position.
+const FOLDS: Record<string, string> = { 'ſ': 's', 'K': 'k', 'İ': 'i', 'ı': 'i' }
+/** The text as Python's `re.I` reads those four letters, for the case-blind patterns. */
+export const pyFold = (s: string) => s.replace(/[ſKİı]/g, c => FOLDS[c] as string)
+const foldsTo = (c: string) => Object.keys(FOLDS).filter(k => FOLDS[k] === c.toLowerCase()).join('')
+
 // A letter in either case: Python's `(?i:...)` group.
-const ci = (s: string) => s.replace(/[a-z]/gi, c => `[${c.toLowerCase()}${c.toUpperCase()}]`)
+const ci = (s: string) => s.replace(/[a-z]/gi, c => `[${c.toLowerCase()}${c.toUpperCase()}${foldsTo(c)}]`)
 const anyCase = (words: string[]) => words.map(ci).join('|')
 
 // Obfuscation-tolerant: optional zero-width / separator chars between letters.
@@ -89,7 +96,7 @@ function msgValue(esc: '\\' | '`'): RegExp {
     String.raw`(?<=\s)(?:--message|--body|--title|--notes|--field|--raw-field|-Body|-m|-b|-t|-f|-F)(?=[\s="'])` +
       String.raw`\s*=?\s*(?:[A-Za-z_][\w\[\].-]*=)?` +
       `(?:"(?<dq>(?:[^"${e}]|${e}.)*)"|'[^']*'|(?<bare>[^\\s'"]+))`,
-    'gis',
+    'gisd',
   )
 }
 const MSG_VALUE = { '\\': msgValue('\\'), '`': msgValue('`') }
@@ -166,7 +173,7 @@ function filesOf(cmd: string, cwd: string, spans: Span[], host: Host): string[] 
       // A file for `git commit`; a template name or repository for gh.
       const before = cmd.slice(0, m.index)
       const seg = SEGMENT_START.exec(before)
-      if (!/\bgit\b/i.test(seg ? before.slice(seg.index) : before)) continue
+      if (!/\bgit\b/i.test(pyFold(seg ? before.slice(seg.index) : before))) continue
     }
     if (path.includes('=')) {
       // gh -F key=value / key=@file; key=@- reads stdin.
@@ -189,9 +196,12 @@ function filesOf(cmd: string, cwd: string, spans: Span[], host: Host): string[] 
 // here-doc bodies, @"..."@ here-strings.
 function expandedValues(cmd: string, spans: Span[], powershell: boolean): string[] {
   const out: string[] = []
-  for (const m of cmd.matchAll(MSG_VALUE[powershell ? '`' : '\\'])) {
+  // The flag names match case-blind on the folded text; the values come from the command as typed.
+  const typed = (at: [number, number] | undefined) => (at ? cmd.slice(at[0], at[1]) : undefined)
+  for (const m of pyFold(cmd).matchAll(MSG_VALUE[powershell ? '`' : '\\'])) {
     if (isIn(spans, m.index ?? 0)) continue
-    const { dq, bare } = m.groups ?? {}
+    const dq = typed(m.indices?.groups?.dq)
+    const bare = typed(m.indices?.groups?.bare)
     if (dq !== undefined) out.push(dq)
     else if (bare && !bare.startsWith('@')) out.push(bare)
   }
@@ -201,8 +211,10 @@ function expandedValues(cmd: string, spans: Span[], powershell: boolean): string
 }
 
 const creditIn = (text: string, where: string) => {
-  const hit = ATTRIBUTION.exec(stripPaths(text))
-  return hit ? `attribution marker '${hit[0]}' found in ${where}.` : undefined
+  const masked = stripPaths(text)
+  const hit = ATTRIBUTION.exec(pyFold(masked))
+  if (!hit) return undefined
+  return `attribution marker '${masked.slice(hit.index, hit.index + hit[0].length)}' found in ${where}.`
 }
 
 /** What the hook decides for one command: its reason to deny, or undefined to pass. With `isCredit` false
@@ -216,22 +228,24 @@ export async function attributionReason(
   if (!cmd) return undefined
   const spans = textSpans(cmd, powershell ? '`' : '\\')
   const args = mask(cmd, spans)
-  const isGit = GIT_WRITE.test(args)
-  const isGh = GH_WRITE.test(args) || GH_API_WRITE.test(args)
-  const isHttp = CURL_GH.test(args) || PS_GH.test(args)
+  // The case-blind patterns read the folded arguments; the case-sensitive `-F -` test reads them as typed.
+  const folded = pyFold(args)
+  const isGit = GIT_WRITE.test(folded)
+  const isGh = GH_WRITE.test(folded) || GH_API_WRITE.test(folded)
+  const isHttp = CURL_GH.test(folded) || PS_GH.test(folded)
   if (!(isGit || isGh || isHttp)) {
     // Still refuse to weaken the git-side guard from any command.
-    return /lefthook\s+uninstall|LEFTHOOK\s*=\s*0/i.test(args)
+    return /lefthook\s+uninstall|LEFTHOOK\s*=\s*0/i.test(folded)
       ? 'disabling lefthook removes the commit-msg attribution check.'
       : undefined
   }
-  if (FILTER_REPO.test(args)) return 'history rewriting tools are not allowed from a session.'
-  if (isGit && (HOOK_BYPASS.test(args) || NO_VERIFY_N.test(args)))
+  if (FILTER_REPO.test(folded)) return 'history rewriting tools are not allowed from a session.'
+  if (isGit && (HOOK_BYPASS.test(folded) || NO_VERIFY_N.test(folded)))
     return 'git hook bypass (--no-verify / -n / hooksPath) is not allowed.'
-  if (isGit && TRAILER.test(args)) return '--trailer is not allowed; write the message body directly.'
-  if (isGit && REUSE.test(args))
+  if (isGit && TRAILER.test(folded)) return '--trailer is not allowed; write the message body directly.'
+  if (isGit && REUSE.test(folded))
     return "reusing another commit's message (-C / -c / --reuse-message) cannot be scanned."
-  if (EVAL.test(args)) return 'eval builds the command at run time, so the hook cannot read the message.'
+  if (EVAL.test(folded)) return 'eval builds the command at run time, so the hook cannot read the message.'
   if (isCredit) {
     const hit = creditIn(cmd, 'the command text')
     if (hit) return hit

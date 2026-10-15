@@ -99,6 +99,12 @@ test('every route the attribution hook refuses is refused', { options: { mode: '
     ['git commit -F - < msg.txt', '`-F -` reads the message from a pipe'],
     ['echo git commit --no-verify -m x; git commit -m y', 'git hook bypass'],
     ['gh pr create -t t --body-file body.md', 'attribution marker'],
+    // Python's case-blind matching reads long s, the Kelvin sign and dotless i as ASCII letters.
+    ['git commit -m "fix: x" -m "aſſiſted by AI"', 'attribution marker'],
+    ['git commit -m "fix: x" -m "made by copılot"', 'attribution marker'],
+    ['gıt commit --no-verify -m x', 'git hook bypass'],
+    ['git commit --meſſage="$MSG"', 'shell expansion'],
+    ['npx lefthooK uninstall', 'disabling lefthook'],
     ['gh pr create -t t --body-file missing.md', 'could not read message/body file'],
     ['gh pr comment 1 --body-file /c/Repos/my-game/body.md', 'could not read message/body file'],
     ['gh api repos/o/r/issues/1/comments -f body="$B"', 'shell expansion'],

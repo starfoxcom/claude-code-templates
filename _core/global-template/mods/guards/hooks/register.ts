@@ -1,6 +1,6 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import { attributionReason } from './attribution'
+import { attributionReason, pyFold } from './attribution'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
 import { prReason } from './prcontract'
 import type { PrRules } from './prcontract'
@@ -131,7 +131,7 @@ async function failed($: Engine, tool: string, command: string, error: string, r
 }
 
 async function guard($: Engine, tool: string, command: string, run: () => Promise<any>) {
-  if (!NAMES_WRITE.test(command)) return run()
+  if (!NAMES_WRITE.test(pyFold(command))) return run()
   // A hot reload starts the module over without a new session.start: set up on first use.
   if (!live.dir) await setUp($)
   let reason: string | undefined
