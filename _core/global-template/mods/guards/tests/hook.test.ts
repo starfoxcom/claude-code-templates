@@ -383,12 +383,25 @@ test('a script that fails lets the call run, even in enforce, and is counted', {
   expect(seen.files.has(LOG)).toBe(false)
 })
 
-test('a script that prints no JSON lets the call run and is counted', async ($, on) => {
+// A script past its limit: the run rejects (a timeout) or ends killed with no exit code, its output cut.
+// Neither is read as a pass or a block, even with a deny in the cut output.
+test('a script that runs past its limit or is killed lets the call run and is counted', {
+  options: { mode: 'enforce' },
+}, async ($, on) => {
   const seen = world(on)
-  seen.scripts['no-ai-attribution.py'] = () => ({ exitCode: 0, stdout: 'not json' })
-  expect((await call($, 'git status')).deny).toBeUndefined()
-  expect(seen.ran).toHaveLength(1)
-  expect(stats(seen)).toMatchObject([{ failed: 1, lastError: expect.stringContaining('no-ai-attribution.py') }])
+  const cut = deny('BLOCKED (PR-body contract): y')
+  for (const [answer, error] of [
+    [() => {
+      throw new Error('timed out after 10000 ms')
+    }, 'pr-body-contract.py:'],
+    [() => ({ ...cut, exitCode: null as never, stderr: 'killed' }), 'pr-body-contract.py exited null'],
+  ] as const) {
+    seen.scripts['pr-body-contract.py'] = i => (TEST_CALL.test(i.tool_input.command) ? undefined : answer())
+    expect((await call($, 'gh pr create')).deny).toBeUndefined()
+    expect(stats(seen).at(-1)).toMatchObject({ lastError: expect.stringContaining(error) })
+  }
+  expect(seen.ran).toEqual(['gh pr create', 'gh pr create'])
+  expect(stats(seen)).toMatchObject([{ checked: 0, failed: 2 }])
 })
 
 test("a failing script never hides another script's deny", { options: { mode: 'enforce' } }, async ($, on) => {

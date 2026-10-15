@@ -327,8 +327,16 @@ class GuardsScriptsTest(unittest.TestCase):
     """The hook scripts the guards mod runs, started as the mod starts them:
     the script on its own, the tool call on stdin."""
 
-    # The mod's launcher (register.ts LAUNCH, SETUP.md § 7c).
+    # The mod's launcher (scripts.ts LAUNCH, SETUP.md § 7c), pinned to the mod's source by
+    # test_launcher_is_the_mods.
     LAUNCH = ["-I", "-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')"]
+
+    def mod_source(self):
+        with open(os.path.join(GUARDS, "..", "hooks", "scripts.ts"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_launcher_is_the_mods(self):
+        self.assertIn(f"const LAUNCH = ['-I', '-c', \"{self.LAUNCH[2]}\"]", self.mod_source())
 
     def launch(self, path, payload, cwd=REPO):
         return subprocess.run([sys.executable, *self.LAUNCH, path], input=json.dumps(payload).encode("utf-8"),
@@ -374,8 +382,7 @@ class GuardsScriptsTest(unittest.TestCase):
 
     def test_scripts_refuse_the_set_up_test_calls(self):
         # scripts.ts TEST_CALLS: the mod's set-up sends these and reads a pass as a lost hook input.
-        with open(os.path.join(GUARDS, "..", "hooks", "scripts.ts"), encoding="utf-8") as f:
-            source = f.read()
+        source = self.mod_source()
         self.assertIn("'block-gh-run-watch.py', 'gh run wat" + "ch 1'", source)
         self.assertIn("""['no-ai-attribution.py', `git commit -m "docs: x" -m "${AI_TRAILER}"`]""", source)
         self.assertIn("const AI_TRAILER = `Co-${'Authored-By'}: Cla${'ude'} <noreply@anthro${'pic'}.com>`", source)
