@@ -210,7 +210,11 @@ test('saved work a closed session misses shows just past the reset, with no 15-m
   await start($)
   const ui = await offered($, seen)
   expect(await ui.find({ key: 'usage-adopt' })).toBeUndefined()
-  await seen.clock.advance(WAKE - NOW + ADOPT_GRACE_MS + 1_000)
+  // In 10-minute steps, as in usage-guard.test.ts: one long jump stopped short on a slow CI runner.
+  const step = 10 * 60_000
+  for (let left = WAKE - NOW + ADOPT_GRACE_MS + 1_000; left > 0; left -= step) {
+    await seen.clock.advance(Math.min(step, left))
+  }
   expect(await ui.find({ key: 'usage-adopt-take' })).toBeDefined()
 })
 
