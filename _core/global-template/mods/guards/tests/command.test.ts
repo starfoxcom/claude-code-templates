@@ -6,6 +6,7 @@ import { sumDays } from '../hooks/register'
 // /guards over a faked stats file: the mode, where the product may be named, and the counts.
 const NOW = Date.UTC(2026, 9, 3, 18, 0, 0)
 const STATS = 'C:/Users/me/.claude/mods-data/guards/stats.json'
+const BOOM = 'pr-body-contract.py exited 1: boom'
 const DAY = (back: number) => new Date(NOW - back * 86_400_000).toISOString().slice(0, 10)
 
 function world(on: On, stats?: Record<string, unknown>) {
@@ -18,8 +19,15 @@ function world(on: On, stats?: Record<string, unknown>) {
     return { value: JSON.stringify(stats) }
   })
   on('fs.write', () => ({ value: undefined }))
-  on('process.run', () => ({
-    value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  // The Python check answers with an interpreter's path; nothing else prints.
+  on('process.run', ($, e) => ({
+    value: {
+      exitCode: 0,
+      stdout: String(e.argv.at(-1)).includes('sys.executable') ? 'C:\\Python\\python.exe\n' : '',
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
   }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => {
@@ -49,7 +57,7 @@ test('/guards shows its arguments in the menu and lists them on help', async ($,
 
 test('/guards names the mode, the attribution check and the counts for today and the week', async ($, on) => {
   world(on, {
-    [DAY(0)]: { checked: 12, mod: 1, scripts: 2, lastAt: NOW },
+    [DAY(0)]: { checked: 12, mod: 1, scripts: 2, failed: 2, lastError: BOOM, lastAt: NOW },
     [DAY(6)]: { checked: 5, mod: 0, scripts: 1, lastAt: NOW },
     [DAY(7)]: { checked: 99, mod: 9, scripts: 9, lastAt: NOW },
   })
@@ -57,10 +65,13 @@ test('/guards names the mode, the attribution check and the counts for today and
   const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
   expect(text.split('\n')).toEqual([
     'Guards: shadow (never blocks; logs what it would block).',
-    'Attribution check: on; the attribution script checks every shell call.',
+    'Scripts run on C:/Python/python.exe.',
+    'Attribution check: on.',
     'Helper agents are allowed (setting helpers = allow).',
-    'Today (UTC): 12 shell calls checked, 1 it would block, 2 the guard scripts blocked.',
-    'Last 7 days (UTC): 17 shell calls checked, 1 it would block, 3 the guard scripts blocked.',
+    'Today (UTC): 12 shell calls checked, 1 it would block, 2 the guard scripts blocked, ' +
+      '2 not checked (a script failed; last: pr-body-contract.py exited 1: boom).',
+    'Last 7 days (UTC): 17 shell calls checked, 1 it would block, 3 the guard scripts blocked, ' +
+      '2 not checked (a script failed; last: pr-body-contract.py exited 1: boom).',
   ])
 })
 
@@ -70,8 +81,13 @@ test('the day totals count today and the days before it, and nothing older', () 
     [DAY(1)]: { checked: 2, mod: 0, scripts: 1 },
     [DAY(7)]: { checked: 50, mod: 5, scripts: 5 },
   }
-  expect(sumDays(stats, NOW, 1)).toEqual({ checked: 1, mod: 1, scripts: 0 })
-  expect(sumDays(stats, NOW, 7)).toEqual({ checked: 3, mod: 1, scripts: 1 })
-  expect(sumDays(stats, NOW, 8)).toEqual({ checked: 53, mod: 6, scripts: 6 })
-  expect(sumDays({}, NOW, 7)).toEqual({ checked: 0, mod: 0, scripts: 0 })
+  expect(sumDays(stats, NOW, 1)).toEqual({ checked: 1, mod: 1, scripts: 0, failed: 0 })
+  expect(sumDays(stats, NOW, 7)).toEqual({ checked: 3, mod: 1, scripts: 1, failed: 0 })
+  expect(sumDays(stats, NOW, 8)).toEqual({ checked: 53, mod: 6, scripts: 6, failed: 0 })
+  expect(sumDays({}, NOW, 7)).toEqual({ checked: 0, mod: 0, scripts: 0, failed: 0 })
+  const failing = {
+    [DAY(2)]: { checked: 0, mod: 0, scripts: 0, failed: 3, lastError: 'old' },
+    [DAY(0)]: { checked: 1, mod: 0, scripts: 0, failed: 1, lastError: 'new' },
+  }
+  expect(sumDays(failing, NOW, 7)).toEqual({ checked: 1, mod: 0, scripts: 0, failed: 4, lastError: 'new' })
 })

@@ -35,12 +35,24 @@ type World = {
   started: Array<{ argv: string[]; input: Record<string, unknown>; timeoutMs?: number }>
   broken: Set<string>
   scripts: Record<string, Script>
+  // What each interpreter's version check prints; one missing from the map does not run.
+  pythons: Record<string, string>
 }
+
+const PYTHON = 'C:/Python/python.exe'
+const LAUNCH = ['-I', '-c', "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')"]
 
 // `seen.own`: scripts the machine has its own copy of. `seen.broken`: calls that throw.
 function world(on: On, os = 'Windows_NT'): World {
-  const seen: World = { files: new Map(), own: new Set(), ran: [], started: [], broken: new Set(), scripts: {} }
-  seen.scripts = { ...STAND_INS }
+  const seen: World = {
+    files: new Map(),
+    own: new Set(),
+    ran: [],
+    started: [],
+    broken: new Set(),
+    scripts: { ...STAND_INS },
+    pythons: { python: 'C:\\Python\\python.exe\n' },
+  }
   const env: Record<string, string> = { USERPROFILE: 'C:/Users/me', OS: os }
   const unless = (call: string) => {
     if (seen.broken.has(call)) throw new Error(`${call} is down`)
@@ -62,9 +74,14 @@ function world(on: On, os = 'Windows_NT'): World {
     return { value: { kind: 'file' } as never }
   })
   on('process.run', ($, e) => {
-    const [, file = ''] = e.argv
+    const file = String(e.argv.at(-1))
     let answer: Answer = { exitCode: 0 }
-    if (file.endsWith('.py')) {
+    if (file.includes('sys.executable')) {
+      // The interpreter check: the candidate's first word names it.
+      const printed = seen.pythons[e.argv.slice(0, e.argv.indexOf('-I')).join(' ')]
+      if (printed === undefined) throw new Error('not found')
+      answer = { exitCode: 0, stdout: printed }
+    } else if (file.endsWith('.py')) {
       unless('python')
       const input = JSON.parse(String(e.init?.stdin))
       seen.started.push({ argv: [...e.argv], input, timeoutMs: e.init?.timeoutMs })
@@ -87,15 +104,15 @@ async function call($: Engine, command: string, tool: 'Bash' | 'PowerShell' = 'B
   return (await $.tool.call({ tool, command } as never)) as { deny?: string }
 }
 const lastEntry = (seen: World) => JSON.parse((seen.files.get(LOG) ?? '').trim().split('\n').pop() ?? '{}')
-const names = (seen: World) => seen.started.map(s => s.argv[1]?.replace(/^.*\//, ''))
+const names = (seen: World) => seen.started.map(s => String(s.argv.at(-1)).replace(/^.*\//, ''))
+const stats = (seen: World) => Object.values(JSON.parse(seen.files.get(`${DATA}/stats.json`) ?? '{}'))
 
 test('each shell call starts the three scripts as Claude Code starts a command hook', async ($, on) => {
   const seen = world(on)
   await call($, 'git status', 'PowerShell')
   expect([...names(seen)].sort()).toEqual([...SHIPPED].sort())
   for (const { argv, input, timeoutMs } of seen.started) {
-    expect(argv[0]).toBe('python')
-    expect(argv[1]).toContain('/scripts/')
+    expect(argv).toEqual([PYTHON, ...LAUNCH, expect.stringMatching(/\/scripts\/[a-z-]+\.py$/)])
     expect(input).toEqual({
       hook_event_name: 'PreToolUse',
       tool_name: 'PowerShell',
@@ -107,10 +124,39 @@ test('each shell call starts the three scripts as Claude Code starts a command h
   expect(seen.ran).toEqual(['git status'])
 })
 
-test('off Windows the scripts start with python3', async ($, on) => {
+test('the scripts run on the first Python 3.8+ found, in the setup guide order', async ($, on) => {
   const seen = world(on, 'Linux')
+  seen.pythons = { 'py -3': 'C:\\Py\\python.exe\n', python3: '/usr/bin/python3\n' }
   await call($, 'ls')
-  expect(seen.started.map(s => s.argv[0])).toEqual(['python3', 'python3', 'python3'])
+  expect(seen.started.map(s => s.argv[0])).toEqual(['/usr/bin/python3', '/usr/bin/python3', '/usr/bin/python3'])
+})
+
+test('with no Python found nothing starts, the call runs and the status says so', async ($, on) => {
+  const seen = world(on)
+  seen.pythons = {}
+  expect((await call($, 'git commit -m CREDIT')).deny).toBeUndefined()
+  expect(seen.started).toEqual([])
+  expect(stats(seen)).toMatchObject([{ checked: 0, failed: 1, lastError: expect.stringContaining('no Python') }])
+  const { text } = (await $.command.run({ command: 'guards', args: '' } as never)) as { text: string }
+  expect(text).toContain('No Python 3.8+ found')
+})
+
+test('every way a hook says stop stops the call', { options: { mode: 'enforce' } }, async ($, on) => {
+  const seen = world(on)
+  const out = (json: unknown): Answer => ({ exitCode: 0, stdout: JSON.stringify(json) })
+  for (const [json, reason] of [
+    [{ decision: 'block', reason: 'old shape' }, 'old shape'],
+    [{ continue: false, stopReason: 'stopped' }, 'stopped'],
+    [{ hookSpecificOutput: { permissionDecision: 'ask', permissionDecisionReason: 'sure?' } }, 'sure? (asks'],
+    [{ hookSpecificOutput: { permissionDecision: 'deny' } }, 'pr-body-contract.py refused the call'],
+  ] as const) {
+    seen.scripts['pr-body-contract.py'] = () => out(json)
+    expect(String((await call($, 'gh pr create')).deny)).toContain(reason)
+  }
+  for (const json of [{ hookSpecificOutput: { permissionDecision: 'allow' } }, { decision: 'approve' }, {}]) {
+    seen.scripts['pr-body-contract.py'] = () => out(json)
+    expect((await call($, 'gh pr create')).deny).toBeUndefined()
+  }
 })
 
 test("the mode saved in the mod's settings file applies from the session's start", async ($, on) => {
@@ -187,7 +233,7 @@ test("a machine's own copy of a script runs in place of the shipped one", { opti
   seen.scripts['own pr-body-contract.py'] = () => deny('own table')
   expect((await call($, 'gh pr create')).deny).toBe('own table')
   // The scripts start side by side, so in no fixed order.
-  const files = seen.started.map(s => String(s.argv[1])).sort()
+  const files = seen.started.map(s => String(s.argv.at(-1))).sort()
   expect(files).toHaveLength(3)
   expect(files.filter(f => f.endsWith('/pr-body-contract.py'))).toEqual([`${DATA}/scripts/pr-body-contract.py`])
 })
@@ -199,8 +245,9 @@ test('the empty command starts no script', { options: { mode: 'enforce' } }, asy
   expect(seen.ran).toEqual([''])
 })
 
-// A failing command hook is a non-blocking error to Claude Code: the call runs, and here the error is logged.
-test('a script that fails lets the call run, even in enforce, and is logged', { options: { mode: 'enforce' } }, async (
+// A failing command hook is a non-blocking error to Claude Code: the call runs. Here it is counted as not
+// checked, with the last error, in stats.json (the log keeps blocks only).
+test('a script that fails lets the call run, even in enforce, and is counted', { options: { mode: 'enforce' } }, async (
   $,
   on,
 ) => {
@@ -208,15 +255,17 @@ test('a script that fails lets the call run, even in enforce, and is logged', { 
   seen.scripts['block-gh-run-watch.py'] = () => ({ exitCode: 1, stderr: 'Traceback: boom' })
   expect((await call($, 'git status')).deny).toBeUndefined()
   expect(seen.ran).toEqual(['git status'])
-  expect(lastEntry(seen).error).toContain('block-gh-run-watch.py exited 1: Traceback: boom')
+  const lastError = 'block-gh-run-watch.py exited 1: Traceback: boom'
+  expect(stats(seen)).toMatchObject([{ checked: 0, failed: 1, lastError }])
+  expect(seen.files.has(LOG)).toBe(false)
 })
 
-test('a script that prints no JSON lets the call run and is logged', async ($, on) => {
+test('a script that prints no JSON lets the call run and is counted', async ($, on) => {
   const seen = world(on)
   seen.scripts['no-ai-attribution.py'] = () => ({ exitCode: 0, stdout: 'not json' })
   expect((await call($, 'git status')).deny).toBeUndefined()
   expect(seen.ran).toHaveLength(1)
-  expect(lastEntry(seen).error).toContain('no-ai-attribution.py')
+  expect(stats(seen)).toMatchObject([{ failed: 1, lastError: expect.stringContaining('no-ai-attribution.py') }])
 })
 
 test("a failing script never hides another script's deny", { options: { mode: 'enforce' } }, async ($, on) => {
@@ -227,7 +276,7 @@ test("a failing script never hides another script's deny", { options: { mode: 'e
   expect(lastEntry(seen).error).toContain('no-ai-attribution.py exited 1')
 })
 
-test('a Python that cannot start lets the call run and is logged', { options: { mode: 'enforce' } }, async (
+test('a script that cannot start lets the call run and is counted', { options: { mode: 'enforce' } }, async (
   $,
   on,
 ) => {
@@ -235,7 +284,7 @@ test('a Python that cannot start lets the call run and is logged', { options: { 
   seen.broken.add('python')
   expect((await call($, 'git status')).deny).toBeUndefined()
   expect(seen.ran).toEqual(['git status'])
-  expect(lastEntry(seen).error).toContain('process.run')
+  expect(stats(seen)).toMatchObject([{ failed: 1, lastError: expect.stringContaining('process.run') }])
 })
 
 test('in enforce mode a check that crashes refuses the command', { options: { mode: 'enforce' } }, async ($, on) => {
