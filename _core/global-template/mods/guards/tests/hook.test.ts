@@ -32,11 +32,13 @@ type World = {
   files: Map<string, string>
   own: Set<string>
   ran: string[]
-  started: Array<{ argv: string[]; input: Record<string, unknown>; timeoutMs?: number }>
+  started: Array<{ argv: string[]; input: Record<string, unknown>; timeoutMs?: number; env?: unknown }>
   broken: Set<string>
   scripts: Record<string, Script>
   // What each interpreter's version check prints; one missing from the map does not run.
   pythons: Record<string, string>
+  // The interpreters the set-up checked, in order.
+  probed: string[]
 }
 
 const PYTHON = 'C:/Python/python.exe'
@@ -52,6 +54,7 @@ function world(on: On, os = 'Windows_NT'): World {
     broken: new Set(),
     scripts: { ...STAND_INS },
     pythons: { python: 'C:\\Python\\python.exe\n' },
+    probed: [],
   }
   const env: Record<string, string> = { USERPROFILE: 'C:/Users/me', OS: os }
   const unless = (call: string) => {
@@ -77,14 +80,16 @@ function world(on: On, os = 'Windows_NT'): World {
     const file = String(e.argv.at(-1))
     let answer: Answer = { exitCode: 0 }
     if (file.includes('sys.executable')) {
-      // The interpreter check: the candidate's first word names it.
-      const printed = seen.pythons[e.argv.slice(0, e.argv.indexOf('-I')).join(' ')]
+      // The interpreter check: the words before `-I` name the candidate.
+      const candidate = e.argv.slice(0, e.argv.indexOf('-I')).join(' ')
+      seen.probed.push(candidate)
+      const printed = seen.pythons[candidate]
       if (printed === undefined) throw new Error('not found')
       answer = { exitCode: 0, stdout: printed }
     } else if (file.endsWith('.py')) {
       unless('python')
       const input = JSON.parse(String(e.init?.stdin))
-      seen.started.push({ argv: [...e.argv], input, timeoutMs: e.init?.timeoutMs })
+      seen.started.push({ argv: [...e.argv], input, timeoutMs: e.init?.timeoutMs, env: e.init?.env })
       const name = file.slice(file.lastIndexOf('/') + 1)
       answer = seen.scripts[file.startsWith(DATA) ? `own ${name}` : name]?.(input) ?? answer
     }
@@ -111,24 +116,29 @@ test('each shell call starts the three scripts as Claude Code starts a command h
   const seen = world(on)
   await call($, 'git status', 'PowerShell')
   expect([...names(seen)].sort()).toEqual([...SHIPPED].sort())
-  for (const { argv, input, timeoutMs } of seen.started) {
+  for (const { argv, input, timeoutMs, env } of seen.started) {
     expect(argv).toEqual([PYTHON, ...LAUNCH, expect.stringMatching(/\/scripts\/[a-z-]+\.py$/)])
     expect(input).toEqual({
       hook_event_name: 'PreToolUse',
+      session_id: 'sess-a',
+      cwd: 'C:/Repos/my-game',
       tool_name: 'PowerShell',
       tool_input: { command: 'git status' },
-      cwd: 'C:/Repos/my-game',
     })
+    expect(env).toEqual({ CLAUDE_PROJECT_DIR: 'C:/Repos/my-game' })
     expect(timeoutMs).toBe(10_000)
   }
   expect(seen.ran).toEqual(['git status'])
 })
 
+// A candidate inside a virtual or conda environment fails the check (exits nonzero), as one not on PATH does.
 test('the scripts run on the first Python 3.8+ found, in the setup guide order', async ($, on) => {
   const seen = world(on, 'Linux')
-  seen.pythons = { 'py -3': 'C:\\Py\\python.exe\n', python3: '/usr/bin/python3\n' }
+  seen.pythons = { 'python3.11': '/usr/bin/python3.11\n', '/usr/bin/python3': '/usr/bin/python3\n' }
   await call($, 'ls')
-  expect(seen.started.map(s => s.argv[0])).toEqual(['/usr/bin/python3', '/usr/bin/python3', '/usr/bin/python3'])
+  expect(new Set(seen.started.map(s => s.argv[0]))).toEqual(new Set(['/usr/bin/python3.11']))
+  expect(seen.started).toHaveLength(3)
+  expect(seen.probed).toEqual(['python', 'python3', 'py -3', 'python3.13', 'python3.12', 'python3.11'])
 })
 
 test('with no Python found nothing starts, the call runs and the status says so', async ($, on) => {

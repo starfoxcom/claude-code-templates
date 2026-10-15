@@ -45,13 +45,13 @@ def deny(reason):
 
 def in_scope(cmd, cwd):
     """Return the matching REPOS entry, or None when the command is out of scope."""
-    m = re.search(r"(?:--repo|-R)\s+([\w.-]+/[\w.-]+)", cmd)
+    m = re.search(r"(?:--repo|-R)(?:\s+|=)([\w.-]+/[\w.-]+)", cmd)
     target = m.group(1).lower() if m else cwd.lower()
     if m and any(word in target for word in SKIP):
         return None
     for name, spec in REPOS.items():
         if name in SEGMENT_KEYS:
-            if re.search(r"(^|[\\/])" + name + r"([\\/]|$)", target):
+            if re.search(r"(^|[\\/])" + re.escape(name) + r"([\\/]|$)", target):
                 return spec
         elif name in target:
             return spec
@@ -59,14 +59,14 @@ def in_scope(cmd, cwd):
 
 
 def body_file_from(cmd):
-    m = re.search(r"(?:--body-file|-F)\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))", cmd)
+    m = re.search(r"(?:--body-file|-F)(?:\s+|=)(?:\"([^\"]+)\"|'([^']+)'|(\S+))", cmd)
     if not m:
         return None
     return next(g for g in m.groups() if g)
 
 
 def title_from(cmd):
-    m = re.search(r"(?:--title|-t)\s+(?:\"([^\"]+)\"|'([^']+)'|(\S+))", cmd)
+    m = re.search(r"(?:--title|-t)(?:\s+|=)(?:\"([^\"]+)\"|'([^']+)'|(\S+))", cmd)
     return next((g for g in m.groups() if g), "") if m else ""
 
 

@@ -3,7 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 
 import { sumDays } from '../hooks/register'
 
-// /guards over a faked stats file: the mode, where the product may be named, and the counts.
+// /guards over a faked stats file: the mode, the Python in use, the attribution check and the counts.
 const NOW = Date.UTC(2026, 9, 3, 18, 0, 0)
 const STATS = 'C:/Users/me/.claude/mods-data/guards/stats.json'
 const BOOM = 'pr-body-contract.py exited 1: boom'

@@ -327,11 +327,17 @@ class GuardsScriptsTest(unittest.TestCase):
     """The hook scripts the guards mod runs, started as the mod starts them:
     the script on its own, the tool call on stdin."""
 
+    # The mod's launcher (register.ts LAUNCH, SETUP.md § 7c).
+    LAUNCH = ["-I", "-c", "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')"]
+
+    def launch(self, path, payload, cwd=REPO):
+        return subprocess.run([sys.executable, *self.LAUNCH, path], input=json.dumps(payload).encode("utf-8"),
+                              capture_output=True, cwd=cwd if os.path.isdir(cwd) else REPO, timeout=60)
+
     def run_script(self, path, command, cwd=REPO, tool="Bash"):
-        payload = {"hook_event_name": "PreToolUse", "tool_name": tool,
-                   "tool_input": {"command": command}, "cwd": cwd}
-        result = subprocess.run([sys.executable, path], input=json.dumps(payload).encode("utf-8"),
-                                capture_output=True, cwd=cwd if os.path.isdir(cwd) else REPO, timeout=60)
+        payload = {"hook_event_name": "PreToolUse", "session_id": "s", "cwd": cwd, "tool_name": tool,
+                   "tool_input": {"command": command}}
+        result = self.launch(path, payload, cwd)
         self.assertEqual(result.returncode, 0, result.stderr)
         out = result.stdout.decode("utf-8").strip()
         return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"] if out else None
@@ -351,6 +357,11 @@ class GuardsScriptsTest(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write(source)
         return path
+
+    def test_a_missing_script_is_a_non_blocking_error(self):
+        # Exit 2 would block every call; the launcher turns a missing file into exit 1.
+        result = self.launch(os.path.join(GUARDS, "no-such-script.py"), {"tool_input": {"command": "ls"}})
+        self.assertEqual(result.returncode, 1, result.stderr)
 
     def test_attribution_script_is_the_shipped_global_hook(self):
         with open(self.script("no-ai-attribution.py"), "rb") as a, \
@@ -397,13 +408,19 @@ class GuardsScriptsTest(unittest.TestCase):
                                 ('gh pr create -t "feat: x"', "--body-file"),
                                 ('gh pr create -t "feat: x" --body-file short.md', "`## What`"),
                                 ('gh pr create -t "feat: x" --body-file norow.md', "no issue line"),
-                                ('gh pr create -t "feat: x" --body-file emptynotes.md', "`## Notes`")):
+                                ('gh pr create -t "feat: x" --body-file emptynotes.md', "`## Notes`"),
+                                ("gh pr edit 3 --body-file=short.md", "`## What`"),
+                                ('gh pr create --title="feat: x" --body-file=norow.md', "no issue line"),
+                                ('gh pr create --repo=o/my-game -t t --body "x"', "inline `--body`")):
             with self.subTest(command=command):
                 self.assertIn(reason, self.run_script(path, command, cwd=repo) or "")
         for command in ('gh pr create -t "feat: x" --body-file full.md',
                         'gh pr create -t "docs: x" --body-file norow.md',
                         "gh pr edit 3 --add-label bug",
-                        'gh pr create -R o/board -t t --body "x"'):
+                        'gh pr create -R o/board -t t --body "x"',
+                        'gh pr create --repo=o/board -t t --body "x"',
+                        'gh pr create -t "feat: x" --body-file=full.md',
+                        'gh pr create --title="docs: x" --body-file=norow.md'):
             with self.subTest(command=command):
                 self.assertIsNone(self.run_script(path, command, cwd=repo))
 

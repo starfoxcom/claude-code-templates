@@ -1,10 +1,11 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
+import { findPython, NO_PYTHON, verdict } from './scripts'
 import { HELPER_BLOCK, helpersCommand, helpersLine, isHelperChecked } from './helpers'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 
-// guards: runs the global attribution, `gh run watch` and PR-body hook scripts (scripts/) on every Bash and
-// PowerShell call, the way Claude Code runs a command hook: the same Python, the same input, the same deny.
+// guards: runs the attribution, `gh run watch` and PR-body hook scripts (scripts/, started by scripts.ts) on
+// every Bash and PowerShell call, the way Claude Code runs a command hook: same Python, input and deny.
 // The scripts themselves decide, so guards refuses exactly what they refuse. A machine's own copy of a
 // script in mods-data/guards/scripts/ runs in place of the shipped one (the PR-body script holds the
 // machine's repo table). Opt-in by setting: helper agents (`helpers` = block refuses Agent and Workflow
@@ -19,9 +20,10 @@ const live = {
   isAttribution: true,
   home: '',
   dir: '',
-  isWindows: false,
   // The Python 3.8+ the scripts run on, found at set-up; empty when none runs.
   python: '',
+  // The folder the session started in: a command hook's CLAUDE_PROJECT_DIR.
+  projectDir: '',
 }
 // The helper setting, and the sessions that typed `/guards helpers allow` (module state: a replaced
 // hooks worker forgets them, which errs toward the block).
@@ -37,98 +39,11 @@ const MARK_LOADED = [
 
 async function setUp($: Engine) {
   const configured = await $.env.get('CLAUDE_CONFIG_DIR')
-  live.isWindows = (await $.env.get('OS')) === 'Windows_NT'
   live.python = await findPython($)
   live.home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '.').replace(/\\/g, '/')
   live.dir = `${(configured ?? `${live.home}/.claude`).replace(/\\/g, '/')}/mods-data/guards`
   // The engine's fs writes no missing folders; node makes it once per session.
   await $.process.run(['node', '-e', MARK_LOADED, live.dir, live.mode], { timeoutMs: 10_000 }).catch(() => undefined)
-}
-
-// The interpreters SETUP.md § 7c tries, in its order, and the check each must pass.
-const PYTHONS = [['python'], ['python3'], ['py', '-3']]
-const PYTHON_CHECK = 'import sys; assert sys.version_info >= (3, 8); print(sys.executable)'
-// SETUP.md § 7c's launcher: a missing or unreadable script raises and exits 1, a non-blocking error, where
-// `python <file>` exits 2, which blocks. `-I` keeps the session folder, PYTHONPATH and the user site out.
-const LAUNCH = ['-I', '-c', "import runpy, sys; runpy.run_path(sys.argv[1], run_name='__main__')"]
-
-// The full path of the first Python 3.8+ that runs, or '' when none does.
-async function findPython($: Engine): Promise<string> {
-  for (const candidate of PYTHONS) {
-    const found = await $.process
-      .run([...candidate, '-I', '-c', PYTHON_CHECK], { timeoutMs: 10_000 })
-      .then(r => (r.exitCode === 0 ? r.stdout.trim() : ''))
-      .catch(() => '')
-    if (found) return found.replace(/\\/g, '/')
-  }
-  return ''
-}
-
-// The hook scripts, in their settings.json order: the first deny in this order is the reason given.
-const SCRIPTS = ['no-ai-attribution.py', 'block-gh-run-watch.py', 'pr-body-contract.py']
-const ATTRIBUTION_SCRIPT = 'no-ai-attribution.py'
-// A command hook's default time limit in the global settings.
-const SCRIPT_TIMEOUT_MS = 10_000
-
-// The machine's own copy of a script when it has one, else the shipped one.
-async function scriptFile($: Engine, name: string): Promise<string> {
-  const own = `${live.dir}/scripts/${name}`
-  const isOwn = await $.fs.stat(own).then(
-    () => true,
-    () => false,
-  )
-  return isOwn ? own : `${$.plugin.root.replace(/\\/g, '/')}/scripts/${name}`
-}
-
-type Answer = { reason?: string; error?: string }
-
-// What a PreToolUse hook's JSON says about the call: the reason it stops it, or undefined. Claude Code
-// stops the call on a `permissionDecision` of deny, on the older `decision: "block"` and on
-// `continue: false`. An `ask` cannot be put to the person from here, so it stops the call too.
-function stopReason(name: string, out: Record<string, unknown>): string | undefined {
-  const specific = (out.hookSpecificOutput ?? {}) as Record<string, unknown>
-  const text = (value: unknown) => String(value ?? '').trim() || `${name} refused the call`
-  if (specific.permissionDecision === 'deny') return text(specific.permissionDecisionReason)
-  if (specific.permissionDecision === 'ask') return `${text(specific.permissionDecisionReason)} (asks for approval)`
-  if (out.decision === 'block') return text(out.reason)
-  if (out.continue === false) return text(out.stopReason)
-  return undefined
-}
-
-// One script's answer as Claude Code reads a command hook's: exit 2 stops the call with stderr, exit 0 with
-// JSON as `stopReason` reads it. Anything else is a non-blocking hook error, as there: a script that cannot
-// start, runs past the limit, exits with another code or prints something other than JSON lets the call run.
-async function scriptAnswer($: Engine, name: string, input: string): Promise<Answer> {
-  if (!live.python) return { error: 'no Python 3.8+ found (tried python, python3, py -3)' }
-  try {
-    const file = await scriptFile($, name)
-    const { exitCode, stdout, stderr } = await $.process.run([live.python, ...LAUNCH, file], {
-      stdin: input,
-      timeoutMs: SCRIPT_TIMEOUT_MS,
-    })
-    if (exitCode === 2) return { reason: stderr.trim() || `${name} refused the call` }
-    if (exitCode !== 0) return { error: `${name} exited ${exitCode}: ${stderr.trim().slice(0, 200)}` }
-    if (!stdout.trim()) return {}
-    const out = JSON.parse(stdout) as unknown
-    if (typeof out !== 'object' || out === null) return { error: `${name} printed something other than a JSON object` }
-    const reason = stopReason(name, out as Record<string, unknown>)
-    return reason === undefined ? {} : { reason }
-  } catch (err) {
-    return { error: `${name}: ${String(err).slice(0, 200)}` }
-  }
-}
-
-// The first reason to block, and the scripts that failed. The scripts run side by side, as Claude Code
-// runs the hooks of one event.
-async function verdict($: Engine, tool: string, command: string): Promise<{ reason?: string; errors: string[] }> {
-  const cwd = await $.session.cwd()
-  const input = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: tool, tool_input: { command }, cwd })
-  const names = SCRIPTS.filter(name => live.isAttribution || name !== ATTRIBUTION_SCRIPT)
-  const answers = await Promise.all(names.map(name => scriptAnswer($, name, input)))
-  return {
-    reason: answers.find(a => a.reason !== undefined)?.reason,
-    errors: answers.flatMap(a => (a.error ? [a.error] : [])),
-  }
 }
 
 async function log($: Engine, entry: Record<string, unknown>) {
@@ -201,7 +116,8 @@ async function guard($: Engine, tool: string, command: string, run: () => Promis
   let reason: string | undefined
   let errors: string[]
   try {
-    ;({ reason, errors } = await verdict($, tool, command))
+    const { python, dir: dataDir, projectDir, isAttribution } = live
+    ;({ reason, errors } = await verdict($, tool, command, { python, dataDir, projectDir, isAttribution }))
   } catch (err) {
     return failed($, tool, command, String(err), run)
   }
@@ -241,8 +157,8 @@ async function helperGuard($: Engine, tool: string, run: () => Promise<any>) {
   if (!live.dir) await setUp($)
   const isBlocked = live.mode === 'enforce'
   // Logged, never counted: stats.json counts shell writes, the denominator of the shadow comparison.
-  const entry ={ at: Date.now(), session: await $.session.id(), tool, mod: HELPER_BLOCK, scripts: null }
-  await log($, { ...entry, ...(isBlocked ? { enforced: true } : {}), unread: [], command: '' })
+  const entry = { at: Date.now(), session: await $.session.id(), tool, mod: HELPER_BLOCK, scripts: null }
+  await log($, { ...entry, ...(isBlocked ? { enforced: true } : {}), command: '' })
   return isBlocked ? { deny: `BLOCKED (guards): ${HELPER_BLOCK}` } : run()
 }
 
@@ -268,6 +184,7 @@ export const register: Register = (on, options) => {
     // A settings file that cannot be read never costs the start: the loaded options stand.
     await readSettings($).catch(() => undefined)
     const result = await next(e)
+    live.projectDir = e.cwd
     await setUp($)
     await $.command.register({
       name: 'guards',
@@ -349,7 +266,7 @@ async function statusText($: Engine): Promise<string> {
     isEnforced ? 'Guards: enforce (blocks).' : 'Guards: shadow (never blocks; logs what it would block).',
     live.python
       ? `Scripts run on ${live.python}.`
-      : 'No Python 3.8+ found (tried python, python3, py -3): nothing is checked.',
+      : `${NO_PYTHON[0]?.toUpperCase()}${NO_PYTHON.slice(1)}: nothing is checked.`,
     live.isAttribution
       ? 'Attribution check: on.'
       : 'Attribution check: off (setting attribution = off); the attribution script does not run.',
