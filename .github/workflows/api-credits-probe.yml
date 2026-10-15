@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   probe:
+    # Done: billed the credits ($0.08). Off so the balance shows only the action's run.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -36,3 +38,21 @@ jobs:
             --max-turns 1 \
             --output-format json \
             | python3 -c 'import json,sys; d=json.load(sys.stdin); print({k: d.get(k) for k in ("is_error","result","total_cost_usd","usage","modelUsage")})'
+
+  # The same question through the review action at the reviews' pin, to see
+  # whether the credits also cover runs made through the action.
+  probe-action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
+          show_full_output: true
+          claude_args: '--max-turns 1 --model claude-fable-5-1'
+          prompt: "Reply with the single word OK."
