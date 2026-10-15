@@ -40,7 +40,6 @@ export const MOD_TAGS = [
   'skill-check',
   'usage-guard',
   'compact-handoff',
-  'guards',
 ]
 export const INJECTED_LINE = new RegExp(`^\\[(?:${MOD_TAGS.join('|')})\\](?: |$)`)
 // The tags the engine wraps its own user-role text in. A message the person types may start with any
