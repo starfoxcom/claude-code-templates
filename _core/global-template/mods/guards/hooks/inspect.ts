@@ -193,7 +193,6 @@ function read(statements: Statement[], r: Reading, outer?: string) {
   statements.forEach((st, idx) => {
     const was = r.isDeferredRead
     r.isDeferredRead = was || st.isDeferred || st.isLooped
-    r.before = statements.slice(0, idx)
     readStatement(st, statements[idx - 1], r, outer)
     r.isDeferredRead = was
   })
@@ -201,6 +200,7 @@ function read(statements: Statement[], r: Reading, outer?: string) {
 
 function readStatement(typed: Statement, prev: Statement | undefined, r: Reading, outer?: string) {
   const { plan } = r
+  if (prev) (r.feeders ??= new WeakMap()).set(typed, prev)
   const scope = outer === undefined ? (typed.scope ?? '') : within(outer, typed.scope)
   // Each Bash `$(...)` or backtick runs in a subshell of its own; PowerShell's `$(...)` runs in place.
   const subshells = new Map<number | undefined, string>()

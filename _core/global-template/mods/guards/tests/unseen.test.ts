@@ -68,6 +68,28 @@ test("another program's argument that is a command line is read as one; prose an
   }
 })
 
+test('a word built at run time is a program only where a program runs', () => {
+  for (const command of [
+    'find . -exec "$GIT" config set core.hooksPath /x \\;',
+    'find . -exec "$GIT" difftool --ext cmd \\;',
+    "unbuffer \"$GH\" alias set ci 'pr checks'",
+    'unbuffer "$GIT" push',
+    "x=$(echo 'git commit -n -m x' | tee a.log | bash)",
+    "echo \"$(echo 'git commit -n -m x' | tee a.log | sort | sh)\"",
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, expect.any(String)])
+  }
+  for (const command of [
+    'cp -r "$D" api',
+    'mkdir -p "$R" notes',
+    'docker compose -f "$F" push',
+    'npm run "$SCRIPT" -- release',
+    'tar -xf "$T" api && git push',
+  ]) {
+    expect([command, inspect(command, false).block]).toEqual([command, undefined])
+  }
+})
+
 test('a variable is a held flag only when the command typed a flag for it', () => {
   for (const [command, ps] of [
     ['X=(-q -n); git commit -m x "${X[@]}"', false],

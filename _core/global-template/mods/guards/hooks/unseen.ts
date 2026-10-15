@@ -57,13 +57,10 @@ const isEnvBefore = (st: Statement, i: number) => st.words.slice(0, i).some(w =>
 // through the programs that pass their input on (`echo '...' | tee run.log | bash`).
 function stdinOf(st: Statement, state: Feed, prev?: Statement): string {
   if (st.heredocs.length > 0) return st.heredocs.join('\n')
-  const before = state.before?.at(-1) === prev ? (state.before ?? []) : prev ? [prev] : []
   const fed: string[] = []
-  for (let i = before.length - 1, at = st; i >= 0 && at.pipeIn; i--) {
-    const feeder = before[i] as Statement
+  for (let at = st, feeder = prev; feeder && at.pipeIn; [at, feeder] = [feeder, state.feeders?.get(feeder)]) {
     fed.push(...feeder.words.map(w => w.text), ...feeder.heredocs)
     if (!PASSES.test(programOf(feeder).name)) break
-    at = feeder
   }
   return fed.join(' ')
 }
@@ -168,7 +165,7 @@ function argumentCalls(name: string, args: Word[], state: Feed, depth: number): 
     for (const st of flat(parse(a.text, false))) {
       const call = programOf(st)
       if (!/^(git|gh)$/.test(call.name)) continue
-      const reason = bypassIn(st, call.name, call.args, { ...state, before: undefined }, undefined, depth + 1)
+      const reason = bypassIn(st, call.name, call.args, { ...state, feeders: undefined }, undefined, depth + 1)
       if (reason) return reason
     }
   }
@@ -204,6 +201,17 @@ function heldFlag(name: string, args: Word[], state: Feed): string | undefined {
   return args.some(a => holdsFlag(a, state as VarState)) ? FLAG_IN_VARIABLE : undefined
 }
 
+// Programs that run the command their arguments name (`unbuffer git ...`, `taskset 1 git ...`, `uv run git
+// ...`), and `find`'s options that run one (`-exec`, `-ok`).
+const PREFIXES =
+  /^(unbuffer|chronic|ionice|taskset|nice|nohup|xargs|stdbuf|setsid|time|timeout|uv|uvx|poetry|pipenv|npx|bunx)$/
+const RUNS_NEXT = /^-(exec|execdir|ok|okdir)$/
+
+// Whether a word built at run time stands where a program runs: right after `find -exec`, or among the
+// arguments of a program that runs the command they name. Elsewhere (`cp -r "$D" api`) it is data.
+const isProgramSpot = (name: string, args: Word[], i: number) =>
+  PREFIXES.test(name) || RUNS_NEXT.test(args[i - 1]?.text ?? '')
+
 // A git or gh call another program runs: from its arguments, through a launcher, or named at run time.
 function otherProgram(st: Statement, name: string, args: Word[], state: Feed, depth: number) {
   const head = st.words[st.words.length - args.length - 1]
@@ -216,14 +224,18 @@ function otherProgram(st: Statement, name: string, args: Word[], state: Feed, de
   if (!state.ps && name && /\s/.test(head?.text ?? '') && NAMES_CALL.test(head?.text ?? '')) return SHELL_TEXT
   // PowerShell runs a literal git or gh word among another program's arguments (`uv run git ...`) the same way;
   // its variables, quoted strings and script blocks are read by the PowerShell reading instead.
-  const runs = (a: Word) => a.dynamic || isGit(a) || SHELL.test(baseName(a.text)) || LAUNCHERS.test(baseName(a.text))
-  const at = args.findIndex(a => (state.ps ? !a.dynamic && isGit(a) : runs(a)))
+  const isRunner = (a: Word) => isGit(a) || SHELL.test(baseName(a.text)) || LAUNCHERS.test(baseName(a.text))
+  const runs = (a: Word, i: number) => (a.dynamic ? isProgramSpot(name, args, i) : isRunner(a))
+  const at = args.findIndex((a, i) => (state.ps ? !a.dynamic && isGit(a) : runs(a, i)))
   const word = args[at]
   if (!word) return argumentCalls(name, args, state, depth)
   const rest = args.slice(at + 1)
-  // A word built at run time counts as the program when a typed git or gh write follows it.
+  // A word built at run time where a program stands may be git or gh: their routes count, and a typed write
+  // after it is unread.
   const next = rest.find(a => !a.text.startsWith('-'))
-  if (word.dynamic) return next && !next.dynamic && WRITE_WORD.test(next.text) ? launched(name) : undefined
+  const isWrite = next && !next.dynamic && WRITE_WORD.test(next.text)
+  const route = word.dynamic ? (bypassOf(st, 'git', rest, state) ?? bypassOf(st, 'gh', rest, state)) : undefined
+  if (word.dynamic) return route ?? (isWrite ? launched(name) : undefined)
   const inner = baseName(word.text)
   if (/^(git|gh)$/.test(inner)) return bypassOf(st, inner, rest, state)
   // A shell or a launcher run from the arguments (`find . -exec ssh host '...'`) runs its text unread.

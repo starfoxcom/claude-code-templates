@@ -62,13 +62,13 @@ const MANAGER_TOOL = /^((@evilmartians\/)?lefthook|husky|pre-commit|pre_commit)(
 
 /** What the reading keeps between statements: a hook manager's switch was set (`export HUSKY=0`), a git
  * call that runs hooks was read, the functions the command defines (a prefix on one reaches its body), and
- * the statements read before this one at its level (`before`), so a pipe is followed back to what feeds it. */
+ * the statement read just before each one at its level (`feeders`), so a pipe is followed back to what feeds it. */
 export type HookState = {
   hooksOff?: boolean
   isHooked?: boolean
   functions?: Set<string>
   ps?: boolean
-  before?: Statement[]
+  feeders?: WeakMap<Statement, Statement>
 }
 
 /** Whether a git call's subcommand runs git's hooks or writes history (`commit`, `push`, `rebase`). */
