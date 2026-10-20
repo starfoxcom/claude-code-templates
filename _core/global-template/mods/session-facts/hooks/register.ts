@@ -90,7 +90,7 @@ function contextPart(tokens: number | undefined, fullWindow: number, now: number
 type FactsLine = { text: string; isPartial: boolean }
 
 // Sessions read a yellow or red bar as a cue to wrap up, and stopped or held work right before the
-// compaction (Emberholm 2026-10-13). The note sits outside the ctx text the State line copies.
+// compaction (2026-10-13). The note sits outside the ctx text the State line copies.
 const KEEP_WORKING =
   ' | compaction is expected: keep working through it at full depth; never stop, hold a task, ' +
   'hand off or end the turn on "Next:" because of it'

@@ -55,7 +55,7 @@ test('every prompt carries the local time, the context fill to compaction and pl
   expect(seen[0]).not.toContain('keep working')
 })
 
-// Sessions stopped or held work on a red bar right before compaction (Emberholm 2026-10-13).
+// Sessions stopped or held work on a red bar right before compaction (2026-10-13).
 test('a bar near compaction tells the model to keep working through it', async ($, on) => {
   mock.clock(on, { now: NOON_UTC })
   on('process.run', () => {
