@@ -31,12 +31,11 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR cancels its older run; each develop commit gets its own
-# group, and a weekly run is grouped by the head commit it started on. The
-# event name keeps a run started by hand from cancelling a push run on the
-# same commit, or the other way round.
+# A new push to a PR cancels its older run. Every other run (a develop push, a
+# weekly run) gets a group of its own, so nothing cancels it: two runs started
+# by hand on the same commit both finish and both report.
 concurrency:
-  group: mod-tests-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  group: mod-tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 defaults:
@@ -54,7 +53,10 @@ env:
 
 jobs:
   test:
-    name: Mod tests
+    # A weekly run tests develop, not the commit it starts on, so it reports
+    # under its own name. Started by hand from a PR's branch, it must never
+    # set that PR's required "Mod tests" check.
+    name: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'Weekly mod tests' || 'Mod tests' }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -130,7 +132,9 @@ jobs:
   # A red weekly run has no PR to show it, so it opens an issue, or comments on
   # the one still open. A run that hits its time limit ends cancelled, not
   # failed, so anything short of success reports, and the issue names the
-  # result instead of assuming the CLI broke.
+  # result instead of assuming the CLI broke. No other run ever replaces a
+  # weekly one (see concurrency), so a cancelled result never means a newer
+  # run took its place.
   report:
     name: Report a weekly failure
     needs: test
