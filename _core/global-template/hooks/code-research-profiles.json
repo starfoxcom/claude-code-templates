@@ -3,12 +3,13 @@
   "_schema_version": 2,
   "_schema": {
     "license": "string - the tool's license, shown before install.",
-    "install": "list of {os, run} - ways to get the tool's binary. os is macos, linux, windows or any; setup offers the entries that match the machine, in order, and runs each command of the one picked in order. Empty when nothing needs installing.",
-    "agent": "{run} or null - commands that wire the tool into Claude Code (MCP server, permissions, instructions). null when install already did it or nothing is needed.",
+    "install": "list of {os, run} - ways to get the tool's binary. os is macos, linux, windows or any; setup offers the entries that match the machine, in order, and runs each command of the one picked in order. Empty when nothing needs installing. Every run entry in every profile is a literal command, run as written.",
+    "agent": "{run} or null - commands that wire the tool into Claude Code (MCP server, permissions, instructions). null when install already did it, nothing is needed, or the step is per plugin (see plugins).",
     "index": "{run, marker} or null - per-project commands that build the tool's index, and the path that exists once they ran. null when the tool indexes on its own.",
     "mcp": "{name, command, args} or null - the MCP server entry, for setting it up by hand when the agent step cannot run.",
-    "hook": "{source, ...} - who redirects Grep and Glob to the tool. tool: the tool's own installer adds it. bindwright: setup renders code-research-first.py.template with filename_basename, detection_mode (walk_up or cli_available), detection_target and sequence_bullets. none: no hook.",
-    "plugins": "lsp-plugins only: list of {plugin, server, extensions}. setup installs the plugin for each language the repo uses; the plugin does not bundle its language server, so the server binary must be on PATH first.",
+    "hook": "{source, ...} - who redirects Grep and Glob to the tool. tool: the tool's own installer adds it. bindwright: setup renders code-research-first.py.template with filename_basename, detection_mode (walk_up or cli_available), detection_target and sequence_bullets. none: no hook. A hook value may itself hold {{TOOLS_CODE_RESEARCH_*}} placeholders (the custom profile's do); setup fills them first, with the same engine values (valuesFor in engine/model.js) it fills the template with.",
+    "plugins": "lsp-plugins only: list of {plugin, server, extensions}. setup picks the plugins whose extensions the repo uses; each plugin needs its server binary on PATH first, since the plugin does not bundle it.",
+    "plugin_install": "lsp-plugins only: the command setup runs once per picked plugin, after replacing <plugin> with that plugin's name. It is a template, never run as written.",
     "notes": "string - what setup tells the person before installing."
   },
 
@@ -29,10 +30,11 @@
   "lsp-plugins": {
     "license": "per language server",
     "install": [],
-    "agent": { "run": ["claude plugin install <plugin>@claude-plugins-official --scope project"] },
+    "agent": null,
     "index": null,
     "mcp": null,
     "hook": { "source": "none" },
+    "plugin_install": "claude plugin install <plugin>@claude-plugins-official --scope project",
     "plugins": [
       { "plugin": "clangd-lsp", "server": "clangd", "extensions": [".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx", ".C", ".H"] },
       { "plugin": "csharp-lsp", "server": "csharp-ls", "extensions": [".cs"] },

@@ -6,12 +6,19 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CODE_RESEARCH_TOOLS } from "../model.js";
+import { CODE_RESEARCH_TOOLS, defaults, valuesFor } from "../model.js";
 
-const hooks = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "_core", "global-template", "hooks");
+const global = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "_core", "global-template");
+const hooks = join(global, "hooks");
 const file = JSON.parse(readFileSync(join(hooks, "code-research-profiles.json"), "utf8"));
 const profiles = Object.entries(file).filter(([key]) => !key.startsWith("_"));
 const template = readFileSync(join(hooks, "code-research-first.py.template"), "utf8");
+
+// Every TOOLS_CODE_RESEARCH_* value the engine supplies, for a custom tool.
+const answers = defaults();
+answers.advanced.codeResearch = "custom";
+answers.advanced.codeResearchCustom = { name: "My Tool", url: "https://example.com/t" };
+const engineValues = new Set(Object.keys(valuesFor(answers)).filter((k) => k.startsWith("TOOLS_CODE_RESEARCH_")));
 
 const OS = ["macos", "linux", "windows", "any"];
 const isText = (v) => typeof v === "string" && v.trim() !== "";
@@ -57,7 +64,35 @@ test("every Bindwright hook fills the hook template completely", () => {
   }
 });
 
+test("every run entry is a literal command", () => {
+  for (const [key, p] of profiles) {
+    const runs = [...p.install.flatMap((s) => s.run), ...(p.agent?.run ?? []), ...(p.index?.run ?? [])];
+    for (const cmd of runs) assert.doesNotMatch(cmd, /<[a-z_-]+>|\{\{/, `${key}: "${cmd}" is a template`);
+  }
+});
+
+test("placeholders inside a profile's hook name values the engine supplies", () => {
+  for (const [key, p] of profiles) {
+    for (const value of Object.values(p.hook)) {
+      for (const [whole, name] of String(value).matchAll(/\{\{([A-Z0-9_]+)\}\}/g)) {
+        assert.ok(engineValues.has(name), `${key}: the engine supplies no ${whole}`);
+      }
+    }
+  }
+});
+
+test("the global CLAUDE.md additions carry one block per engine tool and no retired tools", () => {
+  const text = readFileSync(join(global, "CLAUDE.md.additions"), "utf8");
+  const blocks = [...text.matchAll(/<!-- TOGGLE:code_research:([a-z-]+) START -->/g)].map(([, tool]) => tool);
+  assert.deepEqual(blocks.sort(), Object.keys(CODE_RESEARCH_TOOLS).sort());
+  assert.doesNotMatch(text, /ast-grep|sourcegraph|semgrep|ctags/i);
+  for (const [whole, name] of text.matchAll(/\{\{(TOOLS_CODE_RESEARCH_[A-Z0-9_]+)\}\}/g)) {
+    assert.ok(engineValues.has(name), `the engine supplies no ${whole}`);
+  }
+});
+
 test("the LSP profile names a plugin and server for every language it lists", () => {
+  assert.equal(file["lsp-plugins"].plugin_install.match(/<plugin>/g).length, 1);
   const plugins = file["lsp-plugins"].plugins;
   assert.ok(plugins.length > 0);
   for (const p of plugins) {

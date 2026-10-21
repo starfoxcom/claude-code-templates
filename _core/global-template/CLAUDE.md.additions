@@ -7,11 +7,13 @@ These are project-agnostic instructions that apply to every Claude Code session 
 
   The "No Explore Agents" section below carries seven
   `<!-- TOGGLE:code_research:<value> START/END -->` blocks (tokensave /
-  ast-grep / sourcegraph / ctags / semgrep / none / custom). The bind step
-  MUST: (1) keep the block matching `manifest.tools.code_research` and
-  strip the other six entirely; (2) substitute the residual
-  `{{TOOLS_CODE_RESEARCH_*}}` placeholders from `manifest.tools` +
-  `code-research-profiles.json`. Only then append.
+  lsp-plugins / codegraph / serena / codebase-memory / none / custom), one
+  per key of CODE_RESEARCH_TOOLS in engine/model.js. The bind step MUST:
+  (1) keep the block matching the chosen tool and strip the other six
+  entirely; (2) substitute the residual `{{TOOLS_CODE_RESEARCH_*}}`
+  placeholders with the engine's values for that tool (valuesFor in
+  engine/model.js, which reads a custom tool's name and URL from the
+  answers). Only then append.
 
   Skipping resolution leaves all seven contradictory "before ANY code
   research task" directives in the user's global config and the literal
@@ -39,26 +41,22 @@ The project's chosen tool is set by `tools.code_research` in the bound configura
 - Only fall back to agents if tokensave is confirmed unavailable (check `tokensave_status` first) or the task is genuinely non-code (web search, external API, etc.).
 - If a code analysis question cannot be fully answered by tokensave MCP tools, try querying the SQLite database directly at `.tokensave/tokensave.db` (tables: `nodes`, `edges`, `files`).
 <!-- TOGGLE:code_research:tokensave END -->
-<!-- TOGGLE:code_research:ast-grep START -->
-- Before ANY code research task, use an ast-grep CLI invocation per the project's `/find` skill. Refer to https://ast-grep.github.io for the full pattern language.
-- ast-grep matches over the AST so a single pattern can replace many text-Grep queries. Don't fall back to Grep on common identifiers without trying ast-grep first.
-- Only fall back to agents if ast-grep is missing on PATH (the hook exits 0 automatically in that case) or the task is genuinely non-code.
-<!-- TOGGLE:code_research:ast-grep END -->
-<!-- TOGGLE:code_research:sourcegraph START -->
-- Before ANY code research task, use the `src` CLI against the project's configured Sourcegraph instance per the `/find` skill. Refer to https://sourcegraph.com/docs/cli for the full surface.
-- Sourcegraph is the only option in the catalog that natively spans multiple repos — for cross-repo questions, prefer it strongly over Grep.
-- Only fall back to agents if `src` is missing on PATH or the instance is unreachable.
-<!-- TOGGLE:code_research:sourcegraph END -->
-<!-- TOGGLE:code_research:ctags START -->
-- Before ANY code research task, use `readtags` (or `grep` against the `tags` file) per the project's `/find` skill. Regenerate `tags` with `ctags -R -f tags .` after edits.
-- ctags is least-common-denominator — if the project's `tags` file exists, prefer it over re-scanning source with Grep on every lookup.
-- Only fall back to agents if the `tags` file is missing AND can't be regenerated for this project.
-<!-- TOGGLE:code_research:ctags END -->
-<!-- TOGGLE:code_research:semgrep START -->
-- Before ANY code research task, use `semgrep --pattern ...` per the project's `/find` skill. Refer to https://semgrep.dev/docs for the full pattern language.
-- Semgrep's pattern language is AST-aware so a single pattern beats many text-Grep queries. Don't fall back to Grep on common identifiers without trying semgrep first.
-- Only fall back to agents if semgrep is missing on PATH or the task is genuinely non-code.
-<!-- TOGGLE:code_research:semgrep END -->
+<!-- TOGGLE:code_research:lsp-plugins START -->
+- Before ANY code research task, use the `LSP` tool per the project's `/find` skill: `workspaceSymbol` to find a definition, `findReferences` and the call hierarchy for usages.
+- The language server must run for the file's language. Only fall back to agents if no language server is running for that language (cloud sessions start none) or the task is genuinely non-code.
+<!-- TOGGLE:code_research:lsp-plugins END -->
+<!-- TOGGLE:code_research:codegraph START -->
+- Before ANY code research task, use `codegraph_explore` per the project's `/find` skill. One call usually returns the relevant symbols, their call paths and what a change would affect.
+- Only fall back to agents if the project has no `.codegraph/` index (run `codegraph init` to build one) or the task is genuinely non-code.
+<!-- TOGGLE:code_research:codegraph END -->
+<!-- TOGGLE:code_research:serena START -->
+- Before ANY code research task, use Serena's symbol tools per the project's `/find` skill: `find_symbol`, `get_symbols_overview`, `find_referencing_symbols`.
+- Only fall back to agents if Serena's MCP server is not connected for this project (check `/mcp`) or the task is genuinely non-code.
+<!-- TOGGLE:code_research:serena END -->
+<!-- TOGGLE:code_research:codebase-memory START -->
+- Before ANY code research task, use codebase-memory-mcp per the project's `/find` skill: `search_graph`, `trace_path`, `get_code_snippet`.
+- If `index_status` shows the project is not indexed, run `index_repository` first. Only fall back to agents if the server is not connected or the task is genuinely non-code.
+<!-- TOGGLE:code_research:codebase-memory END -->
 <!-- TOGGLE:code_research:none START -->
 - This project has `tools.code_research: "none"` — no indexer is configured. The `/find` skill resolves to a Grep → Glob → Read sequence; follow it disciplined even without enforcement.
 - Explore agents remain forbidden even in the no-indexer case. Read the project sources directly with Grep/Glob/Read rather than spawning an exploration agent.
