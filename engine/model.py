@@ -20,7 +20,17 @@ CODE_RESEARCH_TOOLS = {
     "serena": {"name": "Serena", "url": "https://github.com/oraios/serena", "bypass": None, "match": "serena"},
     "codebase-memory": {"name": "codebase-memory-mcp", "url": "https://github.com/DeusData/codebase-memory-mcp", "bypass": None, "match": "codebase.memory"},
     "none": {"name": "none", "url": "(no homepage)", "bypass": None, "match": None},
+    # A tool the person names: values_for fills all four from codeResearchCustom.
+    "custom": {"name": None, "url": None, "bypass": None, "match": None},
 }
+# How setup installs each tool lives in _core/global-template/hooks/code-research-profiles.json.
+
+# The custom tool's name lands in Markdown, a Python string and a regex; its
+# URL in Markdown and a hook comment. Both are plain ASCII, so the two twins
+# count the same length; quotes, backslashes, spaces and control characters
+# in the URL are refused rather than escaped.
+CUSTOM_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9 ._+-]{0,38}[A-Za-z0-9._+-])?")
+CUSTOM_URL = re.compile(r"https://[^\x00-\x20\x7f-\U0010ffff\"'`<>\\]{1,200}")
 
 PRECOMMIT_MANAGERS = ["lefthook", "husky", "pre-commit", "simple-git-hooks"]
 # Merge commits by default: every branch stays visible in the history graph.
@@ -87,6 +97,8 @@ def defaults(team=False, client=False):
             "cleanRoom": False,
             "plainWriting": False,
             "codeResearch": "none",
+            # {"name", "url"} when codeResearch is "custom"; None otherwise.
+            "codeResearchCustom": None,
             "branching": "gitflow",
             "devIsDefault": False,
             "mergeStyle": "merge",
@@ -123,6 +135,18 @@ def _glob_ok(g):
             and g.strip(JS_WHITESPACE) == g)
 
 
+def _check_custom_tool(tool, custom):
+    if tool == "custom":
+        name = custom.get("name", UNDEFINED) if isinstance(custom, dict) else UNDEFINED
+        url = custom.get("url", UNDEFINED) if isinstance(custom, dict) else UNDEFINED
+        _check(isinstance(name, str) and CUSTOM_NAME.fullmatch(name) is not None
+               and isinstance(url, str) and CUSTOM_URL.fullmatch(url) is not None,
+               "codeResearchCustom needs a name (1-40 letters, digits, spaces, dot, plus, dash or underscore, "
+               "starting with a letter or digit, not ending in a space) and an https:// url of plain ASCII without spaces or quotes")
+    else:
+        _check(custom is None or custom is UNDEFINED, 'codeResearchCustom is only for codeResearch "custom"')
+
+
 def validate(a):
     adv = a["advanced"]
     project = a["project"]
@@ -137,6 +161,7 @@ def validate(a):
            "repoUrl and licenseHolder must be text")
     _check(_own(LICENSES, get(project, "license")), 'unknown license "%s"' % js_str(get(project, "license")))
     _check(_own(CODE_RESEARCH_TOOLS, get(adv, "codeResearch")), 'unknown code-research tool "%s"' % js_str(get(adv, "codeResearch")))
+    _check_custom_tool(adv["codeResearch"], get(adv, "codeResearchCustom"))
     precommit = get(adv, "precommit")
     _check(precommit == "none" or (isinstance(precommit, str) and precommit in PRECOMMIT_MANAGERS),
            'unknown pre-commit manager "%s"' % js_str(precommit))
@@ -204,11 +229,27 @@ def _upper_snake(s):
     return re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_").upper()
 
 
+# The custom tool's four fields, derived from the name the person gave. The
+# adherence pattern lets each dash in the name also match an underscore or
+# nothing, as MCP servers spell tool names either way.
+def _custom_tool(custom):
+    name = custom["name"]
+    kebab = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return {"name": name, "url": custom["url"], "kebab": kebab,
+            "bypass": _upper_snake(name) + "_BYPASS:", "match": "[-_]?".join(kebab.split("-"))}
+
+
+def _research_tool(adv):
+    if adv["codeResearch"] == "custom":
+        return _custom_tool(adv["codeResearchCustom"])
+    return dict(CODE_RESEARCH_TOOLS[adv["codeResearch"]], kebab=adv["codeResearch"])
+
+
 def values_for(a, year=None):
     if year is None:
         year = datetime.date.today().year
     adv = a["advanced"]
-    tool = CODE_RESEARCH_TOOLS[adv["codeResearch"]]
+    tool = _research_tool(adv)
     gitflow = adv["branching"] == "gitflow"
     return {
         "PROJECT_NAME": a["project"]["name"],
@@ -228,8 +269,8 @@ def values_for(a, year=None):
         "REVIEW_BACKUP_EFFORT": REVIEW_EFFORTS["backup"],
         "TOOLS_CODE_RESEARCH_NAME": tool["name"],
         "TOOLS_CODE_RESEARCH_URL": tool["url"],
-        "TOOLS_CODE_RESEARCH_NAME_KEBAB": adv["codeResearch"],
-        "TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE": _upper_snake(adv["codeResearch"]),
+        "TOOLS_CODE_RESEARCH_NAME_KEBAB": tool["kebab"],
+        "TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE": _upper_snake(tool["kebab"]),
         "TOOLS_CODE_RESEARCH_BYPASS_MARKER": tool["bypass"] or "RESEARCH_BYPASS:",
         "TOOLS_CODE_RESEARCH_MATCH": tool["match"] or "(?!)",
     }

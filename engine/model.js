@@ -16,7 +16,17 @@ export const CODE_RESEARCH_TOOLS = {
   serena: { name: "Serena", url: "https://github.com/oraios/serena", bypass: null, match: "serena" },
   "codebase-memory": { name: "codebase-memory-mcp", url: "https://github.com/DeusData/codebase-memory-mcp", bypass: null, match: "codebase.memory" },
   none: { name: "none", url: "(no homepage)", bypass: null, match: null },
+  // A tool the person names: valuesFor fills all four from codeResearchCustom.
+  custom: { name: null, url: null, bypass: null, match: null },
 };
+// How setup installs each tool lives in _core/global-template/hooks/code-research-profiles.json.
+
+// The custom tool's name lands in Markdown, a Python string and a regex; its
+// URL in Markdown and a hook comment. Both are plain ASCII, so the two twins
+// count the same length; quotes, backslashes, spaces and control characters
+// in the URL are refused rather than escaped.
+const CUSTOM_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9 ._+-]{0,38}[A-Za-z0-9._+-])?$/;
+const CUSTOM_URL = /^https:\/\/[^\x00-\x20\x7f-￿"'`<>\\]{1,200}$/;
 
 export const PRECOMMIT_MANAGERS = ["lefthook", "husky", "pre-commit", "simple-git-hooks"];
 // Merge commits by default: every branch stays visible in the history graph.
@@ -51,6 +61,8 @@ export function defaults({ team = false, client = false } = {}) {
       cleanRoom: false,
       plainWriting: false,
       codeResearch: "none",
+      // { name, url } when codeResearch is "custom"; null otherwise.
+      codeResearchCustom: null,
       branching: "gitflow",
       devIsDefault: false,
       mergeStyle: "merge",
@@ -82,6 +94,15 @@ export function validate(a) {
   check(typeof a.project.repoUrl === "string" && typeof a.project.licenseHolder === "string", "repoUrl and licenseHolder must be text");
   check(own(LICENSES, a.project.license), `unknown license "${a.project.license}"`);
   check(own(CODE_RESEARCH_TOOLS, adv.codeResearch), `unknown code-research tool "${adv.codeResearch}"`);
+  const custom = adv.codeResearchCustom;
+  if (adv.codeResearch === "custom") {
+    check(custom !== null && typeof custom === "object" && !Array.isArray(custom) &&
+      typeof custom.name === "string" && CUSTOM_NAME.test(custom.name) &&
+      typeof custom.url === "string" && CUSTOM_URL.test(custom.url),
+    "codeResearchCustom needs a name (1-40 letters, digits, spaces, dot, plus, dash or underscore, starting with a letter or digit, not ending in a space) and an https:// url of plain ASCII without spaces or quotes");
+  } else {
+    check(custom === null || custom === undefined, 'codeResearchCustom is only for codeResearch "custom"');
+  }
   check(adv.precommit === "none" || PRECOMMIT_MANAGERS.includes(adv.precommit), `unknown pre-commit manager "${adv.precommit}"`);
   check(ARCHITECTURES.includes(adv.architecture), `unknown architecture "${adv.architecture}"`);
   check(["gitflow", "trunk"].includes(adv.branching), `unknown branching model "${adv.branching}"`);
@@ -140,8 +161,21 @@ function upperSnake(s) {
   return s.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase();
 }
 
+// The custom tool's four fields, derived from the name the person gave. The
+// adherence pattern lets each dash in the name also match an underscore or
+// nothing, as MCP servers spell tool names either way.
+function customTool({ name, url }) {
+  const kebab = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return { name, url, kebab, bypass: `${upperSnake(name)}_BYPASS:`, match: kebab.split("-").join("[-_]?") };
+}
+
+function researchTool(adv) {
+  if (adv.codeResearch === "custom") return customTool(adv.codeResearchCustom);
+  return { ...CODE_RESEARCH_TOOLS[adv.codeResearch], kebab: adv.codeResearch };
+}
+
 export function valuesFor(a, { year = new Date().getFullYear() } = {}) {
-  const tool = CODE_RESEARCH_TOOLS[a.advanced.codeResearch];
+  const tool = researchTool(a.advanced);
   const gitflow = a.advanced.branching === "gitflow";
   return {
     PROJECT_NAME: a.project.name,
@@ -161,8 +195,8 @@ export function valuesFor(a, { year = new Date().getFullYear() } = {}) {
     REVIEW_BACKUP_EFFORT: REVIEW_EFFORTS.backup,
     TOOLS_CODE_RESEARCH_NAME: tool.name,
     TOOLS_CODE_RESEARCH_URL: tool.url,
-    TOOLS_CODE_RESEARCH_NAME_KEBAB: a.advanced.codeResearch,
-    TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE: upperSnake(a.advanced.codeResearch),
+    TOOLS_CODE_RESEARCH_NAME_KEBAB: tool.kebab,
+    TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE: upperSnake(tool.kebab),
     TOOLS_CODE_RESEARCH_BYPASS_MARKER: tool.bypass || "RESEARCH_BYPASS:",
     TOOLS_CODE_RESEARCH_MATCH: tool.match || "(?!)",
   };
