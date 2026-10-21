@@ -15,6 +15,8 @@ Dropped from the slot:
 - Sourcegraph: Enterprise-only and works on remotely indexed repos, not the local working tree.
 - universal-ctags: definitions only, no maintained MCP wrapper; the LSP plugins cover it.
 
+Update 2026-10-21, from each README: tokensave's installer now adds its own search-redirect hook, so Bindwright's generic hook serves only CodeGraph and custom tools. codebase-memory-mcp's hooks only add context and never block a call, so it no longer clashes with tokensave's. The official marketplace lists twelve LSP plugins, not eleven.
+
 Offer: tokensave, LSP plugins, CodeGraph, Serena, codebase-memory-mcp, none, custom. Each option is a data profile (install command, MCP config, hook, notes), not setup prose. No head-to-head benchmark exists across these tools; a same-repo, same-queries comparison would settle the ranking.
 
 Sources: github.com/aovestdipaperino/tokensave, code.claude.com/docs/en/discover-plugins, github.com/colbymchenry/codegraph, github.com/oraios/serena, github.com/DeusData/codebase-memory-mcp, arxiv.org/html/2603.27277v1, github.com/semgrep/mcp, sourcegraph.com/mcp, libraries.io/pypi/ctags-mcp.
