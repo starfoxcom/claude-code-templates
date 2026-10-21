@@ -645,7 +645,7 @@ jobs:
           status=0
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           (cd "$wt" && GH_TOKEN="$bot_token" "$cli" -p "$ROUTINE_REVIEW_PROMPT" \
-            --setting-sources user --strict-mcp-config \
+            --setting-sources user --strict-mcp-config --permission-mode default \
             --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh pr edit $PR_NUMBER --repo $REPO --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Bash(git diff *),Bash(git log *),Bash(git show *),Read" \
             --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*),Bash(git difftool*),Bash(git *--output*),Bash(git *--ext-diff*),Bash(git *--textconv*)" \
             --max-turns 120 --model claude-fable-5-1 --effort low \
@@ -732,10 +732,12 @@ jobs:
           # file; they match git commands only, so a comment that quotes them
           # still posts. `Bash(/*)` refuses any program run by absolute path,
           # which covers the push wrapper the action allows in tag mode.
-          # Every review step in both workflows carries the
-          # same lists (the deep tier has no label command; Resolve below
-          # applies a missed label).
-          claude_args: '--setting-sources user,project --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Bash(git diff *),Bash(git log *),Bash(git show *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*),Bash(git difftool*),Bash(git *--output*),Bash(git *--ext-diff*),Bash(git *--textconv*)" --max-turns 120 --model claude-fable-5-1 --effort low'
+          # `--permission-mode default` refuses anything not on the allow list
+          # (tag mode's `acceptEdits` would approve file changes; see the deep
+          # workflow). Every review step in both workflows carries the same
+          # lists (the deep tier has no label command; Resolve below applies a
+          # missed label).
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Bash(git diff *),Bash(git log *),Bash(git show *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*),Bash(git difftool*),Bash(git *--output*),Bash(git *--ext-diff*),Bash(git *--textconv*)" --max-turns 120 --model claude-fable-5-1 --effort low'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       # Backup: any primary failure (usage limit or otherwise) retries once on
@@ -788,7 +790,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
-          claude_args: '--setting-sources user,project --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Bash(git diff *),Bash(git log *),Bash(git show *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*),Bash(git difftool*),Bash(git *--output*),Bash(git *--ext-diff*),Bash(git *--textconv*)" --max-turns 120 --model claude-opus-5-5 --effort high'
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Bash(git diff *),Bash(git log *),Bash(git show *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*),Bash(git difftool*),Bash(git *--output*),Bash(git *--ext-diff*),Bash(git *--textconv*)" --max-turns 120 --model claude-opus-5-5 --effort high'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       - name: Fail when both review attempts failed
