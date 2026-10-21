@@ -161,7 +161,7 @@ jobs:
 
         Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history.
 
-        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc` and `head` will be denied.
+        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks`, `gh pr comment` on this PR, the exact `gh pr edit … --add-label needs-deep-review` command from Step 4, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied.
 
         ## Step 2 — Architectural review
 
@@ -312,8 +312,9 @@ jobs:
       # ── Pre-screen: deterministic Python checks over the diff ────────────────
       # Catches mechanical rule violations before the reviewer sees them. The reviewer then
       # trusts the report and spends turns on judgment work — NOT re-discovering
-      # grep-able patterns. This is what makes the allowlist (`gh`, `git diff`,
-      # `git log`, `git show` and Read) the right size: the reviewer doesn't need
+      # grep-able patterns. This is what makes the allowlist (a few `gh pr` read,
+      # comment and label commands, `git diff`, `git log`, `git show` and Read)
+      # the right size: the reviewer doesn't need
       # `cat`/`grep`/`wc` because the pre-
       # screen already did that work.
       - name: Pre-screen PR diff
@@ -644,9 +645,9 @@ jobs:
           status=0
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           (cd "$wt" && GH_TOKEN="$bot_token" "$cli" -p "$ROUTINE_REVIEW_PROMPT" \
-            --setting-sources user --strict-mcp-config \
-            --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" \
-            --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" \
+            --setting-sources user --strict-mcp-config --permission-mode default \
+            --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh pr edit $PR_NUMBER --repo $REPO --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" \
+            --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" \
             --max-turns 120 --model claude-fable-5-1 --effort low \
             --output-format json) > "$out" || status=$?
           # Only fields the CLI writes are printed: the error flag, the API's
@@ -721,7 +722,23 @@ jobs:
           # maintainer's own allow list (commits, pushes, merges). The reviewer
           # keeps the project's rules, hooks and deny list but not those allows.
           # Every action review step in both workflows passes the same sources.
-          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-fable-5-1 --effort low'
+          # The tool lists let a reviewer read the PR and comment on it, nothing
+          # more: its bot token can write repo contents, and `main`/`develop`
+          # are the only protected refs. So no `gh api`, no `gh pr merge` or
+          # `gh release`, comments only on this PR, only the exact label
+          # command Step 4 gives, and no file edits or git writes. Git reads have
+          # no allow rule on purpose: the CLI's built-in read-only check passes
+          # plain `git diff`, `git log` and `git show` and refuses the options
+          # that run a command or write a file, quoted or not. A `git diff *`
+          # allow would override that check. `Bash(/*)` refuses any program run
+          # by absolute path,
+          # which covers the push wrapper the action allows in tag mode.
+          # `--permission-mode default` refuses anything not on the allow list
+          # (tag mode's `acceptEdits` would approve file changes; see the deep
+          # workflow). Every review step in both workflows carries the same
+          # lists (the deep tier has no label command; Resolve below applies a
+          # missed label).
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns 120 --model claude-fable-5-1 --effort low'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       # Backup: any primary failure (usage limit or otherwise) retries once on
@@ -774,7 +791,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
-          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-opus-5-5 --effort high'
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns 120 --model claude-opus-5-5 --effort high'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       - name: Fail when both review attempts failed
@@ -792,6 +809,8 @@ jobs:
       #   • Label applied → status=in_progress with updated title "Deep
       #     review in progress" — branch protection blocks merge until
       #     claude.yml PATCHes to success/failure.
+      # A trigger comment from this run counts as escalation even when the
+      # reviewer's label command was refused: the step applies the label.
       - name: Resolve Claude On-Demand check post-routine
         if: always() && steps.claude-review-credits.conclusion != 'cancelled' && steps.claude-review.conclusion != 'cancelled'
         env:
@@ -825,7 +844,27 @@ jobs:
             exit 0
           fi
 
+          # The reviewer may run only one exact spelling of the label command.
+          # If it posted the deep-review trigger this run but the label is
+          # missing, apply the label here, so a refused label command can
+          # never mark the deep check skipped while the deep review runs.
+          RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at')
+          if [ -z "$RUN_STARTED_AT" ]; then
+            echo "::error::Could not resolve this run's run_started_at, so whether the reviewer escalated is unknown"
+            exit 1
+          fi
+          # Fetched on its own line so a failed request stops the step (the
+          # runner's bash has -e but no pipefail) instead of reading as zero.
+          COMMENTS=$(gh api --paginate "repos/$REPO/issues/$PR/comments")
+          TRIGGERS=$(printf '%s' "$COMMENTS" \
+            | jq -s -r --arg ts "$RUN_STARTED_AT" \
+                '[.[][] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | select(.body | startswith("@claude review this PR"))] | length')
           LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          if [ "$TRIGGERS" -gt 0 ] && ! echo "$LABELS" | grep -q "needs-deep-review"; then
+            gh api "repos/$REPO/issues/$PR/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null
+            echo "::warning::The reviewer posted the deep-review trigger without the label; applied needs-deep-review"
+            LABELS="$LABELS,needs-deep-review"
+          fi
           if echo "$LABELS" | grep -q "needs-deep-review"; then
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
