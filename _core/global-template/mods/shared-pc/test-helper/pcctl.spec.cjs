@@ -149,17 +149,22 @@ test('a background task keeps the seat until it is done', async () => {
 })
 
 test('a repeated task notice does not restart the linger', async () => {
-  const sb = sandbox({ SHARED_PC_LINGER_MS: '300' })
+  // Timed from the seat's own end stamp, with about a second of slack either
+  // side: each pcctl run is a fresh Node process, slow on a busy CI runner.
+  const linger = 2000
+  const sb = sandbox({ SHARED_PC_LINGER_MS: String(linger) })
+  const until = t => new Promise(r => setTimeout(r, Math.max(0, t - Date.now())))
   sb.register('a')
   sb.register('b')
   sb.run('claim', 'a', 'build')
   sb.run('done', 'a', 'task-1')
   sb.run('taskdone', 'a', 'task-1')
   const endedAt = sb.state().seat.lastHeavyEnd
-  await new Promise(r => setTimeout(r, 150))
+  await until(endedAt + linger / 2)
   sb.run('taskdone', 'a', 'task-1')
   assert.strictEqual(sb.state().seat.lastHeavyEnd, endedAt)
-  await new Promise(r => setTimeout(r, 250))
+  // Past the first linger, still inside the one a restart would have begun.
+  await until(endedAt + linger + 200)
   assert.strictEqual(sb.run('status', 'b').seat, null)
 })
 
