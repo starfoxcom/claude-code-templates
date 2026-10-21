@@ -97,9 +97,9 @@ export function validate(a) {
   const custom = adv.codeResearchCustom;
   if (adv.codeResearch === "custom") {
     check(custom !== null && typeof custom === "object" && !Array.isArray(custom) &&
-      typeof custom.name === "string" && CUSTOM_NAME.test(custom.name) &&
+      typeof custom.name === "string" && CUSTOM_NAME.test(custom.name) && custom.name.replace(/[^A-Za-z0-9]/g, "").length >= 3 &&
       typeof custom.url === "string" && CUSTOM_URL.test(custom.url),
-    "codeResearchCustom needs a name (1-40 letters, digits, spaces, dot, plus, dash or underscore, starting with a letter or digit, not ending in a space) and an https:// url of plain ASCII without spaces or quotes");
+    "codeResearchCustom needs a name (up to 40 letters, digits, spaces, dot, plus, dash or underscore, with at least three letters or digits, starting with a letter or digit, not ending in a space) and an https:// url of plain ASCII without spaces or quotes");
   } else {
     check(custom === null || custom === undefined, 'codeResearchCustom is only for codeResearch "custom"');
   }
@@ -162,11 +162,12 @@ function upperSnake(s) {
 }
 
 // The custom tool's four fields, derived from the name the person gave. The
-// adherence pattern lets each dash in the name also match an underscore or
-// nothing, as MCP servers spell tool names either way.
+// adherence pattern matches only MCP tool calls (mcp__<server>__<tool>), so a
+// name like "Grep" never counts the built-in tools, and lets each dash in the
+// name also match an underscore or nothing, as servers spell names either way.
 function customTool({ name, url }) {
   const kebab = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  return { name, url, kebab, bypass: `${upperSnake(name)}_BYPASS:`, match: kebab.split("-").join("[-_]?") };
+  return { name, url, kebab, bypass: `${upperSnake(name)}_BYPASS:`, match: `^mcp__.*${kebab.split("-").join("[-_]?")}` };
 }
 
 function researchTool(adv) {

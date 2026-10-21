@@ -120,6 +120,8 @@ function refused() {
     (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "trail " }; },
     (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: 'say "hi"' }; },
     (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "x".repeat(41) }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "a.b" }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "Go" }; },
     (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, url: "http://example.com" }; },
     (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, url: "https://exa mple.com" }; },
     (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, url: "https://ejemplo.com/ñ" }; },

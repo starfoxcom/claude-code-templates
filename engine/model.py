@@ -140,9 +140,11 @@ def _check_custom_tool(tool, custom):
         name = custom.get("name", UNDEFINED) if isinstance(custom, dict) else UNDEFINED
         url = custom.get("url", UNDEFINED) if isinstance(custom, dict) else UNDEFINED
         _check(isinstance(name, str) and CUSTOM_NAME.fullmatch(name) is not None
+               and len(re.sub(r"[^A-Za-z0-9]", "", name)) >= 3
                and isinstance(url, str) and CUSTOM_URL.fullmatch(url) is not None,
-               "codeResearchCustom needs a name (1-40 letters, digits, spaces, dot, plus, dash or underscore, "
-               "starting with a letter or digit, not ending in a space) and an https:// url of plain ASCII without spaces or quotes")
+               "codeResearchCustom needs a name (up to 40 letters, digits, spaces, dot, plus, dash or underscore, "
+               "with at least three letters or digits, starting with a letter or digit, not ending in a space) "
+               "and an https:// url of plain ASCII without spaces or quotes")
     else:
         _check(custom is None or custom is UNDEFINED, 'codeResearchCustom is only for codeResearch "custom"')
 
@@ -230,13 +232,14 @@ def _upper_snake(s):
 
 
 # The custom tool's four fields, derived from the name the person gave. The
-# adherence pattern lets each dash in the name also match an underscore or
-# nothing, as MCP servers spell tool names either way.
+# adherence pattern matches only MCP tool calls (mcp__<server>__<tool>), so a
+# name like "Grep" never counts the built-in tools, and lets each dash in the
+# name also match an underscore or nothing, as servers spell names either way.
 def _custom_tool(custom):
     name = custom["name"]
     kebab = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return {"name": name, "url": custom["url"], "kebab": kebab,
-            "bypass": _upper_snake(name) + "_BYPASS:", "match": "[-_]?".join(kebab.split("-"))}
+            "bypass": _upper_snake(name) + "_BYPASS:", "match": "^mcp__.*" + "[-_]?".join(kebab.split("-"))}
 
 
 def _research_tool(adv):

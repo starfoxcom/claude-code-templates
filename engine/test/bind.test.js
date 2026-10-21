@@ -214,8 +214,17 @@ test("a custom code-research tool fills every value from its name and URL", asyn
   assert.equal(values.TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE, "AST_GREP_V2");
   assert.equal(values.TOOLS_CODE_RESEARCH_BYPASS_MARKER, "AST_GREP_V2_BYPASS:");
   const match = new RegExp(values.TOOLS_CODE_RESEARCH_MATCH);
-  for (const name of ["mcp__ast-grep-v2__search", "mcp__ast_grep_v2__find", "astgrepv2"]) assert.match(name, match);
-  for (const name of ["Grep", "mcp__tokensave__search", "ast grep"]) assert.doesNotMatch(name, match);
+  for (const name of ["mcp__ast-grep-v2__search", "mcp__ast_grep_v2__find", "mcp__plugin__astgrepv2_x"]) assert.match(name, match);
+  for (const name of ["Grep", "ast_grep_v2", "mcp__tokensave__search", "mcp__ast grep v2__x"]) assert.doesNotMatch(name, match);
+});
+
+test("a custom tool named after a built-in tool counts only MCP calls", () => {
+  const a = defaults();
+  a.advanced.codeResearch = "custom";
+  a.advanced.codeResearchCustom = { name: "Grep", url: "https://example.com/grep" };
+  const match = new RegExp(valuesFor(a).TOOLS_CODE_RESEARCH_MATCH);
+  for (const name of ["Grep", "Glob", "Read", "Bash"]) assert.doesNotMatch(name, match);
+  assert.match("mcp__grep__search", match);
 });
 
 // Bash rule matching as documented at code.claude.com/docs/en/permissions#wildcard-patterns:
