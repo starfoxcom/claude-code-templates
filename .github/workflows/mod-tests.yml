@@ -5,9 +5,11 @@ name: Mod tests
 # Pull requests and pushes test against a pinned Claude Code release, so a new
 # release does not change a PR's result. The weekly run uses the newest
 # release, so an engine change that breaks a mod shows up as an issue within a
-# week of its release, without waiting for a PR. Pull requests run whatever
-# they change, so the check can be made required without waiting forever on a
-# PR that touches no mod.
+# week of its release, without waiting for a PR. GitHub can delay or drop a
+# scheduled run, so the weekly run can also be started by hand from the
+# Actions tab (workflow_dispatch); both count as the weekly run below. Pull
+# requests run whatever they change, so the check can be made required without
+# waiting forever on a PR that touches no mod.
 #
 # Windows runner: the mods' test fakes answer Windows paths (C:/Users/...),
 # which Linux does not treat as absolute.
@@ -24,14 +26,16 @@ on:
       - ".github/workflows/mod-tests.yml"
   schedule:
     - cron: "17 9 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# A new push to a PR cancels its older run; each develop commit gets its own
-# group, and a scheduled run is grouped by main's head commit.
+# A new push to a PR cancels its older run. Every other run (a develop push, a
+# weekly run) gets a group of its own, so nothing cancels it: two runs started
+# by hand on the same commit both finish and both report.
 concurrency:
-  group: mod-tests-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: mod-tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: true
 
 defaults:
@@ -49,24 +53,28 @@ env:
 
 jobs:
   test:
-    name: Mod tests
+    # A weekly run tests develop, not the commit it starts on, so it reports
+    # under its own name. Started by hand from a PR's branch, it must never
+    # set that PR's required "Mod tests" check.
+    name: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'Weekly mod tests' || 'Mod tests' }}
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      # A scheduled run starts on the default branch (main); it tests develop,
-      # where the mods are worked on. Every other event checks out its own ref.
+      # A weekly run starts on whichever branch it was started from (a scheduled
+      # one on the default branch, main); it tests develop, where the mods are
+      # worked on. Every other event checks out its own ref.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'schedule' && 'develop' || '' }}
+          ref: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'develop' || '' }}
           persist-credentials: false
 
       # main has no mods yet: the job notes that and passes. develop
       # must always have them, so a missing folder there fails instead of
-      # passing by testing nothing. A scheduled run tests develop.
+      # passing by testing nothing. A weekly run tests develop.
       - name: Check for the mods
         id: mods
         env:
-          BRANCH: ${{ github.event_name == 'schedule' && 'develop' || github.base_ref || github.ref_name }}
+          BRANCH: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'develop' || github.base_ref || github.ref_name }}
         run: |
           if [ -d _core/global-template/mods ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
@@ -80,7 +88,7 @@ jobs:
       - name: Install the CLI
         if: steps.mods.outputs.present == 'true'
         env:
-          VERSION: ${{ github.event_name == 'schedule' && 'latest' || env.PINNED_VERSION }}
+          VERSION: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'latest' || env.PINNED_VERSION }}
         run: |
           npm install --global --no-fund --no-audit "@anthropic-ai/claude-code@$VERSION"
           claude --version
@@ -124,11 +132,13 @@ jobs:
   # A red weekly run has no PR to show it, so it opens an issue, or comments on
   # the one still open. A run that hits its time limit ends cancelled, not
   # failed, so anything short of success reports, and the issue names the
-  # result instead of assuming the CLI broke.
+  # result instead of assuming the CLI broke. No other run ever replaces a
+  # weekly one (see concurrency), so a cancelled result never means a newer
+  # run took its place.
   report:
     name: Report a weekly failure
     needs: test
-    if: always() && github.event_name == 'schedule' && needs.test.result != 'success'
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.test.result != 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
