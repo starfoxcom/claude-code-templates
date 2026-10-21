@@ -6,13 +6,20 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind, STAGING } from "../bind.js";
-import { defaults, flagsFor, DEFERRED, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES } from "../model.js";
+import { defaults, flagsFor, valuesFor, DEFERRED, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES } from "../model.js";
 import { listCore } from "../list-core.js";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const readFile = async (p) => readFileSync(join(repo, p), "utf8");
 const coreFiles = JSON.parse(readFileSync(join(repo, "engine", "core-files.json"), "utf8"));
 const run = (answers) => bind(answers, { readFile, coreFiles, year: 2026 });
+
+// Answers using one code-research tool; the custom one needs a name and URL.
+function withTool(answers, tool) {
+  answers.advanced.codeResearch = tool;
+  answers.advanced.codeResearchCustom = tool === "custom" ? { name: "My Tool.v2+", url: "https://example.com/my-tool" } : null;
+  return answers;
+}
 
 function assertClean(files) {
   for (const [path, text] of files) {
@@ -44,9 +51,7 @@ for (const team of [false, true]) {
 
 test("every code-research tool binds cleanly", async () => {
   for (const tool of Object.keys(CODE_RESEARCH_TOOLS)) {
-    const a = defaults({ team: true });
-    a.advanced.codeResearch = tool;
-    assertClean(await run(a));
+    assertClean(await run(withTool(defaults({ team: true }), tool)));
   }
 });
 
@@ -179,9 +184,7 @@ test("path-scoped rules keep their frontmatter at the top", async () => {
 
 test("every code-research tool gets exactly one lookup sequence and no retired tools", async () => {
   for (const tool of Object.keys(CODE_RESEARCH_TOOLS)) {
-    const a = defaults();
-    a.advanced.codeResearch = tool;
-    const files = await run(a);
+    const files = await run(withTool(defaults(), tool));
     assert.equal(files.get(".claude/skills/find/SKILL.md").match(/^## Sequence$/gm).length, 1, `${tool}: /find sequence count`);
     for (const [path, text] of files) {
       assert.doesNotMatch(text, /ast-grep|sourcegraph|semgrep|ctags/i, `${tool}: ${path} mentions a retired tool`);
@@ -193,13 +196,35 @@ test("the adherence script ships only with a code-research tool", async () => {
   const script = ".claude/scripts/research-adherence.py";
   assert.ok(!(await run(defaults())).has(script));
   for (const tool of Object.keys(CODE_RESEARCH_TOOLS).filter((t) => t !== "none")) {
-    const a = defaults();
-    a.advanced.codeResearch = tool;
-    const text = (await run(a)).get(script);
+    const text = (await run(withTool(defaults(), tool))).get(script);
     const pattern = text.match(/TOOL = re\.compile\(r"(.*)"\)/)[1];
     assert.doesNotThrow(() => new RegExp(pattern), `${tool}: bad match pattern`);
-    assert.match(CODE_RESEARCH_TOOLS[tool].match, /./);
+    assert.notEqual(pattern, "(?!)", `${tool}: matches no tool call`);
   }
+});
+
+test("a custom code-research tool fills every value from its name and URL", async () => {
+  const a = defaults();
+  a.advanced.codeResearch = "custom";
+  a.advanced.codeResearchCustom = { name: "Ast Grep.v2", url: "https://example.com/ag" };
+  const values = valuesFor(a);
+  assert.equal(values.TOOLS_CODE_RESEARCH_NAME, "Ast Grep.v2");
+  assert.equal(values.TOOLS_CODE_RESEARCH_URL, "https://example.com/ag");
+  assert.equal(values.TOOLS_CODE_RESEARCH_NAME_KEBAB, "ast-grep-v2");
+  assert.equal(values.TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE, "AST_GREP_V2");
+  assert.equal(values.TOOLS_CODE_RESEARCH_BYPASS_MARKER, "AST_GREP_V2_BYPASS:");
+  const match = new RegExp(values.TOOLS_CODE_RESEARCH_MATCH);
+  for (const name of ["mcp__ast-grep-v2__search", "mcp__ast_grep_v2__find", "mcp__plugin__astgrepv2_x"]) assert.match(name, match);
+  for (const name of ["Grep", "ast_grep_v2", "mcp__tokensave__search", "mcp__ast grep v2__x"]) assert.doesNotMatch(name, match);
+});
+
+test("a custom tool named after a built-in tool counts only MCP calls", () => {
+  const a = defaults();
+  a.advanced.codeResearch = "custom";
+  a.advanced.codeResearchCustom = { name: "Grep", url: "https://example.com/grep" };
+  const match = new RegExp(valuesFor(a).TOOLS_CODE_RESEARCH_MATCH);
+  for (const name of ["Grep", "Glob", "Read", "Bash"]) assert.doesNotMatch(name, match);
+  assert.match("mcp__grep__search", match);
 });
 
 // Bash rule matching as documented at code.claude.com/docs/en/permissions#wildcard-patterns:

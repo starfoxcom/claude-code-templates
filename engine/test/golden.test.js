@@ -35,6 +35,10 @@ const python = spawnSync(process.execPath, ["-e", `
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
+// The custom code-research tool needs its own name and URL to bind.
+const CUSTOM = { name: "My Tool.v2+", url: "https://example.com/tools/my-tool?ref=a&b=1" };
+const withTool = (adv, tool) => ({ ...adv, codeResearch: tool, codeResearchCustom: tool === "custom" ? CUSTOM : null });
+
 // Every advanced choice and switch, one at a time, from each of the four presets.
 function oneAtATime() {
   const choices = {
@@ -48,7 +52,11 @@ function oneAtATime() {
       const base = defaults({ team, client });
       cases.push(base);
       for (const [key, values] of Object.entries(choices)) {
-        for (const v of values) if (v !== base.advanced[key]) cases.push({ ...clone(base), advanced: { ...base.advanced, [key]: v } });
+        for (const v of values) {
+          if (v === base.advanced[key]) continue;
+          const advanced = key === "codeResearch" ? withTool(base.advanced, v) : { ...base.advanced, [key]: v };
+          cases.push({ ...clone(base), advanced });
+        }
       }
       for (const key of switches) cases.push({ ...clone(base), advanced: { ...base.advanced, [key]: !base.advanced[key] } });
       for (const license of Object.keys(LICENSES)) {
@@ -87,6 +95,7 @@ function seeded(count) {
       hookLocation: pick(HOOK_LOCATIONS), denyProfile: pick(DENY_PROFILES),
       shippedTextPaths: bool() ? null : ["src/**/*.ts", "README*"],
     });
+    a.advanced = withTool(a.advanced, a.advanced.codeResearch);
     return a;
   });
 }
@@ -105,6 +114,19 @@ function refused() {
     (a) => { a.project.license = ["MIT", "x"]; },
     (a) => { a.advanced.codeResearch = "constructor"; },
     (a) => { a.advanced.codeResearch = { name: "x" }; },
+    (a) => { a.advanced.codeResearch = "custom"; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = []; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: " lead" }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "trail " }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: 'say "hi"' }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "x".repeat(41) }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "a.b" }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, name: "Go" }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, url: "http://example.com" }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, url: "https://exa mple.com" }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { ...CUSTOM, url: "https://ejemplo.com/ñ" }; },
+    (a) => { a.advanced = withTool(a.advanced, "custom"); a.advanced.codeResearchCustom = { name: "x" }; },
+    (a) => { a.advanced.codeResearch = "tokensave"; a.advanced.codeResearchCustom = CUSTOM; },
     (a) => { a.advanced.precommit = "npm"; },
     (a) => { a.advanced.architecture = null; },
     (a) => { a.advanced.branching = "github-flow"; },

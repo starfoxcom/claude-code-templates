@@ -64,6 +64,16 @@ Prefer `replace_symbol_body` and `insert_after_symbol` for edits to whole symbol
 If results look stale, check `index_status` and re-run `index_repository`.
 <!-- TOGGLE:code_research:codebase-memory END -->
 
+<!-- TOGGLE:code_research:custom START -->
+## Sequence
+
+1. Look the symbol up by name with {{TOOLS_CODE_RESEARCH_NAME}}.
+2. From the symbol it found, list its callers and usages.
+3. Read only the range it returned.
+
+The tool's documentation ({{TOOLS_CODE_RESEARCH_URL}}) names the exact commands for each step; replace this list with them.
+<!-- TOGGLE:code_research:custom END -->
+
 <!-- TOGGLE:code_research:none START -->
 ## Sequence
 

@@ -1,83 +1,127 @@
 {
-  "_doc": "Per-tool profile for code-research-first.py.template. The bind step picks the profile matching `tools.code_research` (or `custom` for the 'Other (specify)' case), substitutes placeholders into the template, writes the result to ~/.claude/hooks/<filename_basename>.py, and registers the hook in ~/.claude/settings.json. See SETUP.md § Phase 7a.",
-  "_schema_version": 1,
+  "_doc": "How setup installs each code-research tool. The keys match CODE_RESEARCH_TOOLS in engine/model.js and engine/model.py, which own each tool's name, homepage, bypass marker and adherence pattern; engine/test/profiles.test.js fails when the two drift. Setup shows every command to the person and runs it only with their consent: several fetch a remote script and pipe it into the shell, exactly as each tool's own README documents. Checked against each tool's README on 2026-10-21.",
+  "_schema_version": 2,
   "_schema": {
-    "required_fields": {
-      "filename_basename": "string — kebab-case basename of the rendered hook (without .py extension). Example: 'tokensave-first', 'ast-grep-first'.",
-      "bypass_marker": "string — exact substring (in a `#` comment) that lets a Bash command through. Convention: <UPPER_SNAKE>_BYPASS:. Example: 'TOKENSAVE_BYPASS:'.",
-      "detection_mode": "enum — one of 'walk_up' or 'cli_available'. Determines how the hook checks if the tool is available for the current project.",
-      "detection_target": "string — for walk_up: relative path of the marker file (e.g. '.tokensave/tokensave.db', 'tags'). For cli_available: the binary name to check via shutil.which (e.g. 'ast-grep', 'src', 'semgrep').",
-      "sequence_bullets": "string — multi-line bulleted text embedded into the rendered hook's stderr block message. JSON-escape newlines as \\n; backslashes in regex examples as \\\\."
-    },
-    "optional_fields": {
-      "url": "string|null — tool homepage URL; substituted into {{TOOLS_CODE_RESEARCH_URL}} in skill/CLAUDE.md templates.",
-      "_skip_install": "bool — set true for 'none' to short-circuit the hook-rendering portion of bind. Even with _skip_install: true, the bind step STILL runs orphan cleanup (settings.json de-dup + ask before unlinking stale *-first.py files) so a switch-from-tokensave-to-none correctly removes the prior hook.",
-      "_uses_user_input": "bool — set true for 'custom' to mark the profile as containing nested {{...}} placeholders that the bind step resolves from user input before substituting into the hook template.",
-      "_note": "string — author commentary; ignored by the bind step.",
-      "_reason": "string — alternative to _note for explanatory profile entries (used by 'none'). Treated identically to _note; ignored by the bind step."
-    },
-    "detection_mode_enum": ["walk_up", "cli_available"],
-    "bypass_marker_pattern": "^[A-Z][A-Z0-9_]*_BYPASS:$"
+    "license": "string - the tool's license, shown before install.",
+    "install": "list of {os, run} - ways to get the tool's binary. os is macos, linux, windows or any; setup offers the entries that match the machine, in order, and runs each command of the one picked in order. Empty when nothing needs installing. Every run entry in every profile is a literal command, run as written.",
+    "agent": "{run} or null - commands that wire the tool into Claude Code (MCP server, permissions, instructions). null when install already did it, nothing is needed, or the step is per plugin (see plugins).",
+    "index": "{run, marker} or null - per-project commands that build the tool's index, and the path that exists once they ran. null when the tool indexes on its own.",
+    "mcp": "{name, command, args} or null - the MCP server entry, for setting it up by hand when the agent step cannot run.",
+    "hook": "{source, ...} - who redirects Grep and Glob to the tool. tool: the tool's own installer adds it. bindwright: setup renders code-research-first.py.template with filename_basename, detection_mode (walk_up or cli_available), detection_target and sequence_bullets. none: no hook. A hook value may itself hold {{TOOLS_CODE_RESEARCH_*}} placeholders (the custom profile's do); setup fills them first, with the same engine values (valuesFor in engine/model.js) it fills the template with.",
+    "plugins": "lsp-plugins only: list of {plugin, server, extensions}. setup picks the plugins whose extensions the repo uses; each plugin needs its server binary on PATH first, since the plugin does not bundle it.",
+    "plugin_install": "lsp-plugins only: the command setup runs once per picked plugin, after replacing <plugin> with that plugin's name. It is a template, never run as written.",
+    "notes": "string - what setup tells the person before installing."
   },
 
   "tokensave": {
-    "filename_basename": "tokensave-first",
-    "bypass_marker": "TOKENSAVE_BYPASS:",
-    "detection_mode": "walk_up",
-    "detection_target": ".tokensave/tokensave.db",
-    "sequence_bullets": "  • Symbol lookup                → tokensave_search <name>\n  • 'Where is X / what calls Y'  → tokensave_context <query>\n  • Call-graph traversal         → tokensave_callers / tokensave_callees / tokensave_impact\n  • File search / locate         → tokensave_files <pattern>\n  • Function/class body          → tokensave_body <symbol>",
-    "url": "https://github.com/aovestdipaperino/tokensave"
+    "license": "MIT",
+    "install": [
+      { "os": "macos", "run": ["brew install aovestdipaperino/tap/tokensave"] },
+      { "os": "windows", "run": ["scoop bucket add tokensave https://github.com/aovestdipaperino/scoop-bucket", "scoop install tokensave"] },
+      { "os": "any", "run": ["cargo binstall tokensave"] }
+    ],
+    "agent": { "run": ["tokensave install --agent claude"] },
+    "index": { "run": ["tokensave init"], "marker": ".tokensave/" },
+    "mcp": null,
+    "hook": { "source": "tool" },
+    "notes": "The agent step registers the MCP server in the user's global config and adds tokensave's own hooks (one redirects symbol-shaped Grep, Glob and Bash searches), prompt rules and tool permissions. Add --local to register it for this project only. Run tokensave sync after large edits."
   },
 
-  "ast-grep": {
-    "filename_basename": "ast-grep-first",
-    "bypass_marker": "AST_GREP_BYPASS:",
-    "detection_mode": "cli_available",
-    "detection_target": "ast-grep",
-    "sequence_bullets": "  • Symbol-by-name search         → ast-grep run --pattern '<name>' --lang <lang>\n  • Structural / AST search      → ast-grep run --pattern '<AST pattern>' --lang <lang>\n  • Rule-based scan              → ast-grep scan --rule <rules.yml>\n  • File globbing                → ast-grep run --pattern '...' --globs '<pattern>'\n  • Reference                    → https://ast-grep.github.io/guide/pattern-syntax.html",
-    "url": "https://ast-grep.github.io"
+  "lsp-plugins": {
+    "license": "per language server",
+    "install": [],
+    "agent": null,
+    "index": null,
+    "mcp": null,
+    "hook": { "source": "none" },
+    "plugin_install": "claude plugin install <plugin>@claude-plugins-official --scope project",
+    "plugins": [
+      { "plugin": "clangd-lsp", "server": "clangd", "extensions": [".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx", ".C", ".H"] },
+      { "plugin": "csharp-lsp", "server": "csharp-ls", "extensions": [".cs"] },
+      { "plugin": "gopls-lsp", "server": "gopls", "extensions": [".go"] },
+      { "plugin": "jdtls-lsp", "server": "jdtls", "extensions": [".java"] },
+      { "plugin": "kotlin-lsp", "server": "kotlin-lsp", "extensions": [".kt", ".kts"] },
+      { "plugin": "lua-lsp", "server": "lua-language-server", "extensions": [".lua"] },
+      { "plugin": "php-lsp", "server": "intelephense", "extensions": [".php"] },
+      { "plugin": "pyright-lsp", "server": "pyright-langserver", "extensions": [".py", ".pyi"] },
+      { "plugin": "ruby-lsp", "server": "ruby-lsp", "extensions": [".rb", ".erb", ".gemspec", ".rake", ".ru"] },
+      { "plugin": "rust-analyzer-lsp", "server": "rust-analyzer", "extensions": [".rs"] },
+      { "plugin": "swift-lsp", "server": "sourcekit-lsp", "extensions": [".swift"] },
+      { "plugin": "typescript-lsp", "server": "typescript-language-server", "extensions": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"] }
+    ],
+    "notes": "Anthropic's official LSP plugins, one per language. Project scope commits the plugin to .claude/settings.json; each teammate still runs the install command once. Cloud sessions do not start plugin language servers. There is no cross-file impact graph."
   },
 
-  "sourcegraph": {
-    "filename_basename": "sourcegraph-first",
-    "bypass_marker": "SOURCEGRAPH_BYPASS:",
-    "detection_mode": "cli_available",
-    "detection_target": "src",
-    "sequence_bullets": "  • Symbol search                 → src search 'r:<repo> <name>'\n  • Repo-scoped reference search  → src search 'r:<repo> patterntype:literal <name>'\n  • Cross-repo search             → src search 'r:.* <name>'\n  • File pattern                  → src search 'r:<repo> type:file f:<pattern>'\n  • Code intelligence (LSIF/SCIP) → instances with code intel expose go-to-definition / find-references via raw GraphQL queries through 'src api'. Check your instance's docs for the exact query shape.",
-    "url": "https://sourcegraph.com"
+  "codegraph": {
+    "license": "MIT",
+    "install": [
+      { "os": "macos", "run": ["curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh"] },
+      { "os": "linux", "run": ["curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh"] },
+      { "os": "windows", "run": ["irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | iex"] },
+      { "os": "any", "run": ["npm i -g @colbymchenry/codegraph"] }
+    ],
+    "agent": { "run": ["codegraph install"] },
+    "index": { "run": ["codegraph init"], "marker": ".codegraph/" },
+    "mcp": { "name": "codegraph", "command": "codegraph", "args": ["serve", "--mcp"] },
+    "hook": {
+      "source": "bindwright",
+      "filename_basename": "codegraph-first",
+      "detection_mode": "walk_up",
+      "detection_target": ".codegraph/codegraph.db",
+      "sequence_bullets": "  • Question or symbol name      → codegraph_explore <question or name>\n  • Read a file or symbol        → codegraph_explore <file or symbol name>\n  • Narrower tools               → set CODEGRAPH_MCP_TOOLS to enable codegraph_search, codegraph_callers, codegraph_callees, codegraph_impact"
+    },
+    "notes": "The agent step writes the MCP server config, a marker-fenced section in CLAUDE.md and tool permissions (--no-permissions skips them). A file watcher keeps the index current after codegraph init."
   },
 
-  "ctags": {
-    "filename_basename": "ctags-first",
-    "bypass_marker": "CTAGS_BYPASS:",
-    "detection_mode": "walk_up",
-    "detection_target": "tags",
-    "sequence_bullets": "  • Generate tags file            → ctags -R -f tags . (regenerate after edits; cheap)\n  • Symbol lookup (Universal)     → readtags -t tags -e -p '<prefix>'  (canonical; insert '-' separator only for dash-prefixed names)\n  • Symbol lookup (any ctags)     → grep -E '^<name>\\b' tags  (use # CTAGS_BYPASS: <reason> marker — this is the canonical lookup, not a fallback)\n  • File globbing                 → use Glob; ctags doesn't index file names\n  • Reference                     → https://docs.ctags.io",
-    "url": "https://ctags.io"
+  "serena": {
+    "license": "GPL-3.0-or-later (application), MIT (SolidLSP)",
+    "install": [
+      { "os": "any", "run": ["uv tool install -p 3.13 serena-agent"] }
+    ],
+    "agent": { "run": ["serena setup claude-code"] },
+    "index": null,
+    "mcp": { "name": "serena", "command": "serena", "args": ["start-mcp-server", "--context", "claude-code", "--project-from-cwd"] },
+    "hook": { "source": "tool" },
+    "notes": "Needs uv. Serena's README warns against installing it from an MCP or plugin marketplace. Its Claude Code hooks (remind, activate, cleanup, auto-approve) are opt-in and marked alpha. If Serena starts slowly, raise MCP_TIMEOUT."
   },
 
-  "semgrep": {
-    "filename_basename": "semgrep-first",
-    "bypass_marker": "SEMGREP_BYPASS:",
-    "detection_mode": "cli_available",
-    "detection_target": "semgrep",
-    "sequence_bullets": "  • Pattern search                → semgrep --pattern '<pattern>' --lang <lang>\n  • Symbol-by-name               → semgrep --pattern '<name>' --lang <lang>\n  • Rule-based scan              → semgrep --config <rules.yml>\n  • Auto-config registry         → semgrep --config auto (downloads relevant rule packs)\n  • File globbing                → use Glob; Semgrep doesn't index file names",
-    "url": "https://semgrep.dev"
+  "codebase-memory": {
+    "license": "MIT",
+    "install": [
+      { "os": "macos", "run": ["curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash"] },
+      { "os": "linux", "run": ["curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash"] },
+      { "os": "windows", "run": ["Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1", "Unblock-File .\\install.ps1", ".\\install.ps1"] }
+    ],
+    "agent": null,
+    "index": null,
+    "mcp": null,
+    "hook": { "source": "tool" },
+    "notes": "The install script also configures Claude Code: MCP server, a skill and graph agents, and hooks that only add context and never block a call. Pass --skip-config to install the binary alone. Indexing starts when the agent is asked to index the project (index_repository); the index lives under ~/.cache/codebase-memory-mcp/."
   },
 
   "none": {
-    "_skip_install": true,
-    "_reason": "User selected `none` for tools.code_research. No PreToolUse hook is installed. CLAUDE.md, the /find skill, and the read-before-writing rule resolve to the Grep/Glob/Read sequence without any enforcement layer."
+    "license": null,
+    "install": [],
+    "agent": null,
+    "index": null,
+    "mcp": null,
+    "hook": { "source": "none" },
+    "notes": "No tool: /find uses Grep, Glob and Read, with no call graph."
   },
 
   "custom": {
-    "_uses_user_input": true,
-    "filename_basename": "{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first",
-    "bypass_marker": "{{TOOLS_CODE_RESEARCH_NAME_UPPER_SNAKE}}_BYPASS:",
-    "detection_mode": "cli_available",
-    "detection_target": "{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}",
-    "sequence_bullets": "  • Refer to {{TOOLS_CODE_RESEARCH_URL}} for the canonical command sequence.\n  • The bind step writes this stub; refine the sequence bullets in ~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py to match the tool's actual CLI surface.",
-    "url": "{{TOOLS_CODE_RESEARCH_URL}}",
-    "_note": "Custom code-research tool. The bind step computes filename_basename, bypass_marker, and detection_target from the user-supplied name using these transformations: NAME_KEBAB = name.lower() with non-alphanumeric runs collapsed to single '-'; NAME_UPPER_SNAKE = name.upper() with non-alphanumeric runs collapsed to single '_'. The resulting hook is a stub — the user should refine the sequence_bullets to match their tool's CLI."
+    "license": null,
+    "install": [],
+    "agent": null,
+    "index": null,
+    "mcp": null,
+    "hook": {
+      "source": "bindwright",
+      "filename_basename": "{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first",
+      "detection_mode": "cli_available",
+      "detection_target": "{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}",
+      "sequence_bullets": "  • Refer to {{TOOLS_CODE_RESEARCH_URL}} for the lookup commands.\n  • Replace these lines in ~/.claude/hooks/{{TOOLS_CODE_RESEARCH_NAME_KEBAB}}-first.py with the tool's own commands."
+    },
+    "notes": "A tool the person names, with its homepage. Setup cannot install it; the person installs it by its own docs. The hook is a stub whose lookup lines the person fills in."
   }
 }
