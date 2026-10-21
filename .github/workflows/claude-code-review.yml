@@ -161,7 +161,7 @@ jobs:
 
         Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history.
 
-        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc` and `head` will be denied.
+        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks/comment`, the exact `gh pr edit … --add-label needs-deep-review` command from Step 4, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied.
 
         ## Step 2 — Architectural review
 
@@ -645,8 +645,8 @@ jobs:
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           (cd "$wt" && GH_TOKEN="$bot_token" "$cli" -p "$ROUTINE_REVIEW_PROMPT" \
             --setting-sources user --strict-mcp-config \
-            --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" \
-            --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" \
+            --allowedTools "Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),Bash(gh pr comment*),Bash(gh pr edit * --add-label needs-deep-review),Bash(gh issue view*),Bash(gh run view*),Bash(gh run list*),Bash(git diff*),Bash(git log*),Bash(git show*),Read" \
+            --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(*git-push.sh*)" \
             --max-turns 120 --model claude-fable-5-1 --effort low \
             --output-format json) > "$out" || status=$?
           # Only fields the CLI writes are printed: the error flag, the API's
@@ -721,7 +721,14 @@ jobs:
           # maintainer's own allow list (commits, pushes, merges). The reviewer
           # keeps the project's rules, hooks and deny list but not those allows.
           # Every action review step in both workflows passes the same sources.
-          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-fable-5-1 --effort low'
+          # The tool lists let a reviewer read the PR and comment on it, nothing
+          # more: its bot token can write repo contents, and `main`/`develop`
+          # are the only protected refs. So no `gh api`, no `gh pr merge` or
+          # `gh release`, only the exact label command the escalation step
+          # needs, and no file edits or git writes. The last deny covers the
+          # push wrapper the action allows in tag mode. Every review step in
+          # both workflows carries the same two lists.
+          claude_args: '--setting-sources user,project --allowedTools "Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),Bash(gh pr comment*),Bash(gh pr edit * --add-label needs-deep-review),Bash(gh issue view*),Bash(gh run view*),Bash(gh run list*),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(*git-push.sh*)" --max-turns 120 --model claude-fable-5-1 --effort low'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       # Backup: any primary failure (usage limit or otherwise) retries once on
@@ -774,7 +781,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
-          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model claude-opus-5-5 --effort high'
+          claude_args: '--setting-sources user,project --allowedTools "Bash(gh pr view*),Bash(gh pr diff*),Bash(gh pr checks*),Bash(gh pr comment*),Bash(gh pr edit * --add-label needs-deep-review),Bash(gh issue view*),Bash(gh run view*),Bash(gh run list*),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(*git-push.sh*)" --max-turns 120 --model claude-opus-5-5 --effort high'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       - name: Fail when both review attempts failed
