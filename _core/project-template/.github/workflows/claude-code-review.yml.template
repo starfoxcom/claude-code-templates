@@ -480,7 +480,12 @@ jobs:
           # `--disallowedTools Agent,...`: a reviewer that hands a large diff to
           # a subagent and "waits" for it ends its one-shot session with no
           # verdict posted. The backup invocation carries the same ban.
-          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_ROUTINE_MODEL}} --effort {{REVIEW_ROUTINE_EFFORT}}'
+          # `--setting-sources user,project`: the action loads every settings
+          # file by default, and `.claude/settings.local.json` holds the
+          # maintainer's own allow list (commits, pushes, merges). The reviewer
+          # keeps the project's rules, hooks and deny list but not those allows.
+          # Every review step in both workflows passes the same sources.
+          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_ROUTINE_MODEL}} --effort {{REVIEW_ROUTINE_EFFORT}}'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       # Backup: any primary failure (a spent usage allowance or anything else)
@@ -533,7 +538,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
-          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_BACKUP_MODEL}} --effort {{REVIEW_BACKUP_EFFORT}}'
+          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_BACKUP_MODEL}} --effort {{REVIEW_BACKUP_EFFORT}}'
           prompt: ${{ env.ROUTINE_REVIEW_PROMPT }}
 
       - name: Fail when both review attempts failed

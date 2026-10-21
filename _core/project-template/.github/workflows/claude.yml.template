@@ -159,11 +159,15 @@ jobs:
         # upstream workaround for credential loss in tag mode.
         # `--disallowedTools` bans helper agents and wake-ups on every attempt:
         # a one-shot session that delegates ends with no verdict.
+        # `--setting-sources user,project` on every attempt keeps the project's
+        # rules, hooks and deny list but skips `.claude/settings.local.json`,
+        # the maintainer's own allow list (commits, pushes, merges), which the
+        # action would otherwise load.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_DEEP_MODEL}} --effort {{REVIEW_DEEP_EFFORT}}'
+          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_DEEP_MODEL}} --effort {{REVIEW_DEEP_EFFORT}}'
           show_full_output: false
           additional_permissions: |
             actions: read
@@ -219,7 +223,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_DEEP_MODEL}} --effort {{REVIEW_DEEP_EFFORT}}'
+          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_DEEP_MODEL}} --effort {{REVIEW_DEEP_EFFORT}}'
           show_full_output: false
           additional_permissions: |
             actions: read
@@ -282,7 +286,7 @@ jobs:
         with:
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_BACKUP_MODEL}} --effort {{REVIEW_BACKUP_EFFORT}}'
+          claude_args: '--setting-sources user,project --allowedTools "Bash(gh *),Bash(git diff*),Bash(git log*),Bash(git show*),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents" --max-turns 120 --model {{REVIEW_BACKUP_MODEL}} --effort {{REVIEW_BACKUP_EFFORT}}'
           show_full_output: false
           additional_permissions: |
             actions: read
