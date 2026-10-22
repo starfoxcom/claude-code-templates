@@ -101,6 +101,54 @@ class Triage(unittest.TestCase):
         self.assertFalse(triage(["docs/%d.md" % i for i in range(gate.LISTING_CAP - 1)]))
 
 
+CHECKS_DIR = os.path.join(ROOT, ".github", "review-checks")
+
+
+class ReviewChecks(unittest.TestCase):
+    """This repo's own pre-screen checks (prescreen.dir), run as the
+    Project pre-screen job runs them: FILES DIFF, from the PR's checkout."""
+
+    def run_check(self, name, files, contents):
+        with tempfile.TemporaryDirectory() as d:
+            for path, text in contents.items():
+                os.makedirs(os.path.join(d, os.path.dirname(path)), exist_ok=True)
+                with open(os.path.join(d, path), "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            with open(os.path.join(d, "files.txt"), "w", encoding="utf-8") as fh:
+                fh.write("".join(f + "\n" for f in files))
+            open(os.path.join(d, "pr.diff"), "w").close()
+            p = subprocess.run([sys.executable, "-I", os.path.join(CHECKS_DIR, name), "files.txt", "pr.diff"],
+                               cwd=d, capture_output=True, text=True)
+            return p.returncode, p.stdout
+
+    def test_the_settings_name_this_folder(self):
+        with open(os.path.join(ROOT, ".github", "review-gate.yml"), encoding="utf-8") as fh:
+            self.assertEqual(gate.settings(fh.read())["prescreen.dir"], ".github/review-checks")
+
+    def test_toggle_markers(self):
+        t = "_core/project-template/x.md"
+        code, out = self.run_check("template_markers.py", [t, "missing.md"],
+                                   {t: "<!-- TOGGLE:a START -->\n<!-- TOGGLE:b START --><!-- TOGGLE:b END -->\n"})
+        self.assertEqual((code, out.strip()), (1, "TOGGLE_UNBALANCED: %s: name=a START=1 END=0" % t))
+        self.assertEqual(self.run_check("template_markers.py", [t], {t: "<!-- TOGGLE:a START -->x<!-- TOGGLE:a END -->"})[0], 0)
+        self.assertEqual(self.run_check("template_markers.py", ["docs/x.md"], {"docs/x.md": "<!-- TOGGLE:a START -->"})[0], 0)
+
+    def test_placeholders(self):
+        t = "_core/project-template/y.md.template"
+        code, out = self.run_check("template_placeholders.py", [t], {t: "{{PROJECT_NAME}} {{NOPE_THING}}"})
+        self.assertEqual(code, 1)
+        self.assertIn("{{NOPE_THING}}", out)
+        self.assertNotIn("PROJECT_NAME", out)
+        self.assertEqual(self.run_check("template_placeholders.py", ["docs/z.md"], {"docs/z.md": "{{NOPE}}"})[0], 0)
+
+    def test_page_parity_only_warns(self):
+        code, out = self.run_check("page_parity.py", ["redesign/app.jsx"], {"redesign/app.jsx": "<a/>"})
+        self.assertEqual(code, 0)
+        self.assertIn("JSX_HTML_PARITY", out)
+        code, out = self.run_check("page_parity.py", ["redesign/app.jsx", "index.html"], {})
+        self.assertNotIn("JSX_HTML_PARITY", out)
+
+
 class Verdict(unittest.TestCase):
     def pages(self, *pages):
         return "\n".join(json.dumps(p) for p in pages)
@@ -509,10 +557,11 @@ class Settings(unittest.TestCase):
         self.assertEqual(got["deep.model"], gate.DEFAULTS["deep.model"])
 
     def test_the_shipped_file_holds_the_defaults(self):
-        # Every value but this repo's own always-reviewed paths.
+        # Every value but this repo's own paths and checks.
         with open(os.path.join(ROOT, ".github", "review-gate.yml"), encoding="utf-8") as fh:
             got = gate.settings(fh.read())
-        self.assertEqual({**got, "triage.always_review": ""}, gate.DEFAULTS)
+        own = {"triage.always_review": "", "prescreen.dir": "", "escalate.paths": ""}
+        self.assertEqual({**got, **own}, gate.DEFAULTS)
 
     def test_bad_settings_are_errors(self):
         for text in ["checks: three", "routine:\n  model: Bad Model", "routine:\n  effort: huge", "routine:\n  max_turns: 0",
