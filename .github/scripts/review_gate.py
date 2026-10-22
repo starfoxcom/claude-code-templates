@@ -49,17 +49,20 @@ import time
 
 # Never reviewed: the review action refuses to run on a PR whose copy of the
 # review workflow differs from the default branch's, so a workflow-only PR has
-# to pass as non-reviewable. Excluded by path on purpose, never by extension.
-NEVER = re.compile(r"^\.github/workflows/")
-# Skipped only when every other path is Markdown, an image or a font outside
-# the deep-review folders: _core/, which lands verbatim in users' repos (and
-# CLAUDE.md.additions in their ~/.claude), bundles/, whose toggles drive what
-# a bind writes, redesign/, and .github/scripts/,
-# where a file Python loads before the standard library could run in the
-# gate. Anything else gets a review: scripts, config, lockfiles, an SVG,
-# which can carry script, and a .gitattributes or .lfsconfig.
+# to pass as non-reviewable. Only the workflow files themselves: a script or
+# action kept under .github/workflows/ is reviewed like any other file.
+NEVER = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
+# Skipped only when every other path is Markdown, an image or a font that is
+# not always reviewed. Always reviewed, whatever the file type: _core/, which
+# lands verbatim in users' repos; bundles/, whose toggles drive what a bind
+# writes; SETUP.md, which every bundle ships as its setup prompt; redesign/;
+# .github/scripts/, where a file Python loads before the standard library
+# could run in the gate; and .claude/ and any CLAUDE.md, the instructions
+# both review tiers load. Matched in any case, as a case-insensitive checkout
+# would place the file. Anything else gets a review: scripts, config,
+# lockfiles, an SVG, which can carry script, and a .gitattributes or .lfsconfig.
 SKIPPABLE = re.compile(r"\.(md|png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$", re.I)
-DEEP_FOLDERS = re.compile(r"^(_core|bundles|redesign|\.github/scripts)/|\.additions$")
+ALWAYS_REVIEWED = re.compile(r"^(_core|bundles|redesign|\.claude|\.github/scripts)/|^SETUP\.md$|(^|/)CLAUDE\.md$", re.I)
 
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
@@ -92,12 +95,24 @@ BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|B
 #    a letter or digit joins a word ("Non-blocking: none") and ends no label.
 LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?(?:[:：—–−]|(?<![^\W_])[-‐‑]|🔴)"
                    r"(?:(?![`🟢])[\W\d_])*(?i:Blocking)(?![^\W_])")
-# The verdict is the last line, under the review action's footer: its job and
-# branch links ("[View job](…) · [Branch](…)", "· `branch`"), a rule line,
-# and an old run's task checklist ("- [x] Post verdict") are skipped.
-FOOTER = re.compile(r"\s*(?:(?:-{3,}|\*{3,}|_{3,})\s*(?:$|(?=[·•]))|[·•]"
-                    r"|\[View job\]\(https://github\.com/|[-*] \[[ xX]\] )")
-VERDICT_LINE = re.compile(r"[\s#*_>]*(?:🔴|🟢)")
+# The verdict is the last line, under the review action's footer. Only lines
+# that say nothing are skipped: an optional rule, then pieces joined by "·" or
+# "•", each empty or one GitHub link or one space-free code span, after an
+# optional "branch:" ("[View job](…) · Branch: [`b`](…)", "--- · `b`"). Any
+# words on a trailing line make it the last line.
+FOOTER_RULE = re.compile(r"(?:-{3,}|\*{3,}|_{3,})")
+FOOTER_ITEM = re.compile(r"(?:[Bb]ranch:?\s*)?(?:\[(?:View job|[^\]\s🔴🟢]{1,200})\]"
+                         r"\(https://github\.com/[^\s)🔴🟢]*\)|`[^`\s🔴🟢]{1,200}`)")
+
+
+def _footer(line):
+    rest = line.strip()
+    rule = FOOTER_RULE.match(rest)
+    if rule:
+        rest = rest[rule.end():]
+    return all(not p.strip() or FOOTER_ITEM.fullmatch(p.strip()) for p in re.split("[·•]", rest))
+# A quoted line ("> 🟢 LGTM") is someone else's verdict, never this one.
+VERDICT_LINE = re.compile(r"[\s#*_]*(?:🔴|🟢)")
 VERDICTS = ("pass", "block", "missing", "error")
 STATE_VALUES = {
     "triage": ("reviewable", "skip"),
@@ -138,7 +153,7 @@ def triage(paths, incomplete=False):
     """Whether a diff with these changed paths gets an AI review."""
     if incomplete or len(paths) >= LISTING_CAP:
         return True
-    return any(not NEVER.search(p) and (DEEP_FOLDERS.search(p) or not SKIPPABLE.search(p)) for p in paths)
+    return any(not NEVER.search(p) and (ALWAYS_REVIEWED.search(p) or not SKIPPABLE.search(p)) for p in paths)
 
 
 def _comments(text):
@@ -188,7 +203,7 @@ def _line(body):
     early = next(((l, how) for l in lines for how, rule in
                   (("red-over-glyph", RED_OPENER), ("word-over-glyph", BLOCKING), ("word-over-glyph", LABEL))
                   if rule.match(l)), None)
-    while lines and (not lines[-1].strip() or FOOTER.match(lines[-1])):
+    while lines and _footer(lines[-1]):
         lines.pop()
     last = lines[-1].strip() if lines else ""
     if VERDICT_LINE.match(last) and "🔴" in last:

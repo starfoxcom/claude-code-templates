@@ -38,10 +38,17 @@ class Triage(unittest.TestCase):
     def test_workflows_never_count_whatever_their_extension(self):
         self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
         self.assertTrue(gate.triage([".github/workflows/x.yml", ".github/scripts/review_gate.py"]))
+        self.assertFalse(gate.triage([".github/workflows/x.yaml", "README.md"]))
+        for path in (".github/workflows/helper.sh", ".github/workflows/lib/action.yml", ".github/workflows/sub/x.py"):
+            with self.subTest(path=path):
+                self.assertTrue(gate.triage([path]))
 
-    def test_deep_review_folders_count_whatever_the_file_type(self):
+    def test_always_reviewed_paths_count_whatever_the_file_type(self):
         for path in (".github/scripts/json.pyc", ".github/scripts/run.sh", "redesign/notes.md",
-                     "_core/project-template/README.md", ".github/review-gate.yml"):
+                     "_core/project-template/README.md", ".github/review-gate.yml", "SETUP.md",
+                     "CLAUDE.md", "engine/CLAUDE.md", ".claude/rules/git.md", ".claude/skills/find/SKILL.md",
+                     "bundles/1-solo-personal/bundle.toggles.md", "_core/x/logo.png",
+                     "_Core/project-template/.claude/rules/zz.md", "Bundles/x/bundle.toggles.md", "setup.MD"):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage([path]))
         self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md"]))
@@ -85,11 +92,31 @@ class Verdict(unittest.TestCase):
 
     def test_the_actions_footer_under_the_verdict_is_skipped(self):
         for tail in ("", "\n\n---\n[View job](https://github.com/o/r/actions/runs/1) · "
-                     "[Branch](https://github.com/o/r/tree/b)", "\n · `fix/x`", "\n- [x] Post verdict"):
+                     "[Branch](https://github.com/o/r/tree/b)", "\n · `fix/x`", "\n• [Branch](https://github.com/o/r/tree/b)  ",
+                     "\n---\n[View job](https://github.com/o/r/actions/runs/1)\n***",
+                     "\n\n---\n · branch [`feat/x`](https://github.com/o/r/tree/feat/x)", "\n--- · `chore/x`",
+                     "\n · `fix/x` ·", "\n• Branch: `fix/x`", "\n ·", "\n--- · [branch](https://github.com/o/r/tree/b)",
+                     "\n[View job](https://github.com/o/r/actions/runs/1) · Branch: [`b`](https://github.com/o/r/tree/b)"):
             body = "**Claude finished**\n\n🟢 LGTM" + tail
             self.assertEqual(gate._line(body)[:2], ("pass", "🟢 LGTM"), tail)
         body = "**Claude finished**\n\n## 🟢 All clear\nVerdict = Blocking\n---\n[View job](https://github.com/o/r/actions/runs/1)"
         self.assertEqual(gate._line(body)[0], "missing")
+
+    def test_a_trailing_line_with_words_is_the_last_line(self):
+        # Only lines that say nothing are skipped: an open item, a bullet with
+        # words or a link followed by text ends the comment and is missing.
+        for tail in ("\n- [ ] `a.py:12` drops the filter, fix before merge", "\n- [x] Post verdict",
+                     "\n• Actually this needs changes: a.py:12", "\n· request changes: fix a.py",
+                     "\n---\n• Request changes", "\n[View job](https://github.com/o/r/actions/runs/1) request changes",
+                     "\n· `fix/x` must change", "\n[Docs](https://example.com/x)", "\n· `must fix a.py`",
+                     "\n· [fix this](https://github.com/o/r/pull/1)", "\n***bold claim***"):
+            body = "## Code Review — claude-code-templates\n### 🟢 All clear on hooks" + tail
+            self.assertEqual(gate._line(body)[0], "missing", tail)
+
+    def test_a_quoted_verdict_is_not_this_reviews_verdict(self):
+        body = "## Deep review\nThe writer races in a.py:40; this must be fixed.\nThe routine review said:\n> 🟢 LGTM"
+        self.assertEqual(gate._line(body)[0], "missing")
+        self.assertEqual(gate._line("## Deep review\n> 🔴 Blocking — x")[0], "block")
 
     def test_the_last_glyph_line_decides_and_a_glyphless_blocking_blocks(self):
         head = "## Code Review — claude-code-templates\n"
