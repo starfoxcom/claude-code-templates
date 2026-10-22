@@ -1,7 +1,8 @@
 name: Tests
 
 # Runs the bind engine tests (JS engine, and the golden test against its Python
-# twin) and the Python tests for the guard hooks and receipts. Its check,
+# twin) and the Python tests for the guard hooks, receipts and the review
+# gate's script. Its check,
 # "Engine and hook tests", is required on develop, so pull requests run it
 # whatever they change: a path filter would leave the required check
 # waiting forever on a PR that touches none of the listed files. Pushes to
@@ -16,6 +17,8 @@ on:
       - "engine/**"
       - "_core/**"
       - "tools/**"
+      - ".github/scripts/**"
+      - ".github/review-gate.yml"
       - ".claude/hooks/**"
       - ".claude/settings.json"
       - "SETUP.md"
@@ -93,3 +96,11 @@ jobs:
           python3 -m unittest -v tools/test_guard_hooks.py tools/test_receipts.py 2>&1 | tee python-tests.txt
           if grep -q "skipped=" python-tests.txt; then echo "::error::Python tests were skipped"; exit 1; fi
           grep -qE "^Ran [1-9][0-9]* tests? in" python-tests.txt || { echo "::error::No Python tests ran"; exit 1; }
+
+      # Not behind the engine check: the review gate's script ships on main
+      # first, and every PR's gate runs it.
+      - name: Review gate tests
+        run: |
+          python3 -m unittest -v tools/test_review_gate.py 2>&1 | tee gate-tests.txt
+          if grep -q "skipped=" gate-tests.txt; then echo "::error::Review gate tests were skipped"; exit 1; fi
+          grep -qE "^Ran [1-9][0-9]* tests? in" gate-tests.txt || { echo "::error::No review gate tests ran"; exit 1; }
