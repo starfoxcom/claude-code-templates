@@ -5,6 +5,8 @@
 # As a command, it binds from the repo this file sits in:
 #   python engine/bind.py [--year N] < answers.json      -> {"files": [[dest, text], ...]}
 #   python engine/bind.py --batch < jobs.json            -> one result per {"answers", "year"} job
+#   python engine/bind.py --code bw1-...                 -> the answers come from a setup code
+#   python engine/bind.py --code bw1-... --write DIR     -> {"written": [...], "skipped": [...]}
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
 import json
@@ -12,8 +14,14 @@ import os
 import re
 import sys
 
+# The twins sit beside this file. Isolated mode (python -I) leaves the
+# script's own folder off the import path, so it is added here.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from model import validate, flags_for, choices_for, values_for, CHOICE_OPTIONS, DEFERRED, LICENSES, JS_WHITESPACE
 from render import render_template
+from setupcode import decode_setup_code, SetupCodeError
+from apply import apply_files, ApplyError
 
 CORE = "_core/project-template/"
 
@@ -122,6 +130,40 @@ def bind(answers, read_file, core_files, year=None):
     return out
 
 
+def _stdin_json():
+    # Bytes, decoded as UTF-8: sys.stdin uses the console code page on Windows.
+    return json.loads(sys.stdin.buffer.read().decode("utf-8"))
+
+
+def _option(argv, name):
+    """The value after `name`, or None when the flag is absent."""
+    if name not in argv:
+        return None
+    i = argv.index(name) + 1
+    if i == len(argv) or argv[i].startswith("--"):
+        raise ValueError(name + " needs a value")
+    return argv[i]
+
+
+def _single(argv, run):
+    """One bind, from stdin or a setup code, optionally written to a folder."""
+    try:
+        code, year, folder = (_option(argv, n) for n in ("--code", "--year", "--write"))
+        answers = _stdin_json() if code is None else decode_setup_code(code)
+        if year is not None and not re.fullmatch("[0-9]+", year):
+            raise ValueError("--year needs a whole number")
+        year = None if year is None else int(year)
+    except ValueError as e:  # bad flags, a bad setup code or unreadable JSON
+        return {"error": str(e)}
+    result = run(answers, year)
+    if folder is None or "error" in result:
+        return result
+    try:
+        return apply_files(result["files"], folder)
+    except (ApplyError, OSError) as e:
+        return {"error": str(e)}
+
+
 def _main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cache = {}
@@ -142,15 +184,12 @@ def _main(argv):
         except Exception as e:  # every failure is reported, as the JS engine throws it
             return {"error": str(e)}
 
-    # Bytes, decoded as UTF-8: sys.stdin uses the console code page on Windows.
-    job = json.loads(sys.stdin.buffer.read().decode("utf-8"))
     if "--batch" in argv:
-        result = [run(j["answers"], j.get("year")) for j in job]
+        result = [run(j["answers"], j.get("year")) for j in _stdin_json()]
     else:
-        year = int(argv[argv.index("--year") + 1]) if "--year" in argv else None
-        result = run(job, year)
-    # ASCII output, so no console code page can mangle it.
-    sys.stdout.write(json.dumps(result, ensure_ascii=True))
+        result = _single(argv, run)
+    # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.
+    sys.stdout.write(json.dumps(result, ensure_ascii=True, separators=(",", ":")))
     return 1 if isinstance(result, dict) and "error" in result else 0
 
 

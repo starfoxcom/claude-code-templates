@@ -150,6 +150,9 @@ def _check_custom_tool(tool, custom):
 
 
 def validate(a):
+    # Setup codes carry answers from outside the page, so the shape comes first.
+    _check(isinstance(a, dict) and isinstance(a.get("project"), dict) and isinstance(a.get("advanced"), dict),
+           "the answers must hold project and advanced objects")
     adv = a["advanced"]
     project = a["project"]
     get = lambda d, k: d.get(k, UNDEFINED)
