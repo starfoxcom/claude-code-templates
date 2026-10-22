@@ -454,7 +454,18 @@ jobs:
               """A name or finding as one inert report line: control characters,
               bytes that are not UTF-8 and backticks are escaped, so a file name
               cannot start a line of its own in the report the reviewer trusts."""
-              return ''.join(c if c.isprintable() and c != '`' else f'\\x{ord(c):02x}' for c in text)
+              return ''.join(c if c.isprintable() and c != '`' else escape(c) for c in text)
+
+          def escape(c):
+              """One character as an escape that names it exactly: a byte that
+              is not UTF-8 (a surrogate after surrogateescape) as that byte,
+              anything else by its code point."""
+              n = ord(c)
+              if 0xDC80 <= n <= 0xDCFF:
+                  return f'\\x{n - 0xDC00:02x}'
+              if n <= 0xFF:
+                  return f'\\x{n:02x}'
+              return f'\\u{n:04x}' if n <= 0xFFFF else f'\\U{n:08x}'
 
           def rename_target(sec):
               """The new path of a renamed file, from its "rename to" line."""
@@ -706,11 +717,13 @@ jobs:
       # exchanged at Anthropic's GitHub app endpoint), because comments posted
       # with the job's own token would not start the deep-review workflow.
       # The step succeeds only when a verdict comment from this run is on the
-      # PR. No verdict (no key, credits or the workspace cap spent, the
+      # PR. Nothing posted (no key, credits or the workspace cap spent, the
       # exchange refused, an API error) leaves the review to the action steps
       # below, which run on the subscription exactly as before. A verdict from
-      # a run that then broke sets `halt` and fails the job instead: a second
-      # review would post a second verdict, and Evaluate reads the newest one.
+      # a run that then broke, or any other comment it posted that the gate
+      # cannot take as a verdict, sets `halt` and fails the job instead: a
+      # second review would post a second verdict, and Evaluate reads the
+      # newest one.
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
         continue-on-error: true
@@ -840,7 +853,7 @@ jobs:
               | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
             if [ "$stray" != 0 ]; then
               echo "halt=true" >> "$GITHUB_OUTPUT"
-              echo "::error::The credits run posted a verdict without its heading, which the gate cannot read"
+              echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no 🔴/🟢 line); read it, then re-run the job"
               exit 1
             fi
             echo "::warning::The credits run posted no verdict: the review runs on the subscription"
