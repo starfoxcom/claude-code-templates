@@ -19,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from model import validate, flags_for, choices_for, values_for, CHOICE_OPTIONS, DEFERRED, LICENSES, JS_WHITESPACE
-from render import render_template
+from render import render_template, fill_placeholders
 from setupcode import decode_setup_code, SetupCodeError
 from apply import apply_files, ApplyError
 
@@ -31,6 +31,11 @@ MERGE_TARGETS = {
     "CLAUDE.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", ".gitattributes", ".claude/settings.json",
 }
 STAGING = ".bindwright/incoming/"
+
+# Files for the user's ~/.claude, under the same paths there. Setup installs
+# each one only with consent; the zip fallback leaves them to the reader.
+GLOBAL = ".bindwright/global/"
+GLOBAL_CORE = "_core/global-template/"
 
 # Guard hooks ship byte for byte: they are code, not templates, and the
 # render step's blank-line folding would still change them.
@@ -106,6 +111,40 @@ def plan_files(answers, core_files, precommit_profiles):
     return sorted(plan, key=lambda f: _code_units(f["dest"]))
 
 
+def _global_files(a, ctx, read_file):
+    """The ~/.claude files, as [dest, text] under GLOBAL: the global CLAUDE.md
+    additions, the memory index, the push guard, the attribution guard when the
+    guards live in ~/.claude, and the research hook for a tool without its own."""
+    def verbatim(p):
+        return read_file(GLOBAL_CORE + p).replace("\r\n", "\n")
+
+    def render(p):
+        return render_template(read_file(GLOBAL_CORE + p), ctx, GLOBAL_CORE + p)
+
+    out = [
+        ["CLAUDE.md.additions", render("CLAUDE.md.additions")],
+        ["memory/MEMORY.md", render("memory-template/MEMORY.md")],
+        ["hooks/push-guard.py", verbatim("hooks/push-guard.py")],
+    ]
+    if not ctx["flags"]["guard_hooks_repo"] and ctx["flags"]["attribution_guard"]:
+        out.append(["hooks/no-ai-attribution.py", verbatim("hooks/no-ai-attribution.py")])
+    profiles = json.loads(read_file(GLOBAL_CORE + "hooks/code-research-profiles.json"))
+    hook = profiles[a["advanced"]["codeResearch"]]["hook"]
+    if hook["source"] == "bindwright":
+        # The custom profile's fields name the tool through placeholders of their own.
+        def field(k):
+            return fill_placeholders(hook[k], ctx["values"], ctx["deferred"], "profile hook " + k)
+
+        values = dict(ctx["values"])
+        values["TOOLS_CODE_RESEARCH_DETECTION_MODE"] = field("detection_mode")
+        values["TOOLS_CODE_RESEARCH_DETECTION_TARGET"] = field("detection_target")
+        values["TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS"] = field("sequence_bullets")
+        src = GLOBAL_CORE + "hooks/code-research-first.py.template"
+        text = render_template(read_file(src), dict(ctx, values=values), src)
+        out.append(["hooks/%s.py" % field("filename_basename"), text])
+    return [[GLOBAL + dest, text] for dest, text in out]
+
+
 def bind(answers, read_file, core_files, year=None):
     """Returns a dict of dest path -> rendered text, in the JS engine's order."""
     a = validate(answers)
@@ -127,7 +166,8 @@ def bind(answers, read_file, core_files, year=None):
         out[dest] = text.replace("\r\n", "\n") if dest.startswith(VERBATIM) else render_template(text, ctx, f["src"])
     if SHIPPED_TEXT_RULE in out and adv["shippedTextPaths"]:
         out[SHIPPED_TEXT_RULE] = _with_paths(out[SHIPPED_TEXT_RULE], adv["shippedTextPaths"], SHIPPED_TEXT_RULE)
-    return out
+    files = list(out.items()) + [tuple(f) for f in _global_files(a, ctx, read_file)]
+    return dict(sorted(files, key=lambda f: _code_units(f[0])))
 
 
 def _stdin_json():

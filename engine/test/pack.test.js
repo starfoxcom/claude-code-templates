@@ -27,7 +27,10 @@ test("the packed plugin binds what the repo's engine binds", { skip: !python && 
     assert.ok(existsSync(join(out, "skills", "setup", "SKILL.md")));
 
     const team = defaults({ team: true, client: true });
-    team.advanced = { ...team.advanced, precommit: "husky", architecture: "hexagonal" };
+    // Every template family: pre-commit, architecture, the research hook and the home guards.
+    team.advanced = {
+      ...team.advanced, precommit: "husky", architecture: "hexagonal", codeResearch: "codegraph", hookLocation: "home",
+    };
     for (const answers of [defaults(), team]) {
       const args = ["--code", encodeSetupCode(answers), "--year", "2026"];
       const expected = run(process.execPath, [join(engine, "cli.js"), ...args]);

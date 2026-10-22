@@ -2,7 +2,7 @@
 // `readFile(path)` returns the text of a repo-relative path (fetch in the
 // browser, fs in Node), so the same code runs in both.
 
-import { renderTemplate } from "./render.js";
+import { renderTemplate, fillPlaceholders } from "./render.js";
 import { validate, flagsFor, choicesFor, valuesFor, CHOICE_OPTIONS, DEFERRED, LICENSES } from "./model.js";
 
 const CORE = "_core/project-template/";
@@ -13,6 +13,11 @@ const MERGE_TARGETS = new Set([
   "CLAUDE.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", ".gitattributes", ".claude/settings.json",
 ]);
 export const STAGING = ".bindwright/incoming/";
+
+// Files for the user's ~/.claude, under the same paths there. Setup installs
+// each one only with consent; the zip fallback leaves them to the reader.
+export const GLOBAL = ".bindwright/global/";
+const GLOBAL_CORE = "_core/global-template/";
 
 // Guard hooks ship byte for byte: they are code, not templates, and the
 // render step's blank-line folding would still change them.
@@ -81,7 +86,40 @@ export function planFiles(answers, coreFiles, precommitProfiles) {
   return plan.sort((x, y) => (x.dest < y.dest ? -1 : x.dest > y.dest ? 1 : 0));
 }
 
-// Returns a Map of dest path -> rendered text.
+// The ~/.claude files, as [dest, text] under GLOBAL: the global CLAUDE.md
+// additions, the memory index, the push guard, the attribution guard when the
+// guards live in ~/.claude, and the research hook for a tool without its own.
+async function globalFiles(a, ctx, readFile) {
+  const verbatim = async (p) => (await readFile(GLOBAL_CORE + p)).replace(/\r\n/g, "\n");
+  const render = async (p) => renderTemplate(await readFile(GLOBAL_CORE + p), ctx, GLOBAL_CORE + p);
+  const out = [
+    ["CLAUDE.md.additions", await render("CLAUDE.md.additions")],
+    ["memory/MEMORY.md", await render("memory-template/MEMORY.md")],
+    ["hooks/push-guard.py", await verbatim("hooks/push-guard.py")],
+  ];
+  if (!ctx.flags.guard_hooks_repo && ctx.flags.attribution_guard) {
+    out.push(["hooks/no-ai-attribution.py", await verbatim("hooks/no-ai-attribution.py")]);
+  }
+  const profiles = JSON.parse(await readFile(`${GLOBAL_CORE}hooks/code-research-profiles.json`));
+  const hook = profiles[a.advanced.codeResearch].hook;
+  if (hook.source === "bindwright") {
+    // The custom profile's fields name the tool through placeholders of their own.
+    const field = (k) => fillPlaceholders(hook[k], ctx.values, ctx.deferred, `profile hook ${k}`);
+    const values = {
+      ...ctx.values,
+      TOOLS_CODE_RESEARCH_DETECTION_MODE: field("detection_mode"),
+      TOOLS_CODE_RESEARCH_DETECTION_TARGET: field("detection_target"),
+      TOOLS_CODE_RESEARCH_SEQUENCE_BULLETS: field("sequence_bullets"),
+    };
+    const src = `${GLOBAL_CORE}hooks/code-research-first.py.template`;
+    out.push([`hooks/${field("filename_basename")}.py`, renderTemplate(await readFile(src), { ...ctx, values }, src)]);
+  }
+  return out.map(([dest, text]) => [GLOBAL + dest, text]);
+}
+
+const byDest = ([x], [y]) => (x < y ? -1 : x > y ? 1 : 0);
+
+// Returns a Map of dest path -> rendered text, in plain code-unit order.
 export async function bind(answers, { readFile, coreFiles, year }) {
   const a = validate(answers);
   const precommitProfiles = JSON.parse(await readFile(`${CORE}precommit/precommit-profiles.json`));
@@ -103,5 +141,5 @@ export async function bind(answers, { readFile, coreFiles, year }) {
   if (out.has(SHIPPED_TEXT_RULE) && a.advanced.shippedTextPaths) {
     out.set(SHIPPED_TEXT_RULE, withPaths(out.get(SHIPPED_TEXT_RULE), a.advanced.shippedTextPaths, SHIPPED_TEXT_RULE));
   }
-  return out;
+  return new Map([...out, ...(await globalFiles(a, ctx, readFile))].sort(byDest));
 }

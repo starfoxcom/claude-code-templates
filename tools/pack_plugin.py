@@ -24,6 +24,12 @@ ENGINE_FILES = [
     "bind.js", "model.js", "render.js", "setupcode.js", "apply.js",
     "bind.py", "model.py", "render.py", "setupcode.py", "apply.py",
 ]
+# The ~/.claude templates bind.js and bind.py read (globalFiles).
+GLOBAL_FILES = [
+    "CLAUDE.md.additions", "memory-template/MEMORY.md",
+    "hooks/push-guard.py", "hooks/no-ai-attribution.py",
+    "hooks/code-research-profiles.json", "hooks/code-research-first.py.template",
+]
 # Marks a folder as a pack, so --out never replaces anything else.
 MARKER = ".bindwright-pack"
 
@@ -61,12 +67,13 @@ def pack(out):
     with open(os.path.join(ROOT, "engine", "core-files.json"), encoding="utf-8") as fh:
         core = ["_core/project-template/" + p for p in json.load(fh)]
     licenses = list(_files_under("_core/licenses"))
-    for rel in core + licenses:
+    global_files = ["_core/global-template/" + p for p in GLOBAL_FILES]
+    for rel in core + licenses + global_files:
         _copy(rel, out)
     _stamp_version(out)
     with open(os.path.join(out, MARKER), "w", encoding="utf-8") as fh:
         fh.write("Built by tools/pack_plugin.py; safe to delete.\n")
-    return len(files) + len(ENGINE_FILES) + len(core) + len(licenses) + 1
+    return len(files) + len(ENGINE_FILES) + len(core) + len(licenses) + len(global_files) + 1
 
 
 def _stamp_version(out):
