@@ -21,10 +21,11 @@ Run these as separate calls, in parallel:
 - `git log --oneline -10`
 - `git fetch origin`, then `git rev-list --count HEAD..origin/develop` (how far behind the current branch is)
 - `gh pr list --author @me --state open`
+- `bash .github/scripts/setup-review-gate.sh --check` (read-only: it reports what the review gate is missing on GitHub and changes nothing)
 
 ## 3. Report, in this order
 
-1. **Project status:** current focus, open work, blockers.
+1. **Project status:** current focus, open work, blockers. Every `MISSING` line from the review gate check is a blocker; name the fix it prints. Running the script without `--check` sets the missing pieces up, but only once the user agrees, since this turn changes nothing.
 2. **Git status:** current branch, uncommitted changes, how far behind `develop` it is, open PRs. If `develop` has moved ahead, propose merging it in before resuming (`git.md` § Keep branches current).
 3. **Branch:** if the work needs a new branch, propose its name per `git.md` and ask before creating it.
 4. **Areas touched:** the directories the plan will change. Anything outside the branch's scope becomes a prerequisite branch that lands first; name it.
