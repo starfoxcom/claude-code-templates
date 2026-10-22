@@ -101,6 +101,6 @@ jobs:
       # first, and every PR's gate runs it.
       - name: Review gate tests
         run: |
-          python3 -m unittest -v tools/test_review_gate.py 2>&1 | tee gate-tests.txt
+          python3 -m unittest -v tools/test_review_gate.py tools/test_pin_check.py 2>&1 | tee gate-tests.txt
           if grep -q "skipped=" gate-tests.txt; then echo "::error::Review gate tests were skipped"; exit 1; fi
           grep -qE "^Ran [1-9][0-9]* tests? in" gate-tests.txt || { echo "::error::No review gate tests ran"; exit 1; }
