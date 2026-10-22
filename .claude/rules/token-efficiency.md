@@ -52,7 +52,7 @@ done
 
 ### Fast-path / auto-pass PRs
 
-When the PR's diff holds only the routine review workflow (`.github/workflows/claude-code-review.yml`) and Markdown, images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`) and fonts (`.ttf`, `.otf`, `.woff`, `.woff2`) outside the always-reviewed paths (`_core/`, `bundles/`, `redesign/`, `.github/scripts/`, `.claude/` at any depth, `SETUP.md`, `TOGGLES.md`, `COMPARISON.md`, any `CLAUDE.md` or `CLAUDE.local.md`; typically docs-only PRs), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks resolve to passing states. The whole run completes in ~30 seconds.
+When the PR's diff contains no source-extension files (typically docs-only, rules-only, `.claude/**`, manifest tweaks), the workflow fires, `triage` classifies the diff as non-reviewable (`run_review=false`), `claude-review` is skipped via its `if: needs.triage.outputs.run_review == 'true'` guard, and `evaluate-review-outcome` (which runs via `if: always()`) takes the non-reviewable-diff path: PATCHes `Claude On-Demand` to `conclusion=skipped` and exits 0. Both required checks resolve to passing states. The whole run completes in ~30 seconds.
 
 ```bash
 # Background pattern — uses gh's built-in --jq; no external jq required:

@@ -30,15 +30,13 @@ Branch protection requires **two** status checks, both attached to the PR HEAD S
 
 Both `Evaluate review outcome` AND `Claude On-Demand` are configured as required status checks on `main` and `develop`. Omitting either from required checks would leave one tier advisory; this repo dogfoods the full strict model.
 
-## PRs that edit claude-code-review.yml go alone
+## Workflow-touching PRs require admin-bypass
 
-The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token. Any PR that edits `.github/workflows/claude-code-review.yml` therefore fails the token exchange and the routine review action cannot post a verdict.
+The Anthropic Claude Code GitHub App validates that the workflow file on a PR's head ref is byte-identical to the version on the default branch before granting an OIDC-exchanged token. Any PR that edits `.github/workflows/claude-code-review.yml` therefore fails the token exchange and the routine review action cannot post a verdict. `Evaluate review outcome` has no comment to read, exits 1, and the only path forward is `gh pr merge --admin`.
 
-Triage never reviews that one file, so a PR whose only other files are skippable (Markdown, images and fonts outside the always-reviewed paths) passes as non-reviewable; our own such PRs merge on two local reviews of the exact head. Anything reviewable in the same PR (`claude.yml`, another workflow, the gate script, `SETUP.md`, `.claude/`, a `CLAUDE.md`, code) starts the review, which stops on `Workflow validation failed`, and the gate blocks with no way through. Split it: the reviewable part goes in its own PR, which gets a normal review, and the `claude-code-review.yml` edit follows alone.
+(Edits to `claude.yml` alone do not trip this: claude.yml runs from the default branch's version on `issue_comment` events, so the running workflow file always matches the default branch. The OIDC check passes.)
 
-(Edits to `claude.yml` alone do not trip this: claude.yml runs from the default branch's version on `issue_comment` events, and the routine review runs the unchanged `claude-code-review.yml`. Such a PR gets a normal review.)
-
-Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (Sonnet posted 🔴, missing verdict line, etc.), fix the underlying issue. Never bypass.
+Confirm the failure mode by inspecting the `Claude review` job log for `Workflow validation failed. The workflow file must exist and have identical content to the version on the repository's default branch`. For every other failure mode (Sonnet posted 🔴, missing verdict line, etc.), fix the underlying issue — do not bypass.
 
 ---
 
@@ -50,7 +48,7 @@ This is the single most load-bearing rule for review quality.
 - **🔴 Blocking when ANY real finding exists**, regardless of how the reviewer frames it. "Minor wording nit" that suggests a real correctness improvement is 🔴. "All clear with caveats" is a contradiction in terms — the caveats make it 🔴. "Non-blocking but worth landing" is 🔴.
 - **The only legitimate omission** is style preferences, micro-optimizations, future-proofing for hypothetical changes, or "consider extracting" suggestions — those should be **DROPPED** entirely, not labeled as 🟡 or non-blocking.
 - **"All clear on X" is allowed AS A SECTION HEADING** when that section genuinely has nothing to flag. It is NEVER allowed as the verdict line when other sections have findings.
-- **In a 🟢 review, 🔴 and the word "Blocking" appear only inside inline backticks on the same line** (a line inside a fenced code block counts like any other; no "Blocking issues" heading, no "Blocking: none"): the gate blocks on lines like `**🔴 …**`, `- 🔴 x`, `### Blocking issues` or `**Verdict:** blocking` wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. The verdict is the last line (under the review action's footer), and it opens with 🔴 or 🟢.
+- **In a 🟢 review, 🔴 and the word "Blocking" appear only inside inline backticks on the same line** (a line inside a fenced code block counts like any other; no "Blocking issues" heading, no "Blocking: none"): the gate blocks on lines like `**🔴 …**`, `### Blocking issues` or `- Blocking: none` wherever they sit, and on a 🔴 anywhere in the last line holding 🔴 or 🟢, backticks or not, so a 🟢 verdict line holds no 🔴 at all.
 
 **Why:** a deep tier that returns 🟢 LGTM with three "minor non-blocking" findings tucked in the body becomes useless — the merge proceeds, the findings rot, and they re-surface as the same review weeks later. Binary verdict forces the reviewer to either drop genuinely-trivial observations or flag them as blockers worth fixing now.
 
