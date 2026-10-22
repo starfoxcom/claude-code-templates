@@ -35,10 +35,10 @@ class Triage(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage(["README.md", path]))
 
-    def test_only_the_review_workflows_never_count(self):
+    def test_only_the_review_workflow_never_counts(self):
         self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
-        self.assertFalse(gate.triage([".github/workflows/claude-code-review.yaml", "README.md"]))
-        for path in (".github/workflows/helper.sh", ".github/workflows/lib/action.yml", ".github/workflows/sub/x.py",
+        for path in (".github/workflows/claude-code-review.yaml",
+                     ".github/workflows/helper.sh", ".github/workflows/lib/action.yml", ".github/workflows/sub/x.py",
                      ".github/workflows/tests.yml", ".github/workflows/pages.yaml", ".github/workflows/claude.yml",
                      ".github/workflows/claude-deploy.yml", ".github/workflows/sub/claude-code-review.yml"):
             with self.subTest(path=path):
@@ -197,6 +197,27 @@ class Verdict(unittest.TestCase):
              "pass", "🟢 LGTM", None),
             (head + "- Step 2 – blocking call removed\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "**Verdict** — BLOCKING\n🟢 LGTM", "block", "**Verdict** — BLOCKING", over),
+            # A lower-case "blocking" after a dash or a 🔴 is a verdict unless a word
+            # or a code span follows it; "finding" and "issue" still make it one.
+            (head + "#### Finding \u2014 blocking\n🟢 LGTM", "block",
+             "#### Finding \u2014 blocking", over),
+            (head + "- **#1 (threading) \u2014 blocking, real correctness bug.**\n🟢 LGTM",
+             "block", "- **#1 (threading) \u2014 blocking, real correctness bug.**", over),
+            (head + "**`a.json` \u2014 blocking finding:**\n🟢 LGTM", "block",
+             "**`a.json` \u2014 blocking finding:**", over),
+            (head + "Verdict 🔴 blocking\n🟢 LGTM", "block", "Verdict 🔴 blocking", over),
+            (head + "### 4. Invariant 3 \u2014 blocking `wait()` in the loop\n🟢 LGTM",
+             "pass", "🟢 LGTM", None),
+            # Emphasis or a bracket before the next word keeps it prose; "finding" still counts.
+            (head + "- `x.py:3` — blocking **I/O** in the event loop\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "Change 3 — blocking (synchronous) writes\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "Change 3 — blocking _output_\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # A double-backtick span quoting a backtick stays code: no label after it.
+            (head + "- The class `` [^`] `` excludes backticks, so `- [ ] Blocking` stays quoted.\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "| ``(?i:blocking)`` | lower-case after a dash |\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "**`a.json` — blocking **finding**:**\n🟢 LGTM", "block",
+             "**`a.json` — blocking **finding**:**", over),
+            (head + "**Verdict** — blocking.\n🟢 LGTM", "block", "**Verdict** — blocking.", over),
             (head + "- `a.py:1` 🔴 Blocking: race\n🟢 LGTM", "block",
              "- `a.py:1` 🔴 Blocking: race", over),
             (head + "\u26a0\ufe0f Blocking — race\n🟢 LGTM", "block", "\u26a0\ufe0f Blocking — race", over),

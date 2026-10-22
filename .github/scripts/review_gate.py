@@ -51,8 +51,9 @@ import time
 # review workflow differs from the default branch's, so a workflow-only PR has
 # to pass as non-reviewable. Only that one workflow: claude.yml (the deep tier
 # runs the default branch's copy), any other workflow, and a script or action
-# kept under .github/workflows/ are reviewed like any other file.
-NEVER = re.compile(r"^\.github/workflows/claude-code-review\.ya?ml$")
+# kept under .github/workflows/ are reviewed like any other file. A .yaml twin
+# would run as a separate workflow, so it is reviewed too.
+NEVER = re.compile(r"^\.github/workflows/claude-code-review\.yml$")
 # Skipped only when every other path is Markdown, an image or a font that is
 # not always reviewed. Always reviewed, whatever the file type: _core/, which
 # lands verbatim in users' repos; bundles/, whose toggles drive what a bind
@@ -94,17 +95,25 @@ RED_OPENER = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🔴🟢])[\W\d_])*🔴")
 # 2. "Blocking" opening a line after the same markup, as written when the
 #    glyph is dropped: "1. **Blocking** — …", "### Blocking issues", "_Blocking_".
 BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|BLOCKING)(?![^\W_])")
-# 3. "Blocking" right after a short label: up to 30 characters (an inline
-#    code span counts as one) ending in a colon, a dash or a 🔴. After a
-#    colon any case counts ("**Verdict:** blocking"); after a dash or a 🔴
-#    only "Blocking" or "BLOCKING" does ("- `a.py:1` — Blocking: x"), since
-#    prose like "Change 3 — blocking output" uses the adjective. A hyphen
-#    right after a letter or digit joins a word ("Non-blocking: none") and
-#    ends no label.
+# 3. "Blocking" right after a short label: up to 30 characters (a
+#    single-backtick code span counts as one; a longer backtick run ends
+#    the label) ending in a colon, a dash or a 🔴. After a
+#    colon any case counts ("**Verdict:** blocking"). After a dash or a 🔴,
+#    "Blocking" and "BLOCKING" always count ("- `a.py:1` — Blocking: x"),
+#    and a lower-case "blocking" counts unless a word or a code span
+#    follows it, which makes it an adjective in prose ("Change 3 — blocking
+#    output", "— blocking `wait()`"); "— blocking finding" and "— blocking
+#    issue" still count. A hyphen right after a letter or digit joins a
+#    word ("Non-blocking: none") and ends no label.
 _AFTER_LABEL = r"(?:(?![`🟢])[\W\d_])*"
-LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?"
+# A word or a code span after the lower-case word, other than "finding" or
+# "issue", even behind emphasis or a bracket ("— blocking **I/O**",
+# "— blocking (sync) writes").
+_ADJECTIVE = r"\s+[*_(\[~]*(?!(?i:findings?|issues?)(?![^\W_]))(?:[^\W_]|`)"
+LABEL = re.compile(r"(?:(?<![`\\])`[^`]+`(?!`)|[^`🔴🟢]){0,30}?"
                    r"(?:[:：]" + _AFTER_LABEL + r"(?i:Blocking)"
-                   r"|(?:[—–−]|(?<![^\W_])[-‐‑]|🔴)" + _AFTER_LABEL + r"(?:Blocking|BLOCKING))"
+                   r"|(?:[—–−]|(?<![^\W_])[-‐‑]|🔴)" + _AFTER_LABEL
+                   + r"(?:Blocking|BLOCKING|(?i:blocking)(?![^\W_])(?!" + _ADJECTIVE + r")))"
                    r"(?![^\W_])")
 # The verdict is the last line, under the review action's footer. Only lines
 # that say nothing are skipped: a rule line, or an optional rule then pieces
