@@ -618,9 +618,13 @@ jobs:
               # so this verdict does not count and must not move Claude
               # On-Demand either; the later run moves it. It does so only after
               # its own gate write's read-back, seconds after that write.
-              NOW=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
-                --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
-              if [ "${NOW##*;deep_by=}" != "$ORDER" ]; then
+              if ! NOW=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
+                  --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""'); then
+                # Unknown owner: fail closed, so Claude On-Demand fails too.
+                echo "::error::Could not read the Review gate back to confirm this run still owns the deep result"
+                DEEP=error
+                STATUS=1
+              elif [ "${NOW##*;deep_by=}" != "$ORDER" ]; then
                 echo "::error::A deep run that started later took over on $HEAD_SHA, so this run's verdict ($DEEP) was not used"
                 exit 1
               fi
