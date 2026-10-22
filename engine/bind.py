@@ -45,7 +45,7 @@ VERBATIM = (".claude/hooks/", ".github/scripts/")
 
 def _included(path, a, flags):
     adv = a["advanced"]
-    # The review gate's script, setup script, settings and guide serve both tiers.
+    # The review gate's scripts, settings, guide and pin check serve both tiers.
     gate = flags["github_actions_routine_review"] or flags["github_actions_deep_review"]
     if path.startswith("precommit/"):
         return False
@@ -68,6 +68,8 @@ def _included(path, a, flags):
         ".github/workflows/claude.yml.template": flags["github_actions_deep_review"],
         ".github/scripts/review_gate.py": gate,
         ".github/scripts/setup-review-gate.sh": gate,
+        ".github/scripts/pin_check.py": gate,
+        ".github/workflows/pin-check.yml": gate,
         ".github/review-gate.yml.template": gate,
         ".github/review-guide.md.template": gate,
         ".claude/hooks/run-hook.sh": flags["guard_hooks_repo"],

@@ -26,6 +26,8 @@ const SHIPPED = [
   ".github/workflows/claude.yml",
   ".github/scripts/review_gate.py",
   ".github/scripts/setup-review-gate.sh",
+  ".github/scripts/pin_check.py",
+  ".github/workflows/pin-check.yml",
 ];
 const GATE_FILES = [...SHIPPED, ".github/review-gate.yml", ".github/review-guide.md"];
 
