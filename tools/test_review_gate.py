@@ -586,7 +586,9 @@ class Settings(unittest.TestCase):
                      "prescreen:\n  dir: a b", "prescreen:\n  dir: -x", "prescreen:\n  dir: -", "escalate:\n  paths: a b", "escalate:\n  paths: $x",
                      "escalate:\n  patterns: (unclosed", "reviewer:\n  allowed_tools: Bash(rm -rf $HOME)",
                      "reviewer:\n  allowed_tools: Bash(a \"b\")", "reviewer:\n  allowed_tools: Write",
-                     "reviewer:\n  allowed_tools: Bash(a), Edit", "reviewer:\n  allowed_tools: Bash(a(b))"]:
+                     "reviewer:\n  allowed_tools: Bash(a), Edit", "reviewer:\n  allowed_tools: Bash(a(b))",
+                     "escalate:\n  auto: yes", "escalate:\n  auto:", "escalate:\n  auto: OFF",
+                     "prescreen:\n  attribution: true", "prescreen:\n  attribution: off now"]:
             with self.subTest(text=text):
                 with self.assertRaises(gate.GateError):
                     gate.settings(text)
@@ -608,6 +610,13 @@ class Settings(unittest.TestCase):
                           "\\b(eval|exec)\\(", "Bash(npm run lint *), Read, Grep"))
         self.assertEqual(gate.settings("prescreen:\n  dir:\n")["prescreen.dir"], "")
 
+    def test_the_switches_are_on_unless_turned_off(self):
+        self.assertEqual((gate.DEFAULTS["escalate.auto"], gate.DEFAULTS["prescreen.attribution"]), ("on", "on"))
+        got = gate.settings("prescreen:\n  attribution: off\nescalate:\n  auto: off  # by hand only\n")
+        self.assertEqual((got["escalate.auto"], got["prescreen.attribution"]), ("off", "off"))
+        lines = gate.run(["settings", "--file", os.devnull])
+        self.assertEqual((lines["escalate.auto"], lines["prescreen.attribution"]), ("on", "on"))
+
 
 class Escalate(unittest.TestCase):
     VALUES = dict(gate.DEFAULTS, **{"escalate.paths": "migrations/, src/*/auth.py",
@@ -617,6 +626,11 @@ class Escalate(unittest.TestCase):
         got = gate.escalate(["Migrations/001.sql", "src/api/AUTH.py", "src/auth.py", "docs/migrations.md"], [],
                             self.VALUES)
         self.assertEqual(got, {"escalate": True, "paths": ["Migrations/001.sql", "src/api/AUTH.py"], "lines": []})
+
+    def test_nothing_matches_while_auto_escalation_is_off(self):
+        values = dict(self.VALUES, **{"escalate.auto": "off"})
+        got = gate.escalate(["migrations/001.sql"], ["y = eval(s)"], values)
+        self.assertEqual(got, {"escalate": False, "paths": [], "lines": []})
 
     def test_added_lines_match_the_pattern(self):
         got = gate.escalate(["a.py"], ["x = 1", "y = eval(s)", "evaluate(s)"], self.VALUES)
