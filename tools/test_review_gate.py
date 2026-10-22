@@ -2,6 +2,7 @@
 
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -140,6 +141,18 @@ class ReviewChecks(unittest.TestCase):
         self.assertIn("{{NOPE_THING}}", out)
         self.assertNotIn("PROJECT_NAME", out)
         self.assertEqual(self.run_check("template_placeholders.py", ["docs/z.md"], {"docs/z.md": "{{NOPE}}"})[0], 0)
+
+    def test_template_names(self):
+        # Names a check could not open from the one-per-line list fail.
+        names = runpy.run_path(os.path.join(CHECKS_DIR, "template_names.py"))
+        for name in (b"a\nb.md", b"a\rb.md", b"tab\tx.md", b"n\xe9.md", b"del\x7f.md"):
+            with self.subTest(name=name):
+                self.assertTrue(names["odd"](name))
+        for name in (b"README.md.template", "caf\u00e9.md".encode(), b"with space.md"):
+            with self.subTest(name=name):
+                self.assertFalse(names["odd"](name))
+        t = "_core/project-template/x/y.md"
+        self.assertEqual(self.run_check("template_names.py", [t], {t: "x"})[0], 0)
 
     def test_page_parity_only_warns(self):
         code, out = self.run_check("page_parity.py", ["redesign/app.jsx"], {"redesign/app.jsx": "<a/>"})
