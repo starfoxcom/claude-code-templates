@@ -65,6 +65,14 @@ class Verdict(unittest.TestCase):
         self.assertEqual(gate.verdict(none, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
         self.assertEqual(gate.verdict("", "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
 
+    def test_the_actions_footer_under_the_verdict_is_skipped(self):
+        for tail in ("", "\n\n---\n[View job](https://github.com/o/r/actions/runs/1) · "
+                     "[Branch](https://github.com/o/r/tree/b)", "\n · `fix/x`", "\n- [x] Post verdict"):
+            body = "**Claude finished**\n\n🟢 LGTM" + tail
+            self.assertEqual(gate._line(body)[:2], ("pass", "🟢 LGTM"), tail)
+        body = "**Claude finished**\n\n## 🟢 All clear\nVerdict = Blocking\n---\n[View job](https://github.com/o/r/actions/runs/1)"
+        self.assertEqual(gate._line(body)[0], "missing")
+
     def test_the_last_glyph_line_decides_and_a_glyphless_blocking_blocks(self):
         head = "## Code Review — claude-code-templates\n"
         alone = "no 🔴/🟢 line; a line opening with Blocking"
@@ -77,7 +85,8 @@ class Verdict(unittest.TestCase):
             (head + "The 🔴 from the last pass is fixed.\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "The format is \"🟢 LGTM\".\n🔴 Must fix: hook is not portable", "block",
              "🔴 Must fix: hook is not portable", None),
-            (head + "Post a binary 🔴/🟢 verdict", "block", "Post a binary 🔴/🟢 verdict", None),
+            # The last line must open with the verdict glyph.
+            (head + "Post a binary 🔴/🟢 verdict", "missing", "", None),
             ("**Code Review - claude-code-templates**\n🟢 LGTM", "pass", "🟢 LGTM", None),
             # A dropped glyph next to a 🟢 elsewhere still blocks.
             (head + "**Blocking** — must fix\nOnce fixed, this is 🟢 LGTM.", "block",
@@ -97,17 +106,30 @@ class Verdict(unittest.TestCase):
             (head + "_Blocking_ — drops the filter\n🟢 LGTM", "block", "_Blocking_ — drops the filter", over),
             # A 🔴 Blocking list item between a 🟢 recap and a 🟢 heading.
             (head + "The routine tier said 🟢 LGTM.\n1. 🔴 **Blocking** — drops the filter\n"
-             "## 🟢 All clear on hooks", "block", "1. 🔴 **Blocking** — drops the filter", over),
+             "## 🟢 All clear on hooks", "block", "1. 🔴 **Blocking** — drops the filter", red),
             (head + "- 🔴 Blocking — drops the filter\n🟢 LGTM", "block",
-             "- 🔴 Blocking — drops the filter", over),
-            # A list item quoting the rule or recapping a fixed finding does
-            # not open with the glyph, whatever its bullet.
-            (head + "  - 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "* 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "+ 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "1. 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "> 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "- 🔴 `hook.sh:12` — raised earlier, now fixed\n🟢 LGTM", "pass", "🟢 LGTM", None),
+             "- 🔴 Blocking — drops the filter", red),
+            # A 🔴 after any bullet blocks too: prose naming a 🔴 keeps it in backticks.
+            (head + "  - 🔴 when any finding exists: checked\n🟢 LGTM", "block", "- 🔴 when any finding exists: checked", red),
+            (head + "* 🔴 when any finding exists: checked\n🟢 LGTM", "block", "* 🔴 when any finding exists: checked", red),
+            (head + "+ 🔴 when any finding exists: checked\n🟢 LGTM", "block", "+ 🔴 when any finding exists: checked", red),
+            (head + "1. 🔴 when any finding exists: checked\n🟢 LGTM", "block", "1. 🔴 when any finding exists: checked", red),
+            (head + "> 🔴 when any finding exists: checked\n🟢 LGTM", "block", "> 🔴 when any finding exists: checked", red),
+            (head + "- 🔴 `hook.sh:12` — raised earlier, now fixed\n🟢 LGTM", "block", "- 🔴 `hook.sh:12` — raised earlier, now fixed", red),
+            (head + "- `🔴` when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # A label then "Blocking" in any case blocks; a hyphenated word does not.
+            (head + "## 🟢 All clear\n**Verdict:** blocking — must fix", "block",
+             "**Verdict:** blocking — must fix", over),
+            (head + "**VERDICT:** BLOCKING\n🟢 LGTM", "block", "**VERDICT:** BLOCKING", over),
+            (head + "- `a.py:1` — Blocking: the writer races\n🟢 LGTM", "block",
+             "- `a.py:1` — Blocking: the writer races", over),
+            (head + "Non-blocking: none\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "\u26a0\ufe0f Blocking — race\n🟢 LGTM", "block", "\u26a0\ufe0f Blocking — race", over),
+            (head + "| [ ] " * 200 + "| ok\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # A glyph-less verdict under a 🟢 heading is missing, never a pass.
+            (head + "## 🟢 All clear on hooks\nVerdict = request changes", "missing", "", None),
+            (head + "## 🟢 All clear on hooks\n\u274c Request changes", "missing", "", None),
+            (head + "🟢 LGTM\nThanks!", "missing", "", None),
             # Bold, italics and headings are markup, not bullets: they open.
             (head + "**🔴 Blocking — the writer races**\n## 🟢 All clear on hooks", "block",
              "**🔴 Blocking — the writer races**", red),

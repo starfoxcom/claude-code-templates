@@ -73,15 +73,27 @@ DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
 NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude |Claude Code is working"
                          r"|[#*_\s]*deep review)", re.I)
 GLYPHS = re.compile("🔴|🟢")
-# "Blocking" opening a line, as written when the glyph is dropped, also as a
-# list item, numbered item, quote or bracketed tag, with or without a 🔴
-# before it ("1. **Blocking** — …", "- 🔴 **Blocking** — …", "_Blocking_").
-BLOCKING = re.compile(r"[ \t>*_#+-]*(?:[0-9]+[.)][ \t]*)?[ \t*_\[]*(?:🔴[ \t*_\[]*)?"
-                      r"Blocking(?![^\W_])")
-# A 🔴 opening a line, after markup only: a verdict line. A list item ("- ",
-# "+ ", "* ", "1. ") quoting the rule ("- 🔴 when any finding exists") or
-# recapping a fixed finding does not count, nor does prose naming a fixed 🔴.
-RED_OPENER = re.compile(r"(?:[ \t#_]|\*(?![ \t]))*🔴")
+# A line that blocks wherever it sits. Each prefix reads a checkbox ("[ ]",
+# "[x]") as one unit and any other non-letter as another, never both ways,
+# so a long row of checkboxes cannot make the match backtrack.
+# 1. A 🔴 after list, quote, table, heading or emphasis markup: "**🔴 …**",
+#    "- 🔴 x", "1. 🔴 Blocking …". Prose naming a 🔴 keeps it in backticks.
+RED_OPENER = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🔴🟢])[\W\d_])*🔴")
+# 2. "Blocking" opening a line after the same markup, as written when the
+#    glyph is dropped: "1. **Blocking** — …", "### Blocking issues", "_Blocking_".
+BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|BLOCKING)(?![^\W_])")
+# 3. "Blocking" in any case right after a short label: up to 30 characters
+#    (an inline code span counts as one) ending in a colon, a dash or a 🔴:
+#    "**Verdict:** blocking", "- `a.py:1` — Blocking: x". A hyphen right after
+#    a letter or digit joins a word ("Non-blocking: none") and ends no label.
+LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?(?:[:：—–−]|(?<![^\W_])[-‐‑]|🔴)"
+                   r"(?:(?![`🟢])[\W\d_])*(?i:Blocking)(?![^\W_])")
+# The verdict is the last line, under the review action's footer: its job and
+# branch links ("[View job](…) · [Branch](…)", "· `branch`"), a rule line,
+# and an old run's task checklist ("- [x] Post verdict") are skipped.
+FOOTER = re.compile(r"\s*(?:(?:-{3,}|\*{3,}|_{3,})\s*(?:$|(?=[·•]))|[·•]"
+                    r"|\[View job\]\(https://github\.com/|[-*] \[[ xX]\] )")
+VERDICT_LINE = re.compile(r"[\s#*_>]*(?:🔴|🟢)")
 VERDICTS = ("pass", "block", "missing", "error")
 STATE_VALUES = {
     "triage": ("reviewable", "skip"),
@@ -160,23 +172,28 @@ def _pick(bodies, tier, marker):
 
 
 def _line(body):
-    """The verdict line: the last holding a glyph. A line opening with 🔴 or
-    with "Blocking" blocks whatever the glyphs say: a 🟢 after it ("once fixed,
-    this is 🟢 LGTM", a "🟢 All clear on X" heading) must not pass it, and the
-    glyph is what gets dropped. A bare "LGTM" never passes, since prose like
-    "LGTM otherwise, but this must be fixed" opens the same way."""
+    """The verdict line: the last line under the action's footer, which must
+    open with 🔴 or 🟢; any 🔴 on it blocks. A line that blocks wherever it
+    sits (RED_OPENER, BLOCKING, LABEL) blocks whatever the verdict line says:
+    a 🟢 after it ("once fixed, this is 🟢 LGTM", a "🟢 All clear on X"
+    heading) must not pass it, and the glyph is what gets dropped. Any other
+    last line is a missing verdict: a bare "LGTM", or "Verdict = Blocking"
+    under a "🟢 All clear on X" heading, never passes."""
     lines = body.splitlines()
-    found = [l for l in lines if GLYPHS.search(l)]
-    if found and "🔴" in found[-1]:
-        return "block", found[-1].strip(), "glyph"
-    red = [l for l in lines if RED_OPENER.match(l)]
-    if red:
-        return "block", red[0].strip(), "red-over-glyph"
-    blocking = [l for l in lines if BLOCKING.match(l)]
-    if blocking:
-        return "block", blocking[0].strip(), ("word-over-glyph" if found else "word")
-    if found:
-        return "pass", found[-1].strip(), "glyph"
+    glyph = any("🔴" in l or "🟢" in l for l in lines)
+    early = next(((l, how) for l in lines for how, rule in
+                  (("red-over-glyph", RED_OPENER), ("word-over-glyph", BLOCKING), ("word-over-glyph", LABEL))
+                  if rule.match(l)), None)
+    while lines and (not lines[-1].strip() or FOOTER.match(lines[-1])):
+        lines.pop()
+    last = lines[-1].strip() if lines else ""
+    if VERDICT_LINE.match(last) and "🔴" in last:
+        return "block", last, "glyph"
+    if early:
+        line, how = early
+        return "block", line.strip(), (how if glyph else "word")
+    if VERDICT_LINE.match(last):
+        return "pass", last, "glyph"
     return "missing", "", ""
 
 
