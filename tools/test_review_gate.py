@@ -120,6 +120,21 @@ class Verdict(unittest.TestCase):
             comment("Deep pass notes\n🟢 LGTM", "2026-10-21T09:12:00Z"),
         ])
         self.assertEqual(gate.verdict(after_only, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+        by_hand = self.pages([
+            comment("@claude review this PR — depth pass.", "2026-10-21T09:05:00Z", login="maintainer"),
+            comment("Review done.\n🔴 Blocking — race in the writer", "2026-10-21T09:10:00Z"),
+            comment("# Deep Review\n🟢 LGTM", "2026-10-21T09:12:00Z"),
+        ])
+        self.assertEqual(gate.verdict(by_hand, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+        asked_earlier = self.pages([
+            comment("@claude review this PR — depth pass.", "2026-10-21T08:55:00Z", login="maintainer"),
+            comment("Review done.\n🔴 Blocking — race in the writer", "2026-10-21T09:10:00Z"),
+            comment("# Deep Review\n🟢 LGTM", "2026-10-21T09:12:00Z"),
+            comment("**deep review**\n🟢 LGTM", "2026-10-21T09:13:00Z"),
+        ])
+        self.assertEqual(gate.verdict(asked_earlier, "2026-10-21T09:00:00Z", "routine", MARK),
+                         {"verdict": "block", "line": "🔴 Blocking — race in the writer",
+                          "recovered": "comment by glyph, line by glyph"})
 
     def test_a_deep_verdict_without_a_glyph_only_ever_blocks(self):
         text = self.pages([comment("## Deep review\nBlocking — race in the writer")])

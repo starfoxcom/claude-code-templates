@@ -68,9 +68,10 @@ DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
 # Bot comments that are never a routine verdict: the deep-review request and
 # the review action's tracking comments ("Claude Code is working…" while it
 # runs, "**Claude finished…**" or "**Claude encountered an error**" after),
-# whose glyphs belong to other runs.
+# whose glyphs belong to other runs, and a deep review whose heading is
+# written slightly off ("# Deep Review", "**Deep review**").
 REQUEST = re.compile(r"\A@claude review this PR")
-NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude |Claude Code is working)")
+NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude |Claude Code is working|[#*_\s]*deep review)", re.I)
 GLYPHS = re.compile("🔴|🟢")
 # A verdict word opening a line, as written when the glyph is dropped.
 WORD = re.compile(r"^[\s*_#]*(Blocking|LGTM)\b", re.M)
@@ -132,26 +133,28 @@ def _comments(text):
         out.extend(page)
 
 
-def _bot_bodies(text, since):
-    return [c.get("body") or "" for c in _comments(text)
-            if isinstance(c, dict) and (c.get("user") or {}).get("login") == BOT
-            and (c.get("created_at") or "") >= since]
+def _window(text, since):
+    """(posted by the bot, body) for every comment at or after `since`, oldest first."""
+    return [((c.get("user") or {}).get("login") == BOT, c.get("body") or "") for c in _comments(text)
+            if isinstance(c, dict) and (c.get("created_at") or "") >= since]
 
 
-def _pick(bodies, tier, marker):
+def _pick(window, tier, marker):
     """The newest comment of `tier`, and what told it apart. A routine comment
     is found by `marker` first; when the reviewer dropped its heading, by a
     verdict glyph, then by a verdict word. It is never a deep comment, even
     one quoting the routine review, nor a request or tracking comment. The
-    looser tiers look only before the first deep-review request: the reviewer
-    posts its verdict before asking, and every comment of a deep run comes
-    after the request that started it."""
+    looser tiers look only before the first deep-review request, whoever
+    posted it: the reviewer posts its verdict before asking, and every comment
+    of a deep run comes after the request that started it."""
+    bodies = [b for by_bot, b in window if by_bot]
     if tier == "deep":
         found = [b for b in bodies if DEEP_MARKER.search(b)]
         return (found[-1], "marker") if found else (None, "")
-    first_request = next((i for i, b in enumerate(bodies) if REQUEST.search(b)), len(bodies))
+    first_request = next((i for i, (_, b) in enumerate(window) if REQUEST.search(b)), len(window))
     routine = [b for b in bodies if not DEEP_MARKER.search(b) and not NOT_ROUTINE.search(b)]
-    before = [b for b in bodies[:first_request] if not DEEP_MARKER.search(b) and not NOT_ROUTINE.search(b)]
+    before = [b for by_bot, b in window[:first_request]
+              if by_bot and not DEEP_MARKER.search(b) and not NOT_ROUTINE.search(b)]
     for how, pool, test in (("marker", routine, marker.search), ("glyph", before, GLYPHS.search),
                             ("word", before, WORD.search)):
         found = [b for b in pool if test(b)]
@@ -178,7 +181,7 @@ def verdict(text, since, tier, marker=None):
     """The verdict in the bot's newest comment of `tier` posted at or after
     `since`. A comment or line found only by a looser tier adds `recovered`,
     naming what found it."""
-    body, found_by = _pick(_bot_bodies(text, since), tier, re.compile(marker) if marker else None)
+    body, found_by = _pick(_window(text, since), tier, re.compile(marker) if marker else None)
     if body is None:
         return {"verdict": "missing", "line": ""}
     result, line, how = _line(body)
