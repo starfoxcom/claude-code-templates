@@ -1,8 +1,9 @@
 # On-demand deep review
 # Filters on body SIGNATURE (`@claude review this PR`), not author. Mirrors
 # GameProject's proven shape: the routine review's structured trigger comment
-# (claude-code-review.yml Step 4.B) is posted by GITHUB_TOKEN — author =
-# `claude[bot]`. So is the action's own progress comment. Body content
+# (claude-code-review.yml Step 4.B) is posted with the review app's
+# installation token, not GITHUB_TOKEN (whose comments start no workflow) —
+# author = `claude[bot]`. So is the action's own progress comment. Body content
 # distinguishes the two cleanly:
 #   • Trigger comment body STARTS with `@claude review this PR — depth pass`.
 #   • Progress comment body is `Claude Code is working…` and contains
@@ -50,8 +51,8 @@ jobs:
     #
     # Note for humans triggering manually: start the comment with the exact
     # phrase `@claude review this PR` (not just `@claude review`). Matches
-    # the structured trigger format documented in
-    # `.claude/rules/review-tiers.md`.
+    # the structured trigger format the routine review posts (Step 4.B in
+    # claude-code-review.yml).
     # Anchor the bot-loop guard to startsWith — the action's progress comment
     # body STARTS with "Claude Code is working"; legitimate escalation
     # comments may quote the phrase when discussing the filter itself (e.g.
@@ -140,13 +141,15 @@ jobs:
       checks: write
     steps:
       # A self-hosted runner shares one workspace between jobs and workflows,
-      # and the routine review's sparse checkouts leave a partial clone there
-      # (file contents fetched on demand). A full fetch into it stays partial,
-      # and reading the diff would then fetch contents without a token, which
-      # fails on a private repo. So this full checkout starts fresh.
+      # where a sparse or partial clone can sit (left by an older routine
+      # review, or another workflow). A full fetch into a partial clone stays
+      # partial, and reading the diff would then fetch contents without a
+      # token, which fails on a private repo; a sparse one leaves most files
+      # out. So this full checkout starts fresh from such a clone.
       - name: Drop a partial clone left by an earlier job
         run: |
-          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ] \
+              || [ "$(git -C "$GITHUB_WORKSPACE" config --get core.sparsecheckout 2>/dev/null)" = true ]; then
             rm -rf "$GITHUB_WORKSPACE/.git"
           fi
 
@@ -461,7 +464,7 @@ jobs:
           $REQUEST
           ----- end of request -----
 
-          The working folder holds the PR's head commit, except that its top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies: read the PR's version of any of those with \`git show HEAD:<path>\`, never with Read. First read CLAUDE.md and .claude/rules/review-tiers.md there (the base copies, on purpose): they hold this project's rules and the verdict rule. ${GUIDE_NOTE:+$GUIDE_NOTE }Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
+          The working folder holds the PR's head commit, except that its top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies: read the PR's version of any of those with \`git show HEAD:<path>\`, never with Read. First read CLAUDE.md there, and .claude/rules/review-tiers.md when the project has it (the base copies, on purpose): they hold this project's rules and its review rules. ${GUIDE_NOTE:+$GUIDE_NOTE }Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
 
           You work alone and this is a one-shot session: the moment you end your turn it is over and nothing else runs. Never delegate to helper agents, never schedule a wake-up, never wait for anything. Read the diff file by file in this turn and post the review before you stop.
 
@@ -508,6 +511,20 @@ jobs:
               echo "::warning::The credits run posted no verdict: the deep review runs on the subscription"
               exit 1 ;;
           esac
+
+      # The review action fetches the PR branch from origin before it writes
+      # its own token, and the checkout above left no login, so on a private
+      # repo that fetch fails and every attempt below with it. The credits
+      # reviewer has finished by now, so the workflow token can go into the
+      # local git config for the attempts; the last step takes it out again.
+      - name: Give the review action a git login on a private repo
+        if: github.event.repository.private && steps.pr-head.outputs.head_sha != '' && steps.claude_credits.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
 
       - name: Run Claude
         id: claude_attempt_1
@@ -680,6 +697,12 @@ jobs:
           additional_permissions: |
             actions: read
           allowed_bots: "claude"
+
+      # Takes the login from the step before the attempts out again, whatever
+      # happened: a self-hosted runner keeps the workspace for later jobs.
+      - name: Remove the review action's git login
+        if: always() && github.event.repository.private
+        run: git config --local --unset-all http.https://github.com/.extraheader || true
 
       - name: Evaluate deep-tier verdict
         # Reads this run's deep verdict and writes it into the Review gate on
