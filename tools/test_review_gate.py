@@ -187,7 +187,8 @@ class Settings(unittest.TestCase):
 
     def test_bad_settings_are_errors(self):
         for text in ["checks: three", "routine:\n  model: Bad Model", "routine:\n  effort: huge", "routine:\n  max_turns: 0",
-                     "deep:\n  colour: red", "  model: x", "model claude"]:
+                     "deep:\n  colour: red", "  model: x", "model claude", "checks:", "checks:  # one",
+                     "colour:", "colour:\n  model: x"]:
             with self.subTest(text=text):
                 with self.assertRaises(gate.GateError):
                     gate.settings(text)

@@ -59,6 +59,7 @@ DEFAULTS = {
     "deep.model": "claude-fable-5-1", "deep.effort": "low", "deep.max_turns": "120",
     "fallback.model": "claude-opus-5-5", "fallback.effort": "high",
 }
+SECTIONS = {k.split(".")[0] for k in DEFAULTS if "." in k}
 CHECKS = {
     "checks": re.compile(r"one|two"),
     "model": re.compile(r"[a-z0-9][a-z0-9.-]{0,63}"),
@@ -227,6 +228,9 @@ def settings(text):
             raise GateError("review-gate.yml line %d: expected `key: value`" % n)
         indent, key, value = m.groups()
         if not indent and not value:
+            if key not in SECTIONS:
+                raise GateError("review-gate.yml line %d: %s needs a value" % (n, key) if key in DEFAULTS
+                                else "review-gate.yml line %d: unknown section %s" % (n, key))
             section = key
             continue
         name = "%s.%s" % (section, key) if indent else key
