@@ -26,8 +26,8 @@
 #   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
 #   head ref is byte-identical to the version on the default branch before granting
 #   an OIDC-exchanged token, so the review action cannot run on a PR that edits this
-#   file. Triage therefore never reviews .github/workflows/: a workflow-only PR passes
-#   as non-reviewable. Keep workflow edits in PRs of their own (mixed with reviewable
+#   file. Triage therefore never reviews the workflow files (.github/workflows/*.yml
+#   and *.yaml): a workflow-only PR passes as non-reviewable. Keep workflow edits in PRs of their own (mixed with reviewable
 #   files, the review starts and fails `Workflow validation failed`), and the
 #   maintainer reads those diffs before merge.
 
@@ -1408,7 +1408,7 @@ jobs:
                 -F status="completed" \
                 -F conclusion="skipped" \
                 -F "output[title]=Deep review skipped — diff non-reviewable" \
-                -F "output[summary]=Triage classified the diff as non-reviewable (only Markdown, images and fonts outside the deep-review folders). Deep review not applicable."
+                -F "output[summary]=Triage classified the diff as non-reviewable (only workflow files, and Markdown, images and fonts outside the always-reviewed paths). Deep review not applicable."
               echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (non-reviewable diff)"
             else
               # Self-heal: init-gate didn't create the check (Checks API 5xx,
