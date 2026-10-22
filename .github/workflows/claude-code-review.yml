@@ -674,7 +674,7 @@ jobs:
                             r'|(^|/)\.mcp\.json$|^\.claude\.json$|^\.husky/|^\.gitmodules$|^\.ripgreprc$', re.I)
           arch_critical, docs, other_code = [], [], []
           for f in changed:
-              if f.startswith('.github/workflows/') or f == 'index.html' or ARCH.search(f):
+              if f.startswith('.github/workflows/') or f.casefold() == 'index.html' or ARCH.search(f):
                   arch_critical.append(f)
               elif f.endswith('.md'):
                   docs.append(f)
@@ -694,10 +694,10 @@ jobs:
           # "_CORE/" in _core/.
           deep_paths = [
               f for f in changed
-              if any(f.lower().startswith(p) for p in DEEP_PREFIXES)
-              or f.lower() in DEEP_FILES
-              or f.lower().startswith(DEEP_HOOKS)
-              or f.lower().startswith(DEEP_WORKFLOWS)
+              if any(f.casefold().startswith(p) for p in DEEP_PREFIXES)
+              or f.casefold() in DEEP_FILES
+              or f.casefold().startswith(DEEP_HOOKS)
+              or f.casefold().startswith(DEEP_WORKFLOWS)
           ]
           # The Repair step applies the label itself when these paths changed,
           # so the deep review is owed whatever the reviewer does.
@@ -1448,7 +1448,7 @@ jobs:
               echo "Routine review verdict: 🔴 Blocking, from $REVIEWER" >> "$GITHUB_STEP_SUMMARY"
               echo "::error::Routine review verdict: 🔴 Blocking — must fix (reviewer: $REVIEWER)" ;;
             missing)
-              echo "::error::No routine verdict this run: no review comment, or one without a 🔴/🟢 line (max-turns hit, gh failure, or refusal; reviewer: $REVIEWER)" ;;
+              echo "::error::No routine verdict this run: no review comment, or one whose last line does not open with 🔴/🟢 (max-turns hit, gh failure, or refusal; reviewer: $REVIEWER)" ;;
             *)
               echo "::error::Claude review job did not complete successfully (result: ${{ needs.claude-review.result }})" ;;
           esac
