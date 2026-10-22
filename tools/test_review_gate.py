@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,7 +26,14 @@ class Triage(unittest.TestCase):
         self.assertTrue(gate.triage(["_core/project-template/CLAUDE.md"]))
         self.assertTrue(gate.triage(["bundles/2-multi-dev-oss/bundle.toggles.md"]))
         self.assertFalse(gate.triage(["README.md", "docs/v2/PLAN.md"]))
+        self.assertFalse(gate.triage(["assets/logo.PNG", "fonts/geist.woff2", "docs/a.jpeg"]))
         self.assertFalse(gate.triage([]))
+
+    def test_anything_but_markdown_images_and_fonts_is_reviewed(self):
+        for path in ("tools/run.sh", ".gitattributes", ".lfsconfig", "assets/logo.svg",
+                     "LICENSE", "VERSION", "index.html", "package-lock.json"):
+            with self.subTest(path=path):
+                self.assertTrue(gate.triage(["README.md", path]))
 
     def test_workflows_never_count_whatever_their_extension(self):
         self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
@@ -64,6 +72,16 @@ class Verdict(unittest.TestCase):
         none = self.pages([comment("## Code Review — claude-code-templates\nLooks fine overall.")])
         self.assertEqual(gate.verdict(none, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
         self.assertEqual(gate.verdict("", "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+
+    def test_a_long_run_of_markup_reads_in_linear_time(self):
+        # A comment can be 65,536 characters; a pattern that backtracks over
+        # every split of a run would hang the verdict step.
+        for seed in (" ", "_", "*", "#", "-", "[ ]", ":", "—", "> ", "`a`", "x"):
+            line = (seed * 60000)[:60000]
+            started = time.perf_counter()
+            gate._line("## Deep review\n" + line + "Blockin\n🟢 LGTM")
+            gate._line(line)
+            self.assertLess(time.perf_counter() - started, 2, repr(seed))
 
     def test_the_actions_footer_under_the_verdict_is_skipped(self):
         for tail in ("", "\n\n---\n[View job](https://github.com/o/r/actions/runs/1) · "
