@@ -186,7 +186,8 @@ CHECKS = {
     "effort": re.compile(r"low|medium|high|xhigh|max"),
     "max_turns": re.compile(r"[1-9][0-9]{0,2}"),
     # A folder in the repo, relative, with no `..` part.
-    "dir": re.compile(r"|(?!/)(?!(?:.*/)?\.\.(?:/|$))[A-Za-z0-9._/-]{1,200}"),
+    # The first character is no `-`, so no tool reads the value as an option.
+    "dir": re.compile(r"|(?!(?:.*/)?\.\.(?:/|$))[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}"),
     "paths": re.compile(r"|%s(?:, *%s){0,49}" % (_GLOB, _GLOB)),
     # Any Python regex up to 500 characters; settings() also compiles it.
     "patterns": re.compile(r"[^\n]{0,500}"),
@@ -470,7 +471,11 @@ def settings(text):
             raise GateError("review-gate.yml line %d: indented key outside a section" % n)
         if name not in DEFAULTS:
             raise GateError("review-gate.yml line %d: unknown setting %s" % (n, name))
-        value = value.strip().strip("\"'")
+        value = value.strip()
+        # One matching pair of outer quotes, never more: a regex may start or
+        # end with a quote of its own.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
         if not CHECKS[name.split(".")[-1]].fullmatch(value) or not _compiles(name, value):
             raise GateError("review-gate.yml line %d: bad value for %s: %s" % (n, name, value))
         values[name] = value
@@ -492,7 +497,31 @@ def _compiles(name, value):
     return True
 
 
-def escalate(paths, added_lines, values):
+HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+def added_lines(diff):
+    """The lines a unified diff adds, read hunk by hunk with the counts in
+    each `@@` header, so an added line that starts with `++` (`++i;`) is never
+    taken for a `+++` file header."""
+    added, old, new = [], 0, 0
+    for line in diff.split("\n"):
+        if old <= 0 and new <= 0:
+            m = HUNK.match(line)
+            if m:
+                old, new = int(m.group(1) or 1), int(m.group(2) or 1)
+            continue
+        if line.startswith("+"):
+            added.append(line[1:])
+            new -= 1
+        elif line.startswith("-"):
+            old -= 1
+        elif not line.startswith("\\"):
+            old, new = old - 1, new - 1
+    return added
+
+
+def escalate(paths, added, values):
     """The project's own deep-review triggers from review-gate.yml: paths that
     match an `escalate.paths` glob (any case; `*` crosses folders, and a glob
     ending in `/` covers the folder), and added diff lines that
@@ -502,7 +531,7 @@ def escalate(paths, added_lines, values):
     pattern = re.compile(values["escalate.patterns"]) if values["escalate.patterns"] else None
     hits = [p for p in paths
             if any(fnmatch.fnmatchcase(p.casefold(), g + "*" if g.endswith("/") else g) for g in globs)]
-    lines = [line for line in added_lines if pattern.search(line)] if pattern else []
+    lines = [line for line in added if pattern.search(line)] if pattern else []
     return {"escalate": bool(hits or lines), "paths": hits, "lines": lines[:20]}
 
 
@@ -551,7 +580,7 @@ def run(argv):
         with open(args[0], encoding="utf-8", errors="surrogateescape") as fh:
             paths = [p for p in fh.read().split("\n") if p]
         with open(args[1], encoding="utf-8", errors="replace") as fh:
-            added = [ln[1:] for ln in fh.read().split("\n") if ln.startswith("+") and not ln.startswith("+++")]
+            added = added_lines(fh.read())
         return escalate(paths, added, values)
     raise GateError("Usage: see the top of .github/scripts/review_gate.py")
 

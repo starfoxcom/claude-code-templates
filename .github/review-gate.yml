@@ -46,7 +46,9 @@ prescreen:
 # The project's own deep-review triggers, on top of the gate's: path globs
 # (comma separated, any case; `*` crosses folders, a trailing `/` covers a
 # folder), and a Python regex matched against the lines a PR adds (no `#`,
-# which starts a comment here). Empty: none.
+# which starts a comment here; one pair of outer quotes is dropped, so wrap a
+# regex that starts and ends with the same quote in another pair).
+# Empty: none.
 escalate:
   paths:
   patterns:
