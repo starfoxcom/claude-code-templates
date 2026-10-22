@@ -126,6 +126,48 @@ class GateState(unittest.TestCase):
                     gate.gate(state, **facts)
 
 
+class Upsert(unittest.TestCase):
+    SHA = "a" * 40
+
+    def setUp(self):
+        self.calls, self.existing = [], []
+        real = gate._gh
+
+        def fake(path, method="GET", body=None):
+            self.calls.append((method, path, body))
+            return {"check_runs": self.existing} if method == "GET" else {}
+        gate._gh = fake
+        self.addCleanup(setattr, gate, "_gh", real)
+
+    def test_first_call_creates_the_check_with_the_start_state(self):
+        out = gate.upsert("o/r", self.SHA, "Set up by the routine workflow.")
+        self.assertEqual(out["status"], "in_progress")
+        method, path, body = self.calls[-1]
+        self.assertEqual((method, path), ("POST", "repos/o/r/check-runs"))
+        self.assertEqual((body["name"], body["head_sha"], body["status"]), ("Review gate", self.SHA, "in_progress"))
+        self.assertNotIn("conclusion", body)
+        self.assertTrue(body["output"]["summary"].endswith("Set up by the routine workflow."))
+
+    def test_later_calls_update_the_newest_check_from_its_state(self):
+        self.existing = [
+            {"id": 7, "name": "Review gate", "external_id": "triage=reviewable;routine=pending;escalated=yes;deep=block"},
+            {"id": 3, "name": "Review gate", "external_id": ""},
+            {"id": 9, "name": "Other check", "external_id": ""},
+        ]
+        out = gate.upsert("o/r", self.SHA, routine="pass")
+        method, path, body = self.calls[-1]
+        self.assertEqual((method, path), ("PATCH", "repos/o/r/check-runs/7"))
+        self.assertEqual((out["conclusion"], body["conclusion"], body["external_id"]),
+                         ("failure", "failure", "triage=reviewable;routine=pass;escalated=yes;deep=block"))
+
+    def test_bad_repo_or_sha_is_refused_before_any_call(self):
+        for repo, sha in [("o/r/../x", self.SHA), ("o/r", "HEAD"), ("o/r", self.SHA[:39])]:
+            with self.subTest(repo=repo, sha=sha):
+                with self.assertRaises(gate.GateError):
+                    gate.upsert(repo, sha)
+        self.assertEqual(self.calls, [])
+
+
 class Settings(unittest.TestCase):
     def test_defaults_and_overrides(self):
         self.assertEqual(gate.settings(""), gate.DEFAULTS)

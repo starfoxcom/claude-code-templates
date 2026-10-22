@@ -1,6 +1,6 @@
 """The review gate's logic, shared by the routine and deep review workflows so
-the workflow files stay the same for every project. The workflows make the
-GitHub API calls; this script only decides. Standard library, Python 3.8+.
+the workflow files stay the same for every project. Standard library and the
+runner's `gh`, Python 3.8+. The workflows run the copy from the base branch.
 
     review_gate.py triage FILES [--incomplete]      -> {"review": true|false}
     review_gate.py verdict --since TS (--tier routine --marker RE | --tier deep)
@@ -8,6 +8,9 @@ GitHub API calls; this script only decides. Standard library, Python 3.8+.
         (reads the PR's comments as `gh api --paginate` prints them, on stdin)
     review_gate.py gate --state STATE [--triage T] [--routine R] [--escalated] [--deep D]
         -> {"status", "conclusion", "title", "summary", "state"} for the "Review gate" check
+    review_gate.py upsert --repo OWNER/NAME --sha HEAD [facts as for gate] [--note TEXT]
+        -> the same, after creating or updating the check on that commit (GH_TOKEN
+           needs checks: write); --note is appended to the check's summary
     review_gate.py settings [--file .github/review-gate.yml] -> KEY=value lines
 
 The "Review gate" check carries its own state in its external_id, e.g.
@@ -23,6 +26,7 @@ Every command prints one line; a bad argument prints {"error": ...} and exits 1.
 
 import json
 import re
+import subprocess
 import sys
 
 # Never reviewed: the review action refuses to run on a PR whose copy of the
@@ -35,6 +39,7 @@ REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.a
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
 
+GATE = "Review gate"
 BOT = "claude[bot]"
 # A deep verdict comment: the review action's finished tracking comment, or
 # the comment the CLI run on the API credits posts under this heading.
@@ -172,6 +177,41 @@ def gate(state_text, triage=None, routine=None, escalated=False, deep=None):
     return check
 
 
+def _gh(path, method="GET", body=None):
+    cmd = ["gh", "api", path, "-X", method] + (["--input", "-"] if body is not None else [])
+    r = subprocess.run(cmd, input=json.dumps(body).encode("utf-8") if body is not None else None,
+                       capture_output=True)
+    if r.returncode:
+        raise GateError("gh api %s %s failed: %s" % (method, path, r.stderr.decode("utf-8", "replace").strip()))
+    return json.loads(r.stdout.decode("utf-8") or "null")
+
+
+def check_body(check, note=""):
+    """The Checks API body for a gate decision."""
+    body = {"status": check["status"], "external_id": check["state"],
+            "output": {"title": check["title"], "summary": (check["summary"] + " " + note).strip()}}
+    if check["conclusion"]:
+        body["conclusion"] = check["conclusion"]
+    return body
+
+
+def upsert(repo, sha, note="", **facts):
+    """Decide from the gate check's stored state plus `facts`, then write the
+    result back to the check on `sha`, creating it on the first call."""
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise GateError("upsert needs --repo OWNER/NAME and a 40-character --sha")
+    runs = _gh("repos/%s/commits/%s/check-runs?check_name=Review%%20gate&per_page=100" % (repo, sha))
+    mine = [r for r in runs.get("check_runs", []) if r.get("name") == GATE]
+    current = max(mine, key=lambda r: r["id"]) if mine else None
+    check = gate((current or {}).get("external_id") or "", **facts)
+    body = check_body(check, note)
+    if current:
+        _gh("repos/%s/check-runs/%d" % (repo, current["id"]), "PATCH", body)
+    else:
+        _gh("repos/%s/check-runs" % repo, "POST", dict(body, name=GATE, head_sha=sha))
+    return check
+
+
 def settings(text):
     """KEY=value pairs from review-gate.yml: top-level keys and one level of
     nesting, `#` comments. Unknown keys and bad values are errors, never ignored."""
@@ -229,11 +269,14 @@ def run(argv):
             raise GateError("verdict needs --since, and --marker exactly when --tier is routine")
         # Bytes, not text: the verdict emoji must not depend on the runner's locale.
         return verdict(sys.stdin.buffer.read().decode("utf-8"), since, tier, marker)
-    if cmd == "gate":
+    if cmd in ("gate", "upsert"):
+        facts = {"triage": _option(args, "--triage"), "routine": _option(args, "--routine"),
+                 "escalated": "--escalated" in args, "deep": _option(args, "--deep")}
+        if cmd == "upsert":
+            return upsert(_option(args, "--repo", ""), _option(args, "--sha", ""), _option(args, "--note", ""), **facts)
         if "--state" not in args:
             raise GateError("gate needs --state (an empty one is the start state)")
-        return gate(_option(args, "--state"), _option(args, "--triage"), _option(args, "--routine"),
-                    "--escalated" in args, _option(args, "--deep"))
+        return gate(_option(args, "--state"), **facts)
     if cmd == "settings":
         path = _option(args, "--file", ".github/review-gate.yml")
         try:
