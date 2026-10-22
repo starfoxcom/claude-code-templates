@@ -6,20 +6,32 @@ runner's `gh`, Python 3.8+. The workflows run the copy from the base branch.
     review_gate.py verdict --since TS (--tier routine --marker RE | --tier deep)
         -> {"verdict": "pass"|"block"|"missing", "line": ...}
         (reads the PR's comments as `gh api --paginate` prints them, on stdin)
-    review_gate.py gate --state STATE [--triage T] [--routine R] [--escalated] [--deep D]
+    review_gate.py gate --state STATE [--triage T] [--routine R] [--escalated] [--deep D] [--order O]
         -> {"status", "conclusion", "title", "summary", "state"} for the "Review gate" check
     review_gate.py upsert --repo OWNER/NAME --sha HEAD [facts as for gate] [--note TEXT]
         -> the same, after creating or updating the check on that commit (GH_TOKEN
-           needs checks: write); --note is appended to the check's summary
+           needs checks: write); --note is appended to the check's summary, and
+           --order is required with --triage, --routine or --deep
     review_gate.py settings [--file .github/review-gate.yml] -> KEY=value lines
 
 The "Review gate" check carries its own state in its external_id, e.g.
-"triage=reviewable;routine=pass;escalated=yes;deep=none" (an empty one is
-the start state). Each review workflow reads it, sets the facts it knows
-and writes back the result, so whichever finishes last has every fact.
-T: reviewable|skip; R: pending|pass|block|missing|error; D: none|pass|block|missing|error.
---escalated only ever turns on: once a deep review was asked for, it stays asked.
-A workflow that cannot tell a fact leaves its option out, keeping the stored value.
+"triage=reviewable;routine=pass;escalated=yes;deep=none;routine_by=0.0.0;deep_by=0.0.0"
+(an empty one is the start state). Each review workflow reads it, sets the
+facts it knows and writes back the result, so whichever finishes last has
+every fact. T: reviewable|skip; R: pending|pass|block|missing|error;
+D: none|pass|block|missing|error. --escalated only ever turns on: once a deep
+review was asked for, it stays asked. A workflow that cannot tell a fact
+leaves its option out, keeping the stored value.
+
+The two workflows can write at the same moment, and a write carries the whole
+state as its writer read it, so one can wipe the other's facts. Two rules make
+that harmless:
+  - Each tier's facts carry the --order of the step that wrote them,
+    RUN_ID.ATTEMPT.STEP (routine_by for triage and routine, deep_by for deep).
+    A write from an older run never replaces a newer run's facts, so a
+    cancelled deep run cannot undo the run that replaced it.
+  - After writing, upsert reads the check back twice, a few seconds apart, and
+    writes again when its own facts are gone.
 
 Every command prints one line; a bad argument prints {"error": ...} and exits 1.
 """
@@ -28,6 +40,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 
 # Never reviewed: the review action refuses to run on a PR whose copy of the
 # review workflow differs from the default branch's, so a workflow-only PR has
@@ -51,7 +64,15 @@ STATE_VALUES = {
     "escalated": ("no", "yes"),
     "deep": ("none",) + VERDICTS,
 }
-START_STATE = {"triage": "reviewable", "routine": "pending", "escalated": "no", "deep": "none"}
+START_STATE = {"triage": "reviewable", "routine": "pending", "escalated": "no", "deep": "none",
+               "routine_by": "0.0.0", "deep_by": "0.0.0"}
+# The order field that stamps each tier's facts, and the form of an order.
+OWNER = {"triage": "routine_by", "routine": "routine_by", "deep": "deep_by"}
+ORDER = re.compile(r"[0-9]{1,20}\.[0-9]{1,4}\.[0-9]{1,2}")
+# upsert reads its write back after each of these delays, and writes again
+# when its facts are gone, at most WRITE_ROUNDS times in all.
+SETTLE_SECONDS = (3, 10)
+WRITE_ROUNDS = 3
 
 DEFAULTS = {
     "checks": "one",
@@ -160,18 +181,35 @@ def parse_state(text):
     state = dict(START_STATE)
     for part in filter(None, text.split(";")):
         key, _, value = part.partition("=")
-        if value not in STATE_VALUES.get(key, ()):
+        if key in OWNER.values():
+            ok = ORDER.fullmatch(value)
+        else:
+            ok = value in STATE_VALUES.get(key, ())
+        if not ok:
             raise GateError("bad gate state: " + part)
         state[key] = value
     return state
 
 
-def gate(state_text, triage=None, routine=None, escalated=False, deep=None):
-    """Set the facts this workflow knows on the stored state, then decide."""
+def _order(text):
+    return tuple(int(p) for p in text.split("."))
+
+
+def gate(state_text, triage=None, routine=None, escalated=False, deep=None, order=None):
+    """Set the facts this workflow knows on the stored state, then decide.
+    With `order`, a tier's facts are set only when no newer run wrote them."""
     state = parse_state(state_text)
+    if order is not None and not ORDER.fullmatch(order):
+        raise GateError("--order must be RUN_ID.ATTEMPT.STEP")
     for key, value in (("triage", triage), ("routine", routine), ("deep", deep)):
-        if value is not None:
-            state[key] = _choice(value, STATE_VALUES[key], "--" + key)
+        if value is None:
+            continue
+        _choice(value, STATE_VALUES[key], "--" + key)
+        if order is not None:
+            if _order(order) < _order(state[OWNER[key]]):
+                continue
+            state[OWNER[key]] = order
+        state[key] = value
     if escalated:
         state["escalated"] = "yes"
     check = decide(state["triage"], state["routine"], state["escalated"] == "yes",
@@ -198,14 +236,13 @@ def check_body(check, note=""):
     return body
 
 
-def upsert(repo, sha, note="", **facts):
-    """Decide from the gate check's stored state plus `facts`, then write the
-    result back to the check on `sha`, creating it on the first call."""
-    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) or not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise GateError("upsert needs --repo OWNER/NAME and a 40-character --sha")
+def _newest(repo, sha):
     runs = _gh("repos/%s/commits/%s/check-runs?check_name=Review%%20gate&per_page=100" % (repo, sha))
     mine = [r for r in runs.get("check_runs", []) if r.get("name") == GATE]
-    current = max(mine, key=lambda r: r["id"]) if mine else None
+    return max(mine, key=lambda r: r["id"]) if mine else None
+
+
+def _write(repo, sha, current, note, facts):
     check = gate((current or {}).get("external_id") or "", **facts)
     body = check_body(check, note)
     if current:
@@ -213,6 +250,46 @@ def upsert(repo, sha, note="", **facts):
     else:
         _gh("repos/%s/check-runs" % repo, "POST", dict(body, name=GATE, head_sha=sha))
     return check
+
+
+def _holds(current, facts):
+    """Whether the check still has this write's facts, or a newer run's
+    facts for the same tier."""
+    if current is None:
+        return False
+    state = parse_state(current.get("external_id") or "")
+    if facts.get("escalated") and state["escalated"] != "yes":
+        return False
+    for key in OWNER:
+        if facts.get(key) is None:
+            continue
+        stored, mine = _order(state[OWNER[key]]), _order(facts["order"])
+        if stored < mine or (stored == mine and state[key] != facts[key]):
+            return False
+    return True
+
+
+def upsert(repo, sha, note="", **facts):
+    """Decide from the gate check's stored state plus `facts`, then write the
+    result back to the check on `sha`, creating it on the first call. Reads
+    it back, and writes again while another workflow's write wiped the facts."""
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise GateError("upsert needs --repo OWNER/NAME and a 40-character --sha")
+    if facts.get("order") is None and any(facts.get(k) is not None for k in OWNER):
+        raise GateError("upsert needs --order with --triage, --routine or --deep")
+    check = _write(repo, sha, _newest(repo, sha), note, facts)
+    for round_ in range(WRITE_ROUNDS):
+        current = None
+        for delay in SETTLE_SECONDS:
+            time.sleep(delay)
+            current = _newest(repo, sha)
+            if not _holds(current, facts):
+                break
+        else:
+            return check
+        if round_ < WRITE_ROUNDS - 1:
+            check = _write(repo, sha, current, note, facts)
+    raise GateError("another workflow kept overwriting the Review gate; re-run this job")
 
 
 def settings(text):
@@ -277,7 +354,8 @@ def run(argv):
         return verdict(sys.stdin.buffer.read().decode("utf-8"), since, tier, marker)
     if cmd in ("gate", "upsert"):
         facts = {"triage": _option(args, "--triage"), "routine": _option(args, "--routine"),
-                 "escalated": "--escalated" in args, "deep": _option(args, "--deep")}
+                 "escalated": "--escalated" in args, "deep": _option(args, "--deep"),
+                 "order": _option(args, "--order")}
         if cmd == "upsert":
             return upsert(_option(args, "--repo", ""), _option(args, "--sha", ""), _option(args, "--note", ""), **facts)
         if "--state" not in args:
