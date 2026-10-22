@@ -27,8 +27,8 @@
 #   head ref is byte-identical to the version on the default branch before granting
 #   an OIDC-exchanged token, so the review action cannot run on a PR that edits this
 #   file. Triage therefore never reviews this workflow (.github/workflows/claude-code-review.yml
-#   or .yaml): a PR of only it passes as non-reviewable. Keep workflow edits in PRs of their own (mixed with reviewable
-#   files, the review starts and fails `Workflow validation failed`), and the
+#   or .yaml): a PR of only it and skippable docs passes as non-reviewable. Edit it alone: mixed with reviewable
+#   files (claude.yml, the gate script, .claude/), the review fails `Workflow validation failed` and the gate blocks, so those go in their own PR first; the
 #   maintainer reads those diffs before merge.
 
 name: Claude Code Review
@@ -669,7 +669,9 @@ jobs:
           # own instructions and what a bind writes are read in full, never
           # filed as low-risk docs.
           ARCH = re.compile(r'^(_core|redesign|bundles|\.github/scripts)/|(^|/)\.claude/'
-                            r'|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE(\.local)?\.md$', re.I)
+                            r'|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE(\.local)?\.md$'
+                            # The CLI's own config, which every later review loads.
+                            r'|(^|/)\.mcp\.json$|^\.claude\.json$|^\.husky/|^\.gitmodules$|^\.ripgreprc$', re.I)
           arch_critical, docs, other_code = [], [], []
           for f in changed:
               if f.startswith('.github/workflows/') or f == 'index.html' or ARCH.search(f):
@@ -688,12 +690,14 @@ jobs:
           DEEP_FILES    = {'index.html', '.github/review-gate.yml'}
           DEEP_HOOKS    = '_core/project-template/.claude/hooks/'
           DEEP_WORKFLOWS = '.github/workflows/claude'  # matches claude.yml + claude-code-review.yml
+          # Matched in any case, like triage: a case-insensitive checkout puts
+          # "_CORE/" in _core/.
           deep_paths = [
               f for f in changed
-              if any(f.startswith(p) for p in DEEP_PREFIXES)
-              or f in DEEP_FILES
-              or f.startswith(DEEP_HOOKS)
-              or f.startswith(DEEP_WORKFLOWS)
+              if any(f.lower().startswith(p) for p in DEEP_PREFIXES)
+              or f.lower() in DEEP_FILES
+              or f.lower().startswith(DEEP_HOOKS)
+              or f.lower().startswith(DEEP_WORKFLOWS)
           ]
           # The Repair step applies the label itself when these paths changed,
           # so the deep review is owed whatever the reviewer does.
