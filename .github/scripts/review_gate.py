@@ -51,8 +51,9 @@ import time
 # review workflow differs from the default branch's, so a workflow-only PR has
 # to pass as non-reviewable. Only that one workflow: claude.yml (the deep tier
 # runs the default branch's copy), any other workflow, and a script or action
-# kept under .github/workflows/ are reviewed like any other file.
-NEVER = re.compile(r"^\.github/workflows/claude-code-review\.ya?ml$")
+# kept under .github/workflows/ are reviewed like any other file. A .yaml twin
+# would run as a separate workflow, so it is reviewed too.
+NEVER = re.compile(r"^\.github/workflows/claude-code-review\.yml$")
 # Skipped only when every other path is Markdown, an image or a font that is
 # not always reviewed. Always reviewed, whatever the file type: _core/, which
 # lands verbatim in users' repos; bundles/, whose toggles drive what a bind
@@ -105,7 +106,9 @@ BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|B
 #    issue" still count. A hyphen right after a letter or digit joins a
 #    word ("Non-blocking: none") and ends no label.
 _AFTER_LABEL = r"(?:(?![`🟢])[\W\d_])*"
-# A word or a code span after the lower-case word, other than "finding" or "issue", even behind emphasis or a bracket ("— blocking **I/O**", "— blocking (sync) writes").
+# A word or a code span after the lower-case word, other than "finding" or
+# "issue", even behind emphasis or a bracket ("— blocking **I/O**",
+# "— blocking (sync) writes").
 _ADJECTIVE = r"\s+[*_(\[~]*(?!(?i:findings?|issues?)(?![^\W_]))(?:[^\W_]|`)"
 LABEL = re.compile(r"(?:(?<![`\\])`[^`]+`(?!`)|[^`🔴🟢]){0,30}?"
                    r"(?:[:：]" + _AFTER_LABEL + r"(?i:Blocking)"
