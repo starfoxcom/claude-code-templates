@@ -376,9 +376,11 @@ jobs:
           # Local git, not `gh pr diff` — the API diff endpoint 406s past 300
           # files. The checkout above is fetch-depth 0, so the base branch is
           # present; three-dot (merge-base..HEAD) equals the PR's diff.
-          # --no-renames lists a renamed file's old path too, so moving a file
-          # off the deep-review trigger list still counts as touching it, and
-          # keys every diff section by one path. -z lists every name raw;
+          # The name list uses --no-renames, so a renamed file's old path is
+          # listed too and moving a file off the deep-review trigger list still
+          # counts as touching it. The content diff keeps rename detection, so
+          # a moved file's unchanged text is not read as added; its section is
+          # keyed by the "rename to" path. -z lists every name raw;
           # without it git quotes names with accents, quotes or backslashes,
           # and a quoted name misses every trigger prefix. quotePath=false
           # keeps accented names raw in diff headers too; headers still quote
@@ -387,7 +389,7 @@ jobs:
           # --text, --no-ext-diff, --no-textconv: the checkout is the PR's, so
           # its .gitattributes could mark every file binary or route it through
           # a filter, and the scans below would read an empty diff.
-          git -c core.quotePath=false diff --no-renames --text --no-ext-diff --no-textconv \
+          git -c core.quotePath=false diff --text --no-ext-diff --no-textconv \
             "origin/$BASE...HEAD" > /tmp/pr_diff.txt
           git diff -z --no-renames --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
 
@@ -436,8 +438,9 @@ jobs:
               return out.decode('utf-8', 'surrogateescape')
 
           def header_path(line):
-              """The path in a `diff --git` header. With --no-renames both sides
-              name the same path, which splits even a name holding " b/"."""
+              """The path in a `diff --git` header. Outside renames (keyed by
+              rename_target) both sides name the same path, which splits even a
+              name holding " b/"."""
               rest = line[len('diff --git '):]
               if rest.startswith('"'):
                   m = re.match(r'"((?:[^"\\]|\\.)*)"', rest)
@@ -446,6 +449,20 @@ jobs:
               if rest[2 + size:] == ' b/' + rest[2:2 + size]:
                   return rest[2:2 + size]
               return None
+
+          def shown(text):
+              """A name or finding as one inert report line: control characters,
+              bytes that are not UTF-8 and backticks are escaped, so a file name
+              cannot start a line of its own in the report the reviewer trusts."""
+              return ''.join(c if c.isprintable() and c != '`' else f'\\x{ord(c):02x}' for c in text)
+
+          def rename_target(sec):
+              """The new path of a renamed file, from its "rename to" line."""
+              m = re.search(r'^rename to (.*)$', sec.split('\n@@', 1)[0], re.MULTILINE)
+              if not m:
+                  return None
+              name = m.group(1)
+              return unquote_git_path(name[1:-1]) if name.startswith('"') else name
 
           # Parse the diff into per-file added-line sections.
           violations = []   # rule-breakage — likely 🔴 unless the reviewer disagrees
@@ -456,7 +473,7 @@ jobs:
               first = sec.split('\n', 1)[0]
               if not first.startswith('diff --git '):
                   continue
-              fname = header_path(first)
+              fname = rename_target(sec) or header_path(first)
               # A header the parser cannot read is still scanned, never skipped.
               if fname is None:
                   fname = f'<unread diff header {n}>'
@@ -628,7 +645,7 @@ jobs:
               if violations:
                   out.write(f'## Pre-screen violations ({len(violations)}) — likely 🔴 unless you can refute each\n\n')
                   for v in violations:
-                      out.write(f'- `{v}`\n')
+                      out.write(f'- `{shown(v)}`\n')
                   out.write('\n')
               else:
                   out.write('## Pre-screen violations: none\n\n')
@@ -636,7 +653,7 @@ jobs:
               if warnings:
                   out.write(f'## Pre-screen warnings ({len(warnings)}) — reviewer judges\n\n')
                   for w in warnings:
-                      out.write(f'- `{w}`\n')
+                      out.write(f'- `{shown(w)}`\n')
                   out.write('\n')
 
               deep_owed = os.environ.get('DEEP_OWED') == '1'
@@ -647,7 +664,7 @@ jobs:
                   if deep_paths:
                       out.write('These paths are on the deep-review trigger list, so escalation is decided already, not by your judgment. The workflow applies `needs-deep-review` itself and fails this run if your structured `@claude review this PR` comment is missing. Run Step 4 in full (label AND comment), no exceptions:\n\n')
                       for p in deep_paths:
-                          out.write(f'- `{p}`\n')
+                          out.write(f'- `{shown(p)}`\n')
                   out.write('\n')
               else:
                   out.write('## Deep-review trigger surface: none (Step 4 skipped)\n\n')
@@ -655,7 +672,7 @@ jobs:
               out.write('## Architecture-critical files (READ THESE)\n\n')
               if arch_critical:
                   for f in arch_critical:
-                      out.write(f'- `{f}`\n')
+                      out.write(f'- `{shown(f)}`\n')
               else:
                   out.write('_(none)_\n')
               out.write('\n')
@@ -663,7 +680,7 @@ jobs:
               out.write('## Docs / markdown changes (low-risk, scan only)\n\n')
               if docs:
                   for f in docs:
-                      out.write(f'- `{f}`\n')
+                      out.write(f'- `{shown(f)}`\n')
               else:
                   out.write('_(none)_\n')
               out.write('\n')
@@ -671,7 +688,7 @@ jobs:
               out.write('## Other code changes\n\n')
               if other_code:
                   for f in other_code:
-                      out.write(f'- `{f}`\n')
+                      out.write(f'- `{shown(f)}`\n')
               else:
                   out.write('_(none)_\n')
 
