@@ -105,7 +105,7 @@ class GateState(unittest.TestCase):
     def test_each_workflow_adds_its_facts_and_the_last_one_decides(self):
         start = gate.gate("")
         self.assertEqual((start["status"], start["state"]),
-                         ("in_progress", "triage=reviewable;routine=pending;escalated=no;deep=none"))
+                         ("in_progress", "triage=reviewable;routine=pending;escalated=no;deep=none;routine_by=0.0.0;deep_by=0.0.0"))
         # A deep review started by hand before the routine one finished...
         deep_started = gate.gate(start["state"], escalated=True, deep="none")
         deep_done = gate.gate(deep_started["state"], deep="block")
@@ -113,16 +113,33 @@ class GateState(unittest.TestCase):
         # ...still blocks once the routine review passes afterwards.
         routine_done = gate.gate(deep_done["state"], triage="reviewable", routine="pass")
         self.assertEqual((routine_done["conclusion"], routine_done["state"]),
-                         ("failure", "triage=reviewable;routine=pass;escalated=yes;deep=block"))
+                         ("failure", "triage=reviewable;routine=pass;escalated=yes;deep=block;routine_by=0.0.0;deep_by=0.0.0"))
 
     def test_escalation_only_turns_on(self):
         asked = gate.gate("", routine="pass", escalated=True)
         self.assertEqual(asked["status"], "in_progress")
         self.assertEqual(gate.gate(asked["state"], routine="pass")["status"], "in_progress")
 
+    def test_an_older_run_never_replaces_a_newer_runs_facts(self):
+        # The deep run that replaced a cancelled one has started...
+        held = gate.gate("", escalated=True, deep="none", order="200.1.0")
+        # ...when the cancelled run's last step reports its error: ignored.
+        late = gate.gate(held["state"], deep="error", order="100.1.1")
+        self.assertEqual((late["status"], late["state"]),
+                         ("in_progress", "triage=reviewable;routine=pending;escalated=yes;deep=none;"
+                                         "routine_by=0.0.0;deep_by=200.1.0"))
+        # A later step of the same run, or a re-run attempt, does replace them.
+        done = gate.gate(late["state"], deep="pass", order="200.1.1")
+        again = gate.gate(done["state"], deep="block", order="200.2.0")
+        self.assertEqual(gate.parse_state(again["state"])["deep"], "block")
+        # The tiers are stamped apart: a newer deep run leaves routine facts alone.
+        routine = gate.gate(again["state"], triage="reviewable", routine="pass", order="150.1.1")
+        self.assertEqual(gate.parse_state(routine["state"])["routine"], "pass")
+
     def test_a_bad_state_or_fact_is_an_error(self):
         for state, facts in [("routine=maybe", {}), ("colour=red", {}), ("routine", {}), ("", {"deep": "pending"}),
-                             ("", {"routine": "none"})]:
+                             ("", {"routine": "none"}), ("deep_by=1.2", {}), ("routine_by=x.1.1", {}),
+                             ("", {"routine": "pass", "order": "12"}), ("", {"deep": "pass", "order": "1.1.1.1"})]:
             with self.subTest(state=state, facts=facts):
                 with self.assertRaises(gate.GateError):
                     gate.gate(state, **facts)
@@ -132,19 +149,36 @@ class Upsert(unittest.TestCase):
     SHA = "a" * 40
 
     def setUp(self):
-        self.calls, self.existing = [], []
-        real = gate._gh
+        # A fake check store. `wipes` stands for another workflow whose stale
+        # write lands right after each of the next N PATCHes, putting back the
+        # start state.
+        self.calls, self.existing, self.wipes = [], [], 0
+        real, settle = gate._gh, gate.SETTLE_SECONDS
 
         def fake(path, method="GET", body=None):
             self.calls.append((method, path, body))
-            return {"check_runs": self.existing} if method == "GET" else {}
-        gate._gh = fake
+            if method == "GET":
+                return {"check_runs": self.existing}
+            if method == "POST":
+                self.existing.append(dict(body, id=1))
+                return {}
+            run = next(r for r in self.existing if path.endswith("/%d" % r["id"]))
+            run["external_id"] = body["external_id"]
+            if self.wipes:
+                self.wipes -= 1
+                run["external_id"] = ""
+            return {}
+        gate._gh, gate.SETTLE_SECONDS = fake, (0, 0)
         self.addCleanup(setattr, gate, "_gh", real)
+        self.addCleanup(setattr, gate, "SETTLE_SECONDS", settle)
+
+    def patches(self):
+        return [body for method, _, body in self.calls if method == "PATCH"]
 
     def test_first_call_creates_the_check_with_the_start_state(self):
         out = gate.upsert("o/r", self.SHA, "Set up by the routine workflow.")
         self.assertEqual(out["status"], "in_progress")
-        method, path, body = self.calls[-1]
+        [(method, path, body)] = [c for c in self.calls if c[0] != "GET"]
         self.assertEqual((method, path), ("POST", "repos/o/r/check-runs"))
         self.assertEqual((body["name"], body["head_sha"], body["status"]), ("Review gate", self.SHA, "in_progress"))
         self.assertNotIn("conclusion", body)
@@ -156,11 +190,40 @@ class Upsert(unittest.TestCase):
             {"id": 3, "name": "Review gate", "external_id": ""},
             {"id": 9, "name": "Other check", "external_id": ""},
         ]
-        out = gate.upsert("o/r", self.SHA, routine="pass")
-        method, path, body = self.calls[-1]
-        self.assertEqual((method, path), ("PATCH", "repos/o/r/check-runs/7"))
+        out = gate.upsert("o/r", self.SHA, routine="pass", order="5.1.1")
+        [body] = self.patches()
+        self.assertIn(("PATCH", "repos/o/r/check-runs/7", body), self.calls)
         self.assertEqual((out["conclusion"], body["conclusion"], body["external_id"]),
-                         ("failure", "failure", "triage=reviewable;routine=pass;escalated=yes;deep=block"))
+                         ("failure", "failure",
+                          "triage=reviewable;routine=pass;escalated=yes;deep=block;routine_by=5.1.1;deep_by=0.0.0"))
+
+    def test_a_wiped_write_is_written_again(self):
+        self.existing = [{"id": 7, "name": "Review gate", "external_id": ""}]
+        self.wipes = 1
+        out = gate.upsert("o/r", self.SHA, triage="reviewable", routine="pass", escalated=True, order="5.1.1")
+        self.assertEqual(len(self.patches()), 2)
+        self.assertEqual((out["status"], self.existing[0]["external_id"]),
+                         ("in_progress", "triage=reviewable;routine=pass;escalated=yes;deep=none;"
+                                         "routine_by=5.1.1;deep_by=0.0.0"))
+
+    def test_a_write_wiped_every_time_fails_the_step(self):
+        self.existing = [{"id": 7, "name": "Review gate", "external_id": ""}]
+        self.wipes = 99
+        with self.assertRaises(gate.GateError):
+            gate.upsert("o/r", self.SHA, deep="pass", order="5.1.1")
+        self.assertEqual(len(self.patches()), gate.WRITE_ROUNDS)
+
+    def test_a_newer_runs_facts_count_as_held(self):
+        self.existing = [{"id": 7, "name": "Review gate", "external_id": "routine=block;routine_by=9.1.1"}]
+        out = gate.upsert("o/r", self.SHA, routine="pass", order="5.1.1")
+        self.assertEqual((out["conclusion"], len(self.patches())), ("failure", 1))
+
+    def test_tier_facts_need_an_order(self):
+        for facts in [{"routine": "pass"}, {"triage": "skip"}, {"deep": "none", "escalated": True}]:
+            with self.subTest(facts=facts):
+                with self.assertRaises(gate.GateError):
+                    gate.upsert("o/r", self.SHA, **facts)
+        self.assertEqual(self.calls, [])
 
     def test_bad_repo_or_sha_is_refused_before_any_call(self):
         for repo, sha in [("o/r/../x", self.SHA), ("o/r", "HEAD"), ("o/r", self.SHA[:39])]:
@@ -213,7 +276,7 @@ class Command(unittest.TestCase):
         finally:
             os.remove(fh.name)
         code, out = self.run_cli("gate", "--state", "", "--routine", "pass", "--escalated")
-        self.assertEqual((code, json.loads(out)["state"]), (0, "triage=reviewable;routine=pass;escalated=yes;deep=none"))
+        self.assertEqual((code, json.loads(out)["state"]), (0, "triage=reviewable;routine=pass;escalated=yes;deep=none;routine_by=0.0.0;deep_by=0.0.0"))
         code, out = self.run_cli("settings", "--file", os.path.join(ROOT, "no-such-file.yml"))
         self.assertEqual(code, 0)
         self.assertIn("routine_model=claude-fable-5-1", out.splitlines())
