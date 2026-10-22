@@ -532,6 +532,20 @@ class Escalate(unittest.TestCase):
                          "(?:\\\\.|[^'])*")
         self.assertEqual(gate.settings("escalate:\n  patterns: =\"\n")["escalate.patterns"], '="')
         self.assertEqual(gate.settings("escalate:\n  patterns: \"'x'\"\n")["escalate.patterns"], "'x'")
+        for text in ("escalate:\n  patterns: \"a#b\"\n", "escalate:\n  patterns: 'x\n"):
+            with self.subTest(text=text):
+                with self.assertRaises(gate.GateError):
+                    gate.settings(text)
+
+    def test_command_keeps_a_carriage_return_inside_an_added_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            files, diff, conf = (os.path.join(d, n) for n in ("files.txt", "pr.diff", "gate.yml"))
+            for path, text in ((files, "a.py\n"), (diff, "--- /dev/null\n+++ b/a.py\n@@ -0,0 +1,2 @@\n+foo\reval(x)\n+bar\n"),
+                               (conf, "escalate:\n  patterns: eval\n")):
+                with open(path, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(text)
+            r = subprocess.run([sys.executable, SCRIPT, "escalate", files, diff, "--file", conf], capture_output=True)
+        self.assertEqual((r.returncode, json.loads(r.stdout)["lines"]), (0, ["foo\reval(x)"]))
 
     def test_nothing_set_never_escalates(self):
         self.assertEqual(gate.escalate(["migrations/1.sql"], ["eval(x)"], gate.DEFAULTS),
@@ -543,7 +557,7 @@ class Escalate(unittest.TestCase):
             for path, text in ((files, "migrations/1.sql\nREADME.md\n"),
                                (diff, "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n+y = eval(s)\n-z = eval(t)\n x = eval(u)\n"),
                                (conf, "escalate:\n  paths: migrations/\n  patterns: eval\n")):
-                with open(path, "w", encoding="utf-8") as fh:
+                with open(path, "w", encoding="utf-8", newline="") as fh:
                     fh.write(text)
             r = subprocess.run([sys.executable, SCRIPT, "escalate", files, diff, "--file", conf], capture_output=True)
         self.assertEqual((r.returncode, json.loads(r.stdout)),

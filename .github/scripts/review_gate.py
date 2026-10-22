@@ -476,6 +476,10 @@ def settings(text):
         # end with a quote of its own.
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = value[1:-1]
+        elif value[:1] in ("\"", "'"):
+            # An opening quote with no partner: a `#` inside quotes cut the
+            # value short, and keeping the rest would change its meaning.
+            raise GateError("review-gate.yml line %d: unbalanced quote in %s (a `#` starts a comment)" % (n, name))
         if not CHECKS[name.split(".")[-1]].fullmatch(value) or not _compiles(name, value):
             raise GateError("review-gate.yml line %d: bad value for %s: %s" % (n, name, value))
         values[name] = value
@@ -577,9 +581,13 @@ def run(argv):
         return _settings_file(args)
     if cmd == "escalate" and len(args) >= 2:
         values = _settings_file(args[2:])
-        with open(args[0], encoding="utf-8", errors="surrogateescape") as fh:
+        # Names decode strictly, as for triage: a name that is not UTF-8 fails
+        # the command (one error line) rather than its printing.
+        with open(args[0], encoding="utf-8") as fh:
             paths = [p for p in fh.read().split("\n") if p]
-        with open(args[1], encoding="utf-8", errors="replace") as fh:
+        # newline="": a carriage return inside an added line must stay in it,
+        # not split it into a line with no "+" that the hunk walk skips.
+        with open(args[1], encoding="utf-8", errors="replace", newline="") as fh:
             added = added_lines(fh.read())
         return escalate(paths, added, values)
     raise GateError("Usage: see the top of .github/scripts/review_gate.py")
