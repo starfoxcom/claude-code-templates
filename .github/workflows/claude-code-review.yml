@@ -4,7 +4,8 @@
 # the PR head commit: a job's own check from the deep tier's comment-triggered
 # run would attach to the default branch instead. Its decisions live in
 # .github/scripts/review_gate.py and its settings in .github/review-gate.yml,
-# both read from the base branch, never from the PR:
+# both read from the base branch (or, when the base predates the gate, from
+# the default branch), never from the PR:
 #   • PR opens                         → in_progress
 #   • Triage finds no reviewable files → success
 #   • Routine verdict, no escalation   → success or failure
@@ -57,6 +58,9 @@ jobs:
       checks: write
       pull-requests: read
     outputs:
+      # The commit every job below reads the gate's files from: the base
+      # commit, or the default branch's tip when the base predates the gate.
+      gate_sha: ${{ steps.settings.outputs.gate_sha }}
       checks: ${{ steps.settings.outputs.checks }}
       routine_model: ${{ steps.settings.outputs.routine_model }}
       routine_effort: ${{ steps.settings.outputs.routine_effort }}
@@ -77,8 +81,9 @@ jobs:
       # backslashes or brackets inside, and Read, Grep, Glob.
       allowed_tools: ${{ steps.settings.outputs.reviewer_allowed_tools != '' && format(',{0}', steps.settings.outputs.reviewer_allowed_tools) || '' }}
     steps:
-      # The gate's script and settings come from the base branch: a PR must
-      # not be able to change how its own review is judged.
+      # The gate's script and settings come from the base branch (or the
+      # default branch, below): a PR must not be able to change how its own
+      # review is judged.
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.base.sha }}
@@ -88,9 +93,31 @@ jobs:
             .github/review-gate.yml
           sparse-checkout-cone-mode: false
 
+      # A base branch from before the gate (an old release line) has no
+      # script, and a PR into it could never pass. Those PRs take the gate
+      # from the default branch's tip, which a PR cannot change either.
+      - name: Check the base has the gate
+        id: source
+        run: |
+          if [ ! -f .github/scripts/review_gate.py ]; then
+            echo "::notice::The base commit has no review gate; using the gate from the default branch."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.source.outputs.fallback == 'true'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts/
+            .github/review-gate.yml
+          sparse-checkout-cone-mode: false
+
       - name: Read the gate settings
         id: settings
         run: |
+          echo "gate_sha=$(git rev-parse HEAD)" | tee -a "$GITHUB_OUTPUT"
           if ! out=$(python3 -I .github/scripts/review_gate.py settings); then
             echo "::error::Bad review gate settings: $out"
             exit 1
@@ -151,11 +178,12 @@ jobs:
     outputs:
       run_review: ${{ steps.classify.outputs.run_review }}
     steps:
-      # The base branch's script and settings: which paths always get a
-      # review is a gate setting, so a PR cannot change it for itself.
+      # The gate's script and settings from Init's commit (the base, or the
+      # default branch's tip): which paths always get a review is a gate
+      # setting, so a PR cannot change it for itself.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: |
             .github/scripts/
@@ -205,7 +233,8 @@ jobs:
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ${{ fromJSON(needs.init-gate.outputs.runner_labels || '["ubuntu-latest"]') }}
     # The project's own deep-review triggers (escalate.* in the gate
-    # settings), matched by the base branch's script. This job runs none of
+    # settings), matched by the gate's own script from Init's commit (the
+    # base, or the default branch's tip). This job runs none of
     # the PR's code, and none of the project's checks, which run in their own
     # job below: a check that runs the PR's code could otherwise rewrite the
     # result and skip the deep review. A failure here skips the review, which
@@ -232,14 +261,14 @@ jobs:
         id: triggers
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           gate="$RUNNER_TEMP/gate-base"
           mkdir -p "$gate"
-          git show "$BASE_SHA:.github/scripts/review_gate.py" > "$gate/review_gate.py"
-          if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
-            git show "$BASE_SHA:.github/review-gate.yml" > "$gate/review-gate.yml"
+          git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate/review_gate.py"
+          if git cat-file -e "$GATE_SHA:.github/review-gate.yml" 2>/dev/null; then
+            git show "$GATE_SHA:.github/review-gate.yml" > "$gate/review-gate.yml"
           fi
           # The same diff the pre-screen in Auto review reads. One name per
           # line: a carriage return or newline in a name becomes a space, so
@@ -295,7 +324,8 @@ jobs:
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ${{ fromJSON(needs.init-gate.outputs.runner_labels || '["ubuntu-latest"]') }}
     # The project's own pre-screen checks (prescreen.dir in the gate
-    # settings). The checks come from the base branch, and they run here, in
+    # settings). The checks come from Init's commit (the base, or the
+    # default branch's tip when the base predates the gate), and they run here, in
     # a job with no secrets and a read-only token, under an empty
     # environment with a home folder of its own: a check that runs the PR's
     # code reaches no review token and cannot set variables for the review
@@ -303,7 +333,7 @@ jobs:
     # self-hosted runner that is not wiped between jobs, such a check can
     # also leave files or processes behind for the jobs that run there next,
     # the review included; keep checks that run the PR's code on hosted or
-    # one-job runners. A failure here, a folder the base branch does not have
+    # one-job runners. A failure here, a folder that commit does not have
     # included, skips the review, which fails the gate.
     permissions:
       contents: read
@@ -329,7 +359,7 @@ jobs:
         if: needs.init-gate.outputs.prescreen_dir != ''
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           PRESCREEN_DIR: ${{ needs.init-gate.outputs.prescreen_dir }}
         run: |
           set -euo pipefail
@@ -342,11 +372,11 @@ jobs:
             | python3 -I -c 'import sys; sys.stdout.buffer.write(b"".join(n.decode("utf-8", "backslashreplace").replace("\r", " ").replace("\n", " ").encode() + b"\n" for n in sys.stdin.buffer.read().split(b"\0") if n))' \
             > "$gate/files.txt"
           : > "$gate/checks.txt"
-          git archive "$BASE_SHA" -- "$PRESCREEN_DIR" | tar -x -C "$gate/checks"
+          git archive "$GATE_SHA" -- "$PRESCREEN_DIR" | tar -x -C "$gate/checks"
           find "$gate/checks/$PRESCREEN_DIR" -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \) \
             -print0 | sort -z > "$gate/list"
           if [ ! -s "$gate/list" ]; then
-            echo "::error::prescreen.dir '$PRESCREEN_DIR' holds no *.py or *.sh checks on the base branch"
+            echo "::error::prescreen.dir '$PRESCREEN_DIR' holds no *.py or *.sh checks at the gate's commit $GATE_SHA"
             exit 1
           fi
           while IFS= read -r -d '' check; do
@@ -405,7 +435,7 @@ jobs:
       reviewer: ${{ steps.claude-review-credits.outcome == 'success' && format('{0} {1} (API credits)', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review.outcome == 'success' && format('{0} {1}', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review-backup.outcome == 'success' && format('{0} {1} (backup)', needs.init-gate.outputs.routine_fallback_model, needs.init-gate.outputs.routine_fallback_effort) || 'none' }}
     env:
       ROUTINE_REVIEW_PROMPT: |
-        Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }}. What the project is, the invariants to verify and its extra escalation cases are in the project's review guide, under "Project review guide" at the end of the review context file (taken from the base branch, so the PR cannot change it). No such section means the project has no guide: review against the general rules below.
+        Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }}. What the project is, the invariants to verify and its extra escalation cases are in the project's review guide, under "Project review guide" at the end of the review context file (taken from the base branch, or from the default branch when the base predates the review gate, so the PR cannot change it). No such section means the project has no guide: review against the general rules below.
 
         **You work alone and this is a one-shot session: the moment you end your turn the session is over and nothing else runs.** Never delegate to helper agents or subagents, never schedule a wake-up, never "wait for" anything — a large diff is read file by file, in this turn, and the verdict comment is posted before you stop. A session that ends without the verdict comment fails the PR's required check.
 
@@ -418,7 +448,7 @@ jobs:
         - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory. A project can turn automatic escalation off; the context then says so in place of this section.
         - **Project switches** — a section saying the project turned its AI-attribution check off, when it did.
         - **Categorized file lists** — architecture-critical files to READ first (including `.claude/` rules and skills, any `CLAUDE.md`, and the project's always-reviewed paths), then docs (scan only), then other code.
-        - **Project review guide** — the project's own part of this prompt, from the base branch (absent when the project has none).
+        - **Project review guide** — the project's own part of this prompt, from the base branch or, when the base predates the review gate, the default branch (absent when the project has none).
 
         The review runs on the base branch's config, so in your working folder the top-level `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc` and `.husky/` hold the base branch's copies: read the PR's version of any of those with `git show HEAD:<path>`, never with Read.
 
@@ -600,6 +630,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE: ${{ github.event.pull_request.base.ref }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           # From the Project pre-screen job: the project's own triggers count
           # like the trigger list below, and its report joins the context.
           PROJECT_ESCALATE: ${{ needs.project-triggers.outputs.escalate }}
@@ -638,9 +669,11 @@ jobs:
           # Without --text, as the reviewer's own `git diff` runs: "-" counts
           # mark the files it will show as binary.
           git diff -z --no-renames --diff-filter=d --numstat "origin/$BASE...HEAD" > "$RUNNER_TEMP/numstat.txt"
-          # The project's review guide, from the base branch so the PR cannot
-          # rewrite the guide its own review follows. No guide, no section.
-          git show "origin/$BASE:.github/review-guide.md" > "$RUNNER_TEMP/review_guide.md" 2>/dev/null \
+          # The project's review guide, from the gate's commit (the base, or
+          # the default branch when the base predates the gate) so the PR
+          # cannot rewrite the guide its own review follows. No guide, no
+          # section.
+          git show "$GATE_SHA:.github/review-guide.md" > "$RUNNER_TEMP/review_guide.md" 2>/dev/null \
             || : > "$RUNNER_TEMP/review_guide.md"
 
           # The verdict floor for Evaluate: no review attempt of this run
@@ -911,11 +944,11 @@ jobs:
               else:
                   out.write('_(none)_\n')
 
-              # Merged text from the base branch, so it goes in as written.
+              # Merged text from the gate's commit, so it goes in as written.
               with open(os.path.join(os.environ['RUNNER_TEMP'], 'review_guide.md'), encoding='utf-8', errors='replace') as f:
                   guide = f.read()
               if guide.strip():
-                  out.write('\n## Project review guide (from the base branch)\n\n')
+                  out.write('\n## Project review guide (from the base or default branch)\n\n')
                   out.write(guide.rstrip('\n') + '\n')
 
           print(f'Pre-screen complete. Violations={len(violations)}, Warnings={len(warnings)}, Deep-trigger={len(deep_paths)}, Deep-owed={deep_owed}, Arch-critical={len(arch_critical)}')
@@ -1403,7 +1436,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts/
           sparse-checkout-cone-mode: false
