@@ -153,22 +153,27 @@ def _pick(bodies, tier, marker):
 
 
 def _line(body):
-    """The verdict line: the last holding a glyph. Without one, a line opening
-    with "Blocking" still blocks; a bare "LGTM" never passes, since prose like
+    """The verdict line: the last holding a glyph. A line opening with
+    "Blocking" blocks whatever the glyphs say: the glyph is what gets dropped,
+    and a 🟢 elsewhere ("once fixed, this is 🟢 LGTM", a "🟢 All clear on X"
+    heading) must not pass it. A bare "LGTM" never passes, since prose like
     "LGTM otherwise, but this must be fixed" opens the same way."""
     lines = body.splitlines()
     found = [l for l in lines if GLYPHS.search(l)]
+    if found and "🔴" in found[-1]:
+        return "block", found[-1].strip(), "glyph"
+    blocking = [l for l in lines if BLOCKING.match(l)]
+    if blocking:
+        return "block", blocking[0].strip(), ("word-over-glyph" if found else "word")
     if found:
-        return ("block" if "🔴" in found[-1] else "pass"), found[-1].strip(), "glyph"
-    found = [l for l in lines if BLOCKING.match(l)]
-    if found:
-        return "block", found[0].strip(), "word"
+        return "pass", found[-1].strip(), "glyph"
     return "missing", "", ""
 
 
 def verdict(text, since, tier, marker=None):
     """The verdict in the bot's newest comment of `tier` posted at or after
-    `since`. A block read from a glyph-less "Blocking" line adds `recovered`."""
+    `since`. A block read from a "Blocking" line rather than a 🔴 adds
+    `recovered`."""
     body = _pick(_bot_bodies(text, since), tier, re.compile(marker) if marker else None)
     if body is None:
         return {"verdict": "missing", "line": ""}
@@ -176,6 +181,8 @@ def verdict(text, since, tier, marker=None):
     out = {"verdict": result, "line": line}
     if how == "word":
         out["recovered"] = "no 🔴/🟢 line; a line opening with Blocking"
+    elif how == "word-over-glyph":
+        out["recovered"] = "a line opening with Blocking outranks the 🟢 line"
     return out
 
 
