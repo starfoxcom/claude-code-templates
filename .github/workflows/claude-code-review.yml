@@ -257,7 +257,7 @@ jobs:
           - `🟢 LGTM`
           - `🔴 Blocking — must fix`
 
-        **WRONG formats — every one of these fails the gate:**
+        **WRONG formats — never post any of these** (the gate reads some as a block or a missing verdict; the rest break the binary rule):
         - `LGTM` (missing 🟢 prefix — the most common mistake; do not do this)
         - `LGTM ✅` / `✅ LGTM` (wrong emoji — parser matches 🟢 only, not ✅)
         - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
@@ -322,7 +322,7 @@ jobs:
 
         **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically: the final line, starting with 🔴 or 🟢 — the SAME strict contract as the routine gate. A comment it cannot read is a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
 
-        **WRONG formats — every one of these fails the deep gate:**
+        **WRONG formats — never post any of these** (the deep gate reads some as a block or a missing verdict; the rest break the binary rule):
         - `LGTM` (missing 🟢 prefix — the most common mistake)
         - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
         - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
@@ -394,9 +394,12 @@ jobs:
           # --text, --no-ext-diff, --no-textconv: the checkout is the PR's, so
           # its .gitattributes could mark every file binary or route it through
           # a filter, and the scans below would read an empty diff.
+          # --ignore-submodules=none: its .gitmodules could set `ignore = all`
+          # on a submodule under a trigger folder and hide it from both lists.
           git -c core.quotePath=false diff --text --no-ext-diff --no-textconv \
-            "origin/$BASE...HEAD" > /tmp/pr_diff.txt
-          git diff -z --no-renames --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
+            --ignore-submodules=none "origin/$BASE...HEAD" > /tmp/pr_diff.txt
+          git diff -z --no-renames --name-only --ignore-submodules=none \
+            "origin/$BASE...HEAD" > /tmp/changed_files.txt
 
           # The verdict floor for Evaluate: no review attempt of this run
           # starts before this moment, and a run this one replaced was
