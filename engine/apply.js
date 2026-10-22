@@ -1,6 +1,7 @@
 // Writes a bind's files into a repo, never over an existing file. When the
 // repo already has a file, the new text goes to STAGING under the same path
-// instead, for setup to merge; when that copy exists too, the file is skipped.
+// instead, for setup to merge. A file whose staged copy exists too, or one in
+// .bindwright/ (setup's own working files), is skipped.
 // Node only (the browser offers a zip instead); apply.py is the Python twin.
 
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
@@ -42,7 +43,7 @@ export function applyFiles(files, root) {
     if (!exists(at(path))) {
       write(at(path), text);
       result.written.push(path);
-    } else if (!path.startsWith(STAGING) && !exists(at(STAGING + path))) {
+    } else if (!path.startsWith(".bindwright/") && !exists(at(STAGING + path))) {
       write(at(STAGING + path), text);
       result.staged.push(path);
     } else {

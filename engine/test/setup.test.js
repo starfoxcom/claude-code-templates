@@ -150,17 +150,18 @@ test("both writers write new files, stage what exists and skip what is staged", 
     // and no template has one.
     const files = [
       ["a/b/c.txt", "x\r\ny\n"], ["ñ/中.md", "é 😀"], ["keep.txt", "new"], ["dir", "z"], ["both.md", "new"],
-      [`${STAGING}CLAUDE.md`, "staged"],
+      [`${STAGING}CLAUDE.md`, "staged"], [".bindwright/global/hooks/a.py", "new"],
     ];
+    const old = ["keep.txt", "both.md", `${STAGING}both.md`, `${STAGING}CLAUDE.md`, ".bindwright/global/hooks/a.py"];
     for (const side of ["js", "py"]) {
       mkdirSync(join(root, side, "dir"), { recursive: true });
       mkdirSync(join(root, side, ".bindwright", "incoming"), { recursive: true });
-      for (const name of ["keep.txt", "both.md", ".bindwright/incoming/both.md", ".bindwright/incoming/CLAUDE.md"]) {
-        writeFileSync(join(root, side, name), "old");
-      }
+      mkdirSync(join(root, side, ".bindwright", "global", "hooks"), { recursive: true });
+      for (const name of old) writeFileSync(join(root, side, name), "old");
     }
     const expected = {
-      written: ["a/b/c.txt", "ñ/中.md"], staged: ["keep.txt", "dir"], skipped: ["both.md", `${STAGING}CLAUDE.md`],
+      written: ["a/b/c.txt", "ñ/中.md"], staged: ["keep.txt", "dir"],
+      skipped: ["both.md", `${STAGING}CLAUDE.md`, ".bindwright/global/hooks/a.py"],
     };
     assert.deepEqual(applyFiles(files, join(root, "js")), expected);
     assert.deepEqual(runPython(PY_APPLY, { files, root: join(root, "py") }), expected);
@@ -223,8 +224,8 @@ test("both commands write the same files and never overwrite", { skip: noPython 
     writeFileSync(mine, "mine");
     const write = [join(engine, "cli.js"), "--code", code, "--write", join(root, "js")];
     const again = () => JSON.parse(run(process.execPath, write).stdout);
-    const inPlace = result.written.filter((p) => !p.startsWith(STAGING));
-    const staged = result.written.filter((p) => p.startsWith(STAGING));
+    const inPlace = result.written.filter((p) => !p.startsWith(".bindwright/"));
+    const staged = result.written.filter((p) => p.startsWith(".bindwright/"));
     assert.deepEqual(again(), { written: [], staged: inPlace, skipped: staged });
     assert.deepEqual(again(), { written: [], staged: [], skipped: result.written });
     assert.equal(readFileSync(mine, "utf8"), "mine");

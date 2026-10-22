@@ -2,25 +2,6 @@
 
 These are project-agnostic instructions that apply to every Claude Code session on your machine. Append them to your existing `~/.claude/CLAUDE.md`, or create the file from scratch if you don't have one.
 
-<!--
-  BIND-TIME RESOLUTION REQUIRED — do NOT raw-append this file.
-
-  The "No Explore Agents" section below carries seven
-  `<!-- TOGGLE:code_research:<value> START/END -->` blocks (tokensave /
-  lsp-plugins / codegraph / serena / codebase-memory / none / custom), one
-  per key of CODE_RESEARCH_TOOLS in engine/model.js. The bind step MUST:
-  (1) keep the block matching the chosen tool and strip the other six
-  entirely; (2) substitute the residual `{{TOOLS_CODE_RESEARCH_*}}`
-  placeholders with the engine's values for that tool (valuesFor in
-  engine/model.js, which reads a custom tool's name and URL from the
-  answers). Only then append.
-
-  Skipping resolution leaves all seven contradictory "before ANY code
-  research task" directives in the user's global config and the literal
-  template placeholders remain unresolved. See SETUP.md § Phase 7 for the
-  canonical resolution procedure.
--->
-
 
 ---
 
