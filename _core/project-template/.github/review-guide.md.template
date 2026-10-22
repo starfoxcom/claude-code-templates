@@ -1,0 +1,28 @@
+# Review guide
+
+The project's own part of the review prompt. Both review tiers read this file from the PR's base branch, so a PR cannot change the guide its own review follows, and every change to it gets a review.
+
+## About this project
+
+**{{PROJECT_NAME}}**: {{ONE_LINE_DESCRIPTION}}
+
+## Project invariants to verify (in priority order)
+
+Replace these starting points with the rules a change here must never break, highest risk first.
+
+1. **Contract stability**: public APIs, file formats and schemas change only on purpose, with every caller and stored file still handled.
+2. **Shared code**: a change to a shared utility keeps working for every caller, not only the one the PR needed.
+
+<!-- TOGGLE:github_actions_deep_review_auto_fire START -->
+## Also escalate when the diff includes
+
+These escalate on their own: the gate's own files (`.github/scripts/**`, `.github/review-gate.yml`, this guide, the review workflows and the project's check folder) and the trigger paths and patterns in `.github/review-gate.yml` (`escalate.*`). List here the changes that need a reviewer's judgment to spot, for example:
+
+- Changes to how data is saved or loaded
+- New code on a trust boundary (user input, network, plugins)
+<!-- TOGGLE:github_actions_deep_review_auto_fire END -->
+<!-- TOGGLE:github_actions_deep_review_auto_fire:off START -->
+## Deep reviews
+
+Automatic escalation is off (`escalate.auto` in `.github/review-gate.yml`): a person asks for a deep review by commenting `@claude review this PR` on each push that needs one, or adds the `needs-deep-review` label so every later push to that PR gets one.
+<!-- TOGGLE:github_actions_deep_review_auto_fire:off END -->

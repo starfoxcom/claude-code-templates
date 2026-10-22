@@ -815,6 +815,7 @@ def main():
     pos, opts = parse(sys.argv[1:])
     with open(STATE) as f:
         st = json.load(f)
+    before = json.dumps(st)
     with open(LOG, "a") as f:
         f.write(json.dumps(sys.argv[1:]) + "\n")
     cmd = pos[:2]
@@ -831,8 +832,13 @@ def main():
         st["secrets"].append(pos[2])
     if data is KeyError:
         return not_found()
-    with open(STATE, "w") as f:
-        json.dump(st, f)
+    # The script pipes one call into another (read a ruleset, write it back),
+    # so two fakes run at once: only a call that changed the state writes it,
+    # and the file is swapped whole, never seen half written.
+    if json.dumps(st) != before:
+        with open(STATE + ".new", "w") as f:
+            json.dump(st, f)
+        os.replace(STATE + ".new", STATE)
     return out(data, opts) if data is not None else 0
 
 
