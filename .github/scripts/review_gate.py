@@ -171,7 +171,8 @@ DEFAULTS = {
     "deep.model": "claude-fable-5-1", "deep.effort": "low", "deep.max_turns": "120",
     "deep.fallback_model": "claude-opus-5-5", "deep.fallback_effort": "high",
     "fallback.model": "claude-opus-5-5", "fallback.effort": "high",
-    "prescreen.dir": "", "escalate.paths": "", "escalate.patterns": "", "reviewer.allowed_tools": "",
+    "prescreen.dir": "", "prescreen.attribution": "on",
+    "escalate.auto": "on", "escalate.paths": "", "escalate.patterns": "", "reviewer.allowed_tools": "",
     "triage.always_review": "",
 }
 SECTIONS = {k.split(".")[0] for k in DEFAULTS if "." in k}
@@ -194,6 +195,8 @@ CHECKS = {
     # Any Python regex up to 500 characters; settings() also compiles it.
     "patterns": re.compile(r"[^\n]{0,500}"),
     "allowed_tools": re.compile(r"|%s(?:, *%s){0,19}" % (_TOOL, _TOOL)),
+    "attribution": re.compile(r"on|off"),
+    "auto": re.compile(r"on|off"),
 }
 CHECKS["fallback_model"], CHECKS["fallback_effort"] = CHECKS["model"], CHECKS["effort"]
 
@@ -547,7 +550,10 @@ def escalate(paths, added, values):
     match an `escalate.paths` glob (any case; `*` crosses folders, and a glob
     ending in `/` covers the folder), and added diff lines that
     `escalate.patterns` finds. Returns what matched, so the pre-screen can
-    name it."""
+    name it. Nothing matches while `escalate.auto` is off: the project then
+    asks for every deep review by hand."""
+    if values["escalate.auto"] == "off":
+        return {"escalate": False, "paths": [], "lines": []}
     globs = _globs(values["escalate.paths"])
     pattern = re.compile(values["escalate.patterns"]) if values["escalate.patterns"] else None
     hits = [p for p in paths if _glob_match(p, globs)]
