@@ -48,7 +48,7 @@ This is the single most load-bearing rule for review quality.
 - **🔴 Blocking when ANY real finding exists**, regardless of how the reviewer frames it. "Minor wording nit" that suggests a real correctness improvement is 🔴. "All clear with caveats" is a contradiction in terms — the caveats make it 🔴. "Non-blocking but worth landing" is 🔴.
 - **The only legitimate omission** is style preferences, micro-optimizations, future-proofing for hypothetical changes, or "consider extracting" suggestions — those should be **DROPPED** entirely, not labeled as 🟡 or non-blocking.
 - **"All clear on X" is allowed AS A SECTION HEADING** when that section genuinely has nothing to flag. It is NEVER allowed as the verdict line when other sections have findings.
-- **In a 🟢 review, 🔴 and the word "Blocking" appear only inside backticks** (no "Blocking issues" heading, no "Blocking: none"): the gate can block on any other line holding them, whatever the last line says.
+- **In a 🟢 review, 🔴 and the word "Blocking" appear only inside inline backticks on the same line** (a line inside a fenced code block counts like any other; no "Blocking issues" heading, no "Blocking: none"): the gate can block on any other line holding them, whatever the last line says.
 
 **Why:** a deep tier that returns 🟢 LGTM with three "minor non-blocking" findings tucked in the body becomes useless — the merge proceeds, the findings rot, and they re-surface as the same review weeks later. Binary verdict forces the reviewer to either drop genuinely-trivial observations or flag them as blockers worth fixing now.
 
