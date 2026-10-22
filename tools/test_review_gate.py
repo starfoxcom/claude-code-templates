@@ -360,5 +360,277 @@ class Command(unittest.TestCase):
                 self.assertIn("error", json.loads(out))
 
 
+# A stand-in for the gh CLI that keeps a pretend repository in a JSON file,
+# logs every call, and runs --jq filters through the real jq.
+FAKE_GH = r'''
+import json, os, subprocess, sys
+
+STATE, LOG = os.environ["FAKE_GH_STATE"], os.environ["FAKE_GH_LOG"]
+VALUED = {"-X", "--jq", "--input", "-F", "-f", "-H", "-R", "--json", "--color",
+          "--description", "--body"}
+
+
+def parse(argv):
+    pos, opts = [], {}
+    it = iter(argv)
+    for arg in it:
+        if arg in VALUED:
+            opts.setdefault(arg, []).append(next(it))
+        elif arg.startswith("-"):
+            opts[arg] = [True]
+        else:
+            pos.append(arg)
+    return pos, opts
+
+
+def out(data, opts):
+    if "--silent" in opts:
+        return 0
+    if isinstance(data, str) and "--jq" not in opts:
+        sys.stdout.write(data)
+        return 0
+    if "--jq" in opts:
+        run = subprocess.run(["jq", "-r", "-c", opts["--jq"][0]], input=json.dumps(data),
+                             capture_output=True, text=True)
+        sys.stdout.write(run.stdout)
+        sys.stderr.write(run.stderr)
+        return run.returncode
+    sys.stdout.write(json.dumps(data))
+    return 0
+
+
+def not_found():
+    sys.stderr.write("gh: Not Found (HTTP 404)\n")
+    return 1
+
+
+def api(path, opts, st):
+    method = opts.get("-X", ["GET"])[0]
+    path = path.split("?")[0]
+    repo = "repos/" + st["name"]
+    sets = st["rulesets"]
+    if method == "PATCH" and path == repo:
+        for field in opts.get("-F", []):
+            key, value = field.split("=", 1)
+            st["repo"][key] = {"true": True, "false": False}.get(value, value)
+        return None
+    if method == "POST" and path == repo + "/rulesets":
+        body = json.load(sys.stdin)
+        body["id"] = 100 + len(sets)
+        body["source_type"] = "Repository"
+        sets.append(body)
+        return None
+    if method == "PUT" and path.startswith(repo + "/rulesets/"):
+        rid = int(path.rsplit("/", 1)[1])
+        body = json.load(sys.stdin)
+        body.update(id=rid, source_type="Repository")
+        sets[:] = [body if r["id"] == rid else r for r in sets]
+        return None
+    if path == repo:
+        return dict(st["repo"], full_name=st["name"])
+    if path == repo + "/rulesets":
+        return [{k: r[k] for k in ("id", "name", "target", "source_type")} for r in sets]
+    if path.startswith(repo + "/rulesets/"):
+        return next((r for r in sets if str(r["id"]) == path.rsplit("/", 1)[1]), KeyError)
+    if path.startswith(repo + "/labels/"):
+        name = path.rsplit("/", 1)[1]
+        return {"name": name} if name in st["labels"] else KeyError
+    if path.startswith(repo + "/branches/"):
+        name = path.split("/branches/", 1)[1]
+        return {"name": name} if name in st["branches"] else KeyError
+    if path == repo + "/issues/comments":
+        return st.get("comments", [])
+    if path == repo + "/contents/.github/review-gate.yml":
+        return st["gate_yml"] if "gate_yml" in st else KeyError
+    if path.startswith("orgs/"):
+        return {"installations": st.get("installations", [])}
+    return KeyError
+
+
+def main():
+    sys.stdout.reconfigure(newline="\n")  # Windows would end lines with CRLF
+    pos, opts = parse(sys.argv[1:])
+    with open(STATE) as f:
+        st = json.load(f)
+    with open(LOG, "a") as f:
+        f.write(json.dumps(sys.argv[1:]) + "\n")
+    cmd = pos[:2]
+    data = None
+    if pos[0] == "api":
+        data = api(pos[1], opts, st)
+    elif cmd == ["repo", "view"]:
+        data = {"nameWithOwner": st["name"]}
+    elif cmd == ["label", "create"]:
+        st["labels"].append(pos[2])
+    elif cmd == ["secret", "list"]:
+        data = [{"name": n} for n in st["secrets"]]
+    elif cmd == ["secret", "set"]:
+        st["secrets"].append(pos[2])
+    if data is KeyError:
+        return not_found()
+    with open(STATE, "w") as f:
+        json.dump(st, f)
+    return out(data, opts) if data is not None else 0
+
+
+sys.exit(main())
+'''
+
+SETUP = os.path.join(ROOT, ".github", "scripts", "setup-review-gate.sh")
+WRITES = (["label", "create"], ["secret", "set"])
+
+
+def fresh_repo(**changes):
+    state = {
+        "name": "acme/game",
+        "repo": {"permissions": {"admin": True}, "default_branch": "main",
+                 "owner": {"type": "User"}, "allow_merge_commit": True,
+                 "allow_squash_merge": True, "allow_rebase_merge": True,
+                 "delete_branch_on_merge": False},
+        "branches": ["main", "develop"], "labels": [], "secrets": [], "rulesets": [],
+    }
+    state.update(changes)
+    return state
+
+
+def old_ruleset(rid=7, include="refs/heads/main"):
+    """A ruleset from the two-check setup, with an admin bypass."""
+    return {
+        "id": rid, "name": "protect", "target": "branch", "enforcement": "active",
+        "source_type": "Repository",
+        "conditions": {"ref_name": {"include": [include], "exclude": []}},
+        "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole",
+                           "bypass_mode": "always"}],
+        "rules": [{"type": "non_fast_forward"}, {"type": "required_status_checks", "parameters": {
+            "strict_required_status_checks_policy": False, "required_status_checks": [
+                {"context": "Evaluate review outcome", "integration_id": 15368},
+                {"context": "Claude On-Demand", "integration_id": 15368},
+                {"context": "Lint"}]}}],
+    }
+
+
+def tool(name):
+    from shutil import which
+    return which(name)
+
+
+@unittest.skipUnless(tool("bash") and tool("jq"), "needs bash and jq")
+class SetupScript(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.state = os.path.join(self.dir, "state.json")
+        self.log = os.path.join(self.dir, "log.jsonl")
+        stub = os.path.join(self.dir, "fake_gh.py")
+        with open(stub, "w") as f:
+            f.write(FAKE_GH)
+        gh = os.path.join(self.dir, "gh")
+        with open(gh, "w", newline="\n") as f:
+            f.write('#!/usr/bin/env bash\nexec "%s" "%s" "$@"\n'
+                    % (sys.executable.replace("\\", "/"), stub.replace("\\", "/")))
+        os.chmod(gh, 0o755)
+
+    def run_setup(self, state, *args):
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        open(self.log, "w").close()
+        env = dict(os.environ, FAKE_GH_STATE=self.state, FAKE_GH_LOG=self.log,
+                   PATH=self.dir + os.pathsep + os.environ["PATH"])
+        # The full path: on Windows a bare "bash" can start WSL's instead.
+        run = subprocess.run([tool("bash"), SETUP, "--repo", "acme/game", *args], env=env,
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        with open(self.state) as f:
+            after = json.load(f)
+        with open(self.log) as f:
+            calls = [json.loads(line) for line in f]
+        return run, after, calls
+
+    def writes(self, calls):
+        return [c for c in calls if "-X" in c or c[:2] in WRITES]
+
+    def checks(self, ruleset):
+        rule = next(r for r in ruleset["rules"] if r["type"] == "required_status_checks")
+        return [c["context"] for c in rule["parameters"]["required_status_checks"]]
+
+    def test_check_mode_reports_every_gap_and_changes_nothing(self):
+        run, after, calls = self.run_setup(fresh_repo(), "--check")
+        self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+        for gap in ("label needs-deep-review", "merge settings", "secret CLAUDE_CODE_OAUTH_TOKEN",
+                    "ruleset on main: no active ruleset", "ruleset on develop: no active ruleset"):
+            self.assertIn("MISSING  " + gap, run.stdout)
+        self.assertIn("5 missing.", run.stdout)
+        self.assertEqual(self.writes(calls), [])
+        self.assertEqual(after, fresh_repo())
+
+    def test_setup_brings_a_fresh_repo_to_a_clean_check(self):
+        state = fresh_repo(secrets=["CLAUDE_CODE_OAUTH_TOKEN"])
+        run, after, _ = self.run_setup(state, "--require", "Mod tests")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(after["labels"], ["needs-deep-review"])
+        repo = after["repo"]
+        self.assertEqual([repo["allow_merge_commit"], repo["allow_squash_merge"],
+                          repo["allow_rebase_merge"], repo["delete_branch_on_merge"]],
+                         [True, False, False, True])
+        self.assertEqual(sorted(r["name"] for r in after["rulesets"]),
+                         ["develop-protection", "main-protection"])
+        for ruleset in after["rulesets"]:
+            self.assertEqual(ruleset["bypass_actors"], [])
+            self.assertEqual(self.checks(ruleset), ["Review gate", "Mod tests"])
+            rule = ruleset["rules"][-1]["parameters"]["required_status_checks"][0]
+            self.assertEqual(rule["integration_id"], 15368)
+        run, _, calls = self.run_setup(after, "--check", "--require", "Mod tests")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("All set.", run.stdout)
+        self.assertEqual(self.writes(calls), [])
+
+    def test_setup_repairs_an_old_ruleset_and_keeps_its_own_checks(self):
+        extra = dict(old_ruleset(rid=8, include="~DEFAULT_BRANCH"), name="extra",
+                     rules=[{"type": "required_linear_history"}])
+        state = fresh_repo(rulesets=[extra, old_ruleset()], branches=["main"])
+        run, after, _ = self.run_setup(state, "--check")
+        self.assertIn('MISSING  ruleset on main: drop required check "Claude On-Demand"',
+                      run.stdout)
+        self.assertIn("MISSING  ruleset on main: no bypass actors (has 2)", run.stdout)
+        run, after, _ = self.run_setup(state)
+        self.assertIn("set up   ruleset on main", run.stdout)
+        extra_after, main = after["rulesets"]
+        self.assertEqual(self.checks(main), ["Evaluate review outcome", "Lint", "Review gate"])
+        self.assertIn("deletion", [r["type"] for r in main["rules"]])
+        self.assertEqual(extra_after["rules"], [{"type": "required_linear_history"}])
+        self.assertEqual(extra_after["bypass_actors"] + main["bypass_actors"], [])
+
+    def test_checks_two_keeps_the_old_deep_check(self):
+        ruleset = old_ruleset()
+        ruleset["rules"][1]["parameters"]["required_status_checks"].append(
+            {"context": "Review gate", "integration_id": 15368})
+        ruleset["rules"] += [{"type": "deletion"}, {"type": "pull_request"}]
+        ruleset["bypass_actors"] = []
+        state = fresh_repo(rulesets=[ruleset], branches=["main"], gate_yml="checks: two\n")
+        run, _, _ = self.run_setup(state, "--check")
+        self.assertIn("ok       ruleset on main", run.stdout)
+        run, _, _ = self.run_setup(dict(state, gate_yml="checks: one  # one check\n"), "--check")
+        self.assertIn('drop required check "Claude On-Demand"', run.stdout)
+
+    def test_a_missing_token_without_a_terminal_is_reported_not_prompted(self):
+        run, after, calls = self.run_setup(fresh_repo())
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("MISSING  secret CLAUDE_CODE_OAUTH_TOKEN", run.stdout)
+        self.assertEqual(after["secrets"], [])
+        self.assertFalse([c for c in calls if c[:2] == ["secret", "set"]])
+
+    def test_names_that_could_break_out_of_a_string_are_refused(self):
+        for args in (["--branch", 'ma"in'], ["--require", "a\\b"], ["--approvals", "11"],
+                     ["--merge-style", "fast"]):
+            run, _, calls = self.run_setup(fresh_repo(), *args)
+            self.assertEqual(run.returncode, 2, args)
+            self.assertEqual(calls, [], args)
+
+    def test_the_app_counts_as_seen_once_it_has_commented(self):
+        bot = comment("review", login="claude[bot]")
+        run, _, _ = self.run_setup(fresh_repo(comments=[bot]), "--check")
+        self.assertIn("ok       Claude GitHub App", run.stdout)
+        run, _, _ = self.run_setup(fresh_repo(), "--check")
+        self.assertIn("note     Claude GitHub App not confirmed", run.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
