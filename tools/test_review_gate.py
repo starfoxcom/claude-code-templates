@@ -67,29 +67,70 @@ class Verdict(unittest.TestCase):
 
     def test_the_last_glyph_line_decides_and_a_glyphless_blocking_blocks(self):
         head = "## Code Review — claude-code-templates\n"
+        alone = "no 🔴/🟢 line; a line opening with Blocking"
+        over = "a line opening with Blocking outranks the 🟢 line"
+        red = "a line opening with 🔴 outranks the later 🟢 line"
         cases = [
             # (routine comment body, verdict, line, recovered)
             (head + "**Blocking** — hook is not POSIX-portable", "block",
-             "**Blocking** — hook is not POSIX-portable", True),
-            (head + "The 🔴 from the last pass is fixed.\n🟢 LGTM", "pass", "🟢 LGTM", False),
+             "**Blocking** — hook is not POSIX-portable", alone),
+            (head + "The 🔴 from the last pass is fixed.\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "The format is \"🟢 LGTM\".\n🔴 Must fix: hook is not portable", "block",
-             "🔴 Must fix: hook is not portable", False),
-            (head + "Post a binary 🔴/🟢 verdict", "block", "Post a binary 🔴/🟢 verdict", False),
-            ("**Code Review - claude-code-templates**\n🟢 LGTM", "pass", "🟢 LGTM", False),
+             "🔴 Must fix: hook is not portable", None),
+            (head + "Post a binary 🔴/🟢 verdict", "block", "Post a binary 🔴/🟢 verdict", None),
+            ("**Code Review - claude-code-templates**\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # A dropped glyph next to a 🟢 elsewhere still blocks.
+            (head + "**Blocking** — must fix\nOnce fixed, this is 🟢 LGTM.", "block",
+             "**Blocking** — must fix", over),
+            (head + "## 🟢 All clear on hooks\nBlocking: the writer races", "block",
+             "Blocking: the writer races", over),
+            # A verdict line with a 🟢 heading after it, and list-style tags.
+            (head + "🔴 Blocking — the writer races\n## 🟢 All clear on hooks", "block",
+             "🔴 Blocking — the writer races", red),
+            (head + "1. **Blocking** — drops the filter\n## 🟢 All clear on hooks", "block",
+             "1. **Blocking** — drops the filter", over),
+            (head + "- **[Blocking]** — drops the filter", "block",
+             "- **[Blocking]** — drops the filter", alone),
+            (head + "> Blocking: the writer races\n🟢 LGTM", "block", "> Blocking: the writer races", over),
+            (head + "+ Blocking — drops the filter\n🟢 LGTM", "block", "+ Blocking — drops the filter", over),
+            (head + "[Blocking] — drops the filter", "block", "[Blocking] — drops the filter", alone),
+            (head + "_Blocking_ — drops the filter\n🟢 LGTM", "block", "_Blocking_ — drops the filter", over),
+            # A 🔴 Blocking list item between a 🟢 recap and a 🟢 heading.
+            (head + "The routine tier said 🟢 LGTM.\n1. 🔴 **Blocking** — drops the filter\n"
+             "## 🟢 All clear on hooks", "block", "1. 🔴 **Blocking** — drops the filter", over),
+            (head + "- 🔴 Blocking — drops the filter\n🟢 LGTM", "block",
+             "- 🔴 Blocking — drops the filter", over),
+            # A list item quoting the rule or recapping a fixed finding does
+            # not open with the glyph, whatever its bullet.
+            (head + "  - 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "* 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "+ 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "1. 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "> 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "- 🔴 `hook.sh:12` — raised earlier, now fixed\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # Bold, italics and headings are markup, not bullets: they open.
+            (head + "**🔴 Blocking — the writer races**\n## 🟢 All clear on hooks", "block",
+             "**🔴 Blocking — the writer races**", red),
+            (head + "*🔴 the writer races*\n🟢 LGTM", "block", "*🔴 the writer races*", red),
+            (head + "# 🔴 the writer races\n🟢 LGTM", "block", "# 🔴 the writer races", red),
+            (head + "Blockings and Blockingly are not the word.\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # Fails closed on a heading that opens with the word: none of the
+            # repo's 513 passing verdicts to 2026-10-22 had one.
+            (head + "## Blocking findings\nNone.\n🟢 LGTM", "block", "## Blocking findings", over),
             # A bare LGTM never passes: prose opens the same way.
-            (head + "LGTM", "missing", "", False),
-            (head + "LGTM otherwise, but the END marker must be fixed", "missing", "", False),
-            (head + "no blocking issues found", "missing", "", False),
+            (head + "LGTM", "missing", "", None),
+            (head + "LGTM otherwise, but the END marker must be fixed", "missing", "", None),
+            (head + "no blocking issues found", "missing", "", None),
             # Without its heading a comment is never the routine verdict.
-            ("Review done.\n🟢 LGTM", "missing", "", False),
-            ("Review done.\n🔴 Blocking — race in the writer", "missing", "", False),
+            ("Review done.\n🟢 LGTM", "missing", "", None),
+            ("Review done.\n🔴 Blocking — race in the writer", "missing", "", None),
         ]
         for body, result, line, recovered in cases:
             with self.subTest(body=body):
                 got = gate.verdict(self.pages([comment(body)]), "2026-10-21T09:00:00Z", "routine", MARK)
                 want = {"verdict": result, "line": line}
                 if recovered:
-                    want["recovered"] = "no 🔴/🟢 line; a line opening with Blocking"
+                    want["recovered"] = recovered
                 self.assertEqual(got, want)
 
     def test_requests_and_tracking_comments_are_never_the_routine_verdict(self):
