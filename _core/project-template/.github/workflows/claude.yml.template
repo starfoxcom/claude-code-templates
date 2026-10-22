@@ -139,6 +139,17 @@ jobs:
       # (success/failure based on verdict).
       checks: write
     steps:
+      # A self-hosted runner shares one workspace between jobs and workflows,
+      # and the routine review's sparse checkouts leave a partial clone there
+      # (file contents fetched on demand). A full fetch into it stays partial,
+      # and reading the diff would then fetch contents without a token, which
+      # fails on a private repo. So this full checkout starts fresh.
+      - name: Drop a partial clone left by an earlier job
+        run: |
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+
       # The workflow token (it can write checks) is not left in .git/config:
       # the credits reviewer reads files next to it while acting on PR
       # content. Fetches pass the token per command. The review action steps
