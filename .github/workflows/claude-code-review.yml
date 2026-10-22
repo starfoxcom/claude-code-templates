@@ -251,7 +251,7 @@ jobs:
 
         **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
 
-        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The gate reads the verdict from your comment mechanically: the final line, starting with 🔴 or 🟢. A comment it cannot read is a MISSING verdict and the gate FAILS CLOSED. Do not count on any recovery from a different format. The emoji line is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
+        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The gate reads the verdict from your comment mechanically: the last line holding 🔴 or 🟢 (any 🔴 on it blocks); an earlier line that opens with 🔴 or `Blocking` can block first. A comment with no 🔴 or 🟢 line is a MISSING verdict and the gate FAILS CLOSED. Do not count on any recovery from a different format. The emoji line is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
 
         Body MUST:
         - Be titled `## Code Review — claude-code-templates`
@@ -322,7 +322,7 @@ jobs:
         - 🔴 Blocking when ANY real finding exists, regardless of framing.
         - DROP style preferences and micro-optimisations entirely.
 
-        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically: the final line, starting with 🔴 or 🟢 — the SAME strict contract as the routine gate. A comment it cannot read is a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
+        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically — the SAME strict contract as the routine gate: the last line holding 🔴 or 🟢 (any 🔴 on it blocks); an earlier line that opens with 🔴 or `Blocking` can block first. A comment with no 🔴 or 🟢 line is a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
 
         **WRONG formats — never post any of these** (the deep gate reads some as a block or a missing verdict; the rest break the binary rule):
         - `LGTM` (missing 🟢 prefix — the most common mistake)
