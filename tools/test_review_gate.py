@@ -212,6 +212,9 @@ class Verdict(unittest.TestCase):
             (head + "- `x.py:3` — blocking **I/O** in the event loop\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "Change 3 — blocking (synchronous) writes\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "Change 3 — blocking _output_\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # A double-backtick span quoting a backtick stays code: no label after it.
+            (head + "- The class `` [^`] `` excludes backticks, so `- [ ] Blocking` stays quoted.\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "| ``(?i:blocking)`` | lower-case after a dash |\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "**`a.json` — blocking **finding**:**\n🟢 LGTM", "block",
              "**`a.json` — blocking **finding**:**", over),
             (head + "**Verdict** — blocking.\n🟢 LGTM", "block", "**Verdict** — blocking.", over),

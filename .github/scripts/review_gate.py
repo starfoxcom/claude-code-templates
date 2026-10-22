@@ -94,8 +94,9 @@ RED_OPENER = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🔴🟢])[\W\d_])*🔴")
 # 2. "Blocking" opening a line after the same markup, as written when the
 #    glyph is dropped: "1. **Blocking** — …", "### Blocking issues", "_Blocking_".
 BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|BLOCKING)(?![^\W_])")
-# 3. "Blocking" right after a short label: up to 30 characters (an inline
-#    code span counts as one) ending in a colon, a dash or a 🔴. After a
+# 3. "Blocking" right after a short label: up to 30 characters (a
+#    single-backtick code span counts as one; a longer backtick run ends
+#    the label) ending in a colon, a dash or a 🔴. After a
 #    colon any case counts ("**Verdict:** blocking"). After a dash or a 🔴,
 #    "Blocking" and "BLOCKING" always count ("- `a.py:1` — Blocking: x"),
 #    and a lower-case "blocking" counts unless a word or a code span
@@ -106,7 +107,7 @@ BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|B
 _AFTER_LABEL = r"(?:(?![`🟢])[\W\d_])*"
 # A word or a code span after the lower-case word, other than "finding" or "issue", even behind emphasis or a bracket ("— blocking **I/O**", "— blocking (sync) writes").
 _ADJECTIVE = r"\s+[*_(\[~]*(?!(?i:findings?|issues?)(?![^\W_]))(?:[^\W_]|`)"
-LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?"
+LABEL = re.compile(r"(?:(?<![`\\])`[^`]+`(?!`)|[^`🔴🟢]){0,30}?"
                    r"(?:[:：]" + _AFTER_LABEL + r"(?i:Blocking)"
                    r"|(?:[—–−]|(?<![^\W_])[-‐‑]|🔴)" + _AFTER_LABEL
                    + r"(?:Blocking|BLOCKING|(?i:blocking)(?![^\W_])(?!" + _ADJECTIVE + r")))"
