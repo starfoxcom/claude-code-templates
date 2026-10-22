@@ -441,16 +441,21 @@ jobs:
               return None
 
           # Parse the diff into per-file added-line sections.
-          per_file_added = {}
-          for sec in re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE):
-              fname = header_path(sec.split('\n', 1)[0])
-              if fname is None:
-                  continue
-              added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
-              per_file_added[fname] = added
-
           violations = []   # rule-breakage — likely 🔴 unless the reviewer disagrees
           warnings   = []   # likely-needs-attention — reviewer judges
+
+          per_file_added = {}
+          for n, sec in enumerate(re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE)):
+              first = sec.split('\n', 1)[0]
+              if not first.startswith('diff --git '):
+                  continue
+              fname = header_path(first)
+              # A header the parser cannot read is still scanned, never skipped.
+              if fname is None:
+                  fname = f'<unread diff header {n}>'
+                  warnings.append(f'UNREAD_DIFF_HEADER: {first[:120]}')
+              added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
+              per_file_added[fname] = added
 
           # ── Check 1: Toggle marker balance ───────────────────────────────────
           # Every `<!-- TOGGLE:name START -->` (and `name:off`) must have a
@@ -469,7 +474,7 @@ jobs:
               if not fname.endswith(('.md', '.template', '.yml', '.yaml', '.html')):
                   continue
               try:
-                  with open(fname) as f:
+                  with open(fname, encoding='utf-8', errors='replace') as f:
                       src = f.read()
               except OSError:
                   continue
@@ -532,7 +537,7 @@ jobs:
               if not fname.startswith('_core/project-template/'):
                   continue
               try:
-                  with open(fname) as f:
+                  with open(fname, encoding='utf-8', errors='replace') as f:
                       src = f.read()
               except OSError:
                   continue
