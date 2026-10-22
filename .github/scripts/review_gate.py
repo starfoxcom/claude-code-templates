@@ -49,9 +49,10 @@ import time
 
 # Never reviewed: the review action refuses to run on a PR whose copy of the
 # review workflow differs from the default branch's, so a workflow-only PR has
-# to pass as non-reviewable. Only the workflow files themselves: a script or
-# action kept under .github/workflows/ is reviewed like any other file.
-NEVER = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
+# to pass as non-reviewable. Only the review workflows themselves (claude*.yml):
+# another workflow, or a script or action kept under .github/workflows/, is
+# reviewed like any other file.
+NEVER = re.compile(r"^\.github/workflows/claude[^/]*\.ya?ml$")
 # Skipped only when every other path is Markdown, an image or a font that is
 # not always reviewed. Always reviewed, whatever the file type: _core/, which
 # lands verbatim in users' repos; bundles/, whose toggles drive what a bind
@@ -59,12 +60,14 @@ NEVER = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
 # TOGGLES.md and COMPARISON.md, which it reads and the pre-screen treats as
 # architecture files; redesign/;
 # .github/scripts/, where a file Python loads before the standard library
-# could run in the gate; and .claude/ and any CLAUDE.md, the instructions
-# both review tiers load. Matched in any case, as a case-insensitive checkout
+# could run in the gate; and a .claude/ folder at any depth and any CLAUDE.md
+# or CLAUDE.local.md, the instructions and skills both review tiers load
+# (Claude Code reads a subfolder's when it reads files there). Matched in any case, as a case-insensitive checkout
 # would place the file. Anything else gets a review: scripts, config,
 # lockfiles, an SVG, which can carry script, and a .gitattributes or .lfsconfig.
 SKIPPABLE = re.compile(r"\.(md|png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$", re.I)
-ALWAYS_REVIEWED = re.compile(r"^(_core|bundles|redesign|\.claude|\.github/scripts)/|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE\.md$", re.I)
+ALWAYS_REVIEWED = re.compile(r"^(_core|bundles|redesign|\.github/scripts)/|(^|/)\.claude/"
+                             r"|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE(\.local)?\.md$", re.I)
 
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
@@ -107,7 +110,7 @@ LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?(?:[:：—–−]|(?<![^\W_
 FOOTER_RULE = re.compile(r"(?:-{3,}|\*{3,}|_{3,})")
 _BRANCH = r"[^`\s~^:?*\[\\\]🔴🟢]{1,200}"
 FOOTER_ITEM = re.compile(r"(?:[Bb]ranch:?\s*)?(?:\[(?:View job|`?%s`?)\]\(https://github\.com/"
-                         r"[^/\s)]+/[^/\s)]+/(?:tree|actions/runs)/[^\s)🔴🟢]*\)|`%s`)" % (_BRANCH, _BRANCH))
+                         r"[\w.-]+/[\w.-]+/(?:tree|actions/runs)/[^\s)🔴🟢]*\)|`%s`)" % (_BRANCH, _BRANCH))
 FOOTER_LONE = re.compile(r"[Bb]ranch|\[View job\]")
 
 
@@ -205,9 +208,10 @@ def _line(body):
     open with 🔴 or 🟢; any 🔴 on it blocks. A line that blocks wherever it
     sits (RED_OPENER, BLOCKING, LABEL) blocks whatever the verdict line says:
     a 🟢 after it ("once fixed, this is 🟢 LGTM", a "🟢 All clear on X"
-    heading) must not pass it, and the glyph is what gets dropped. Any other
-    last line is a missing verdict: a bare "LGTM", or "Verdict = Blocking"
-    under a "🟢 All clear on X" heading, never passes."""
+    heading) must not pass it, and the glyph is what gets dropped. With any
+    other last line, a 🔴 on the last line holding a glyph blocks; otherwise
+    the verdict is missing: a bare "LGTM", or "Verdict = Blocking" under a
+    "🟢 All clear on X" heading, never passes."""
     lines = body.splitlines()
     glyph = any("🔴" in l or "🟢" in l for l in lines)
     early = next(((l, how) for l in lines for how, rule in

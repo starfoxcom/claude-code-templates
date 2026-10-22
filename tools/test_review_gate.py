@@ -35,11 +35,12 @@ class Triage(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage(["README.md", path]))
 
-    def test_workflows_never_count_whatever_their_extension(self):
+    def test_only_the_review_workflows_never_count(self):
         self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
-        self.assertTrue(gate.triage([".github/workflows/x.yml", ".github/scripts/review_gate.py"]))
-        self.assertFalse(gate.triage([".github/workflows/x.yaml", "README.md"]))
-        for path in (".github/workflows/helper.sh", ".github/workflows/lib/action.yml", ".github/workflows/sub/x.py"):
+        self.assertFalse(gate.triage([".github/workflows/claude.yml", ".github/workflows/claude-x.yaml", "README.md"]))
+        self.assertTrue(gate.triage([".github/workflows/claude.yml", ".github/scripts/review_gate.py"]))
+        for path in (".github/workflows/helper.sh", ".github/workflows/lib/action.yml", ".github/workflows/sub/x.py",
+                     ".github/workflows/tests.yml", ".github/workflows/pages.yaml", ".github/workflows/sub/claude.yml"):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage([path]))
 
@@ -49,10 +50,11 @@ class Triage(unittest.TestCase):
                      "CLAUDE.md", "engine/CLAUDE.md", ".claude/rules/git.md", ".claude/skills/find/SKILL.md",
                      "bundles/1-solo-personal/bundle.toggles.md", "_core/x/logo.png",
                      "_Core/project-template/.claude/rules/zz.md", "Bundles/x/bundle.toggles.md", "setup.MD",
-                     "TOGGLES.md", "COMPARISON.md"):
+                     "TOGGLES.md", "COMPARISON.md", "CLAUDE.local.md", "engine/claude.LOCAL.md",
+                     "engine/.claude/skills/x/SKILL.md", "a/b/.Claude/rules/r.md"):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage([path]))
-        self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md"]))
+        self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md", "docs/a.claude/x.md", "docs/xclaude.md"]))
 
     def test_an_incomplete_listing_is_reviewed(self):
         self.assertTrue(gate.triage(["README.md"], incomplete=True))
@@ -115,6 +117,10 @@ class Verdict(unittest.TestCase):
                      "\n--- `wip`", "\n· `must-fix-a.py:12`", "\n· [Changes](https://github.com/o/r/pull/1)"):
             body = "## Code Review — claude-code-templates\n### 🟢 All clear on hooks" + tail
             self.assertEqual(gate._line(body)[0], "missing", tail)
+        # A glyph anywhere in a link keeps the line: it is never a footer.
+        for tail in ("\n · [View job](https://github.com/o/r🔴/actions/runs/1)",
+                     "\n · [`b`](https://github.com/o🔴/r/tree/b)"):
+            self.assertEqual(gate._line("## Deep review\n🟢 LGTM" + tail)[0], "block", tail)
 
     def test_a_red_on_the_last_glyph_line_blocks_without_a_verdict_line(self):
         # Never missing: a missing deep verdict starts a second review that
