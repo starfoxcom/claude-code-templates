@@ -57,7 +57,7 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 - [x] Deny-list profiles (standard and strict) in a committed `.claude/settings.json`. The force-push deny must not block `--force-with-lease`. Shipped as the `denyProfile` switch: `standard` blocks force pushes, direct pushes to the main and development branches, interactive rebase and admin merges; `strict` adds `git reset --hard`, `git clean -f`, deleting those branches, `gh repo delete` and `gh api` DELETE calls. `settings.local.json` keeps only the allow list.
 - [x] Shipped-text scope as a per-project list of globs. Shipped as the `shippedTextPaths` switch: the rule keeps its default globs in its frontmatter, and the engine swaps in a project's list after rendering, so neither the canonical placeholder scan nor `SETUP.md` changes.
 - [x] Remove every admin-merge instruction from rules and workflow templates (#155, #156).
-- [ ] One line in the canonical token-efficiency rule: `Workflow` and agent calls leave `model` and `effort` out so they follow the session's choice (see Model choice).
+- [x] One line in the canonical token-efficiency rule: `Workflow` and agent calls leave `model` and `effort` out so they follow the session's choice (see Model choice). Shipped as its own "Agent calls" section (#331).
 
 ### Phase 2: review gate v2
 - [ ] Prototype the single-check workflow and `review_gate.py` on this repo (hotfix to `main`, then cascade).

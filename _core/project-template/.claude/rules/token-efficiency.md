@@ -11,6 +11,10 @@ Enable an MCP server only while the work needs it. Every enabled server adds its
 - One command per call where you can. Permission rules match the whole command string, so `&&` chains prompt more and fail in confusing ways.
 - Never retry a timed-out command with the same timeout. Builds and installs start at 420 000 ms. The first two retries add 180 000 ms each (600 000, then 780 000); every later retry adds 120 000 ms.
 
+## Agent calls
+
+Leave `model` and `effort` out of `Workflow` and agent calls, so they run on the session's model and effort. A pinned value overrides the person's choice.
+
 ## Watching CI
 
 After every push, watch the PR's checks with the **Monitor tool** where it exists; never use `gh run watch`:
