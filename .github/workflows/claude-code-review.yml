@@ -384,7 +384,11 @@ jobs:
           # keeps accented names raw in diff headers too; headers still quote
           # names with quotes, backslashes or control characters, which the
           # parser below unquotes.
-          git -c core.quotePath=false diff --no-renames "origin/$BASE...HEAD" > /tmp/pr_diff.txt
+          # --text, --no-ext-diff, --no-textconv: the checkout is the PR's, so
+          # its .gitattributes could mark every file binary or route it through
+          # a filter, and the scans below would read an empty diff.
+          git -c core.quotePath=false diff --no-renames --text --no-ext-diff --no-textconv \
+            "origin/$BASE...HEAD" > /tmp/pr_diff.txt
           git diff -z --no-renames --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
 
           # The verdict floor for Evaluate: no review attempt of this run
