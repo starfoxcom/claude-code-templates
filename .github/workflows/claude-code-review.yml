@@ -377,7 +377,9 @@ jobs:
           # files. The checkout above is fetch-depth 0, so the base branch is
           # present; three-dot (merge-base..HEAD) equals the PR's diff.
           git diff "origin/$BASE...HEAD" > /tmp/pr_diff.txt
-          git diff --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
+          # --no-renames lists a renamed file's old path too, so moving a file
+          # off the deep-review trigger list still counts as touching it.
+          git diff --no-renames --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
 
           # The verdict floor for Evaluate: no review attempt of this run
           # starts before this moment, and a run this one replaced was
