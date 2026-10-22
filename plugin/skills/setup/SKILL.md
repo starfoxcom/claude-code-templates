@@ -34,6 +34,10 @@ Run the engine with `--code <the setup code> --write <repo root>`. It prints one
   - `staged`: files the repo already had. The repo's copy is untouched; the new text is at `.bindwright/incoming/<path>`.
   - `skipped`: files whose staged copy already existed from an earlier run. Nothing was written for them.
 
+Edits inside `.claude/` ask the user for permission even when edits are otherwise accepted. Before the first one, say that the next steps change the repo's agent settings and rules.
+
+Fill `{{STACK_COMMANDS_ALLOWLIST}}` in `.claude/settings.local.json` now (see step 4). Until it is filled, that file is not valid JSON.
+
 ## 3. Merge what was staged
 
 Every file under `.bindwright/incoming/` is new text for the file at the same path without that prefix. The engine always stages files a repo often has (`CLAUDE.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `.gitattributes`, `.claude/settings.json`), plus every file reported as `staged`.
@@ -69,6 +73,8 @@ When the project has no such command (no type checker, no tests yet), remove tha
 ## 5. Fit the rules to the repo
 
 - `.claude/rules/code-size.md`: keep only the per-language rows for languages the repo contains (count files by extension, ignoring vendored and generated folders), plus `Other` when the repo has languages the table does not list. Narrow its `paths:` globs to the same languages.
+- `.gitignore`: `.claude/settings.local.json` is personal. If `git check-ignore -q .claude/settings.local.json` fails, add that path to `.gitignore` (create the file if needed).
+- `.claude/rules/git.md` names the branches work lands on. If it names a development branch the repo does not have (`git branch --list <name>`), offer to create it from the current branch, locally only.
 - Check that every command and path the new files name exists in the repo. Fix what you can; list the rest for the user.
 
 ## 6. Finish
