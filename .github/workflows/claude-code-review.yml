@@ -203,7 +203,7 @@ jobs:
         - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
         - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
 
-        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history.
+        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history. If the pre-screen warns `GITATTRIBUTES_CHANGED`, Read every changed file instead of trusting the diff: the PR's own `.gitattributes` can make `git diff` show its files as binary.
 
         **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks`, `gh pr comment` on this PR, the exact `gh pr edit … --add-label needs-deep-review` command from Step 4, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied.
 
@@ -319,6 +319,8 @@ jobs:
         2. ...
 
         **Out of scope:** <list of intentional deferrals>
+
+        If the PR adds or changes a .gitattributes file, Read every changed file instead of trusting the diff: the PR can make the diff show its files as binary.
 
         **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
         - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
@@ -628,6 +630,15 @@ jobs:
           jsx_changed = [f for f in changed if f.startswith('redesign/') and f.endswith('.jsx')]
           if jsx_changed and 'index.html' not in changed:
               warnings.append(f'JSX_HTML_PARITY: {", ".join(jsx_changed)} touched but index.html not in diff — production may be out of sync')
+
+          # ── Check 4b: .gitattributes in the PR ───────────────────────────────
+          # The scans above read the diff with --text, but the reviewer runs
+          # plain `git diff` in the PR's own checkout, where a .gitattributes
+          # from the PR (`* -diff`, `binary`) can show every file as "Binary
+          # files differ" and hide the code from the review.
+          attrs = [f for f in changed if f.rsplit('/', 1)[-1] == '.gitattributes']
+          if attrs:
+              warnings.append(f'GITATTRIBUTES_CHANGED: {", ".join(attrs)} — the PR can make git diff show files as binary; Read every changed file instead of trusting the diff')
 
           # ── Check 5: Categorize files ────────────────────────────────────────
           ARCH_PREFIXES = ('_core/', 'redesign/')
