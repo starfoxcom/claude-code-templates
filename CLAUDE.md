@@ -71,7 +71,6 @@ Rules from `.claude/rules/token-efficiency.md`, `.claude/rules/task-tracking.md`
 - **No admin bypass, ever.** Never `gh pr merge --admin`. The rulesets have no bypass actors; `BLOCKED` means find and fix the cause.
 - **Branch cleanup after every merge** follows `.claude/rules/git.md` § Merging: `gh pr merge --delete-branch` removes the remote branch (and the local one when it is checked out); run `git branch -D <name>` as a separate call if it remains. Never `&&`-chain cleanup commands: permission rules match the whole command string, so chained calls get denied.
 - **Our own PRs merge on green, without waiting for the maintainer.** Once every check passes (and, for a PR that edits the review workflow, both local reviews of the head commit are 🟢), the session merges and cleans up. Only a PR carrying a commit from outside our sessions waits for the maintainer's read.
-- **Usage ceiling** (a rule of this file only): at ≥80%, commit locally and stop. Don't push to PR (CI run costs 10–15% of remaining capacity).
 
 ---
 
