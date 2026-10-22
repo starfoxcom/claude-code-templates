@@ -26,10 +26,12 @@
 #   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
 #   head ref is byte-identical to the version on the default branch before granting
 #   an OIDC-exchanged token, so the review action cannot run on a PR that edits this
-#   file. Triage therefore never reviews this workflow (.github/workflows/claude-code-review.yml
-#   or .yaml): a PR of only it and skippable docs passes as non-reviewable. Edit it alone: mixed with reviewable
-#   files (claude.yml, the gate script, .claude/), the review fails `Workflow validation failed` and the gate blocks, so those go in their own PR first; the
-#   maintainer reads those diffs before merge.
+#   file. Triage therefore never reviews this one file (.github/workflows/claude-code-review.yml;
+#   a .yaml twin would run as a separate workflow, so it is reviewed): a PR of only it and skippable
+#   docs passes as non-reviewable. Edit it alone: mixed with reviewable files (claude.yml, the gate
+#   script, .claude/), the review fails `Workflow validation failed` and the gate blocks, so those go
+#   in their own PR first. Our own such PRs merge on two local reviews of the head commit; any other
+#   PR waits for the maintainer's read.
 
 name: Claude Code Review
 
