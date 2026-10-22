@@ -71,7 +71,29 @@ jobs:
       contents: read
     outputs:
       allowed: ${{ steps.asker.outputs.allowed }}
+      runner_labels: ${{ steps.runner.outputs.labels }}
     steps:
+      # The review job's runner labels (`runner`), from the default branch's
+      # gate settings, the branch this workflow runs from. Bad or missing
+      # settings fall back to a hosted runner here; the review job reads the
+      # settings again from the PR's base and fails the gate on bad ones.
+      # The ref is explicit: on review events the default checkout is the
+      # PR's merge commit, whose settings the PR controls.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts/
+            .github/review-gate.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Read the runner labels
+        id: runner
+        run: |
+          labels=$(python3 -I .github/scripts/review_gate.py settings 2>/dev/null | sed -n 's/^runner_labels=//p')
+          echo "labels=${labels:-[\"ubuntu-latest\"]}" >> "$GITHUB_OUTPUT"
+
       - name: Check the asker's access
         id: asker
         env:
@@ -104,7 +126,7 @@ jobs:
     concurrency:
       group: claude-on-demand-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.authorize.outputs.runner_labels || '["ubuntu-latest"]') }}
     permissions:
       contents: read
       pull-requests: write
@@ -210,6 +232,11 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
+          # Extra reviewer tools as a ",tool,tool" suffix for --allowedTools.
+          # The script admits only Bash(...) without quotes, `$`, backslashes
+          # or brackets inside, and Read, Grep, Glob.
+          tools=$(printf '%s\n' "$out" | sed -n 's/^reviewer_allowed_tools=//p')
+          echo "tools_suffix=${tools:+,$tools}" >> "$GITHUB_OUTPUT"
 
       # A deep review now counts as asked for, and its earlier result (if any)
       # no longer stands: the gate waits on this run's verdict. With
@@ -330,6 +357,7 @@ jobs:
           MODEL: ${{ steps.gate.outputs.deep_model }}
           EFFORT: ${{ steps.gate.outputs.deep_effort }}
           MAX_TURNS: ${{ steps.gate.outputs.deep_max_turns }}
+          EXTRA_TOOLS: ${{ steps.gate.outputs.tools_suffix }}
           REQUEST: ${{ github.event.comment.body || github.event.review.body }}
         # No workflow token in this step's environment: the reviewer it starts
         # reads PR content and could read its environment. The head and base
@@ -411,7 +439,7 @@ jobs:
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           (cd "$wt" && GH_TOKEN="$bot_token" "$cli" -p "$prompt" \
             --setting-sources user --strict-mcp-config --permission-mode default \
-            --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" \
+            --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
             --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" \
             --max-turns "$MAX_TURNS" --model "$MODEL" --effort "$EFFORT" \
             --output-format json) > "$out" || status=$?
@@ -461,7 +489,7 @@ jobs:
         # The token goes in both as a `with:` input and as an env var, the
         # upstream workaround for credential loss in tag mode.
         # Model, effort and turn cap from the gate settings (deep.*; the
-        # fallback below uses fallback.*). `--disallowedTools`
+        # fallback below uses deep.fallback_*). `--disallowedTools`
         # bans helper agents and wake-ups on every attempt: a one-shot session
         # that delegates ends with no verdict.
         # `--setting-sources user,project` on every attempt keeps the project's
@@ -487,7 +515,7 @@ jobs:
           APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ steps.gate.outputs.tools_suffix }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
           show_full_output: false
           additional_permissions: |
             actions: read
@@ -546,7 +574,7 @@ jobs:
           APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ steps.gate.outputs.tools_suffix }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
           show_full_output: false
           additional_permissions: |
             actions: read
@@ -613,7 +641,7 @@ jobs:
         with:
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.fallback_model }} --effort ${{ steps.gate.outputs.fallback_effort }}'
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ steps.gate.outputs.tools_suffix }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_fallback_model }} --effort ${{ steps.gate.outputs.deep_fallback_effort }}'
           show_full_output: false
           additional_permissions: |
             actions: read
@@ -648,7 +676,7 @@ jobs:
           # The model whose attempt completed, for the check summaries: the job
           # name and a green first step cannot tell (every attempt continues on
           # error).
-          REVIEWER: ${{ steps.claude_credits.outcome == 'success' && format('{0} {1} (API credits)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_attempt_1.outcome == 'success' && format('{0} {1}', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_retry.outcome == 'success' && format('{0} {1} (retry)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_fallback.outcome == 'success' && format('{0} {1} (fallback)', steps.gate.outputs.fallback_model, steps.gate.outputs.fallback_effort) || 'none' }}
+          REVIEWER: ${{ steps.claude_credits.outcome == 'success' && format('{0} {1} (API credits)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_attempt_1.outcome == 'success' && format('{0} {1}', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_retry.outcome == 'success' && format('{0} {1} (retry)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_fallback.outcome == 'success' && format('{0} {1} (fallback)', steps.gate.outputs.deep_fallback_model, steps.gate.outputs.deep_fallback_effort) || 'none' }}
           ATTEMPTS: "API credits: ${{ steps.claude_credits.outcome || 'skipped' }}, first: ${{ steps.claude_attempt_1.outcome || 'skipped' }}, usage limit: ${{ steps.failure_class.outputs.usage_limit || 'no' }}, retry: ${{ steps.claude_retry.outcome || 'skipped' }}, fallback: ${{ steps.claude_fallback.outcome || 'skipped' }}"
         run: |
           set -o pipefail
