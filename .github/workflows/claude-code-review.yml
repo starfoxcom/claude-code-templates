@@ -245,6 +245,17 @@ jobs:
       escalate: ${{ steps.triggers.outputs.escalate }}
       context: ${{ steps.triggers.outputs.context }}
     steps:
+      # A self-hosted runner shares one workspace between jobs and workflows,
+      # and the light jobs' sparse checkouts leave a partial clone there (file
+      # contents fetched on demand). A full fetch into it stays partial, and
+      # the diff below would then fetch contents after the token is gone,
+      # which fails on a private repo. So the full checkouts start fresh.
+      - name: Drop a partial clone left by an earlier job
+        run: |
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -340,6 +351,14 @@ jobs:
     outputs:
       context: ${{ steps.checks.outputs.context }}
     steps:
+      # As in Project triggers: a full checkout starts from a fresh clone.
+      - name: Drop a partial clone left by an earlier job
+        if: needs.init-gate.outputs.prescreen_dir != ''
+        run: |
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+
       - uses: actions/checkout@v6
         if: needs.init-gate.outputs.prescreen_dir != ''
         with:
@@ -588,6 +607,13 @@ jobs:
       # to in_progress when routine auto-escalates.
       checks: write
     steps:
+      # As in Project triggers: a full checkout starts from a fresh clone.
+      - name: Drop a partial clone left by an earlier job
+        run: |
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+            rm -rf "$GITHUB_WORKSPACE/.git"
+          fi
+
       # No token left in .git/config, which the credits reviewer's worktree
       # shares: that reviewer reads PR content with a Read tool, and this
       # job's token can write checks. The fetches here are anonymous on a
