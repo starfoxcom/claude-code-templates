@@ -196,6 +196,7 @@ test("both commands bind a setup code to the same output", { skip: noPython }, a
 
   const refusals = [
     ["--code", "bad"], ["--code"], ["--code", code, "--year", "1_0"], ["--code", codeOf('{"team":"yes"}')],
+    ["--code", code, "--adopt"],
   ];
   for (const args of refusals) {
     const [jsBad, pyBad] = commands(args);
@@ -231,5 +232,30 @@ test("both commands write the same files and never overwrite", { skip: noPython 
     assert.deepEqual(again(), { written: [], staged: inPlace, skipped: staged });
     assert.deepEqual(again(), { written: [], staged: [], skipped: result.written });
     assert.equal(readFileSync(mine, "utf8"), "mine");
+  });
+});
+
+test("adopt mode stages every file and writes only setup's own folder", { skip: noPython }, () => {
+  withTemp((root) => {
+    const code = encodeSetupCode(named());
+    for (const side of ["js", "py"]) {
+      mkdirSync(join(root, side, ".claude", "rules"), { recursive: true });
+      writeFileSync(join(root, side, ".claude", "rules", "git.md"), "the project's own rule");
+    }
+    const [js, py] = [
+      run(process.execPath, [join(engine, "cli.js"), "--code", code, "--write", join(root, "js"), "--adopt"]),
+      run(python, [join(engine, "bind.py"), "--code", code, "--write", join(root, "py"), "--adopt"]),
+    ];
+    assert.equal(js.status, 0, js.stderr);
+    assert.equal(py.stdout, js.stdout);
+    assert.deepEqual(tree(join(root, "py")), tree(join(root, "js")));
+    const result = JSON.parse(js.stdout);
+    assert.deepEqual(result.written.filter((p) => !p.startsWith(".bindwright/")), []);
+    assert.ok(result.written.includes(".bindwright/pristine.json"));
+    assert.ok(result.staged.includes(".claude/rules/git.md") && result.staged.length > 10);
+    assert.deepEqual(result.skipped, []);
+    const outside = tree(join(root, "js")).map(([p]) => p).filter((p) => !p.startsWith(".bindwright/"));
+    assert.deepEqual(outside, [".claude/rules/git.md"]);
+    assert.equal(readFileSync(join(root, "js", ".claude", "rules", "git.md"), "utf8"), "the project's own rule");
   });
 });

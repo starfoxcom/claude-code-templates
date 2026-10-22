@@ -17,6 +17,7 @@ This skill writes the files the code describes into the repo, then fits them to 
 - Find the repo root with `git rev-parse --show-toplevel`. If this is not a git repo, ask whether to run `git init` here or stop.
 - If `git status --porcelain` shows uncommitted changes, say so and ask whether to continue. The setup is easier to review on a clean tree.
 - If `.bindwright/pristine.json` already exists, this repo was set up before, with the answers in `.bindwright/project.json`. Say so and ask whether to start over from this code (delete both files first, so the new ones are written) or stop.
+- Otherwise, if the repo has its own agent setup already (`CLAUDE.md`, `.claude/rules/`, `.claude/skills/`, `.claude/hooks/`, or a review workflow under `.github/workflows/`), this is **adopt mode**: say so in one line. Nothing lands without a yes, file by file.
 - If `.bindwright/incoming/` or `.bindwright/global/` already exists, an earlier setup stopped before it finished. Ask whether to finish its merges first (steps 3 and 6 on those files) or delete both folders and start fresh.
 
 ## 2. Write the files
@@ -28,7 +29,7 @@ Pick the engine: the first of these that runs.
 
 With neither, tell the user setup needs Node or Python 3.8+, or the zip download on the page, and stop.
 
-Run the engine with `--code <the setup code> --write <repo root>`. It prints one line of JSON:
+Run the engine with `--code <the setup code> --write <repo root>`, adding `--adopt` in adopt mode: it then stages every file, new ones included, instead of writing them in place. It prints one line of JSON:
 
 - `{"error": "..."}`: show the message and stop. A message starting `Invalid setup code` means the code was cut or changed while copying; ask for a fresh copy.
 - `{"written": [...], "staged": [...], "skipped": [...]}`: paths relative to the repo root.
@@ -53,6 +54,13 @@ For each one:
   - `LICENSE`: never replace an existing license without an explicit yes; a license change is a legal decision.
   - `CLAUDE.md`: keep the repo's project-specific sections, and put the new rules where they read naturally rather than appending a second copy of a section.
 - Delete the staged copy once its file is settled.
+
+In adopt mode, offer every staged file without a repo copy on its own: one line on what it does, move it into place on a yes, delete the staged copy on a no. For a file both have, go through the differences one at a time rather than merging the whole file at once.
+
+Then offer the two ways to mark parts of the repo as the project's own, which a later update never changes. In adopt mode, suggest them for whatever the user kept over the new text.
+
+- **Whole files:** `.bindwright/owned`, one repo path or pattern per line (`*` within a folder, `**` across folders, a trailing `/` for a whole folder, `#` for comments), for example the project's own review workflow.
+- **Sections of shared files:** a line holding `bindwright:keep` and a later one holding `bindwright:end-keep`, written in the file's own comment style (`<!-- bindwright:keep -->` in Markdown, `# bindwright:keep` in YAML or Python). Markers do not nest.
 
 Remove `.bindwright/incoming/` when it is empty. Mention any `skipped` paths: their staged copies came from an earlier run, and the user decides whether to merge or delete them.
 

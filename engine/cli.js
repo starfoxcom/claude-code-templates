@@ -3,6 +3,7 @@
 //   node engine/cli.js [--year N] < answers.json     -> {"files": [[dest, text], ...]}
 //   node engine/cli.js --code bw1-...                -> the answers come from a setup code
 //   node engine/cli.js --code bw1-... --write DIR    -> {"written": [...], "staged": [...], "skipped": [...]}
+//   ... --write DIR --adopt                          -> the same, with every file outside .bindwright/ staged
 // A failure gives {"error": message} and exit status 1.
 
 import { readFileSync } from "node:fs";
@@ -24,6 +25,8 @@ function option(argv, name) {
 
 async function run(argv) {
   const [code, year, folder] = ["--code", "--year", "--write"].map((n) => option(argv, n));
+  const adopt = argv.includes("--adopt");
+  if (adopt && folder === undefined) throw new Error("--adopt needs --write");
   if (year !== undefined && !/^[0-9]+$/.test(year)) throw new Error("--year needs a whole number");
   const answers = code === undefined ? JSON.parse(readFileSync(0, "utf8")) : decodeSetupCode(code);
   const coreFiles = JSON.parse(readFileSync(join(root, "engine", "core-files.json"), "utf8"));
@@ -32,7 +35,7 @@ async function run(argv) {
   const version = (await readFile("VERSION")).trim().replace(/^v+/, "");
   const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year), version });
   const files = [...bound.entries()];
-  return folder === undefined ? { files } : applyFiles(files, folder);
+  return folder === undefined ? { files } : applyFiles(files, folder, { adopt });
 }
 
 let result;

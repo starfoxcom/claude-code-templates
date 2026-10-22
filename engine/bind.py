@@ -4,9 +4,10 @@
 #
 # As a command, it binds from the repo this file sits in:
 #   python engine/bind.py [--year N] < answers.json      -> {"files": [[dest, text], ...]}
-#   python engine/bind.py --batch < jobs.json            -> one result per {"answers", "year"} job
+#   python engine/bind.py --batch < jobs.json            -> one result per {"answers", "year", "version"} job
 #   python engine/bind.py --code bw1-...                 -> the answers come from a setup code
-#   python engine/bind.py --code bw1-... --write DIR     -> {"written": [...], "skipped": [...]}
+#   python engine/bind.py --code bw1-... --write DIR     -> {"written": [...], "staged": [...], "skipped": [...]}
+#   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
 import json
@@ -233,6 +234,9 @@ def _single(argv, run):
     """One bind, from stdin or a setup code, optionally written to a folder."""
     try:
         code, year, folder = (_option(argv, n) for n in ("--code", "--year", "--write"))
+        adopt = "--adopt" in argv
+        if adopt and folder is None:
+            raise ValueError("--adopt needs --write")
         answers = _stdin_json() if code is None else decode_setup_code(code)
         if year is not None and not re.fullmatch("[0-9]+", year):
             raise ValueError("--year needs a whole number")
@@ -243,7 +247,7 @@ def _single(argv, run):
     if folder is None or "error" in result:
         return result
     try:
-        return apply_files(result["files"], folder)
+        return apply_files(result["files"], folder, adopt)
     except (ApplyError, OSError) as e:
         return {"error": str(e)}
 
