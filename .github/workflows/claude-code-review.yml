@@ -187,23 +187,22 @@ jobs:
             *) echo "::error::Unexpected triage result"; exit 1 ;;
           esac
 
-  project-checks:
-    name: Project pre-screen
+  project-triggers:
+    name: Project triggers
     needs: [triage, init-gate]
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ${{ fromJSON(needs.init-gate.outputs.runner_labels || '["ubuntu-latest"]') }}
-    # The project's own deep-review triggers (escalate.*) and pre-screen
-    # checks (prescreen.dir) from the gate settings. The script, settings and
-    # checks come from the base branch, and they run here, in a job with no
-    # secrets and a read-only token, under an empty environment: a check that
-    # runs the PR's code reaches no review token and cannot set variables for
-    # the review job's steps. A failure here skips the review, which fails
-    # the gate.
+    # The project's own deep-review triggers (escalate.* in the gate
+    # settings), matched by the base branch's script. This job runs none of
+    # the PR's code, and none of the project's checks, which run in their own
+    # job below: a check that runs the PR's code could otherwise rewrite the
+    # result and skip the deep review. A failure here skips the review, which
+    # fails the gate.
     permissions:
       contents: read
     outputs:
-      escalate: ${{ steps.project.outputs.escalate }}
-      context: ${{ steps.project.outputs.context }}
+      escalate: ${{ steps.triggers.outputs.escalate }}
+      context: ${{ steps.triggers.outputs.context }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -217,16 +216,15 @@ jobs:
           printf '%s\n' '* !diff -text !eol !working-tree-encoding !filter !ident' > .git/info/attributes
           git rm -rq --cached --ignore-unmatch . && git reset -q --hard
 
-      - name: Run the project triggers and checks
-        id: project
+      - name: Match the project triggers
+        id: triggers
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PRESCREEN_DIR: ${{ needs.init-gate.outputs.prescreen_dir }}
         run: |
           set -euo pipefail
           gate="$RUNNER_TEMP/gate-base"
-          mkdir -p "$gate/checks"
+          mkdir -p "$gate"
           git show "$BASE_SHA:.github/scripts/review_gate.py" > "$gate/review_gate.py"
           if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
             git show "$BASE_SHA:.github/review-gate.yml" > "$gate/review-gate.yml"
@@ -238,27 +236,11 @@ jobs:
             "origin/$BASE...HEAD" | tr '\0' '\n' > "$gate/files.txt"
           python3 -I "$gate/review_gate.py" escalate "$gate/files.txt" "$gate/pr.diff" \
             --file "$gate/review-gate.yml" > "$gate/escalate.json"
-          : > "$gate/checks.txt"
-          if [ -n "$PRESCREEN_DIR" ]; then
-            # A folder the base branch does not have fails this job.
-            git archive "$BASE_SHA" -- "$PRESCREEN_DIR" | tar -x -C "$gate/checks"
-            find "$gate/checks/$PRESCREEN_DIR" -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \) \
-              -print0 | sort -z > "$gate/list"
-            while IFS= read -r -d '' check; do
-              case "$check" in *.py) run=(python3 -I "$check") ;; *) run=(bash "$check") ;; esac
-              status=0
-              env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 \
-                timeout 300 "${run[@]}" "$gate/files.txt" "$gate/pr.diff" > "$gate/out" 2>&1 || status=$?
-              printf '%s\t%s\n' "$status" "${check##*/}" >> "$gate/checks.txt"
-              head -c 4000 "$gate/out" > "$gate/out.${check##*/}"
-            done < "$gate/list"
-          fi
-          python3 -I - "$gate" <<'PYEOF'
+          python3 -I - "$gate/escalate.json" <<'PYEOF'
           import json, os, sys
-          gate = sys.argv[1]
-          esc = json.load(open(os.path.join(gate, 'escalate.json'), encoding='utf-8'))
+          esc = json.load(open(sys.argv[1], encoding='utf-8'))
           def code(text):
-              # Indented code, so nothing in a PR line or a check's output reads as markup.
+              # Indented code, so nothing in a PR line reads as markup.
               return ''.join('    ' + ln + '\n' for ln in text.splitlines()) or '    (no output)\n'
           parts = []
           if esc['escalate']:
@@ -267,6 +249,79 @@ jobs:
               if esc['lines']:
                   parts.append('- added lines matching the pattern:\n\n' + code('\n'.join(esc['lines'])))
               parts.append('\n')
+          context = ''.join(parts)[:10000]
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              delim = 'EOF_' + os.urandom(16).hex()
+              fh.write(f"escalate={'true' if esc['escalate'] else 'false'}\n")
+              fh.write(f'context<<{delim}\n{context}\n{delim}\n')
+          PYEOF
+
+  project-checks:
+    name: Project pre-screen
+    needs: [triage, init-gate]
+    if: needs.triage.outputs.run_review == 'true'
+    runs-on: ${{ fromJSON(needs.init-gate.outputs.runner_labels || '["ubuntu-latest"]') }}
+    # The project's own pre-screen checks (prescreen.dir in the gate
+    # settings). The checks come from the base branch, and they run here, in
+    # a job with no secrets and a read-only token, under an empty
+    # environment: a check that runs the PR's code reaches no review token
+    # and cannot set variables for the review job's steps, though it can
+    # still rewrite this job's own report. A failure here, a folder the base
+    # branch does not have included, skips the review, which fails the gate.
+    permissions:
+      contents: read
+    outputs:
+      context: ${{ steps.checks.outputs.context }}
+    steps:
+      - uses: actions/checkout@v6
+        if: needs.init-gate.outputs.prescreen_dir != ''
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # As in Auto review: the PR's .gitattributes must not change the bytes.
+      - name: Override the PR's git attributes
+        if: needs.init-gate.outputs.prescreen_dir != ''
+        run: |
+          mkdir -p .git/info
+          printf '%s\n' '* !diff -text !eol !working-tree-encoding !filter !ident' > .git/info/attributes
+          git rm -rq --cached --ignore-unmatch . && git reset -q --hard
+
+      - name: Run the project checks
+        id: checks
+        if: needs.init-gate.outputs.prescreen_dir != ''
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRESCREEN_DIR: ${{ needs.init-gate.outputs.prescreen_dir }}
+        run: |
+          set -euo pipefail
+          gate="$RUNNER_TEMP/gate-checks"
+          mkdir -p "$gate/checks" "$gate/out"
+          # The same diff and name list the pre-screen in Auto review reads.
+          git -c core.quotePath=false diff --text --no-ext-diff --no-textconv \
+            --ignore-submodules=none "origin/$BASE...HEAD" > "$gate/pr.diff"
+          git diff -z --no-renames --name-only --ignore-submodules=none \
+            "origin/$BASE...HEAD" | tr '\0' '\n' > "$gate/files.txt"
+          : > "$gate/checks.txt"
+          git archive "$BASE_SHA" -- "$PRESCREEN_DIR" | tar -x -C "$gate/checks"
+          find "$gate/checks/$PRESCREEN_DIR" -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \) \
+            -print0 | sort -z > "$gate/list"
+          while IFS= read -r -d '' check; do
+            case "$check" in *.py) run=(python3 -I "$check") ;; *) run=(bash "$check") ;; esac
+            status=0
+            env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 \
+              timeout 300 "${run[@]}" "$gate/files.txt" "$gate/pr.diff" > "$gate/out/run" 2>&1 || status=$?
+            printf '%s\t%s\n' "$status" "${check##*/}" >> "$gate/checks.txt"
+            head -c 4000 "$gate/out/run" > "$gate/out/${check##*/}"
+          done < "$gate/list"
+          python3 -I - "$gate" <<'PYEOF'
+          import os, sys
+          gate = sys.argv[1]
+          def code(text):
+              # Indented code, so nothing in a check's output reads as markup.
+              return ''.join('    ' + ln + '\n' for ln in text.splitlines()) or '    (no output)\n'
+          parts = []
           rows = [ln.split('\t', 1) for ln in open(os.path.join(gate, 'checks.txt'), encoding='utf-8').read().splitlines()]
           failed = [name for status, name in rows if status != '0']
           if rows:
@@ -274,18 +329,17 @@ jobs:
                       if failed else '## Project pre-screen checks: all passed')
               parts.append(head + '\n\n')
               for status, name in rows:
-                  out = open(os.path.join(gate, 'out.' + name), encoding='utf-8', errors='replace').read()
+                  out = open(os.path.join(gate, 'out', name), encoding='utf-8', errors='replace').read()
                   parts.append(f'### {name}: exit {status}\n\n' + code(out) + '\n')
-          context = ''.join(parts)[:30000]
+          context = ''.join(parts)[:20000]
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               delim = 'EOF_' + os.urandom(16).hex()
-              fh.write(f"escalate={'true' if esc['escalate'] else 'false'}\n")
               fh.write(f'context<<{delim}\n{context}\n{delim}\n')
           PYEOF
 
   claude-review:
     name: Auto review
-    needs: [triage, init-gate, project-checks]
+    needs: [triage, init-gate, project-triggers, project-checks]
     if: needs.triage.outputs.run_review == 'true'
     runs-on: ${{ fromJSON(needs.init-gate.outputs.runner_labels || '["ubuntu-latest"]') }}
     # The model whose attempt wrote the verdict, for the gate's summary. The
@@ -507,8 +561,8 @@ jobs:
           BASE: ${{ github.event.pull_request.base.ref }}
           # From the Project pre-screen job: the project's own triggers count
           # like the trigger list below, and its report joins the context.
-          PROJECT_ESCALATE: ${{ needs.project-checks.outputs.escalate }}
-          PROJECT_CONTEXT: ${{ needs.project-checks.outputs.context }}
+          PROJECT_ESCALATE: ${{ needs.project-triggers.outputs.escalate }}
+          PROJECT_CONTEXT: ${{ needs.project-triggers.outputs.context }}${{ needs.project-checks.outputs.context }}
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
@@ -852,12 +906,13 @@ jobs:
                       if project_deep:
                           out.write("- the project's own triggers, listed in the next section\n")
                   out.write('\n')
-              # The project's report comes first-hand from the Project pre-screen
-              # job, which formats every PR-derived line as indented code.
-              if project_context.strip():
-                  out.write(project_context.rstrip('\n') + '\n\n')
               else:
                   out.write('## Deep-review trigger surface: none (Step 4 skipped)\n\n')
+              # The project's report comes first-hand from the Project triggers
+              # and Project pre-screen jobs, which format every PR-derived line
+              # as indented code.
+              if project_context.strip():
+                  out.write(project_context.rstrip('\n') + '\n\n')
 
               out.write('## Architecture-critical files (READ THESE)\n\n')
               if arch_critical:
