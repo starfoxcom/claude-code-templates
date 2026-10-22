@@ -924,7 +924,8 @@ jobs:
                 REQUESTED=yes
                 break
               fi
-              PERM=$(gh api "repos/$REPO/collaborators/$ASKER/permission" --jq .permission)
+              # A failed lookup (a bot or deleted account) counts as no access.
+              PERM=$(gh api "repos/$REPO/collaborators/$ASKER/permission" --jq .permission) || PERM=none
               case "$PERM" in
                 admin|maintain|write) REQUESTED=yes; break ;;
               esac
@@ -957,8 +958,12 @@ jobs:
           # `skipped` and `in_progress` states ARE safe to overwrite —
           # they're set by this routine workflow, not by claude.yml's
           # authoritative Evaluate step.
-          EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
-          EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
+          # One read for status, conclusion and title: separate reads could
+          # straddle the deep run's final write and see none of its marks.
+          EXISTING=$(gh api "repos/$REPO/check-runs/$CHECK_ID")
+          EXISTING_STATUS=$(printf '%s' "$EXISTING" | jq -r '.status')
+          EXISTING_CONCLUSION=$(printf '%s' "$EXISTING" | jq -r '.conclusion // ""')
+          EXISTING_TITLE=$(printf '%s' "$EXISTING" | jq -r '.output.title // ""')
           if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
             echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — the deep tier has spoken; routine Resolve will not overwrite"
             exit 0
@@ -970,7 +975,6 @@ jobs:
           # required checks pass while that review runs.
           GATE_NOW=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
             --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
-          EXISTING_TITLE=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.output.title // ""')
           RUNNING=no
           case ";$GATE_NOW;" in
             *";escalated=yes;deep=none;"*) RUNNING=yes ;;
@@ -1175,8 +1179,11 @@ jobs:
               # if a maintainer manually @claude-triggered on a docs-only PR
               # and the deep review set the check to success/failure, a routine re-run
               # must not overwrite that authoritative verdict with skipped.
-              EXISTING_STATUS=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.status')
-              EXISTING_CONCLUSION=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.conclusion // ""')
+              # One read for all three fields, as in the Resolve step.
+              EXISTING=$(gh api "repos/$REPO/check-runs/$CHECK_ID")
+              EXISTING_STATUS=$(printf '%s' "$EXISTING" | jq -r '.status')
+              EXISTING_CONCLUSION=$(printf '%s' "$EXISTING" | jq -r '.conclusion // ""')
+              EXISTING_TITLE=$(printf '%s' "$EXISTING" | jq -r '.output.title // ""')
               if [ "$EXISTING_STATUS" = "completed" ] && { [ "$EXISTING_CONCLUSION" = "success" ] || [ "$EXISTING_CONCLUSION" = "failure" ]; }; then
                 echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — will not overwrite with skipped"
                 exit 0
@@ -1186,7 +1193,6 @@ jobs:
               # (if that write failed) this check reads "Deep review running".
               GATE_NOW=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
                 --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
-              EXISTING_TITLE=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.output.title // ""')
               RUNNING=no
               case ";$GATE_NOW;" in
                 *";escalated=yes;deep=none;"*) RUNNING=yes ;;
