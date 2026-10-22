@@ -22,7 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE_FILES = [
     "package.json", "core-files.json", "cli.js",
     "bind.js", "model.js", "render.js", "setupcode.js", "apply.js",
-    "bind.py", "model.py", "render.py", "setupcode.py", "apply.py",
+    "bind.py", "model.py", "render.py", "setupcode.py", "apply.py", "home.py",
 ]
 # The ~/.claude templates bind.js and bind.py read (globalFiles).
 GLOBAL_FILES = [
@@ -40,10 +40,17 @@ def _copy(src_rel, dest_root, dest_rel=None):
     shutil.copyfile(os.path.join(ROOT, *src_rel.split("/")), dest)
 
 
+def _skipped(dirpath, name):
+    # Caches, tests, and the editor typings the CLI writes beside a loaded mod.
+    if name in ("__pycache__", "node_modules", "tests", "test-helper"):
+        return True
+    return name == "types" and os.path.basename(dirpath) == ".claude-plugin"
+
+
 def _files_under(rel):
     base = os.path.join(ROOT, *rel.split("/"))
     for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        dirnames[:] = sorted(d for d in dirnames if not _skipped(dirpath, d))
         for name in sorted(filenames):
             yield os.path.relpath(os.path.join(dirpath, name), ROOT).replace(os.sep, "/")
 
@@ -68,6 +75,9 @@ def pack(out):
         core = ["_core/project-template/" + p for p in json.load(fh)]
     licenses = list(_files_under("_core/licenses"))
     global_files = ["_core/global-template/" + p for p in GLOBAL_FILES]
+    # Mods are copied whole into ~/.claude/mods/, so the pack carries them as they ship.
+    mods = list(_files_under("_core/global-template/mods"))
+    global_files += mods
     for rel in core + licenses + global_files:
         _copy(rel, out)
     _stamp_version(out)
