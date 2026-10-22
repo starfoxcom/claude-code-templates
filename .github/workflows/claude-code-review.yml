@@ -4,7 +4,8 @@
 # the PR head commit: a job's own check from the deep tier's comment-triggered
 # run would attach to the default branch instead. Its decisions live in
 # .github/scripts/review_gate.py and its settings in .github/review-gate.yml,
-# both read from the base branch, never from the PR:
+# both read from the base branch (or, when the base predates the gate, from
+# the default branch), never from the PR:
 #   • PR opens                         → in_progress
 #   • Triage finds no reviewable files → success
 #   • Routine verdict, no escalation   → success or failure
@@ -57,6 +58,9 @@ jobs:
       checks: write
       pull-requests: read
     outputs:
+      # The commit every job below reads the gate's files from: the base
+      # commit, or the default branch's tip when the base predates the gate.
+      gate_sha: ${{ steps.settings.outputs.gate_sha }}
       checks: ${{ steps.settings.outputs.checks }}
       routine_model: ${{ steps.settings.outputs.routine_model }}
       routine_effort: ${{ steps.settings.outputs.routine_effort }}
@@ -88,9 +92,31 @@ jobs:
             .github/review-gate.yml
           sparse-checkout-cone-mode: false
 
+      # A base branch from before the gate (an old release line) has no
+      # script, and a PR into it could never pass. Those PRs take the gate
+      # from the default branch's tip, which a PR cannot change either.
+      - name: Check the base has the gate
+        id: source
+        run: |
+          if [ ! -f .github/scripts/review_gate.py ]; then
+            echo "::notice::The base commit has no review gate; using the gate from the default branch."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v6
+        if: steps.source.outputs.fallback == 'true'
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/scripts/
+            .github/review-gate.yml
+          sparse-checkout-cone-mode: false
+
       - name: Read the gate settings
         id: settings
         run: |
+          echo "gate_sha=$(git rev-parse HEAD)" | tee -a "$GITHUB_OUTPUT"
           if ! out=$(python3 -I .github/scripts/review_gate.py settings); then
             echo "::error::Bad review gate settings: $out"
             exit 1
@@ -155,7 +181,7 @@ jobs:
       # review is a gate setting, so a PR cannot change it for itself.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: |
             .github/scripts/
@@ -232,14 +258,14 @@ jobs:
         id: triggers
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           gate="$RUNNER_TEMP/gate-base"
           mkdir -p "$gate"
-          git show "$BASE_SHA:.github/scripts/review_gate.py" > "$gate/review_gate.py"
-          if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
-            git show "$BASE_SHA:.github/review-gate.yml" > "$gate/review-gate.yml"
+          git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate/review_gate.py"
+          if git cat-file -e "$GATE_SHA:.github/review-gate.yml" 2>/dev/null; then
+            git show "$GATE_SHA:.github/review-gate.yml" > "$gate/review-gate.yml"
           fi
           # The same diff the pre-screen in Auto review reads. One name per
           # line: a carriage return or newline in a name becomes a space, so
@@ -329,7 +355,7 @@ jobs:
         if: needs.init-gate.outputs.prescreen_dir != ''
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           PRESCREEN_DIR: ${{ needs.init-gate.outputs.prescreen_dir }}
         run: |
           set -euo pipefail
@@ -342,7 +368,7 @@ jobs:
             | python3 -I -c 'import sys; sys.stdout.buffer.write(b"".join(n.decode("utf-8", "backslashreplace").replace("\r", " ").replace("\n", " ").encode() + b"\n" for n in sys.stdin.buffer.read().split(b"\0") if n))' \
             > "$gate/files.txt"
           : > "$gate/checks.txt"
-          git archive "$BASE_SHA" -- "$PRESCREEN_DIR" | tar -x -C "$gate/checks"
+          git archive "$GATE_SHA" -- "$PRESCREEN_DIR" | tar -x -C "$gate/checks"
           find "$gate/checks/$PRESCREEN_DIR" -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \) \
             -print0 | sort -z > "$gate/list"
           if [ ! -s "$gate/list" ]; then
@@ -600,6 +626,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE: ${{ github.event.pull_request.base.ref }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           # From the Project pre-screen job: the project's own triggers count
           # like the trigger list below, and its report joins the context.
           PROJECT_ESCALATE: ${{ needs.project-triggers.outputs.escalate }}
@@ -638,9 +665,11 @@ jobs:
           # Without --text, as the reviewer's own `git diff` runs: "-" counts
           # mark the files it will show as binary.
           git diff -z --no-renames --diff-filter=d --numstat "origin/$BASE...HEAD" > "$RUNNER_TEMP/numstat.txt"
-          # The project's review guide, from the base branch so the PR cannot
-          # rewrite the guide its own review follows. No guide, no section.
-          git show "origin/$BASE:.github/review-guide.md" > "$RUNNER_TEMP/review_guide.md" 2>/dev/null \
+          # The project's review guide, from the gate's commit (the base, or
+          # the default branch when the base predates the gate) so the PR
+          # cannot rewrite the guide its own review follows. No guide, no
+          # section.
+          git show "$GATE_SHA:.github/review-guide.md" > "$RUNNER_TEMP/review_guide.md" 2>/dev/null \
             || : > "$RUNNER_TEMP/review_guide.md"
 
           # The verdict floor for Evaluate: no review attempt of this run
@@ -1403,7 +1432,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts/
           sparse-checkout-cone-mode: false
