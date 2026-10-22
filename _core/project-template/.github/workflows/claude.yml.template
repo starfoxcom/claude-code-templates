@@ -157,9 +157,9 @@ jobs:
       # the credits reviewer reads files next to it while acting on PR
       # content. Fetches pass the token per command. The review action steps
       # later write their own bot token into the origin URL; that is the
-      # action's own setup and predates this file. The fetches before that
-      # are anonymous, which works on a public repo: a private one needs
-      # persisted credentials here or a fetch of its own.
+      # action's own setup and predates this file. The action's fetch of the
+      # PR branch before that reads a local copy (see the step before the
+      # attempts), so it needs no login on a private repo.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -194,7 +194,7 @@ jobs:
             echo "head_sha=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          read -r HEAD_SHA BASE_SHA < <(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '"\(.head.sha) \(.base.sha)"')
+          read -r HEAD_SHA BASE_SHA HEAD_REF < <(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '"\(.head.sha) \(.base.sha) \(.head.ref)"')
           if [ -z "$HEAD_SHA" ] || [ -z "$BASE_SHA" ]; then
             echo "::error::Could not resolve the head and base commits of PR $PR_NUMBER"
             exit 1
@@ -202,6 +202,7 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
           # The order stamp for this run's gate writes: the moment this job
           # started, in nanoseconds, not the run id. Each approved request
           # joins the review group above and cancels the run in flight, so
@@ -512,19 +513,37 @@ jobs:
               exit 1 ;;
           esac
 
-      # The review action fetches the PR branch from origin before it writes
-      # its own token, and the checkout above left no login, so on a private
-      # repo that fetch fails and every attempt below with it. The credits
-      # reviewer has finished by now, so the workflow token can go into the
-      # local git config for the attempts; the last step takes it out again.
-      - name: Give the review action a git login on a private repo
-        if: github.event.repository.private && steps.pr-head.outputs.head_sha != '' && steps.claude_credits.outcome != 'success'
+      # Each review action attempt fetches the PR branch from origin before
+      # it writes its own token into the origin URL, and revokes that token
+      # when it ends. The checkout above left no login, so on a private repo
+      # the first fetch fails, and a retry's fetch carries the revoked token
+      # and fails on any repo. The workflow token (it can write checks) must
+      # not go into .git/config: the reviewer can read that file and post a
+      # comment. So origin points at a local bare repo that shares this
+      # checkout's objects and holds only the PR's head commit, under the
+      # names the action fetches (the branch, and the pull ref for a fork).
+      # The attempts fetch from it with no network and no token; the step
+      # after them points origin back at GitHub. Each attempt starts with no
+      # branch checked out: a fork PR's fetch writes into a local branch of
+      # the PR's branch name, and git refuses that for the checked-out one.
+      - name: Serve the PR branch to the review action locally
+        id: pr-origin
+        if: steps.pr-head.outputs.head_sha != '' && steps.claude_credits.outcome != 'success'
+        continue-on-error: true
         env:
-          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr-head.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
+          HEAD_REF: ${{ steps.pr-head.outputs.head_ref }}
         run: |
-          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          echo "::add-mask::$auth"
-          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+          origin="$RUNNER_TEMP/pr-origin.git"
+          rm -rf "$origin"
+          git init --quiet --bare "$origin"
+          echo "$(git rev-parse --absolute-git-dir)/objects" > "$origin/objects/info/alternates"
+          git -C "$origin" update-ref "refs/heads/$HEAD_REF" "$HEAD_SHA"
+          git -C "$origin" update-ref "refs/pull/$PR_NUMBER/head" "$HEAD_SHA"
+          echo "url=$origin" >> "$GITHUB_OUTPUT"
+          git remote set-url origin "$origin"
+          git checkout --quiet --detach
 
       - name: Run Claude
         id: claude_attempt_1
@@ -612,6 +631,16 @@ jobs:
         if: steps.claude_attempt_1.outcome == 'failure'
         run: sleep 90
 
+      # The attempt before left its revoked token in the origin URL and the
+      # PR branch checked out. Same for the next attempt below.
+      - name: Serve the PR branch locally again
+        if: steps.claude_attempt_1.outcome == 'failure' && steps.pr-origin.outcome == 'success'
+        env:
+          ORIGIN: ${{ steps.pr-origin.outputs.url }}
+        run: |
+          git remote set-url origin "$ORIGIN"
+          git checkout --quiet --detach
+
       # Attempt 2a: same-model retry, for transient failures only.
       - name: Run Claude (retry, same model)
         id: claude_retry
@@ -673,6 +702,14 @@ jobs:
           echo "Claude Code $installed at $dest"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
 
+      - name: Serve the PR branch locally for the fallback
+        if: steps.claude_retry.outcome == 'failure' && steps.pr-origin.outcome == 'success'
+        env:
+          ORIGIN: ${{ steps.pr-origin.outputs.url }}
+        run: |
+          git remote set-url origin "$ORIGIN"
+          git checkout --quiet --detach
+
       # Attempt 2b: the fallback model from the settings. Fires on a usage limit,
       # or when the same-model retry also failed. The Evaluate step below owns
       # the outcome, so every attempt continues on error.
@@ -698,11 +735,11 @@ jobs:
             actions: read
           allowed_bots: "claude"
 
-      # Takes the login from the step before the attempts out again, whatever
-      # happened: a self-hosted runner keeps the workspace for later jobs.
-      - name: Remove the review action's git login
-        if: always() && github.event.repository.private
-        run: git config --local --unset-all http.https://github.com/.extraheader || true
+      # Whatever happened: a self-hosted runner keeps the workspace for later
+      # jobs, and the local repo goes with this job's temp folder.
+      - name: Point origin back at GitHub
+        if: always() && steps.pr-origin.outcome == 'success'
+        run: git remote set-url origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
 
       - name: Evaluate deep-tier verdict
         # Reads this run's deep verdict and writes it into the Review gate on
