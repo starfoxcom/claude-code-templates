@@ -192,6 +192,13 @@ class Verdict(unittest.TestCase):
             (head + "- `a.py:1` — Blocking: the writer races\n🟢 LGTM", "block",
              "- `a.py:1` — Blocking: the writer races", over),
             (head + "Non-blocking: none\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # After a dash only "Blocking"/"BLOCKING" counts: the adjective in prose passes.
+            (head + "**Change 3 — blocking verdict output summary (~line 244):**\n🟢 LGTM",
+             "pass", "🟢 LGTM", None),
+            (head + "- Step 2 – blocking call removed\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "**Verdict** — BLOCKING\n🟢 LGTM", "block", "**Verdict** — BLOCKING", over),
+            (head + "- `a.py:1` 🔴 Blocking: race\n🟢 LGTM", "block",
+             "- `a.py:1` 🔴 Blocking: race", over),
             (head + "\u26a0\ufe0f Blocking — race\n🟢 LGTM", "block", "\u26a0\ufe0f Blocking — race", over),
             (head + "| [ ] " * 200 + "| ok\n🟢 LGTM", "pass", "🟢 LGTM", None),
             # A glyph-less verdict under a 🟢 heading is missing, never a pass.
