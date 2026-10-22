@@ -55,14 +55,16 @@ NEVER = re.compile(r"^\.github/workflows/[^/]+\.ya?ml$")
 # Skipped only when every other path is Markdown, an image or a font that is
 # not always reviewed. Always reviewed, whatever the file type: _core/, which
 # lands verbatim in users' repos; bundles/, whose toggles drive what a bind
-# writes; SETUP.md, which every bundle ships as its setup prompt; redesign/;
+# writes; SETUP.md, which every bundle ships as its setup prompt, and
+# TOGGLES.md and COMPARISON.md, which it reads and the pre-screen treats as
+# architecture files; redesign/;
 # .github/scripts/, where a file Python loads before the standard library
 # could run in the gate; and .claude/ and any CLAUDE.md, the instructions
 # both review tiers load. Matched in any case, as a case-insensitive checkout
 # would place the file. Anything else gets a review: scripts, config,
 # lockfiles, an SVG, which can carry script, and a .gitattributes or .lfsconfig.
 SKIPPABLE = re.compile(r"\.(md|png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$", re.I)
-ALWAYS_REVIEWED = re.compile(r"^(_core|bundles|redesign|\.claude|\.github/scripts)/|^SETUP\.md$|(^|/)CLAUDE\.md$", re.I)
+ALWAYS_REVIEWED = re.compile(r"^(_core|bundles|redesign|\.claude|\.github/scripts)/|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE\.md$", re.I)
 
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
@@ -96,21 +98,29 @@ BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|B
 LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?(?:[:：—–−]|(?<![^\W_])[-‐‑]|🔴)"
                    r"(?:(?![`🟢])[\W\d_])*(?i:Blocking)(?![^\W_])")
 # The verdict is the last line, under the review action's footer. Only lines
-# that say nothing are skipped: an optional rule, then pieces joined by "·" or
-# "•", each empty or one GitHub link or one space-free code span, after an
-# optional "branch:" ("[View job](…) · Branch: [`b`](…)", "--- · `b`"). Any
-# words on a trailing line make it the last line.
+# that say nothing are skipped: a rule line, or an optional rule then pieces
+# joined by "·" or "•", each empty or one item after an optional "branch:":
+# a job or branch link on GitHub, or a branch name in a code span (no space
+# or other character git refuses in a branch name). A lone item needs a
+# "branch:" or "[View job]" in front ("[View job](…) · Branch: [`b`](…)",
+# "--- · `b`"). Any words on a trailing line make it the last line.
 FOOTER_RULE = re.compile(r"(?:-{3,}|\*{3,}|_{3,})")
-FOOTER_ITEM = re.compile(r"(?:[Bb]ranch:?\s*)?(?:\[(?:View job|[^\]\s🔴🟢]{1,200})\]"
-                         r"\(https://github\.com/[^\s)🔴🟢]*\)|`[^`\s🔴🟢]{1,200}`)")
+_BRANCH = r"[^`\s~^:?*\[\\\]🔴🟢]{1,200}"
+FOOTER_ITEM = re.compile(r"(?:[Bb]ranch:?\s*)?(?:\[(?:View job|`?%s`?)\]\(https://github\.com/"
+                         r"[^/\s)]+/[^/\s)]+/(?:tree|actions/runs)/[^\s)🔴🟢]*\)|`%s`)" % (_BRANCH, _BRANCH))
+FOOTER_LONE = re.compile(r"[Bb]ranch|\[View job\]")
 
 
 def _footer(line):
     rest = line.strip()
     rule = FOOTER_RULE.match(rest)
     if rule:
-        rest = rest[rule.end():]
-    return all(not p.strip() or FOOTER_ITEM.fullmatch(p.strip()) for p in re.split("[·•]", rest))
+        rest = rest[rule.end():].strip()
+    if not rest:
+        return True
+    parts = re.split("[·•]", rest)
+    return (all(not p.strip() or FOOTER_ITEM.fullmatch(p.strip()) for p in parts)
+            and (len(parts) > 1 or bool(FOOTER_LONE.match(rest))))
 # A quoted line ("> 🟢 LGTM") is someone else's verdict, never this one.
 VERDICT_LINE = re.compile(r"[\s#*_]*(?:🔴|🟢)")
 VERDICTS = ("pass", "block", "missing", "error")
@@ -213,6 +223,12 @@ def _line(body):
         return "block", line.strip(), (how if glyph else "word")
     if VERDICT_LINE.match(last):
         return "pass", last, "glyph"
+    # No verdict line, but the last line holding a glyph holds a 🔴 ("Verdict:
+    # 🔴 the writer races", then a closing remark): a block, never a missing
+    # verdict, which would start a second deep review that could bury it.
+    marked = [l for l in lines if "🔴" in l or "🟢" in l]
+    if marked and "🔴" in marked[-1]:
+        return "block", marked[-1].strip(), "glyph"
     return "missing", "", ""
 
 

@@ -48,7 +48,8 @@ class Triage(unittest.TestCase):
                      "_core/project-template/README.md", ".github/review-gate.yml", "SETUP.md",
                      "CLAUDE.md", "engine/CLAUDE.md", ".claude/rules/git.md", ".claude/skills/find/SKILL.md",
                      "bundles/1-solo-personal/bundle.toggles.md", "_core/x/logo.png",
-                     "_Core/project-template/.claude/rules/zz.md", "Bundles/x/bundle.toggles.md", "setup.MD"):
+                     "_Core/project-template/.claude/rules/zz.md", "Bundles/x/bundle.toggles.md", "setup.MD",
+                     "TOGGLES.md", "COMPARISON.md"):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage([path]))
         self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md"]))
@@ -109,9 +110,24 @@ class Verdict(unittest.TestCase):
                      "\n• Actually this needs changes: a.py:12", "\n· request changes: fix a.py",
                      "\n---\n• Request changes", "\n[View job](https://github.com/o/r/actions/runs/1) request changes",
                      "\n· `fix/x` must change", "\n[Docs](https://example.com/x)", "\n· `must fix a.py`",
-                     "\n· [fix this](https://github.com/o/r/pull/1)", "\n***bold claim***"):
+                     "\n· [fix this](https://github.com/o/r/pull/1)", "\n***bold claim***",
+                     "\n`DO-NOT-MERGE`", "\n[Changes_requested](https://github.com/o/r/pull/1)",
+                     "\n--- `wip`", "\n· `must-fix-a.py:12`", "\n· [Changes](https://github.com/o/r/pull/1)"):
             body = "## Code Review — claude-code-templates\n### 🟢 All clear on hooks" + tail
             self.assertEqual(gate._line(body)[0], "missing", tail)
+
+    def test_a_red_on_the_last_glyph_line_blocks_without_a_verdict_line(self):
+        # Never missing: a missing deep verdict starts a second review that
+        # could bury the 🔴.
+        for body, line in (
+                ("## Deep review\nx\n**Verdict — 🔴 request changes**\n\nHappy to re-check after a fix.",
+                 "**Verdict — 🔴 request changes**"),
+                ("## Deep review\nx\nVerdict: 🔴 the writer races in a.py:40\nHappy to re-check.",
+                 "Verdict: 🔴 the writer races in a.py:40"),
+                ("## Deep review\n🟢 hooks\nFinal verdict 🔴 — a.py:40 races\n- [x] Post verdict",
+                 "Final verdict 🔴 — a.py:40 races")):
+            self.assertEqual(gate._line(body), ("block", line, "glyph"))
+        self.assertEqual(gate._line("## Deep review\nVerdict: 🔴 x\n🟢 hooks are fine\nThanks")[0], "missing")
 
     def test_a_quoted_verdict_is_not_this_reviews_verdict(self):
         body = "## Deep review\nThe writer races in a.py:40; this must be fixed.\nThe routine review said:\n> 🟢 LGTM"
@@ -130,8 +146,9 @@ class Verdict(unittest.TestCase):
             (head + "The 🔴 from the last pass is fixed.\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "The format is \"🟢 LGTM\".\n🔴 Must fix: hook is not portable", "block",
              "🔴 Must fix: hook is not portable", None),
-            # The last line must open with the verdict glyph.
-            (head + "Post a binary 🔴/🟢 verdict", "missing", "", None),
+            # No line opens with a glyph: a 🔴 on the last glyph line still blocks.
+            (head + "Post a binary 🔴/🟢 verdict", "block", "Post a binary 🔴/🟢 verdict", None),
+            (head + "Post a binary verdict 🟢 or not", "missing", "", None),
             ("**Code Review - claude-code-templates**\n🟢 LGTM", "pass", "🟢 LGTM", None),
             # A dropped glyph next to a 🟢 elsewhere still blocks.
             (head + "**Blocking** — must fix\nOnce fixed, this is 🟢 LGTM.", "block",
