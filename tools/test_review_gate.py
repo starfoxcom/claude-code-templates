@@ -37,10 +37,10 @@ class Triage(unittest.TestCase):
 
     def test_only_the_review_workflows_never_count(self):
         self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
-        self.assertFalse(gate.triage([".github/workflows/claude.yml", ".github/workflows/claude-x.yaml", "README.md"]))
-        self.assertTrue(gate.triage([".github/workflows/claude.yml", ".github/scripts/review_gate.py"]))
+        self.assertFalse(gate.triage([".github/workflows/claude-code-review.yaml", "README.md"]))
         for path in (".github/workflows/helper.sh", ".github/workflows/lib/action.yml", ".github/workflows/sub/x.py",
-                     ".github/workflows/tests.yml", ".github/workflows/pages.yaml", ".github/workflows/sub/claude.yml"):
+                     ".github/workflows/tests.yml", ".github/workflows/pages.yaml", ".github/workflows/claude.yml",
+                     ".github/workflows/claude-deploy.yml", ".github/workflows/sub/claude-code-review.yml"):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage([path]))
 
