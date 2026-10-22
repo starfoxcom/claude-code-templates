@@ -104,8 +104,8 @@ BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|B
 #    issue" still count. A hyphen right after a letter or digit joins a
 #    word ("Non-blocking: none") and ends no label.
 _AFTER_LABEL = r"(?:(?![`🟢])[\W\d_])*"
-# A word or a code span after the lower-case word, other than "finding" or "issue".
-_ADJECTIVE = r"\s+(?!(?i:findings?|issues?)(?![^\W_]))(?:[^\W_]|`)"
+# A word or a code span after the lower-case word, other than "finding" or "issue", even behind emphasis or a bracket ("— blocking **I/O**", "— blocking (sync) writes").
+_ADJECTIVE = r"\s+[*_(\[~]*(?!(?i:findings?|issues?)(?![^\W_]))(?:[^\W_]|`)"
 LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?"
                    r"(?:[:：]" + _AFTER_LABEL + r"(?i:Blocking)"
                    r"|(?:[—–−]|(?<![^\W_])[-‐‑]|🔴)" + _AFTER_LABEL
