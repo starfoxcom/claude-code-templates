@@ -658,6 +658,7 @@ jobs:
           python3 -I - << 'PYEOF'
           import fnmatch
           import os
+          import posixpath
           import re
 
           PR = os.environ.get('PR_NUMBER', '?')
@@ -797,8 +798,11 @@ jobs:
                             r'|(^|/)\.mcp\.json$|^\.claude\.json$|^\.husky/|^\.gitmodules$|^\.ripgreprc$', re.I)
           # The project's own checks (prescreen.dir) are part of the gate:
           # read in full and a deep-review trigger, like the gate's script.
-          CHECKS_DIR = os.environ.get('PRESCREEN_DIR', '').strip().strip('/').casefold()
-          CHECKS_PREFIX = (CHECKS_DIR + '/',) if CHECKS_DIR else ()
+          # Normalised as git names files: "./x", "x//y" and "x/./y" all mean
+          # x/y. A folder of "." holds every file, so every file counts.
+          CHECKS_DIR = os.environ.get('PRESCREEN_DIR', '').strip()
+          CHECKS_DIR = posixpath.normpath(CHECKS_DIR).strip('/').casefold() if CHECKS_DIR else ''
+          CHECKS_PREFIX = ('',) if CHECKS_DIR == '.' else (CHECKS_DIR + '/',) if CHECKS_DIR else ()
           # Matched as review_gate.py matches its path settings.
           OWN = [g.strip().casefold() for name in ('ALWAYS_REVIEW', 'ESCALATE_PATHS')
                  for g in os.environ.get(name, '').split(',') if g.strip()]
