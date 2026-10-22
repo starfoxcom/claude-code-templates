@@ -831,11 +831,13 @@ jobs:
             | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("^[\\s#*_]*Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
             | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
-            # A verdict posted without its heading still counts as posted: a
-            # second review would bury its 🔴 under a fresh verdict. Requests,
-            # tracking comments and deep reviews are skipped, as in the gate.
+            # Anything else the bot posted since this run started counts as
+            # posted: a verdict without its heading, or a headed one whose
+            # glyph was dropped ("Blocking — must fix"). A second review would
+            # bury it under a fresh verdict. Only the deep-review request, the
+            # deep run's tracking comments and deep reviews are skipped.
             stray=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("🔴|🟢")) | select(test("\\A(@claude review this pr|\\*\\*claude |claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
+              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
             if [ "$stray" != 0 ]; then
               echo "halt=true" >> "$GITHUB_OUTPUT"
               echo "::error::The credits run posted a verdict without its heading, which the gate cannot read"
@@ -1001,7 +1003,7 @@ jobs:
           COMMENTS=$(gh api --paginate "repos/$REPO/issues/$PR/comments")
           TRIGGERS=$(printf '%s' "$COMMENTS" \
             | jq -s -r --arg ts "$RUN_STARTED_AT" \
-                '[.[][] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | select(.body | startswith("@claude review this PR"))] | length')
+                '[.[][] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr"))] | length')
           LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           if [ "$TRIGGERS" -gt 0 ] && ! echo "$LABELS" | grep -q "needs-deep-review"; then
             gh api "repos/$REPO/issues/$PR/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null
