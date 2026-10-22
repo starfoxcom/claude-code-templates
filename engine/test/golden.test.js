@@ -93,6 +93,11 @@ function seeded(count) {
 // Bad answers both engines must refuse with the same message.
 function refused() {
   const edits = [
+    () => null,
+    () => [],
+    (a) => { delete a.advanced; },
+    (a) => { a.advanced = []; },
+    (a) => { a.project = "x"; },
     (a) => { a.team = "yes"; },
     (a) => { a.advanced.cleanRoom = 1; },
     (a) => { delete a.advanced.uiRule; },
@@ -129,7 +134,8 @@ function refused() {
     (a) => { a.advanced.shippedTextPaths = ["﻿docs/**"]; },
     (a) => { a.advanced.shippedTextPaths = ["😀".repeat(101)]; },
   ];
-  return edits.map((edit) => { const a = defaults(); edit(a); return a; });
+  // An edit that returns a value replaces the answers outright.
+  return edits.map((edit) => { const a = defaults(); const whole = edit(a); return whole === undefined ? a : whole; });
 }
 
 // First differing file and line, so a failure names what to fix.

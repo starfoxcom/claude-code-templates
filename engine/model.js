@@ -84,7 +84,11 @@ function check(cond, msg) {
 // (model.py) has no prototype chain; this keeps the two in step.
 const own = (obj, key) => typeof key === "string" && Object.prototype.hasOwnProperty.call(obj, key);
 
+const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+
 export function validate(a) {
+  // Setup codes carry answers from outside the page, so the shape comes first.
+  check(isObject(a) && isObject(a.project) && isObject(a.advanced), "the answers must hold project and advanced objects");
   const adv = a.advanced;
   check(typeof a.team === "boolean" && typeof a.client === "boolean", "team and client must be true or false");
   for (const key of ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting"]) {
