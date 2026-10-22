@@ -13,6 +13,11 @@ runner's `gh`, Python 3.8+. The workflows run the copy from the base branch.
            needs checks: write); --note is appended to the check's summary, and
            --order is required with --triage, --routine or --deep
     review_gate.py settings [--file .github/review-gate.yml] -> KEY=value lines
+        (dots become underscores; runner_labels adds the runner as a JSON list)
+    review_gate.py escalate FILES DIFF [--file .github/review-gate.yml]
+        -> {"escalate": true|false, "paths": [...], "lines": [...]}, the
+           project's own deep-review triggers met by the changed files (one
+           per line in FILES) and the lines the diff in DIFF adds
 
 The "Review gate" check carries its own state in its external_id, e.g.
 "triage=reviewable;routine=pass;escalated=yes;deep=none;routine_by=0.0.0;deep_by=0.0.0"
@@ -41,6 +46,7 @@ that harmless:
 Every command prints one line; a bad argument prints {"error": ...} and exits 1.
 """
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -159,18 +165,35 @@ SETTLE_SECONDS = (3, 10)
 WRITE_ROUNDS = 3
 
 DEFAULTS = {
-    "checks": "one",
+    "checks": "one", "runner": "ubuntu-latest",
     "routine.model": "claude-fable-5-1", "routine.effort": "low", "routine.max_turns": "120",
+    "routine.fallback_model": "claude-opus-5-5", "routine.fallback_effort": "high",
     "deep.model": "claude-fable-5-1", "deep.effort": "low", "deep.max_turns": "120",
+    "deep.fallback_model": "claude-opus-5-5", "deep.fallback_effort": "high",
     "fallback.model": "claude-opus-5-5", "fallback.effort": "high",
+    "prescreen.dir": "", "escalate.paths": "", "escalate.patterns": "", "reviewer.allowed_tools": "",
 }
 SECTIONS = {k.split(".")[0] for k in DEFAULTS if "." in k}
+# A tier's own backup, when its file leaves it out, follows the shared one.
+TIER_FALLBACK = {"%s.fallback_%s" % (t, k): "fallback." + k for t in ("routine", "deep") for k in ("model", "effort")}
+_LABEL = r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}"
+_GLOB = r"[A-Za-z0-9._/*?-]{1,200}"
+_TOOL = r"(?:Bash\([^\"'`$\\(),\n]{1,200}\)|Read|Grep|Glob)"
 CHECKS = {
     "checks": re.compile(r"one|two"),
+    "runner": re.compile(r"%s(?:, *%s){0,7}" % (_LABEL, _LABEL)),
     "model": re.compile(r"[a-z0-9][a-z0-9.-]{0,63}"),
     "effort": re.compile(r"low|medium|high|xhigh|max"),
     "max_turns": re.compile(r"[1-9][0-9]{0,2}"),
+    # A folder in the repo, relative, with no `..` part.
+    # The first character is no `-`, so no tool reads the value as an option.
+    "dir": re.compile(r"|(?!(?:.*/)?\.\.(?:/|$))[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}"),
+    "paths": re.compile(r"|%s(?:, *%s){0,49}" % (_GLOB, _GLOB)),
+    # Any Python regex up to 500 characters; settings() also compiles it.
+    "patterns": re.compile(r"[^\n]{0,500}"),
+    "allowed_tools": re.compile(r"|%s(?:, *%s){0,19}" % (_TOOL, _TOOL)),
 }
+CHECKS["fallback_model"], CHECKS["fallback_effort"] = CHECKS["model"], CHECKS["effort"]
 
 
 class GateError(Exception):
@@ -428,7 +451,7 @@ def upsert(repo, sha, note="", **facts):
 def settings(text):
     """KEY=value pairs from review-gate.yml: top-level keys and one level of
     nesting, `#` comments. Unknown keys and bad values are errors, never ignored."""
-    values, section = dict(DEFAULTS), None
+    values, section, given = dict(DEFAULTS), None, set()
     for n, raw in enumerate(text.splitlines(), 1):
         line = raw.split("#", 1)[0].rstrip()
         if not line.strip():
@@ -448,12 +471,74 @@ def settings(text):
             raise GateError("review-gate.yml line %d: indented key outside a section" % n)
         if name not in DEFAULTS:
             raise GateError("review-gate.yml line %d: unknown setting %s" % (n, name))
-        value = value.strip().strip("\"'")
-        if not CHECKS[name.split(".")[-1]].fullmatch(value):
+        value = value.strip()
+        # One matching pair of outer quotes, never more: a regex may start or
+        # end with a quote of its own.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        elif value[:1] in ("\"", "'"):
+            # An opening quote with no partner: a `#` inside quotes cut the
+            # value short, and keeping the rest would change its meaning.
+            raise GateError("review-gate.yml line %d: unbalanced quote in %s (a `#` starts a comment)" % (n, name))
+        if not CHECKS[name.split(".")[-1]].fullmatch(value) or not _compiles(name, value):
             raise GateError("review-gate.yml line %d: bad value for %s: %s" % (n, name, value))
         values[name] = value
+        given.add(name)
         section = section if indent else None
+    for name, shared in TIER_FALLBACK.items():
+        if name not in given:
+            values[name] = values[shared]
     return values
+
+
+def _compiles(name, value):
+    if name != "escalate.patterns":
+        return True
+    try:
+        re.compile(value)
+    except re.error:
+        return False
+    return True
+
+
+HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+def added_lines(diff):
+    """The lines a unified diff adds, read hunk by hunk with the counts in
+    each `@@` header, so an added line that starts with `++` (`++i;`) is never
+    taken for a `+++` file header."""
+    added, old, new = [], 0, 0
+    for line in diff.split("\n"):
+        if old <= 0 and new <= 0:
+            m = HUNK.match(line)
+            if m:
+                old, new = int(m.group(1) or 1), int(m.group(2) or 1)
+            continue
+        if line.startswith("+"):
+            # One trailing CR is the file's CRLF ending, dropped so a
+            # `$`-anchored pattern still matches; a CR inside the line stays.
+            added.append(line[1:-1] if line.endswith("\r") else line[1:])
+            new -= 1
+        elif line.startswith("-"):
+            old -= 1
+        elif not line.startswith("\\"):
+            old, new = old - 1, new - 1
+    return added
+
+
+def escalate(paths, added, values):
+    """The project's own deep-review triggers from review-gate.yml: paths that
+    match an `escalate.paths` glob (any case; `*` crosses folders, and a glob
+    ending in `/` covers the folder), and added diff lines that
+    `escalate.patterns` finds. Returns what matched, so the pre-screen can
+    name it."""
+    globs = [g.strip().casefold() for g in values["escalate.paths"].split(",") if g.strip()]
+    pattern = re.compile(values["escalate.patterns"]) if values["escalate.patterns"] else None
+    hits = [p for p in paths
+            if any(fnmatch.fnmatchcase(p.casefold(), g + "*" if g.endswith("/") else g) for g in globs)]
+    lines = [line for line in added if pattern.search(line)] if pattern else []
+    return {"escalate": bool(hits or lines), "paths": hits, "lines": lines[:20]}
 
 
 def _option(args, name, default=None):
@@ -495,14 +580,29 @@ def run(argv):
             raise GateError("gate needs --state (an empty one is the start state)")
         return gate(_option(args, "--state"), **facts)
     if cmd == "settings":
-        path = _option(args, "--file", ".github/review-gate.yml")
-        try:
-            with open(path, encoding="utf-8") as fh:
-                text = fh.read()
-        except FileNotFoundError:
-            text = ""
-        return settings(text)
+        return _settings_file(args)
+    if cmd == "escalate" and len(args) >= 2:
+        values = _settings_file(args[2:])
+        # Names decode strictly, as for triage: a name that is not UTF-8 fails
+        # the command (one error line) rather than its printing.
+        with open(args[0], encoding="utf-8") as fh:
+            paths = [p for p in fh.read().split("\n") if p]
+        # newline="": a carriage return inside an added line must stay in it,
+        # not split it into a line with no "+" that the hunk walk skips.
+        with open(args[1], encoding="utf-8", errors="replace", newline="") as fh:
+            added = added_lines(fh.read())
+        return escalate(paths, added, values)
     raise GateError("Usage: see the top of .github/scripts/review_gate.py")
+
+
+def _settings_file(args):
+    path = _option(args, "--file", ".github/review-gate.yml")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        text = ""
+    return settings(text)
 
 
 def main(argv):
@@ -513,7 +613,9 @@ def main(argv):
         print(json.dumps({"error": str(e)}))
         return 1
     if argv and argv[0] == "settings":
-        print("\n".join("%s=%s" % (k.replace(".", "_"), v) for k, v in result.items()))
+        labels = [label.strip() for label in result["runner"].split(",")]
+        lines = ["%s=%s" % (k.replace(".", "_"), v) for k, v in result.items()]
+        print("\n".join(lines + ["runner_labels=" + json.dumps(labels)]))
     else:
         print(json.dumps(result, ensure_ascii=False))
     return 0
