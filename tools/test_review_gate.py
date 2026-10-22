@@ -14,6 +14,13 @@ import review_gate as gate  # noqa: E402
 
 SCRIPT = os.path.join(ROOT, ".github", "scripts", "review_gate.py")
 MARK = r"Code Review[^a-zA-Z]+claude-code-templates"
+with open(os.path.join(ROOT, ".github", "review-gate.yml"), encoding="utf-8") as _fh:
+    # This repo's own always-reviewed paths, from its gate settings.
+    ALWAYS = gate.settings(_fh.read())["triage.always_review"]
+
+
+def triage(paths, incomplete=False):
+    return gate.triage(paths, incomplete, ALWAYS)
 
 
 def comment(body, at="2026-10-21T10:00:00Z", login="claude[bot]"):
@@ -22,12 +29,12 @@ def comment(body, at="2026-10-21T10:00:00Z", login="claude[bot]"):
 
 class Triage(unittest.TestCase):
     def test_reviewable_and_not(self):
-        self.assertTrue(gate.triage(["engine/bind.js"]))
-        self.assertTrue(gate.triage(["_core/project-template/CLAUDE.md"]))
-        self.assertTrue(gate.triage(["bundles/2-multi-dev-oss/bundle.toggles.md"]))
-        self.assertFalse(gate.triage(["README.md", "docs/v2/PLAN.md"]))
-        self.assertFalse(gate.triage(["assets/logo.PNG", "fonts/geist.woff2", "docs/a.jpeg"]))
-        self.assertFalse(gate.triage([]))
+        self.assertTrue(triage(["engine/bind.js"]))
+        self.assertTrue(triage(["_core/project-template/CLAUDE.md"]))
+        self.assertTrue(triage(["bundles/2-multi-dev-oss/bundle.toggles.md"]))
+        self.assertFalse(triage(["README.md", "docs/v2/PLAN.md"]))
+        self.assertFalse(triage(["assets/logo.PNG", "fonts/geist.woff2", "docs/a.jpeg"]))
+        self.assertFalse(triage([]))
 
     def test_anything_but_markdown_images_and_fonts_is_reviewed(self):
         for path in ("tools/run.sh", ".gitattributes", ".lfsconfig", "assets/logo.svg",
@@ -53,13 +60,45 @@ class Triage(unittest.TestCase):
                      "TOGGLES.md", "COMPARISON.md", "CLAUDE.local.md", "engine/claude.LOCAL.md",
                      "engine/.claude/skills/x/SKILL.md", "a/b/.Claude/rules/r.md"):
             with self.subTest(path=path):
+                self.assertTrue(triage([path]))
+        self.assertFalse(triage([".github/notes.md", "docs/redesign/x.md", "docs/a.claude/x.md", "docs/xclaude.md"]))
+
+    def test_the_gates_own_paths_need_no_setting(self):
+        for path in (".github/scripts/notes.md", ".claude/rules/git.md", "a/.claude/x.md",
+                     "CLAUDE.md", "engine/CLAUDE.local.md"):
+            with self.subTest(path=path):
                 self.assertTrue(gate.triage([path]))
-        self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md", "docs/a.claude/x.md", "docs/xclaude.md"]))
+        for path in ("_core/x.md", "bundles/x.md", "SETUP.md", "redesign/a.md"):
+            with self.subTest(path=path):
+                self.assertFalse(gate.triage([path]))
+
+    def test_a_project_setting_adds_paths(self):
+        self.assertTrue(gate.triage(["docs/security/runbook.md"], always_review="docs/security/"))
+        self.assertTrue(gate.triage(["Docs/Security/a/b.MD"], always_review="docs/security/"))
+        self.assertTrue(gate.triage(["guide/x.md"], always_review="README.md, guide/*.md"))
+        self.assertTrue(gate.triage(["guide/a/x.md"], always_review="guide/*.md"))
+        self.assertFalse(gate.triage(["docs/securityx.md", "docs/other/a.md"], always_review="docs/security/"))
+        self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml"], always_review=".github/"))
+
+    def test_the_setting_comes_from_the_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            files, settings = os.path.join(d, "files.txt"), os.path.join(d, "gate.yml")
+            with open(files, "w", encoding="utf-8") as fh:
+                fh.write("docs/security/runbook.md\n")
+            with open(settings, "w", encoding="utf-8") as fh:
+                fh.write("triage:\n  always_review: docs/security/\n")
+            run = lambda *extra: subprocess.run([sys.executable, "-I", SCRIPT, "triage", files, *extra],
+                                                capture_output=True, text=True).stdout.strip()
+            self.assertEqual(run("--file", settings), '{"review": true}')
+            self.assertEqual(run("--file", os.path.join(d, "none.yml")), '{"review": false}')
+            with open(settings, "w", encoding="utf-8") as fh:
+                fh.write("triage:\n  always_review: docs/<x>\n")
+            self.assertIn('"error"', run("--file", settings))
 
     def test_an_incomplete_listing_is_reviewed(self):
-        self.assertTrue(gate.triage(["README.md"], incomplete=True))
-        self.assertTrue(gate.triage(["docs/%d.md" % i for i in range(gate.LISTING_CAP)]))
-        self.assertFalse(gate.triage(["docs/%d.md" % i for i in range(gate.LISTING_CAP - 1)]))
+        self.assertTrue(triage(["README.md"], incomplete=True))
+        self.assertTrue(triage(["docs/%d.md" % i for i in range(gate.LISTING_CAP)]))
+        self.assertFalse(triage(["docs/%d.md" % i for i in range(gate.LISTING_CAP - 1)]))
 
 
 class Verdict(unittest.TestCase):
@@ -470,9 +509,10 @@ class Settings(unittest.TestCase):
         self.assertEqual(got["deep.model"], gate.DEFAULTS["deep.model"])
 
     def test_the_shipped_file_holds_the_defaults(self):
+        # Every value but this repo's own always-reviewed paths.
         with open(os.path.join(ROOT, ".github", "review-gate.yml"), encoding="utf-8") as fh:
             got = gate.settings(fh.read())
-        self.assertEqual(got, gate.DEFAULTS)
+        self.assertEqual({**got, "triage.always_review": ""}, gate.DEFAULTS)
 
     def test_bad_settings_are_errors(self):
         for text in ["checks: three", "routine:\n  model: Bad Model", "routine:\n  effort: huge", "routine:\n  max_turns: 0",

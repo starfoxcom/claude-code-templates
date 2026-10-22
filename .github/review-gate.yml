@@ -1,5 +1,6 @@
 # Settings for the review gate (.github/scripts/review_gate.py). Every value
-# here is the default; delete a line to keep the default.
+# here is the default but triage.always_review, which lists this repo's own
+# paths; delete a line to keep the default.
 # Unknown keys and bad values fail the gate instead of being ignored.
 # The workflows read this file from the PR's base branch, so a PR cannot
 # change the settings its own review runs under.
@@ -60,6 +61,14 @@ prescreen:
 escalate:
   paths:
   patterns:
+
+# Paths that always get a review, whatever their file type, on top of the
+# gate's own (.github/scripts/, any .claude/ folder, any CLAUDE.md): globs as
+# for escalate.paths. Without this, a PR of only Markdown, images or fonts
+# passes without a review. This repo: the templates every bind ships, the
+# bundle defaults, the setup prompt and the files it reads, and redesign/.
+triage:
+  always_review: _core/, bundles/, redesign/, SETUP.md, TOGGLES.md, COMPARISON.md
 
 # Extra tools both reviewers may use, comma separated: Bash(...) patterns,
 # Read, Grep or Glob. A Bash pattern that runs the PR's code hands that code

@@ -2,7 +2,8 @@
 the workflow files stay the same for every project. Standard library and the
 runner's `gh`, Python 3.8+. The workflows run the copy from the base branch.
 
-    review_gate.py triage FILES [--incomplete]      -> {"review": true|false}
+    review_gate.py triage FILES [--incomplete] [--file .github/review-gate.yml]
+        -> {"review": true|false}
     review_gate.py verdict --since TS (--tier routine --marker RE | --tier deep)
         -> {"verdict": "pass"|"block"|"missing", "line": ...[, "recovered": ...]}
         (reads the PR's comments as `gh api --paginate` prints them, on stdin)
@@ -61,20 +62,17 @@ import time
 # would run as a separate workflow, so it is reviewed too.
 NEVER = re.compile(r"^\.github/workflows/claude-code-review\.yml$")
 # Skipped only when every other path is Markdown, an image or a font that is
-# not always reviewed. Always reviewed, whatever the file type: _core/, which
-# lands verbatim in users' repos; bundles/, whose toggles drive what a bind
-# writes; SETUP.md, which every bundle ships as its setup prompt, and
-# TOGGLES.md and COMPARISON.md, which it reads and the pre-screen treats as
-# architecture files; redesign/;
-# .github/scripts/, where a file Python loads before the standard library
-# could run in the gate; and a .claude/ folder at any depth and any CLAUDE.md
-# or CLAUDE.local.md, the instructions and skills both review tiers load
-# (Claude Code reads a subfolder's when it reads files there). Matched in any case, as a case-insensitive checkout
-# would place the file. Anything else gets a review: scripts, config,
-# lockfiles, an SVG, which can carry script, and a .gitattributes or .lfsconfig.
+# not always reviewed. Always reviewed, whatever the file type, in every
+# project: .github/scripts/, where a file Python loads before the standard
+# library could run in the gate; and a .claude/ folder at any depth and any
+# CLAUDE.md or CLAUDE.local.md, the instructions and skills both review tiers
+# load (Claude Code reads a subfolder's when it reads files there). A project
+# adds its own paths with `triage.always_review` in the gate settings. Matched
+# in any case, as a case-insensitive checkout would place the file. Anything
+# else gets a review: scripts, config, lockfiles, an SVG, which can carry
+# script, and a .gitattributes or .lfsconfig.
 SKIPPABLE = re.compile(r"\.(md|png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$", re.I)
-ALWAYS_REVIEWED = re.compile(r"^(_core|bundles|redesign|\.github/scripts)/|(^|/)\.claude/"
-                             r"|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE(\.local)?\.md$", re.I)
+ALWAYS_REVIEWED = re.compile(r"^\.github/scripts/|(^|/)\.claude/|(^|/)CLAUDE(\.local)?\.md$", re.I)
 
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
@@ -172,6 +170,7 @@ DEFAULTS = {
     "deep.fallback_model": "claude-opus-5-5", "deep.fallback_effort": "high",
     "fallback.model": "claude-opus-5-5", "fallback.effort": "high",
     "prescreen.dir": "", "escalate.paths": "", "escalate.patterns": "", "reviewer.allowed_tools": "",
+    "triage.always_review": "",
 }
 SECTIONS = {k.split(".")[0] for k in DEFAULTS if "." in k}
 # A tier's own backup, when its file leaves it out, follows the shared one.
@@ -189,6 +188,7 @@ CHECKS = {
     # The first character is no `-`, so no tool reads the value as an option.
     "dir": re.compile(r"|(?!(?:.*/)?\.\.(?:/|$))[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}"),
     "paths": re.compile(r"|%s(?:, *%s){0,49}" % (_GLOB, _GLOB)),
+    "always_review": re.compile(r"|%s(?:, *%s){0,49}" % (_GLOB, _GLOB)),
     # Any Python regex up to 500 characters; settings() also compiles it.
     "patterns": re.compile(r"[^\n]{0,500}"),
     "allowed_tools": re.compile(r"|%s(?:, *%s){0,19}" % (_TOOL, _TOOL)),
@@ -200,11 +200,24 @@ class GateError(Exception):
     pass
 
 
-def triage(paths, incomplete=False):
-    """Whether a diff with these changed paths gets an AI review."""
+def triage(paths, incomplete=False, always_review=""):
+    """Whether a diff with these changed paths gets an AI review.
+    `always_review` is the project's `triage.always_review` setting."""
     if incomplete or len(paths) >= LISTING_CAP:
         return True
-    return any(not NEVER.search(p) and (ALWAYS_REVIEWED.search(p) or not SKIPPABLE.search(p)) for p in paths)
+    globs = _globs(always_review)
+    return any(not NEVER.search(p) and (ALWAYS_REVIEWED.search(p) or _glob_match(p, globs)
+                                        or not SKIPPABLE.search(p)) for p in paths)
+
+
+def _globs(setting):
+    return [g.strip().casefold() for g in setting.split(",") if g.strip()]
+
+
+def _glob_match(path, globs):
+    """A path setting's match: any case, `*` crosses folders, and a glob
+    ending in `/` covers the folder."""
+    return any(fnmatch.fnmatchcase(path.casefold(), g + "*" if g.endswith("/") else g) for g in globs)
 
 
 def _comments(text):
@@ -533,10 +546,9 @@ def escalate(paths, added, values):
     ending in `/` covers the folder), and added diff lines that
     `escalate.patterns` finds. Returns what matched, so the pre-screen can
     name it."""
-    globs = [g.strip().casefold() for g in values["escalate.paths"].split(",") if g.strip()]
+    globs = _globs(values["escalate.paths"])
     pattern = re.compile(values["escalate.patterns"]) if values["escalate.patterns"] else None
-    hits = [p for p in paths
-            if any(fnmatch.fnmatchcase(p.casefold(), g + "*" if g.endswith("/") else g) for g in globs)]
+    hits = [p for p in paths if _glob_match(p, globs)]
     lines = [line for line in added if pattern.search(line)] if pattern else []
     return {"escalate": bool(hits or lines), "paths": hits, "lines": lines[:20]}
 
@@ -561,7 +573,8 @@ def run(argv):
     if cmd == "triage" and args:
         with open(args[0], encoding="utf-8") as fh:
             paths = [l.strip() for l in fh if l.strip()]
-        return {"review": triage(paths, "--incomplete" in args)}
+        values = _settings_file(args[1:])
+        return {"review": triage(paths, "--incomplete" in args, values["triage.always_review"])}
     if cmd == "verdict":
         since = _option(args, "--since")
         tier = _choice(_option(args, "--tier"), ("routine", "deep"), "--tier")
