@@ -39,7 +39,10 @@ fallback:
 # A folder of the project's own pre-screen checks (*.py and *.sh), run from
 # the base branch with the changed-file list; their output joins the review
 # context, and a check that exits non-zero is reported as a violation.
-# Empty: none.
+# A check that runs the PR's code can fake its own report, and on a
+# self-hosted runner that is not wiped between jobs it can leave files or
+# processes behind for the review; keep such checks on hosted or one-job
+# runners. Empty: none.
 prescreen:
   dir:
 
