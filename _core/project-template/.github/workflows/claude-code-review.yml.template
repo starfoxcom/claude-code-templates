@@ -39,8 +39,9 @@
 #   head ref is byte-identical to the version on the default branch before granting
 #   an OIDC-exchanged token. Any PR that edits .github/workflows/claude-code-review.yml
 #   therefore fails the token exchange and the routine review action cannot post a
-#   verdict. Triage below reviews only source files, so a PR that changes only
-#   workflow files (and docs) is non-reviewable and passes without a review. Keep
+#   verdict. Triage below never reviews that file, by name, and reviews only
+#   source files, so a PR that changes only workflow files (and docs) is
+#   non-reviewable and passes without a review. Keep
 #   workflow edits in PRs of their own; `.claude/rules/review-tiers.md` says how
 #   they are reviewed before merge.
 
@@ -131,8 +132,13 @@ jobs:
             echo "run_review=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Never reviewed, by name: the review action refuses to run when the
+          # PR's copy of this workflow differs from the default branch's, so a
+          # PR that edits it has to pass as non-reviewable. Naming it keeps that
+          # true when the extensions below include .yml.
+          grep -vxF '.github/workflows/claude-code-review.yml' /tmp/changed_files.txt > /tmp/reviewable_files.txt || true
           # Reviewable extensions — customize for your stack
-          if grep -qE '\.(py|ts|tsx|js|jsx|rs|go|java|cpp|h|hpp|c|gd|dart|rb|kt|swift|cs)$' /tmp/changed_files.txt; then
+          if grep -qE '\.(py|ts|tsx|js|jsx|rs|go|java|cpp|h|hpp|c|gd|dart|rb|kt|swift|cs)$' /tmp/reviewable_files.txt; then
             echo "Reviewable changes detected; running review."
             echo "run_review=true" >> "$GITHUB_OUTPUT"
           else

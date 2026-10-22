@@ -44,7 +44,7 @@ Fix on the same PR branch and push; the review re-runs. Then search the codebase
 
 ## PRs that edit the review workflow
 
-The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so the review must never start on them. Triage reviews only source files, so a PR that changes only workflow files (and docs) is non-reviewable: both checks pass without a review. That makes two rules:
+The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so the review must never start on them. Triage never reviews `claude-code-review.yml`, which it skips by name whatever file types the project reviews, and reviews only source files, so a PR that changes only workflow files (and docs) is non-reviewable: both checks pass without a review. That makes two rules:
 
 - A workflow edit ships in a PR of its own, with no source files. Mixed with code, the review starts, fails `Workflow validation failed`, and the PR can never merge; split it.
 - No AI reviews a workflow-only PR in CI, so it is reviewed before merge, one of two ways:
