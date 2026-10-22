@@ -461,7 +461,14 @@ jobs:
               if fname is None:
                   fname = f'<unread diff header {n}>'
                   warnings.append(f'UNREAD_DIFF_HEADER: {first[:120]}')
-              added = [l[1:] for l in sec.split('\n') if l.startswith('+') and not l.startswith('+++')]
+              # Added lines are the "+" lines inside hunks; the "+++ b/" header
+              # comes before the first "@@", so content opening with "++" counts.
+              added, in_hunk = [], False
+              for l in sec.split('\n'):
+                  if l.startswith('@@'):
+                      in_hunk = True
+                  elif in_hunk and l.startswith('+'):
+                      added.append(l[1:])
               per_file_added[fname] = added
 
           # ── Check 1: Toggle marker balance ───────────────────────────────────
@@ -811,7 +818,7 @@ jobs:
             # second review would bury its 🔴 under a fresh verdict. Requests,
             # tracking comments and deep reviews are skipped, as in the gate.
             stray=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("🔴|🟢")) | select(test("^(@claude review this pr|\\*\\*claude |claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
+              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("🔴|🟢")) | select(test("\\A(@claude review this pr|\\*\\*claude |claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
             if [ "$stray" != 0 ]; then
               echo "halt=true" >> "$GITHUB_OUTPUT"
               echo "::error::The credits run posted a verdict without its heading, which the gate cannot read"
