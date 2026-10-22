@@ -366,7 +366,8 @@ jobs:
               echo "::warning::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           cli="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$cli" ]; then
@@ -386,6 +387,8 @@ jobs:
           ----- end of request -----
 
           The working folder holds the PR's head commit. First read CLAUDE.md and .claude/rules/review-tiers.md there: they hold this project's rules and the verdict rule. Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
+
+          You work alone and this is a one-shot session: the moment you end your turn it is over and nothing else runs. Never delegate to helper agents, never schedule a wake-up, never wait for anything. Read the diff file by file in this turn and post the review before you stop.
 
           Then post exactly one comment with \`gh pr comment $PR_NUMBER --body \"<your review>\"\`. Its first line is exactly \`## Deep review\`. Its last line is the verdict alone: \`🟢 LGTM\` only when the review is fully clean (no caveats, no nits, no non-blocking findings), otherwise \`🔴 Blocking — <one-line reason>\`. Post nothing else and change nothing."
 
@@ -552,7 +555,8 @@ jobs:
               echo "::error::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           src="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$src" ]; then
@@ -646,7 +650,13 @@ jobs:
           elif [ -z "$FLOOR" ]; then
             echo "::error::The review's start time is unknown — refusing to evaluate the verdict without a stale-comment floor"
           elif gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/comments.json; then
-            DEEP=$(python3 "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json | jq -r .verdict) || DEEP=error
+            if READ=$(python3 "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json); then
+              DEEP=$(printf '%s' "$READ" | jq -r .verdict) || DEEP=error
+              RECOVERED=$(printf '%s' "$READ" | jq -r '.recovered // empty') || RECOVERED=""
+              if [ -n "$RECOVERED" ]; then
+                echo "::warning::Deep verdict read from a malformed comment: $RECOVERED"
+              fi
+            fi
           fi
           echo "Deep verdict: $DEEP (reviewer: $REVIEWER; $ATTEMPTS)"
 
