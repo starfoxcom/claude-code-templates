@@ -93,9 +93,11 @@ class Settings(unittest.TestCase):
                          ("two", "claude-opus-5-5", "80", "medium"))
         self.assertEqual(got["deep.model"], gate.DEFAULTS["deep.model"])
 
-    def test_the_shipped_file_holds_the_defaults(self):
+    def test_the_shipped_file_holds_the_defaults_but_checks(self):
         with open(os.path.join(ROOT, ".github", "review-gate.yml"), encoding="utf-8") as fh:
-            self.assertEqual(gate.settings(fh.read()), gate.DEFAULTS)
+            got = gate.settings(fh.read())
+        self.assertEqual(got.pop("checks"), "two")
+        self.assertEqual(got, {k: v for k, v in gate.DEFAULTS.items() if k != "checks"})
 
     def test_bad_settings_are_errors(self):
         for text in ["checks: three", "routine:\n  model: Bad Model", "routine:\n  effort: huge", "routine:\n  max_turns: 0",
