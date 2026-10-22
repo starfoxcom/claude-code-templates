@@ -205,7 +205,7 @@ jobs:
           if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
             git show "$BASE_SHA:.github/review-gate.yml" > "$dir/review-gate.yml"
           fi
-          if ! out=$(python3 "$dir/review_gate.py" settings --file "$dir/review-gate.yml"); then
+          if ! out=$(python3 -I "$dir/review_gate.py" settings --file "$dir/review-gate.yml"); then
             echo "::error::Bad review gate settings: $out"
             exit 1
           fi
@@ -222,7 +222,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 "${{ steps.gate.outputs.script }}" upsert --repo "${{ github.repository }}" \
+          python3 -I "${{ steps.gate.outputs.script }}" upsert --repo "${{ github.repository }}" \
             --sha "${{ steps.pr-head.outputs.head_sha }}" --escalated --deep none \
             --order "${{ steps.pr-head.outputs.stamp }}.${{ github.run_attempt }}.0" --note "A deep review is running."
 
@@ -361,11 +361,11 @@ jobs:
 
           oidc=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["value"])')
+            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])')
           echo "::add-mask::$oidc"
           bot_token=$(curl -fsS -X POST -H "Authorization: Bearer $oidc" \
             https://api.anthropic.com/api/github/github-app-token-exchange \
-            | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")')
+            | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")')
           if [ -z "$bot_token" ]; then
             echo "::warning::The bot token exchange returned no token: the deep review runs on the subscription"
             exit 1
@@ -417,7 +417,7 @@ jobs:
             --output-format json) > "$out" || status=$?
           # Only fields the CLI writes are printed (see the routine tier).
           clean=true
-          python3 - "$out" "$status" <<'PYEOF' || clean=false
+          python3 -I - "$out" "$status" <<'PYEOF' || clean=false
           import json, sys
           path, status = sys.argv[1], int(sys.argv[2])
           try:
@@ -437,7 +437,7 @@ jobs:
             echo "::warning::Could not read the PR comments: the deep review runs on the subscription"
             exit 1
           fi
-          verdict=$(python3 "$GATE" verdict --since "$since" --tier deep < "$RUNNER_TEMP/deep-comments.json" | jq -r .verdict)
+          verdict=$(python3 -I "$GATE" verdict --since "$since" --tier deep < "$RUNNER_TEMP/deep-comments.json" | jq -r .verdict)
           case "$verdict" in
             pass|block)
               if [ "$clean" != true ]; then
@@ -664,7 +664,7 @@ jobs:
           elif [ -z "$FLOOR" ]; then
             echo "::error::The review's start time is unknown — refusing to evaluate the verdict without a stale-comment floor"
           elif gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/comments.json; then
-            if READ=$(python3 "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json); then
+            if READ=$(python3 -I "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json); then
               DEEP=$(printf '%s' "$READ" | jq -r .verdict) || DEEP=error
               RECOVERED=$(printf '%s' "$READ" | jq -r '.recovered // empty') || RECOVERED=""
               if [ -n "$RECOVERED" ]; then
@@ -681,7 +681,7 @@ jobs:
             STATUS=1
           else
             ORDER="${{ steps.pr-head.outputs.stamp }}.${{ github.run_attempt }}.1"
-            if OUT=$(python3 "$GATE" upsert --repo "$REPO" --sha "$HEAD_SHA" --escalated --deep "$DEEP" \
+            if OUT=$(python3 -I "$GATE" upsert --repo "$REPO" --sha "$HEAD_SHA" --escalated --deep "$DEEP" \
                 --order "$ORDER" --note "Deep reviewer: $REVIEWER."); then
               # Read the gate as it stands now, not this write's own result
               # (upsert accepts a newer stamp as holding): when a deep run

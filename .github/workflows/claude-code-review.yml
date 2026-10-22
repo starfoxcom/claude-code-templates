@@ -76,7 +76,7 @@ jobs:
       - name: Read the gate settings
         id: settings
         run: |
-          if ! out=$(python3 .github/scripts/review_gate.py settings); then
+          if ! out=$(python3 -I .github/scripts/review_gate.py settings); then
             echo "::error::Bad review gate settings: $out"
             exit 1
           fi
@@ -92,7 +92,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 .github/scripts/review_gate.py upsert --repo "${{ github.repository }}" \
+          python3 -I .github/scripts/review_gate.py upsert --repo "${{ github.repository }}" \
             --sha "${{ github.event.pull_request.head.sha }}" \
             --routine pending --order "${{ github.run_id }}.${{ github.run_attempt }}.0"
 
@@ -167,7 +167,7 @@ jobs:
             echo "::warning::The file listing failed; treating the diff as reviewable"
             INCOMPLETE="--incomplete"
           fi
-          RESULT=$(python3 .github/scripts/review_gate.py triage /tmp/changed_files.txt $INCOMPLETE)
+          RESULT=$(python3 -I .github/scripts/review_gate.py triage /tmp/changed_files.txt $INCOMPLETE)
           echo "$RESULT"
           case "$RESULT" in
             '{"review": true}') echo "run_review=true" >> "$GITHUB_OUTPUT" ;;
@@ -435,7 +435,7 @@ jobs:
           LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           case ",$LABELS," in *,needs-deep-review,*) export DEEP_OWED=1 ;; esac
 
-          python3 - << 'PYEOF'
+          python3 -I - << 'PYEOF'
           import os
           import re
           from collections import Counter
@@ -818,11 +818,11 @@ jobs:
 
           oidc=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
-            | python3 -c 'import json, sys; print(json.load(sys.stdin)["value"])')
+            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])')
           echo "::add-mask::$oidc"
           bot_token=$(curl -fsS -X POST -H "Authorization: Bearer $oidc" \
             https://api.anthropic.com/api/github/github-app-token-exchange \
-            | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")')
+            | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")')
           if [ -z "$bot_token" ]; then
             echo "::warning::The bot token exchange returned no token: the review runs on the subscription"
             exit 1
@@ -864,7 +864,7 @@ jobs:
           # status, the cost and the turn count. On an error the result text is
           # the API's message, never the model's words.
           clean=true
-          python3 - "$out" "$status" <<'PYEOF' || clean=false
+          python3 -I - "$out" "$status" <<'PYEOF' || clean=false
           import json, sys
           path, status = sys.argv[1], int(sys.argv[2])
           try:
@@ -891,7 +891,7 @@ jobs:
             exit 1
           fi
           verdict=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("^[\\s#*_]*Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
+            | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
             | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
             # Anything else the bot posted since this run started counts as
@@ -1290,7 +1290,7 @@ jobs:
           # on it blocks (the script lists exactly which openings count).
           gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/all-comments.json
           jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)]' /tmp/all-comments.json > /tmp/comments.json
-          VERDICT=$(python3 .github/scripts/review_gate.py verdict --since "$FLOOR" --tier routine \
+          VERDICT=$(python3 -I .github/scripts/review_gate.py verdict --since "$FLOOR" --tier routine \
             --marker '^[\s#*_]*Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
           echo "$VERDICT"
           ROUTINE=$(printf '%s' "$VERDICT" | jq -r .verdict)
@@ -1327,7 +1327,7 @@ jobs:
           if [ -n "$ROUTINE" ]; then ARGS+=(--routine "$ROUTINE"); fi
           if [ "$ESCALATED" = "true" ]; then ARGS+=(--escalated); fi
           if [ -n "$REVIEWER" ]; then ARGS+=(--note "Routine reviewer: $REVIEWER."); fi
-          python3 .github/scripts/review_gate.py upsert --repo "${{ github.repository }}" \
+          python3 -I .github/scripts/review_gate.py upsert --repo "${{ github.repository }}" \
             --sha "${{ github.event.pull_request.head.sha }}" \
             --order "${{ github.run_id }}.${{ github.run_attempt }}.1" "${ARGS[@]}"
 
