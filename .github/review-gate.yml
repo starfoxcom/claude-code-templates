@@ -10,7 +10,10 @@
 checks: one
 
 # The runner label (runs-on) for the review jobs; several labels, comma
-# separated, pick a self-hosted runner ("self-hosted, linux").
+# separated, pick a self-hosted runner ("self-hosted, linux"). Run such a
+# runner under an account of its own with no Claude Code setup: the
+# reviewers load that account's user settings, hooks and instructions, and
+# the review installs Claude Code into its home folder.
 runner: ubuntu-latest
 
 # The review that runs on every PR with reviewable files. Its backup runs
@@ -50,8 +53,10 @@ prescreen:
 # (comma separated, any case; `*` crosses folders, a trailing `/` covers a
 # folder), and a Python regex matched against the lines a PR adds (no `#`,
 # which starts a comment here; one pair of outer quotes is dropped, so wrap a
-# regex that starts and ends with the same quote in another pair).
-# Empty: none.
+# regex that starts and ends with the same quote in another pair). They
+# apply to PRs the gate reviews: a PR of only skippable files (Markdown,
+# images, fonts outside the always-reviewed paths) passes without a review,
+# so a trigger on such a file never fires. Empty: none.
 escalate:
   paths:
   patterns:
