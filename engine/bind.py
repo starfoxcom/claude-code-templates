@@ -37,13 +37,16 @@ STAGING = ".bindwright/incoming/"
 GLOBAL = ".bindwright/global/"
 GLOBAL_CORE = "_core/global-template/"
 
-# Guard hooks ship byte for byte: they are code, not templates, and the
-# render step's blank-line folding would still change them.
-VERBATIM = ".claude/hooks/"
+# Guard hooks and the review gate's scripts ship byte for byte: they are
+# code, not templates, and the render step's blank-line folding would still
+# change them.
+VERBATIM = (".claude/hooks/", ".github/scripts/")
 
 
 def _included(path, a, flags):
     adv = a["advanced"]
+    # The review gate's script, setup script, settings and guide serve both tiers.
+    gate = flags["github_actions_routine_review"] or flags["github_actions_deep_review"]
     if path.startswith("precommit/"):
         return False
     if path.startswith(".claude/rules/architecture/"):
@@ -63,6 +66,10 @@ def _included(path, a, flags):
         ".claude/scripts/research-adherence.py": flags["code_research_first"],
         ".github/workflows/claude-code-review.yml.template": flags["github_actions_routine_review"],
         ".github/workflows/claude.yml.template": flags["github_actions_deep_review"],
+        ".github/scripts/review_gate.py": gate,
+        ".github/scripts/setup-review-gate.sh": gate,
+        ".github/review-gate.yml.template": gate,
+        ".github/review-guide.md.template": gate,
         ".claude/hooks/run-hook.sh": flags["guard_hooks_repo"],
         ".claude/hooks/push-guard.py": flags["guard_hooks_repo"],
         ".claude/hooks/no-ai-attribution.py": flags["guard_hooks_repo"] and flags["attribution_guard"],

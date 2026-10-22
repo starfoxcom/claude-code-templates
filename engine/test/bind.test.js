@@ -955,9 +955,9 @@ test("guard hooks and settings follow the hook location and the attribution guar
       assert.equal(files.has(`${STAGING}.gitattributes`), repoHooks, `${label}: .gitattributes`);
       if (repoHooks) assert.match(files.get(`${STAGING}.gitattributes`), /^\*\.sh text eol=lf$/m, label);
       assert.equal(files.get(".claude/rules/git.md").includes("No AI-attribution lines"), attributionGuard, `${label}: git.md rule`);
-      const review = files.get(".github/workflows/claude-code-review.yml");
-      assert.equal(review.includes("AI_ATTRIBUTION"), attributionGuard, `${label}: review pre-screen scan`);
-      assert.equal(review.includes("AI-attribution markers in added code"), attributionGuard, `${label}: review prompt`);
+      // The review workflow ships unchanged; the gate's switch carries the choice.
+      const gate = files.get(".github/review-gate.yml");
+      assert.match(gate, attributionGuard ? /^ {2}attribution: on$/m : /^ {2}attribution: off$/m, `${label}: gate switch`);
     }
   }
 });

@@ -19,12 +19,15 @@ export const STAGING = ".bindwright/incoming/";
 export const GLOBAL = ".bindwright/global/";
 const GLOBAL_CORE = "_core/global-template/";
 
-// Guard hooks ship byte for byte: they are code, not templates, and the
-// render step's blank-line folding would still change them.
-const VERBATIM = ".claude/hooks/";
+// Guard hooks and the review gate's scripts ship byte for byte: they are
+// code, not templates, and the render step's blank-line folding would still
+// change them.
+const VERBATIM = [".claude/hooks/", ".github/scripts/"];
 
 function included(path, a, flags) {
   const adv = a.advanced;
+  // The review gate's script, setup script, settings and guide serve both tiers.
+  const gate = flags.github_actions_routine_review || flags.github_actions_deep_review;
   if (path.startsWith("precommit/")) return false;
   if (path.startsWith(".claude/rules/architecture/")) return false;
   if (path.startsWith(".claude/skills/architecture-graph/")) return false;
@@ -41,6 +44,10 @@ function included(path, a, flags) {
     ".claude/scripts/research-adherence.py": flags.code_research_first,
     ".github/workflows/claude-code-review.yml.template": flags.github_actions_routine_review,
     ".github/workflows/claude.yml.template": flags.github_actions_deep_review,
+    ".github/scripts/review_gate.py": gate,
+    ".github/scripts/setup-review-gate.sh": gate,
+    ".github/review-gate.yml.template": gate,
+    ".github/review-guide.md.template": gate,
     ".claude/hooks/run-hook.sh": flags.guard_hooks_repo,
     ".claude/hooks/push-guard.py": flags.guard_hooks_repo,
     ".claude/hooks/no-ai-attribution.py": flags.guard_hooks_repo && flags.attribution_guard,
@@ -136,7 +143,7 @@ export async function bind(answers, { readFile, coreFiles, year }) {
   const out = new Map();
   for (const { src, dest } of planFiles(a, coreFiles, precommitProfiles)) {
     const text = await readFile(src);
-    out.set(dest, dest.startsWith(VERBATIM) ? text.replace(/\r\n/g, "\n") : renderTemplate(text, ctx, src));
+    out.set(dest, VERBATIM.some((p) => dest.startsWith(p)) ? text.replace(/\r\n/g, "\n") : renderTemplate(text, ctx, src));
   }
   if (out.has(SHIPPED_TEXT_RULE) && a.advanced.shippedTextPaths) {
     out.set(SHIPPED_TEXT_RULE, withPaths(out.get(SHIPPED_TEXT_RULE), a.advanced.shippedTextPaths, SHIPPED_TEXT_RULE));
