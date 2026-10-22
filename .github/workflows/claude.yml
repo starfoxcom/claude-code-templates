@@ -11,7 +11,8 @@
 #
 # Merge gate participation: this workflow writes the deep result into the
 # "Review gate" check on the PR head commit through the shared script
-# (.github/scripts/review_gate.py, taken from the PR's base commit), which
+# (.github/scripts/review_gate.py, taken from the PR's base commit, or from the
+# default branch when the base predates the gate), which
 # combines it with the routine result stored on the same check. See the
 # comment block in claude-code-review.yml. With `checks: two` in the gate
 # settings it also moves the older `Claude On-Demand` check to success or
@@ -206,6 +207,9 @@ jobs:
       # its own for git: the reviewer it starts can read its environment.
       # The script's path is written before the settings are read, so a bad
       # settings file still leaves Evaluate a script to fail the gate with.
+      # A base commit from before the gate (an old release line) has no
+      # script; its PRs take the gate from the default branch's tip, which a
+      # PR cannot change either, as the routine review does.
       - name: Fetch the gate script and settings
         id: gate
         if: steps.pr-head.outputs.head_sha != ''
@@ -213,6 +217,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ steps.pr-head.outputs.base_sha }}
           HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           dir="$RUNNER_TEMP/gate"
           mkdir -p "$dir"
@@ -221,16 +226,21 @@ jobs:
             echo "::add-mask::$auth"
             git -c http.extraheader="AUTHORIZATION: basic $auth" fetch --quiet --no-tags origin "$BASE_SHA" "$HEAD_SHA"
           fi
-          git show "$BASE_SHA:.github/scripts/review_gate.py" > "$dir/review_gate.py"
+          GATE_SHA="$BASE_SHA"
+          if ! git cat-file -e "$BASE_SHA:.github/scripts/review_gate.py" 2>/dev/null; then
+            GATE_SHA=$(git rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT_BRANCH^{commit}")
+            echo "::notice::The base commit has no review gate; using the gate from the default branch ($GATE_SHA)."
+          fi
+          git show "$GATE_SHA:.github/scripts/review_gate.py" > "$dir/review_gate.py"
           echo "script=$dir/review_gate.py" >> "$GITHUB_OUTPUT"
-          # The project's review guide, read from the base commit so the PR
+          # The project's review guide, read from the gate's commit so the PR
           # cannot change the guide its own review follows. No guide, no note.
-          if git cat-file -e "$BASE_SHA:.github/review-guide.md" 2>/dev/null; then
-            echo "guide_note=This project's review guide (what the project is and the invariants to verify) is .github/review-guide.md on the base branch: read it with \`git show $BASE_SHA:.github/review-guide.md\`, never the PR's copy, and verify the invariants it lists." >> "$GITHUB_OUTPUT"
+          if git cat-file -e "$GATE_SHA:.github/review-guide.md" 2>/dev/null; then
+            echo "guide_note=This project's review guide (what the project is and the invariants to verify) is .github/review-guide.md: read it with \`git show $GATE_SHA:.github/review-guide.md\`, never the PR's copy, and verify the invariants it lists." >> "$GITHUB_OUTPUT"
           fi
           # No settings file means the defaults.
-          if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
-            git show "$BASE_SHA:.github/review-gate.yml" > "$dir/review-gate.yml"
+          if git cat-file -e "$GATE_SHA:.github/review-gate.yml" 2>/dev/null; then
+            git show "$GATE_SHA:.github/review-gate.yml" > "$dir/review-gate.yml"
           fi
           if ! out=$(python3 -I "$dir/review_gate.py" settings --file "$dir/review-gate.yml"); then
             echo "::error::Bad review gate settings: $out"
