@@ -1200,7 +1200,7 @@ jobs:
   evaluate-review-outcome:
     name: Evaluate review outcome
     needs: [init-gate, triage, claude-review]
-    # Runs on every PR event, including non-reviewable docs/rules PRs:
+    # Runs on every PR event, including non-reviewable docs-only PRs:
     # `always()` keeps it firing when `claude-review` is skipped by triage.
     # It reports the routine result twice:
     #   • into the "Review gate" check, through the script, which adds the
@@ -1221,7 +1221,7 @@ jobs:
       issues: read
       # The Review gate check, and with `checks: two` the non-reviewable path's
       # PATCH of Claude On-Demand to skipped (otherwise it would stay at
-      # in_progress on docs/rules-only PRs and block the merge).
+      # in_progress on docs-only PRs and block the merge).
       checks: write
     steps:
       - uses: actions/checkout@v6
@@ -1413,7 +1413,7 @@ jobs:
             else
               # Self-heal: init-gate didn't create the check (Checks API 5xx,
               # permission propagation delay on a fresh bind, runner blip).
-              # Create it directly here so docs/rules-only PRs don't stall in
+              # Create it directly here so docs-only PRs don't stall in
               # branch-protection's "Expected" state on transient infra
               # failures. The reviewable path's Resolve step exits 1 in the
               # same scenario (clearer signal there); the non-reviewable path
