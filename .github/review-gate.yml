@@ -10,7 +10,10 @@
 checks: one
 
 # The runner label (runs-on) for the review jobs; several labels, comma
-# separated, pick a self-hosted runner ("self-hosted, linux").
+# separated, pick a self-hosted runner ("self-hosted, linux"). Run such a
+# runner under an account of its own with no Claude Code setup: the
+# reviewers load that account's user settings, hooks and instructions, and
+# the review installs Claude Code into its home folder.
 runner: ubuntu-latest
 
 # The review that runs on every PR with reviewable files. Its backup runs
