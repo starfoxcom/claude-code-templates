@@ -33,8 +33,12 @@ on:
     types: [submitted]
 
 jobs:
-  claude:
-    name: On-demand deep review (@claude)
+  # Who asked, checked in a job of its own with no concurrency group: the
+  # review job's group cancels the deep run in flight, so only a request this
+  # job approves may join it. Write access is what the review action itself
+  # requires; the routine reviewer (claude[bot]) is the other approved asker.
+  authorize:
+    name: Check who asked for the deep review
     # Filter: accept comments whose body STARTS with `@claude review this PR`
     # AND does NOT start with `Claude Code is working`. The trigger is a
     # command, so it leads the comment: the routine review's Step 4.B trigger
@@ -53,10 +57,8 @@ jobs:
     # listing invariants for the deep tier to verify). Using `!contains` here would
     # reject any such quote and silently block the deep tier from firing.
     #
-    # Asker filter, here and not only in a step: a run that passes this `if:`
-    # joins the concurrency group below and cancels the deep run in flight.
-    # Only the routine reviewer (claude[bot]) or the repo's owner, members and
-    # collaborators get past it; the Resolve step then checks for write access.
+    # The asker filter here is a cheap first pass (owner, members and
+    # collaborators, or claude[bot]); the step below checks write access.
     if: |
       (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working') &&
         (github.event.comment.user.login == 'claude[bot]' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) ||
@@ -64,14 +66,41 @@ jobs:
         (github.event.comment.user.login == 'claude[bot]' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) ||
       (github.event_name == 'pull_request_review' && startsWith(github.event.review.body, '@claude review this PR') && !startsWith(github.event.review.body, 'Claude Code is working') &&
         (github.event.review.user.login == 'claude[bot]' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)))
-    # CRITICAL: this MUST live at the job level (not workflow level). The
-    # action's own progress comment ("Claude Code is working…") contains the
-    # `@claude` substring, so workflow-level concurrency would accept it and
-    # cancel the in-flight deep-tier review *before* the job-level `if:` had
-    # a chance to filter it out. Job-level concurrency is evaluated AFTER
-    # the job-level `if:`, so bot-comment runs that get filtered never enter
-    # the concurrency group and can't preempt anything. The fallback to
-    # `github.run_id` keeps the group unique for non-PR/issue events.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.asker.outputs.allowed }}
+    steps:
+      - name: Check the asker's access
+        id: asker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASKER: ${{ github.actor }}
+        run: |
+          if [ "$ASKER" = "claude[bot]" ]; then
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # A failed lookup fails this job: it must not read as "no access"
+          # and silently drop a maintainer's request.
+          PERM=$(gh api "repos/${{ github.repository }}/collaborators/$ASKER/permission" --jq .permission)
+          case "$PERM" in
+            admin|maintain|write)
+              echo "allowed=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::notice::$ASKER has no write access (permission: $PERM), so no deep review runs" ;;
+          esac
+
+  claude:
+    name: On-demand deep review (@claude)
+    needs: authorize
+    if: needs.authorize.outputs.allowed == 'true'
+    # Job-level concurrency, entered only by approved requests: the action's
+    # own progress comment ("Claude Code is working…") and anyone without
+    # write access never reach it, so they cannot cancel the deep review in
+    # flight. The fallback to `github.run_id` keeps the group unique for
+    # non-PR/issue events.
     concurrency:
       group: claude-on-demand-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
       cancel-in-progress: true
@@ -87,8 +116,13 @@ jobs:
       # (success/failure based on verdict).
       checks: write
     steps:
-      # No token left in .git/config: the review steps read files from this
-      # folder while acting on PR content. Fetches pass the token per command.
+      # The workflow token (it can write checks) is not left in .git/config:
+      # the credits reviewer reads files next to it while acting on PR
+      # content. Fetches pass the token per command. The review action steps
+      # later write their own bot token into the origin URL; that is the
+      # action's own setup and predates this file. The fetches before that
+      # are anonymous, which works on a public repo: a private one needs
+      # persisted credentials here or a fetch of its own.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -102,28 +136,12 @@ jobs:
         id: pr-head
         env:
           GH_TOKEN: ${{ github.token }}
-          ASKER: ${{ github.actor }}
         run: |
           PR_NUMBER="${{ github.event.issue.number || github.event.pull_request.number }}"
           if [ -z "$PR_NUMBER" ]; then
             echo "::notice::Not on a PR — skipping HEAD SHA resolution"
             echo "head_sha=" >> "$GITHUB_OUTPUT"
             exit 0
-          fi
-          # Only the routine reviewer or someone with write access starts a
-          # deep review, as the review action itself requires. Anyone else's
-          # comment leaves no head commit, so no later step touches the gate
-          # checks: a stranger's comment cannot hold or fail a PR's gate.
-          if [ "$ASKER" != "claude[bot]" ]; then
-            # A failed lookup stops the run: it must not read as "no access" and
-            # silently drop a maintainer's request.
-            PERM=$(gh api "repos/${{ github.repository }}/collaborators/$ASKER/permission" --jq .permission)
-            case "$PERM" in
-              admin|maintain|write) ;;
-              *)
-                echo "::notice::$ASKER has no write access (permission: $PERM), so no deep review runs"
-                exit 0 ;;
-            esac
           fi
           read -r HEAD_SHA BASE_SHA < <(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '"\(.head.sha) \(.base.sha)"')
           if [ -z "$HEAD_SHA" ] || [ -z "$BASE_SHA" ]; then
@@ -138,23 +156,26 @@ jobs:
       # The gate's script and settings from the PR's base commit, kept outside
       # the checkout: the review steps switch the checkout to the PR's own
       # code, and on review events the checkout already is the PR's. Read
-      # from local history (the checkout has every branch), fetching the base
-      # commit only when it moved since. The script's path is written before
-      # the settings are read, so a bad settings file still leaves Evaluate a
-      # script to fail the gate with.
+      # from local history (the checkout has every branch). This step also
+      # fetches the base and head commits when they are not local yet (pushed
+      # after the checkout), so the credits review below needs no token of
+      # its own for git: the reviewer it starts can read its environment.
+      # The script's path is written before the settings are read, so a bad
+      # settings file still leaves Evaluate a script to fail the gate with.
       - name: Fetch the gate script and settings
         id: gate
         if: steps.pr-head.outputs.head_sha != ''
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ steps.pr-head.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
         run: |
           dir="$RUNNER_TEMP/gate"
           mkdir -p "$dir"
-          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || ! git cat-file -e "$HEAD_SHA^{commit}" 2>/dev/null; then
             auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
             echo "::add-mask::$auth"
-            git -c http.extraheader="AUTHORIZATION: basic $auth" fetch --quiet --no-tags origin "$BASE_SHA"
+            git -c http.extraheader="AUTHORIZATION: basic $auth" fetch --quiet --no-tags origin "$BASE_SHA" "$HEAD_SHA"
           fi
           git show "$BASE_SHA:.github/scripts/review_gate.py" > "$dir/review_gate.py"
           echo "script=$dir/review_gate.py" >> "$GITHUB_OUTPUT"
@@ -241,7 +262,9 @@ jobs:
           EFFORT: ${{ steps.gate.outputs.deep_effort }}
           MAX_TURNS: ${{ steps.gate.outputs.deep_max_turns }}
           REQUEST: ${{ github.event.comment.body || github.event.review.body }}
-          FETCH_TOKEN: ${{ github.token }}
+        # No workflow token in this step's environment: the reviewer it starts
+        # reads PR content and could read its environment. The head and base
+        # commits are already local (the gate step fetched any missing one).
         run: |
           set -euo pipefail
           if [ -z "$ANTHROPIC_API_KEY" ]; then
@@ -261,9 +284,6 @@ jobs:
             git worktree remove --force "$wt" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          auth=$(printf 'x-access-token:%s' "$FETCH_TOKEN" | base64 -w0)
-          echo "::add-mask::$auth"
-          git -c http.extraheader="AUTHORIZATION: basic $auth" fetch --quiet --no-tags origin "$HEAD_SHA" "$BASE_SHA"
           git worktree add --quiet --detach "$wt" "$HEAD_SHA"
           for p in .claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md .husky; do
             rm -rf "${wt:?}/$p"
@@ -550,6 +570,16 @@ jobs:
           set -o pipefail
           REPO="${{ github.repository }}"
 
+          # No script from the base commit: on a comment event this run's own
+          # commit is the default branch's, trusted like this workflow file,
+          # so its copy can still fail the gate closed. (On review events that
+          # commit is the PR's own, so there is no fallback.) No review ran.
+          if [ -z "$GATE" ] && [ "${{ github.event_name }}" = "issue_comment" ] \
+              && git show "${{ github.sha }}:.github/scripts/review_gate.py" > "$RUNNER_TEMP/gate-fallback.py"; then
+            GATE="$RUNNER_TEMP/gate-fallback.py"
+            REVIEWER=none
+          fi
+
           DEEP=error
           RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at') || RUN_STARTED_AT=""
           if [ -z "$RUN_STARTED_AT" ]; then
@@ -567,8 +597,19 @@ jobs:
             echo "::error::The gate script could not be read from the PR's base commit, so the Review gate was not updated"
             STATUS=1
           else
-            python3 "$GATE" upsert --repo "$REPO" --sha "$HEAD_SHA" --escalated --deep "$DEEP" \
-              --order "${{ github.run_id }}.${{ github.run_attempt }}.1" --note "Deep reviewer: $REVIEWER." || STATUS=1
+            ORDER="${{ github.run_id }}.${{ github.run_attempt }}.1"
+            if OUT=$(python3 "$GATE" upsert --repo "$REPO" --sha "$HEAD_SHA" --escalated --deep "$DEEP" \
+                --order "$ORDER" --note "Deep reviewer: $REVIEWER."); then
+              # A newer deep run on this head owns the gate's deep result, so
+              # this one (an older run re-run by hand) did not count.
+              if [ "$(printf '%s' "$OUT" | jq -r .state | sed 's/.*;deep_by=//')" != "$ORDER" ]; then
+                echo "::error::A newer deep run already reported on $HEAD_SHA, so this run's verdict ($DEEP) was not used. To review again, post a new comment starting with \`@claude review this PR\` instead of re-running an older run."
+                exit 1
+              fi
+            else
+              echo "$OUT"
+              STATUS=1
+            fi
           fi
 
           # Unknown settings (they failed to load) count as `two`: a Claude

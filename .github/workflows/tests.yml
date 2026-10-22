@@ -18,6 +18,7 @@ on:
       - "_core/**"
       - "tools/**"
       - ".github/scripts/**"
+      - ".github/review-gate.yml"
       - ".claude/hooks/**"
       - ".claude/settings.json"
       - "SETUP.md"

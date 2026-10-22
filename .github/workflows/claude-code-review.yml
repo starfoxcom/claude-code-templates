@@ -84,8 +84,11 @@ jobs:
 
       # Each run starts the routine tier over: until this run's verdict lands,
       # the gate waits, even on a re-run after an earlier verdict. Facts from
-      # a deep review are kept.
+      # a deep review are kept. With `checks: two` the branch rules still
+      # require the older pair, so a failed write to the new check must not
+      # turn them red: it stays visible on this step only.
       - name: Create the Review gate check
+        continue-on-error: ${{ steps.settings.outputs.checks == 'two' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -331,9 +334,14 @@ jobs:
       # to in_progress when routine auto-escalates.
       checks: write
     steps:
+      # No token left in .git/config, which the credits reviewer's worktree
+      # shares: that reviewer reads PR content with a Read tool, and this
+      # job's token can write checks. The fetches here are anonymous on a
+      # public repo; the review action sets up its own auth.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -1058,8 +1066,11 @@ jobs:
           fi
           echo "routine=$ROUTINE" >> "$GITHUB_OUTPUT"
 
+      # With `checks: two`, a failed write to the not-yet-required gate must
+      # not turn this job, the older required check, red.
       - name: Update the Review gate
         if: always()
+        continue-on-error: ${{ needs.init-gate.outputs.checks == 'two' }}
         env:
           GH_TOKEN: ${{ github.token }}
           READ: ${{ steps.routine.outcome }}
