@@ -244,6 +244,21 @@ jobs:
               -F "output[summary]=Manual @claude trigger fired on a HEAD SHA with no prior routine run. The deep reviewer is running."
             echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
           fi
+          # A routine run that read this check just before the write above
+          # can still PATCH it to skipped a second later (when the Hold write
+          # failed, nothing else shows this review). Mark it running again
+          # once that window has passed.
+          sleep 5
+          CHECK_ID=$(gh api \
+            "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+            --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty') || CHECK_ID=""
+          # Best effort: a failed re-mark must not skip the review below.
+          if [ -n "$CHECK_ID" ]; then
+            gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+              -F status="in_progress" \
+              -F "output[title]=Deep review running" \
+              -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment." >/dev/null || true
+          fi
 
       # Comments older than this moment cannot be this run's verdict: a run
       # this one cancelled is gone by now (the gate write above alone takes
@@ -617,6 +632,7 @@ jobs:
           echo "Deep verdict: $DEEP (reviewer: $REVIEWER; $ATTEMPTS)"
 
           STATUS=0
+          GATE_UNSURE=no
           if [ -z "$GATE" ]; then
             echo "::error::The gate script could not be read from the PR's base commit, so the Review gate was not updated"
             STATUS=1
@@ -634,7 +650,7 @@ jobs:
                   --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""'); then
                 # Unknown owner: fail closed, so Claude On-Demand fails too.
                 echo "::error::Could not read the Review gate back to confirm this run still owns the deep result"
-                DEEP=error
+                GATE_UNSURE=yes
                 STATUS=1
               elif [ "${NOW##*;deep_by=}" != "$ORDER" ]; then
                 echo "::error::A deep run that started later took over on $HEAD_SHA, so this run's verdict ($DEEP) was not used"
@@ -644,7 +660,7 @@ jobs:
               # The write may have landed or not, and the owner is unknown:
               # fail closed like a failed read, so Claude On-Demand fails too.
               echo "$OUT"
-              DEEP=error
+              GATE_UNSURE=yes
               STATUS=1
             fi
           fi
@@ -673,6 +689,14 @@ jobs:
                 TITLE="Deep review errored"
                 SUMMARY="The reviewer never ran to completion ($ATTEMPTS). This is not a blocking finding; nothing was judged. Retry: $RETRY. If the deep tier keeps failing, report it to the maintainer." ;;
             esac
+            # The verdict stands as read, but its write to the Review gate (or
+            # the read-back confirming this run owns it) failed: fail closed,
+            # and say what the reviewer found instead of "nothing was judged".
+            if [ "$GATE_UNSURE" = yes ]; then
+              CONCLUSION=failure
+              TITLE="Deep review ran ($DEEP) but the Review gate could not be updated"
+              SUMMARY="The deep reviewer ($REVIEWER) finished with verdict: $DEEP. This run could not write it to the Review gate or confirm it owns the result there, so this check fails closed. See the deep review comment for its findings, then $RETRY."
+            fi
             CHECK_ID=$(gh api \
               "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
               --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty') || CHECK_ID=""

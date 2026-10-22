@@ -984,10 +984,16 @@ jobs:
           elif [ "$RUNNING" = yes ]; then
             REASON="A deep review was asked for on this head and has not reported yet (claude.yml will PATCH this check on completion). If no deep run is alive, ask again with a comment starting with \`@claude review this PR\`."
           fi
+          # Keep claude.yml's "Deep review running" marker while that review
+          # runs, so every later routine pass on this head still sees it.
+          TITLE="Deep review in progress"
+          if [ "$RUNNING" = yes ]; then
+            TITLE="Deep review running"
+          fi
           if [ -n "$REASON" ]; then
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
-              -F "output[title]=Deep review in progress" \
+              -F "output[title]=$TITLE" \
               -F "output[summary]=$REASON"
             echo "::notice::Set Claude On-Demand check $CHECK_ID to in_progress (escalated)"
           else
@@ -1183,6 +1189,10 @@ jobs:
                 RUNNING=yes
               fi
               if [ "$RUNNING" = yes ]; then
+                gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
+                  -F status="in_progress" \
+                  -F "output[title]=Deep review running" \
+                  -F "output[summary]=A deep review was asked for on this head and has not reported yet (claude.yml will PATCH this check on completion). If no deep run is alive, ask again with a comment starting with \`@claude review this PR\`." >/dev/null
                 echo "::notice::A deep review is running on $HEAD_SHA — leaving Claude On-Demand at in_progress"
                 exit 0
               fi
