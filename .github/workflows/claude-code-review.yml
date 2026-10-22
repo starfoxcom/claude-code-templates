@@ -153,12 +153,14 @@ jobs:
           # fails is passed on as incomplete, which the script reviews; so is
           # one that reaches the API's 3,000-file cap. Which files count, and
           # why workflow files never do, is in the script. A carriage return
-          # or newline in a name is written as \r or \n, so one name stays one
-          # line: split, "tools/a<LF>.github/workflows/b.py" would read as a
-          # file with no extension and a workflow file, and skip the review.
+          # or newline in a name becomes a space, so one name stays one line:
+          # split, "tools/a<LF>.github/workflows/b.py" would read as a file
+          # with no extension and a workflow file, and skip the review. A
+          # space, unlike an escape, keeps "x.py<LF>" ending in .py once the
+          # script strips the line.
           INCOMPLETE=""
           if ! gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" \
-              --jq '.[] | .filename, (.previous_filename // empty) | gsub("\r"; "\\r") | gsub("\n"; "\\n")' > /tmp/changed_files.txt; then
+              --jq '.[] | .filename, (.previous_filename // empty) | gsub("[\r\n]"; " ")' > /tmp/changed_files.txt; then
             echo "::warning::The file listing failed; treating the diff as reviewable"
             INCOMPLETE="--incomplete"
           fi
