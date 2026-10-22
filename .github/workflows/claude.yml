@@ -129,15 +129,18 @@ jobs:
           persist-credentials: false
 
       # The PR's own .gitattributes must not change what the reviewer reads:
-      # working-tree-encoding rewrites checked-out bytes, and `-diff` or
-      # `binary` hides a file's text from a diff. .git/info/attributes
-      # outranks every .gitattributes, so the PR checkout and the worktree
-      # made below are written without them. This checkout is the default
-      # branch, so nothing needs redoing here.
+      # working-tree-encoding, filter (git-lfs is installed on the runner,
+      # and the PR controls .lfsconfig) or ident rewrite checked-out bytes,
+      # and `-diff` or `binary` hides a file's text from a diff.
+      # .git/info/attributes outranks every .gitattributes and is shared by
+      # the worktree made below. On a review event this checkout already is
+      # the PR's merge ref, so it is redone under the override; the action's
+      # later checkout of the PR branch then writes its files the same way.
       - name: Override the PR's git attributes
         run: |
           mkdir -p .git/info
-          printf '%s\n' '* !diff -text !eol !working-tree-encoding' > .git/info/attributes
+          printf '%s\n' '* !diff -text !eol !working-tree-encoding !filter !ident' > .git/info/attributes
+          git rm -rq --cached --ignore-unmatch . && git reset -q --hard
 
       # ── Resolve PR HEAD SHA once for downstream Checks API calls ──────────
       # claude.yml fires on issue_comment events, where the PR head SHA is

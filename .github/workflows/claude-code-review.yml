@@ -364,15 +364,17 @@ jobs:
 
       # The PR's own .gitattributes must not change what the pre-screen and
       # the reviewer read: `-diff` or `binary` shows a file as "Binary files
-      # differ", and working-tree-encoding rewrites the checked-out bytes.
+      # differ", and working-tree-encoding, filter (git-lfs is installed on
+      # the runner, and the PR controls .lfsconfig) or ident rewrite the
+      # checked-out bytes.
       # .git/info/attributes outranks every .gitattributes and is shared by
       # the credits reviewer's worktree; the checkout is then redone under it.
       # A NUL byte still makes git call a file binary: the pre-screen warns.
       - name: Override the PR's git attributes
         run: |
           mkdir -p .git/info
-          printf '%s\n' '* !diff -text !eol !working-tree-encoding' > .git/info/attributes
-          git rm -rq --cached . && git reset -q --hard
+          printf '%s\n' '* !diff -text !eol !working-tree-encoding !filter !ident' > .git/info/attributes
+          git rm -rq --cached --ignore-unmatch . && git reset -q --hard
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -421,7 +423,7 @@ jobs:
             "origin/$BASE...HEAD" > /tmp/changed_files.txt
           # Without --text, as the reviewer's own `git diff` runs: "-" counts
           # mark the files it will show as binary.
-          git diff -z --no-renames --numstat "origin/$BASE...HEAD" > /tmp/numstat.txt
+          git diff -z --no-renames --diff-filter=d --numstat "origin/$BASE...HEAD" > /tmp/numstat.txt
 
           # The verdict floor for Evaluate: no review attempt of this run
           # starts before this moment, and a run this one replaced was
