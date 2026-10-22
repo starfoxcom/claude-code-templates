@@ -99,6 +99,33 @@ class Decide(unittest.TestCase):
                 self.assertTrue(out["title"] and out["summary"])
 
 
+class GateState(unittest.TestCase):
+    def test_each_workflow_adds_its_facts_and_the_last_one_decides(self):
+        start = gate.gate("")
+        self.assertEqual((start["status"], start["state"]),
+                         ("in_progress", "triage=reviewable;routine=pending;escalated=no;deep=none"))
+        # A deep review started by hand before the routine one finished...
+        deep_started = gate.gate(start["state"], escalated=True, deep="none")
+        deep_done = gate.gate(deep_started["state"], deep="block")
+        self.assertEqual(deep_done["conclusion"], "failure")
+        # ...still blocks once the routine review passes afterwards.
+        routine_done = gate.gate(deep_done["state"], triage="reviewable", routine="pass")
+        self.assertEqual((routine_done["conclusion"], routine_done["state"]),
+                         ("failure", "triage=reviewable;routine=pass;escalated=yes;deep=block"))
+
+    def test_escalation_only_turns_on(self):
+        asked = gate.gate("", routine="pass", escalated=True)
+        self.assertEqual(asked["status"], "in_progress")
+        self.assertEqual(gate.gate(asked["state"], routine="pass")["status"], "in_progress")
+
+    def test_a_bad_state_or_fact_is_an_error(self):
+        for state, facts in [("routine=maybe", {}), ("colour=red", {}), ("routine", {}), ("", {"deep": "pending"}),
+                             ("", {"routine": "none"})]:
+            with self.subTest(state=state, facts=facts):
+                with self.assertRaises(gate.GateError):
+                    gate.gate(state, **facts)
+
+
 class Settings(unittest.TestCase):
     def test_defaults_and_overrides(self):
         self.assertEqual(gate.settings(""), gate.DEFAULTS)
@@ -140,15 +167,16 @@ class Command(unittest.TestCase):
             self.assertEqual(self.run_cli("triage", fh.name), (0, '{"review": true}'))
         finally:
             os.remove(fh.name)
-        code, out = self.run_cli("decide", "--triage", "reviewable", "--routine", "pass", "--escalated")
-        self.assertEqual((code, json.loads(out)["status"]), (0, "in_progress"))
+        code, out = self.run_cli("gate", "--state", "", "--routine", "pass", "--escalated")
+        self.assertEqual((code, json.loads(out)["state"]), (0, "triage=reviewable;routine=pass;escalated=yes;deep=none"))
         code, out = self.run_cli("settings", "--file", os.path.join(ROOT, "no-such-file.yml"))
         self.assertEqual(code, 0)
         self.assertIn("routine_model=claude-fable-5-1", out.splitlines())
 
     def test_bad_arguments_are_refused(self):
-        for args in [("decide", "--triage", "maybe"), ("decide", "--triage", "reviewable", "--routine", "ok"),
-                     ("decide", "--triage", "skip", "--deep", "pending"), ("verdict", "--since", "x", "--tier", "routine"),
+        for args in [("gate", "--triage", "skip"), ("gate", "--state", "", "--triage", "maybe"),
+                     ("gate", "--state", "", "--routine", "ok"), ("gate", "--state", "deep=later"),
+                     ("verdict", "--since", "x", "--tier", "routine"),
                      ("verdict", "--since", "x", "--tier", "deep", "--marker", "y"), ("verdict", "--tier", "deep"),
                      ("nonsense",)]:
             with self.subTest(args=args):

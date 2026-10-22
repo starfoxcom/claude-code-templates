@@ -6,10 +6,17 @@ GitHub API calls; this script only decides. Standard library, Python 3.8+.
     review_gate.py verdict --since TS (--tier routine --marker RE | --tier deep)
         -> {"verdict": "pass"|"block"|"missing", "line": ...}
         (reads the PR's comments as `gh api --paginate` prints them, on stdin)
-    review_gate.py decide --triage reviewable|skip [--routine R] [--escalated] [--deep D]
-        -> {"status", "conclusion", "title", "summary"} for the "Review gate" check
-        R: pass|block|missing|error|pending; D: pass|block|missing|error
+    review_gate.py gate --state STATE [--triage T] [--routine R] [--escalated] [--deep D]
+        -> {"status", "conclusion", "title", "summary", "state"} for the "Review gate" check
     review_gate.py settings [--file .github/review-gate.yml] -> KEY=value lines
+
+The "Review gate" check carries its own state in its external_id, e.g.
+"triage=reviewable;routine=pass;escalated=yes;deep=none" (an empty one is
+the start state). Each review workflow reads it, sets the facts it knows
+and writes back the result, so whichever finishes last has every fact.
+T: reviewable|skip; R: pending|pass|block|missing|error; D: none|pass|block|missing|error.
+--escalated only ever turns on: once a deep review was asked for, it stays asked.
+A workflow that cannot tell a fact leaves its option out, keeping the stored value.
 
 Every command prints one line; a bad argument prints {"error": ...} and exits 1.
 """
@@ -32,8 +39,14 @@ BOT = "claude[bot]"
 # A deep verdict comment: the review action's finished tracking comment, or
 # the comment the CLI run on the API credits posts under this heading.
 DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
-DEEP_RESULTS = ("pass", "block", "missing", "error")
-ROUTINE_RESULTS = DEEP_RESULTS + ("pending",)
+VERDICTS = ("pass", "block", "missing", "error")
+STATE_VALUES = {
+    "triage": ("reviewable", "skip"),
+    "routine": ("pending",) + VERDICTS,
+    "escalated": ("no", "yes"),
+    "deep": ("none",) + VERDICTS,
+}
+START_STATE = {"triage": "reviewable", "routine": "pending", "escalated": "no", "deep": "none"}
 
 DEFAULTS = {
     "checks": "one",
@@ -134,6 +147,31 @@ def decide(triage_result, routine=None, escalated=False, deep=None):
     return _check("completed", "success", "Routine review 🟢", "The routine review passed and asked for no deep review.")
 
 
+def parse_state(text):
+    """The gate state stored in the check's external_id; empty is the start state."""
+    state = dict(START_STATE)
+    for part in filter(None, text.split(";")):
+        key, _, value = part.partition("=")
+        if value not in STATE_VALUES.get(key, ()):
+            raise GateError("bad gate state: " + part)
+        state[key] = value
+    return state
+
+
+def gate(state_text, triage=None, routine=None, escalated=False, deep=None):
+    """Set the facts this workflow knows on the stored state, then decide."""
+    state = parse_state(state_text)
+    for key, value in (("triage", triage), ("routine", routine), ("deep", deep)):
+        if value is not None:
+            state[key] = _choice(value, STATE_VALUES[key], "--" + key)
+    if escalated:
+        state["escalated"] = "yes"
+    check = decide(state["triage"], state["routine"], state["escalated"] == "yes",
+                   None if state["deep"] == "none" else state["deep"])
+    check["state"] = ";".join("%s=%s" % (k, state[k]) for k in START_STATE)
+    return check
+
+
 def settings(text):
     """KEY=value pairs from review-gate.yml: top-level keys and one level of
     nesting, `#` comments. Unknown keys and bad values are errors, never ignored."""
@@ -191,15 +229,11 @@ def run(argv):
             raise GateError("verdict needs --since, and --marker exactly when --tier is routine")
         # Bytes, not text: the verdict emoji must not depend on the runner's locale.
         return verdict(sys.stdin.buffer.read().decode("utf-8"), since, tier, marker)
-    if cmd == "decide":
-        tri = _choice(_option(args, "--triage"), ("reviewable", "skip"), "--triage")
-        routine = _option(args, "--routine")
-        deep = _option(args, "--deep")
-        if tri == "reviewable":
-            _choice(routine, ROUTINE_RESULTS, "--routine")
-        if deep is not None:
-            _choice(deep, DEEP_RESULTS, "--deep")
-        return decide(tri, routine, "--escalated" in args, deep)
+    if cmd == "gate":
+        if "--state" not in args:
+            raise GateError("gate needs --state (an empty one is the start state)")
+        return gate(_option(args, "--state"), _option(args, "--triage"), _option(args, "--routine"),
+                    "--escalated" in args, _option(args, "--deep"))
     if cmd == "settings":
         path = _option(args, "--file", ".github/review-gate.yml")
         try:
