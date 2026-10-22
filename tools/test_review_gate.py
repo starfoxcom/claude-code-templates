@@ -98,12 +98,28 @@ class Verdict(unittest.TestCase):
             comment("## Code Review — claude-code-templates\n🟢 LGTM", "2026-10-21T09:10:00Z"),
             comment("@claude review this PR — depth pass on the Code Review — claude-code-templates gate.\n"
                     "🔴 Blocking when ANY real finding exists", "2026-10-21T09:11:00Z"),
-            comment("**Claude Code is working…**\n🔴 Blocking", "2026-10-21T09:12:00Z"),
+            comment("Claude Code is working… <img src=\"spinner\">\n🔴 Blocking", "2026-10-21T09:12:00Z"),
+            comment("**Claude encountered an error** — [View job](x)\n🔴 Blocking", "2026-10-21T09:13:00Z"),
         ])
         self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "routine", MARK),
                          {"verdict": "pass", "line": "🟢 LGTM"})
         only_request = self.pages([comment("@claude review this PR\n🟢 LGTM")])
         self.assertEqual(gate.verdict(only_request, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+
+    def test_a_headingless_verdict_is_looked_for_only_before_the_request(self):
+        # A deep run's comments come after the request; one shaped unlike any
+        # known tracking comment still cannot stand in for the routine verdict.
+        text = self.pages([
+            comment("Review done.\n🔴 Blocking — race in the writer", "2026-10-21T09:10:00Z"),
+            comment("@claude review this PR — depth pass on the writer.", "2026-10-21T09:11:00Z"),
+            comment("Deep pass notes\n🟢 LGTM", "2026-10-21T09:12:00Z"),
+        ])
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "block")
+        after_only = self.pages([
+            comment("@claude review this PR — depth pass.", "2026-10-21T09:11:00Z"),
+            comment("Deep pass notes\n🟢 LGTM", "2026-10-21T09:12:00Z"),
+        ])
+        self.assertEqual(gate.verdict(after_only, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
 
     def test_a_deep_verdict_without_a_glyph_only_ever_blocks(self):
         text = self.pages([comment("## Deep review\nBlocking — race in the writer")])

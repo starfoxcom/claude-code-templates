@@ -66,8 +66,11 @@ BOT = "claude[bot]"
 # the comment the CLI run on the API credits posts under this heading.
 DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
 # Bot comments that are never a routine verdict: the deep-review request and
-# the review action's tracking comments, whose glyphs belong to other runs.
-NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude )")
+# the review action's tracking comments ("Claude Code is working…" while it
+# runs, "**Claude finished…**" or "**Claude encountered an error**" after),
+# whose glyphs belong to other runs.
+REQUEST = re.compile(r"\A@claude review this PR")
+NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude |Claude Code is working)")
 GLYPHS = re.compile("🔴|🟢")
 # A verdict word opening a line, as written when the glyph is dropped.
 WORD = re.compile(r"^[\s*_#]*(Blocking|LGTM)\b", re.M)
@@ -139,13 +142,19 @@ def _pick(bodies, tier, marker):
     """The newest comment of `tier`, and what told it apart. A routine comment
     is found by `marker` first; when the reviewer dropped its heading, by a
     verdict glyph, then by a verdict word. It is never a deep comment, even
-    one quoting the routine review, nor a request or tracking comment."""
+    one quoting the routine review, nor a request or tracking comment. The
+    looser tiers look only before the first deep-review request: the reviewer
+    posts its verdict before asking, and every comment of a deep run comes
+    after the request that started it."""
     if tier == "deep":
         found = [b for b in bodies if DEEP_MARKER.search(b)]
         return (found[-1], "marker") if found else (None, "")
+    first_request = next((i for i, b in enumerate(bodies) if REQUEST.search(b)), len(bodies))
     routine = [b for b in bodies if not DEEP_MARKER.search(b) and not NOT_ROUTINE.search(b)]
-    for how, test in (("marker", marker.search), ("glyph", GLYPHS.search), ("word", WORD.search)):
-        found = [b for b in routine if test(b)]
+    before = [b for b in bodies[:first_request] if not DEEP_MARKER.search(b) and not NOT_ROUTINE.search(b)]
+    for how, pool, test in (("marker", routine, marker.search), ("glyph", before, GLYPHS.search),
+                            ("word", before, WORD.search)):
+        found = [b for b in pool if test(b)]
         if found:
             return found[-1], how
     return None, ""
