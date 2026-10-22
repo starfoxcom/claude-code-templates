@@ -3,10 +3,12 @@ the workflow files stay the same for every project. The workflows make the
 GitHub API calls; this script only decides. Standard library, Python 3.8+.
 
     review_gate.py triage FILES [--incomplete]      -> {"review": true|false}
-    review_gate.py verdict --since TS --marker RE   -> {"verdict": "pass"|"block"|"missing", "line": ...}
+    review_gate.py verdict --since TS (--tier routine --marker RE | --tier deep)
+        -> {"verdict": "pass"|"block"|"missing", "line": ...}
         (reads the PR's comments as `gh api --paginate` prints them, on stdin)
-    review_gate.py decide --triage reviewable|skip --routine R [--escalated] [--deep D]
+    review_gate.py decide --triage reviewable|skip [--routine R] [--escalated] [--deep D]
         -> {"status", "conclusion", "title", "summary"} for the "Review gate" check
+        R: pass|block|missing|error|pending; D: pass|block|missing|error
     review_gate.py settings [--file .github/review-gate.yml] -> KEY=value lines
 
 Every command prints one line; a bad argument prints {"error": ...} and exits 1.
@@ -27,7 +29,11 @@ REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.a
 LISTING_CAP = 3000
 
 BOT = "claude[bot]"
-TIER_RESULTS = ("pass", "block", "missing", "error")
+# A deep verdict comment: the review action's finished tracking comment, or
+# the comment the CLI run on the API credits posts under this heading.
+DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
+DEEP_RESULTS = ("pass", "block", "missing", "error")
+ROUTINE_RESULTS = DEEP_RESULTS + ("pending",)
 
 DEFAULTS = {
     "checks": "one",
@@ -68,13 +74,20 @@ def _comments(text):
         out.extend(page)
 
 
-def verdict(text, since, marker):
-    """The verdict in the bot's newest comment that matches `marker` and was
-    posted at or after `since`: the last line holding 🔴 or 🟢."""
-    pattern = re.compile(marker)
+def _is_tier(body, tier, marker):
+    if DEEP_MARKER.search(body):
+        return tier == "deep"
+    return tier == "routine" and marker.search(body) is not None
+
+
+def verdict(text, since, tier, marker=None):
+    """The verdict in the bot's newest comment of `tier` posted at or after
+    `since`: the last line holding 🔴 or 🟢. A routine comment matches
+    `marker` and is never a deep one, even when a deep review quotes it."""
+    pattern = re.compile(marker) if marker else None
     bodies = [c.get("body") or "" for c in _comments(text)
               if isinstance(c, dict) and (c.get("user") or {}).get("login") == BOT
-              and (c.get("created_at") or "") >= since and pattern.search(c.get("body") or "")]
+              and (c.get("created_at") or "") >= since and _is_tier(c.get("body") or "", tier, pattern)]
     if not bodies:
         return {"verdict": "missing", "line": ""}
     lines = [l for l in bodies[-1].splitlines() if "🔴" in l or "🟢" in l]
@@ -87,27 +100,38 @@ def _check(status, conclusion, title, summary):
     return {"status": status, "conclusion": conclusion, "title": title, "summary": summary}
 
 
+FAILED = {
+    "block": ("Blocked by the {} review", "The {} review found something to fix. Fix it on the PR branch and push."),
+    "missing": ("No {} verdict", "The {} review finished without a 🟢 or 🔴 line. Re-run it."),
+    "error": ("The {} review errored", "No {} review attempt ran to the end. Re-run it."),
+}
+
+
+def _failed(result, tier):
+    title, summary = FAILED[result]
+    return _check("completed", "failure", title.format(tier), summary.format(tier))
+
+
 def decide(triage_result, routine=None, escalated=False, deep=None):
-    """The "Review gate" check for the tiers' results so far. Fails closed:
-    anything but a clean pass from every tier that ran blocks the merge."""
+    """The "Review gate" check from everything known so far. Both review
+    workflows call this with the same facts, so whichever finishes last
+    writes the full answer. Fails closed: anything but a clean pass from
+    every tier that ran, or was asked for, blocks the merge."""
+    if deep not in (None, "pass"):
+        return _failed(deep, "deep")
     if triage_result == "skip":
+        if deep == "pass":
+            return _check("completed", "success", "Deep review 🟢", "The diff has no reviewable files and the deep review passed.")
         return _check("completed", "success", "No review needed", "The diff has no reviewable files.")
-    failed = {
-        "block": ("Blocked by the {} review", "The {} review found something to fix. Fix it on the PR branch and push."),
-        "missing": ("No {} verdict", "The {} review finished without a 🟢 or 🔴 line. Re-run it."),
-        "error": ("The {} review errored", "No {} review attempt ran to the end. Re-run it."),
-    }
+    if routine == "pending":
+        return _check("in_progress", None, "Routine review in progress", "Waiting for the routine review's verdict.")
     if routine != "pass":
-        title, summary = failed[routine]
-        return _check("completed", "failure", title.format("routine"), summary.format("routine"))
-    if not escalated:
-        return _check("completed", "success", "Routine review 🟢", "The routine review passed and asked for no deep review.")
-    if deep is None:
+        return _failed(routine, "routine")
+    if deep == "pass":
+        return _check("completed", "success", "Routine and deep reviews 🟢", "Both review tiers passed.")
+    if escalated:
         return _check("in_progress", None, "Deep review in progress", "The routine review passed and asked for a deep review.")
-    if deep != "pass":
-        title, summary = failed[deep]
-        return _check("completed", "failure", title.format("deep"), summary.format("deep"))
-    return _check("completed", "success", "Routine and deep reviews 🟢", "Both review tiers passed.")
+    return _check("completed", "success", "Routine review 🟢", "The routine review passed and asked for no deep review.")
 
 
 def settings(text):
@@ -160,19 +184,21 @@ def run(argv):
             paths = [l.strip() for l in fh if l.strip()]
         return {"review": triage(paths, "--incomplete" in args)}
     if cmd == "verdict":
-        since, marker = _option(args, "--since"), _option(args, "--marker")
-        if not since or not marker:
-            raise GateError("verdict needs --since and --marker")
+        since = _option(args, "--since")
+        tier = _choice(_option(args, "--tier"), ("routine", "deep"), "--tier")
+        marker = _option(args, "--marker")
+        if not since or (tier == "routine") != bool(marker):
+            raise GateError("verdict needs --since, and --marker exactly when --tier is routine")
         # Bytes, not text: the verdict emoji must not depend on the runner's locale.
-        return verdict(sys.stdin.buffer.read().decode("utf-8"), since, marker)
+        return verdict(sys.stdin.buffer.read().decode("utf-8"), since, tier, marker)
     if cmd == "decide":
         tri = _choice(_option(args, "--triage"), ("reviewable", "skip"), "--triage")
         routine = _option(args, "--routine")
         deep = _option(args, "--deep")
         if tri == "reviewable":
-            _choice(routine, TIER_RESULTS, "--routine")
+            _choice(routine, ROUTINE_RESULTS, "--routine")
         if deep is not None:
-            _choice(deep, TIER_RESULTS, "--deep")
+            _choice(deep, DEEP_RESULTS, "--deep")
         return decide(tri, routine, "--escalated" in args, deep)
     if cmd == "settings":
         path = _option(args, "--file", ".github/review-gate.yml")

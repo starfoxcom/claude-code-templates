@@ -48,30 +48,45 @@ class Verdict(unittest.TestCase):
              comment("## Code Review — claude-code-templates\n🟢 LGTM", login="someone"),
              comment("unrelated 🟢")],
         )
-        self.assertEqual(gate.verdict(text, "2026-10-21T09:30:00Z", MARK),
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:30:00Z", "routine", MARK),
                          {"verdict": "block", "line": "🔴 Blocking — must fix"})
 
     def test_older_than_the_run_or_without_a_verdict_is_missing(self):
         old = self.pages([comment("## Code Review — claude-code-templates\n🟢 LGTM", "2026-10-21T08:00:00Z")])
-        self.assertEqual(gate.verdict(old, "2026-10-21T09:00:00Z", MARK)["verdict"], "missing")
+        self.assertEqual(gate.verdict(old, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
         bare = self.pages([comment("## Code Review — claude-code-templates\nLGTM")])
-        self.assertEqual(gate.verdict(bare, "2026-10-21T09:00:00Z", MARK)["verdict"], "missing")
-        self.assertEqual(gate.verdict("", "2026-10-21T09:00:00Z", MARK)["verdict"], "missing")
+        self.assertEqual(gate.verdict(bare, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+        self.assertEqual(gate.verdict("", "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
 
-    def test_pass(self):
-        text = self.pages([comment("**Claude finished the task**\n🟢 LGTM")])
-        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", r"^\*\*Claude finished")["verdict"], "pass")
+    def test_the_tiers_never_read_each_others_comments(self):
+        text = self.pages([
+            comment("## Code Review — claude-code-templates\n🔴 Blocking", "2026-10-21T09:10:00Z"),
+            comment("**Claude finished the task**\nThe Code Review — claude-code-templates verdict was 🔴.\n🟢 LGTM",
+                    "2026-10-21T09:20:00Z"),
+        ])
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "block")
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "deep")["verdict"], "pass")
+        credits = self.pages([comment("## Deep review\n🔴 Blocking — race in the writer")])
+        self.assertEqual(gate.verdict(credits, "2026-10-21T09:00:00Z", "deep")["verdict"], "block")
+        self.assertEqual(gate.verdict(credits, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
 
 
 class Decide(unittest.TestCase):
     def test_every_path(self):
         cases = [
             (("skip",), {}, "completed", "success"),
+            (("skip",), {"deep": "pass"}, "completed", "success"),
+            (("skip",), {"deep": "block"}, "completed", "failure"),
             (("reviewable", "pass"), {}, "completed", "success"),
             (("reviewable", "block"), {}, "completed", "failure"),
             (("reviewable", "missing"), {}, "completed", "failure"),
             (("reviewable", "error"), {"escalated": True}, "completed", "failure"),
+            (("reviewable", "pending"), {}, "in_progress", None),
+            (("reviewable", "pending"), {"deep": "pass"}, "in_progress", None),
+            (("reviewable", "pending"), {"deep": "error"}, "completed", "failure"),
+            (("reviewable", "block"), {"deep": "pass"}, "completed", "failure"),
             (("reviewable", "pass"), {"escalated": True}, "in_progress", None),
+            (("reviewable", "pass"), {"deep": "pass"}, "completed", "success"),
             (("reviewable", "pass"), {"escalated": True, "deep": "pass"}, "completed", "success"),
             (("reviewable", "pass"), {"escalated": True, "deep": "block"}, "completed", "failure"),
             (("reviewable", "pass"), {"escalated": True, "deep": "missing"}, "completed", "failure"),
@@ -114,7 +129,8 @@ class Command(unittest.TestCase):
 
     def test_verdict_reads_utf8_whatever_the_locale(self):
         stdin = json.dumps([comment("## Code Review — claude-code-templates\n🟢 LGTM")], ensure_ascii=False)
-        code, out = self.run_cli("verdict", "--since", "2026-10-21T09:00:00Z", "--marker", MARK, stdin=stdin)
+        code, out = self.run_cli("verdict", "--since", "2026-10-21T09:00:00Z", "--tier", "routine", "--marker", MARK,
+                                 stdin=stdin)
         self.assertEqual((code, json.loads(out)), (0, {"verdict": "pass", "line": "🟢 LGTM"}))
 
     def test_commands_print_one_line(self):
@@ -132,7 +148,9 @@ class Command(unittest.TestCase):
 
     def test_bad_arguments_are_refused(self):
         for args in [("decide", "--triage", "maybe"), ("decide", "--triage", "reviewable", "--routine", "ok"),
-                     ("verdict", "--since", "x"), ("nonsense",)]:
+                     ("decide", "--triage", "skip", "--deep", "pending"), ("verdict", "--since", "x", "--tier", "routine"),
+                     ("verdict", "--since", "x", "--tier", "deep", "--marker", "y"), ("verdict", "--tier", "deep"),
+                     ("nonsense",)]:
             with self.subTest(args=args):
                 code, out = self.run_cli(*args)
                 self.assertEqual(code, 1)
