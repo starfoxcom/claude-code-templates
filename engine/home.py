@@ -210,7 +210,7 @@ def add_mod(home, folder):
         raise HomeError("Not a mod folder (no .claude-plugin/plugin.json): " + folder)
     path, data = _load(home)
     env = _section(data, "env", dict, path)
-    target = os.path.join(_claude(home), "mods", name)
+    target = os.path.normpath(os.path.join(_claude(home), "mods", name))
     # An installed copy may carry the user's own edits (rules.ts lists), so it stays.
     kept = os.path.exists(target)
     if not kept:

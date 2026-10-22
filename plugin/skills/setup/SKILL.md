@@ -92,7 +92,7 @@ The hooks need a system Python: run `home.py find-python` once. On an error, ski
 - **Attribution guard:** when `hooks/` holds `no-ai-attribution.py`, install it the same way with `--matcher "Bash|PowerShell"`, then run `home.py attribution-off`, which stops the CLI adding its own credit lines.
 - **Mods:** they need CLI 2.1.287 or later (`claude --version`) and Node; skip them otherwise. Read the table in `${CLAUDE_PLUGIN_ROOT}/_core/global-template/mods/README.md` and offer `session-facts` as recommended and the rest as opt-in, one line each. Install each chosen one with `home.py add-mod "${CLAUDE_PLUGIN_ROOT}/_core/global-template/mods/<name>"`. A mod already installed keeps its copy (`"kept_existing": true`), since it may hold the user's edits. Mods load at start-up, so the user restarts the CLI after.
 
-After a hook install, check it works: pipe `{"tool_name": "Bash", "tool_input": {"command": "git push -qf origin main"}}` into the registered command and arguments (`home.py` printed the settings path; the entry is the last one under `hooks.PreToolUse`). The push guard must exit 2.
+After a hook install, check it works: pipe `{"tool_name": "Bash", "tool_input": {"command": "git push -qf origin main"}}` into the registered command and arguments on standard input, writing no file (`home.py` printed the settings path; the entry is the last one under `hooks.PreToolUse`). The push guard must exit 2.
 
 Delete `.bindwright/global/`, then `.bindwright/` if it is empty.
 
