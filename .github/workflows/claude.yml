@@ -245,6 +245,15 @@ jobs:
             echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
           fi
 
+      # Comments older than this moment cannot be this run's verdict: a run
+      # this one cancelled is gone by now (the gate write above alone takes
+      # seconds after this job joined the group), and every review attempt
+      # starts after it.
+      - name: Mark the start of the review
+        id: floor
+        if: steps.pr-head.outputs.head_sha != ''
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # ── First attempt: the plan's monthly API credits ─────────────────────
       # The routine tier's credits path (see its step in claude-code-review.yml
       # for why it works this way): a plain `claude -p` run is paid from the
@@ -561,11 +570,12 @@ jobs:
         # comment ("**Claude finished …") or the credits run's comment headed
         # "## Deep review"; the script never mistakes a routine comment for
         # one. Stale-comment floor: only comments posted at or after this
-        # run's run_started_at count, so a prior push's 🟢 can never stand in
-        # for this run (an attempt can end without posting: max turns, a gh
-        # failure, a network blip mid-comment). No comment and no attempt that
-        # ran to the end is an error; a comment without a 🔴/🟢 line is a
-        # missing verdict. Both fail closed.
+        # run's review started (the "Mark the start of the review" step) count,
+        # so neither a prior push's 🟢 nor one from a run this one cancelled
+        # can stand in for this run (an attempt can end without posting: max
+        # turns, a gh failure, a network blip mid-comment). No attempt that ran
+        # to the end is an error; a comment without a 🔴/🟢 line is a missing
+        # verdict. Both fail closed.
         if: always() && steps.pr-head.outputs.head_sha != ''
         env:
           GH_TOKEN: ${{ github.token }}
@@ -573,6 +583,7 @@ jobs:
           HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
           GATE: ${{ steps.gate.outputs.script }}
           CHECKS: ${{ steps.gate.outputs.checks }}
+          FLOOR: ${{ steps.floor.outputs.at }}
           # The model whose attempt completed, for the check summaries: the job
           # name and a green first step cannot tell (every attempt continues on
           # error).
@@ -592,15 +603,16 @@ jobs:
             REVIEWER=none
           fi
 
+          # No attempt that ran to the end means no verdict of this run's,
+          # whatever the comments say: a run this one cancelled can post its
+          # own just as it dies.
           DEEP=error
-          RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at') || RUN_STARTED_AT=""
-          if [ -z "$RUN_STARTED_AT" ]; then
-            echo "::error::Could not resolve current run's run_started_at — refusing to evaluate verdict without stale-comment floor"
+          if [ "$REVIEWER" = "none" ]; then
+            echo "::error::No deep review attempt ran to the end"
+          elif [ -z "$FLOOR" ]; then
+            echo "::error::The review's start time is unknown — refusing to evaluate the verdict without a stale-comment floor"
           elif gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/comments.json; then
-            DEEP=$(python3 "$GATE" verdict --since "$RUN_STARTED_AT" --tier deep < /tmp/comments.json | jq -r .verdict) || DEEP=error
-            if [ "$DEEP" = "missing" ] && [ "$REVIEWER" = "none" ]; then
-              DEEP=error
-            fi
+            DEEP=$(python3 "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json | jq -r .verdict) || DEEP=error
           fi
           echo "Deep verdict: $DEEP (reviewer: $REVIEWER; $ATTEMPTS)"
 
