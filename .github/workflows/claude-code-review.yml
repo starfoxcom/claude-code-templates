@@ -65,6 +65,9 @@ jobs:
       routine_fallback_effort: ${{ steps.settings.outputs.routine_fallback_effort || steps.settings.outputs.fallback_effort }}
       runner_labels: ${{ steps.settings.outputs.runner_labels }}
       prescreen_dir: ${{ steps.settings.outputs.prescreen_dir }}
+      # The project's own paths, for the pre-screen's file categories.
+      always_review: ${{ steps.settings.outputs.triage_always_review }}
+      escalate_paths: ${{ steps.settings.outputs.escalate_paths }}
       # Extra reviewer tools as a ready ",tool,tool" suffix for --allowedTools,
       # or empty. The script admits only Bash(...) without quotes, `$`,
       # backslashes or brackets inside, and Read, Grep, Glob.
@@ -405,8 +408,9 @@ jobs:
         ## Step 1 — Read the pre-screen report
 
         Read the review context file named on the first line of this prompt. It contains:
-        - **Pre-screen violations** — mechanical rule-breakage already detected (toggle marker imbalance, unknown placeholders in canonical templates, AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
-        - **Pre-screen warnings** — likely issues you should judge (JSX/HTML parity drift, etc.).
+        - **Pre-screen violations** — mechanical rule-breakage already detected (AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
+        - **Pre-screen warnings** — likely issues you should judge (files the diff shows as binary, changed git attributes, etc.).
+        - **Project pre-screen** — the project's own checks (`prescreen.dir` in the gate settings): a check that exited non-zero is a violation, likely 🔴 unless you can refute it; a line marked WARNING is for you to judge.
         - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
         - **Categorized file lists** — architecture-critical files to READ first (including `.claude/` rules and skills, any `CLAUDE.md`, and `bundles/`, which steer reviewers and binds), then docs (scan only), then other code.
 
@@ -608,6 +612,8 @@ jobs:
           # like the trigger list below, and its report joins the context.
           PROJECT_ESCALATE: ${{ needs.project-triggers.outputs.escalate }}
           PROJECT_CONTEXT: ${{ needs.project-triggers.outputs.context }}${{ needs.project-checks.outputs.context }}
+          ALWAYS_REVIEW: ${{ needs.init-gate.outputs.always_review }}
+          ESCALATE_PATHS: ${{ needs.init-gate.outputs.escalate_paths }}
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
@@ -649,9 +655,9 @@ jobs:
           case ",$LABELS," in *,needs-deep-review,*) export DEEP_OWED=1 ;; esac
 
           python3 -I - << 'PYEOF'
+          import fnmatch
           import os
           import re
-          from collections import Counter
 
           PR = os.environ.get('PR_NUMBER', '?')
 
@@ -746,95 +752,6 @@ jobs:
                       added.append(l[1:])
               per_file_added[fname] = added
 
-          # ── Check 1: Toggle marker balance ───────────────────────────────────
-          # Every `<!-- TOGGLE:name START -->` (and `name:off`) must have a
-          # matching `<!-- TOGGLE:name END -->` in the SAME file. A missing END
-          # silently swallows downstream content during SETUP-time resolution.
-          # Scope-guarded to _core/project-template/** — toggle markers only
-          # exist canonically inside that subtree. Without the guard, markdown
-          # documentation prose that quotes the marker syntax (e.g. CHANGELOG
-          # entries describing the pre-screen feature in backticked examples)
-          # produces false-positive TOGGLE_UNBALANCED violations because the
-          # regex is markdown-unaware and counts literal text in code spans.
-          toggle_pat = re.compile(r'<!--\s*TOGGLE:([\w:_\-]+)\s+(START|END)\s*-->')
-          for fname in changed:
-              if not fname.startswith('_core/project-template/'):
-                  continue
-              if not fname.endswith(('.md', '.template', '.yml', '.yaml', '.html')):
-                  continue
-              try:
-                  with open(fname, encoding='utf-8', errors='replace') as f:
-                      src = f.read()
-              except OSError:
-                  continue
-              starts = Counter(m.group(1) for m in toggle_pat.finditer(src) if m.group(2) == 'START')
-              ends   = Counter(m.group(1) for m in toggle_pat.finditer(src) if m.group(2) == 'END')
-              for name in (starts | ends).keys():
-                  if starts[name] != ends[name]:
-                      violations.append(f'TOGGLE_UNBALANCED: {fname}: name={name} START={starts[name]} END={ends[name]}')
-
-          # ── Check 2: Placeholder validation in canonical templates ──────────
-          # Every `{{NAME}}` in `_core/project-template/**` must be one of the
-          # placeholders SETUP.md knows how to resolve. An unknown placeholder
-          # lands literally in the user's repo on bind.
-          CANONICAL = {
-              'MAIN_BRANCH', 'DEV_BRANCH', 'DEFAULT_BRANCH',
-              'PROJECT_NAME', 'PROJECT_NAME_UPPER',
-              'LANGUAGE_AND_FRAMEWORK',
-              'CONVERSATION_LANGUAGE', 'CODE_LANGUAGE',
-              'REPO_URL', 'ONE_LINE_DESCRIPTION',
-              'GITFLOW_OR_TRUNK',
-              # v1.3.0 — `tools.code_research` slot, per-tool resolution at
-              # bind time from `manifest.tools` + `code-research-profiles.json`.
-              # See SETUP.md Phase 3 step 2 + TOGGLES.md per-value markers.
-              'TOOLS_CODE_RESEARCH_NAME',
-              'TOOLS_CODE_RESEARCH_URL',
-              'TOOLS_CODE_RESEARCH_NAME_KEBAB',
-              'TOOLS_CODE_RESEARCH_BYPASS_MARKER',
-              # v1.4.0 — review-model placeholders (default-only, no bind-UI
-              # field) for the deep/routine review --model. Bind-time default
-              # defined in SETUP.md Phase 3 step 2; consumed by the workflow
-              # templates once they are de-versioned. Registered here so the
-              # canonical placeholder scan recognizes the tokens.
-              'REVIEW_DEEP_MODEL', 'REVIEW_ROUTINE_MODEL',
-              # Each tier's --effort and the backup reviewer both tiers fall
-              # back to (model and effort). Defaults in SETUP.md Phase 3 step 2.
-              'REVIEW_DEEP_EFFORT', 'REVIEW_ROUTINE_EFFORT',
-              'REVIEW_BACKUP_MODEL', 'REVIEW_BACKUP_EFFORT',
-              # Pre-existing placeholder in _core/.../settings.local.json.template;
-              # registered so it doesn't trip UNKNOWN_PLACEHOLDER in a scanned diff.
-              'STACK_COMMANDS_ALLOWLIST',
-              # precommit slot — profile-driven config generation under
-              # _core/project-template/precommit/ (mirrors code_research). NAME/URL
-              # resolve via the generic tool-slot enumeration (SETUP.md Phase 3
-              # step 2); LINT/TYPECHECK/TEST substitute from stack_commands in
-              # SETUP.md step 8e. Registered ahead of the feature branch that
-              # introduces the templates, per the placeholder->allowlist lockstep.
-              'TOOLS_PRECOMMIT_NAME',
-              'TOOLS_PRECOMMIT_URL',
-              'LINT_COMMAND',
-              'TYPECHECK_COMMAND',
-              'TEST_COMMAND',
-              # Bind engine placeholders (engine/model.js DEFERRED and valuesFor):
-              # CODEOWNERS owners, the rendered license text, and the adherence
-              # script's tool-name regex.
-              'LEAD_USER', 'TEAM_OR_USER', 'LICENSE_BODY',
-              'TOOLS_CODE_RESEARCH_MATCH',
-          }
-          placeholder_pat = re.compile(r'\{\{([A-Z][A-Z_]+)\}\}')
-          for fname in changed:
-              if not fname.startswith('_core/project-template/'):
-                  continue
-              try:
-                  with open(fname, encoding='utf-8', errors='replace') as f:
-                      src = f.read()
-              except OSError:
-                  continue
-              for m in placeholder_pat.finditer(src):
-                  name = m.group(1)
-                  if name not in CANONICAL:
-                      violations.append(f'UNKNOWN_PLACEHOLDER: {fname}: {{{{{name}}}}} not in canonical set')
-
           # ── Check 3: AI-attribution scan ─────────────────────────────────────
           # Scans ADDED lines for the AI-attribution patterns defined in
           # .claude/rules/git.md. The regexes are encoded in ai_pats below
@@ -854,13 +771,6 @@ jobs:
                           violations.append(f'AI_ATTRIBUTION: {fname}: {line.strip()[:120]}')
                           break
 
-          # ── Check 4: JSX/HTML parity ─────────────────────────────────────────
-          # The redesign/*.jsx source and `index.html` production are kept in
-          # manual sync. A JSX edit without a matching HTML edit ships broken.
-          jsx_changed = [f for f in changed if f.startswith('redesign/') and f.endswith('.jsx')]
-          if jsx_changed and 'index.html' not in changed:
-              warnings.append(f'JSX_HTML_PARITY: {", ".join(jsx_changed)} touched but index.html not in diff — production may be out of sync')
-
           # ── Check 4b: what the reviewer's diff hides ─────────────────────────
           # The workflow overrides the PR's attributes for this run, so a new
           # .gitattributes only matters once merged; the reviewer judges that.
@@ -877,17 +787,21 @@ jobs:
               warnings.append(f'BINARY_IN_DIFF: {", ".join(binary)} — git diff shows these as binary; Read each one in full (git show HEAD:<path> for the base-config paths)')
 
           # ── Check 5: Categorize files ────────────────────────────────────────
-          # Everything triage always reviews (review_gate.ALWAYS_REVIEWED, in
-          # any case) plus the page and every workflow: the reviewers'
-          # own instructions and what a bind writes are read in full, never
-          # filed as low-risk docs.
-          ARCH = re.compile(r'^(_core|redesign|bundles|\.github/scripts)/|(^|/)\.claude/'
-                            r'|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE(\.local)?\.md$'
+          # Read in full, never filed as low-risk docs: everything triage
+          # always reviews (review_gate.ALWAYS_REVIEWED and the project's
+          # triage.always_review, in any case), the project's deep-review
+          # trigger paths (escalate.paths) and every workflow.
+          ARCH = re.compile(r'^\.github/scripts/|(^|/)\.claude/|(^|/)CLAUDE(\.local)?\.md$'
                             # The CLI's own config, which every later review loads.
                             r'|(^|/)\.mcp\.json$|^\.claude\.json$|^\.husky/|^\.gitmodules$|^\.ripgreprc$', re.I)
+          # Matched as review_gate.py matches its path settings.
+          OWN = [g.strip().casefold() for name in ('ALWAYS_REVIEW', 'ESCALATE_PATHS')
+                 for g in os.environ.get(name, '').split(',') if g.strip()]
+          def own_path(f):
+              return any(fnmatch.fnmatchcase(f.casefold(), g + '*' if g.endswith('/') else g) for g in OWN)
           arch_critical, docs, other_code = [], [], []
           for f in changed:
-              if f.startswith('.github/workflows/') or f.casefold() == 'index.html' or ARCH.search(f):
+              if f.startswith('.github/workflows/') or ARCH.search(f) or own_path(f):
                   arch_critical.append(f)
               elif f.endswith('.md'):
                   docs.append(f)
@@ -895,22 +809,17 @@ jobs:
                   other_code.append(f)
 
           # ── Check 6: Deep-review trigger surface ─────────────────────────────
-          # MUST stay in sync with prompt § Step 2.5 and
-          # `_core/project-template/.claude/rules/review-tiers.md`.
-          # The gate's script and settings decide what may merge, like the
-          # review workflows themselves.
-          DEEP_PREFIXES = ('_core/', 'redesign/', '.github/scripts/')
-          DEEP_FILES    = {'index.html', '.github/review-gate.yml'}
-          DEEP_HOOKS    = '_core/project-template/.claude/hooks/'
-          DEEP_WORKFLOWS = '.github/workflows/claude'  # matches claude.yml + claude-code-review.yml
+          # The gate's own files, in every project: its script, its settings
+          # and the review workflows decide what may merge. The project's own
+          # trigger paths and patterns (escalate.*) come from the Project
+          # triggers job as PROJECT_ESCALATE below.
+          DEEP_PREFIXES = ('.github/scripts/', '.github/workflows/claude')  # claude.yml + claude-code-review.yml
+          DEEP_FILES    = {'.github/review-gate.yml'}
           # Matched in any case, like triage: a case-insensitive checkout puts
-          # "_CORE/" in _core/.
+          # ".GitHub/Scripts/" in .github/scripts/.
           deep_paths = [
               f for f in changed
-              if any(f.casefold().startswith(p) for p in DEEP_PREFIXES)
-              or f.casefold() in DEEP_FILES
-              or f.casefold().startswith(DEEP_HOOKS)
-              or f.casefold().startswith(DEEP_WORKFLOWS)
+              if f.casefold().startswith(DEEP_PREFIXES) or f.casefold() in DEEP_FILES
           ]
           # The Repair step applies the label itself when these paths changed,
           # so the deep review is owed whatever the reviewer does.
