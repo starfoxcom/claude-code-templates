@@ -400,11 +400,11 @@ jobs:
           $REQUEST
           ----- end of request -----
 
-          The working folder holds the PR's head commit. First read CLAUDE.md and .claude/rules/review-tiers.md there: they hold this project's rules and the verdict rule. Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
+          The working folder holds the PR's head commit, except that its top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies: read the PR's version of any of those with \`git show HEAD:<path>\`, never with Read. First read CLAUDE.md and .claude/rules/review-tiers.md there (the base copies, on purpose): they hold this project's rules and the verdict rule. Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
 
           You work alone and this is a one-shot session: the moment you end your turn it is over and nothing else runs. Never delegate to helper agents, never schedule a wake-up, never wait for anything. Read the diff file by file in this turn and post the review before you stop.
 
-          Then post exactly one comment with \`gh pr comment $PR_NUMBER --body \"<your review>\"\`. Its first line is exactly \`## Deep review\`. Its last line is the verdict alone: \`🟢 LGTM\` only when the review is fully clean (no caveats, no nits, no non-blocking findings), otherwise \`🔴 Blocking — <one-line reason>\`. In a clean review, 🔴 and the word Blocking appear only inside inline backticks on the same line (a line inside a fenced code block counts like any other), since the gate blocks on lines like \`**🔴 …**\`, \`- 🔴 x\`, \`### Blocking issues\` or \`**Verdict:** blocking\` wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. If the diff shows a file as binary, Read that file in full in the working folder, since a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way. Post nothing else and change nothing."
+          Then post exactly one comment with \`gh pr comment $PR_NUMBER --body \"<your review>\"\`. Its first line is exactly \`## Deep review\`. Its last line is the verdict alone: \`🟢 LGTM\` only when the review is fully clean (no caveats, no nits, no non-blocking findings), otherwise \`🔴 Blocking — <one-line reason>\`. In a clean review, 🔴 and the word Blocking appear only inside inline backticks on the same line (a line inside a fenced code block counts like any other), since the gate blocks on lines like \`**🔴 …**\`, \`- 🔴 x\`, \`### Blocking issues\` or \`**Verdict:** blocking\` wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. If the diff shows a file as binary, Read that file in full in the working folder (for the base-copy paths above, \`git show HEAD:<path>\` instead), since a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way. Post nothing else and change nothing."
 
           out="$RUNNER_TEMP/claude-credits-output.json"
           status=0
@@ -482,6 +482,9 @@ jobs:
         # carries the routine tier's lists minus its label command.
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The action puts the base branch's config in the checkout before the
+          # reviewer starts; this tells it where the PR's own copies are.
+          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
@@ -538,6 +541,9 @@ jobs:
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The action puts the base branch's config in the checkout before the
+          # reviewer starts; this tells it where the PR's own copies are.
+          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
@@ -601,6 +607,9 @@ jobs:
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The action puts the base branch's config in the checkout before the
+          # reviewer starts; this tells it where the PR's own copies are.
+          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
         with:
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
