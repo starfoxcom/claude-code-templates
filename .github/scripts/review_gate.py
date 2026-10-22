@@ -4,7 +4,7 @@ runner's `gh`, Python 3.8+. The workflows run the copy from the base branch.
 
     review_gate.py triage FILES [--incomplete]      -> {"review": true|false}
     review_gate.py verdict --since TS (--tier routine --marker RE | --tier deep)
-        -> {"verdict": "pass"|"block"|"missing", "line": ...}
+        -> {"verdict": "pass"|"block"|"missing", "line": ...[, "recovered": ...]}
         (reads the PR's comments as `gh api --paginate` prints them, on stdin)
     review_gate.py gate --state STATE [--triage T] [--routine R] [--escalated] [--deep D] [--order O]
         -> {"status", "conclusion", "title", "summary", "state"} for the "Review gate" check
@@ -51,9 +51,12 @@ import time
 # review workflow differs from the default branch's, so a workflow-only PR has
 # to pass as non-reviewable. Excluded by path on purpose, never by extension.
 NEVER = re.compile(r"^\.github/workflows/")
-# Source, data and contract files, plus everything under _core/, which lands
-# verbatim in users' repos (and CLAUDE.md.additions in their ~/.claude).
-REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.additions$|/bundle\.toggles\.md$")
+# Source, data and contract files, plus every file of any type in the
+# deep-review folders: _core/, which lands verbatim in users' repos (and
+# CLAUDE.md.additions in their ~/.claude), redesign/, and .github/scripts/,
+# where a file Python loads before the standard library could run in the gate.
+REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^(_core|redesign|\.github/scripts)/"
+                        r"|\.additions$|/bundle\.toggles\.md$")
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
 
@@ -62,6 +65,16 @@ BOT = "claude[bot]"
 # A deep verdict comment: the review action's finished tracking comment, or
 # the comment the CLI run on the API credits posts under this heading.
 DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
+# Bot comments that are never a routine verdict: the deep-review request and
+# the review action's tracking comments ("Claude Code is working…" while it
+# runs, "**Claude finished…**" or "**Claude encountered an error**" after),
+# whose glyphs belong to other runs, and a deep review whose heading is
+# written slightly off ("# Deep Review", "**Deep review**").
+NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude |Claude Code is working"
+                         r"|[#*_\s]*deep review)", re.I)
+GLYPHS = re.compile("🔴|🟢")
+# "Blocking" opening a line, as written when the glyph is dropped.
+BLOCKING = re.compile(r"[\s*_#]*Blocking\b")
 VERDICTS = ("pass", "block", "missing", "error")
 STATE_VALUES = {
     "triage": ("reviewable", "skip"),
@@ -119,26 +132,51 @@ def _comments(text):
         out.extend(page)
 
 
-def _is_tier(body, tier, marker):
-    if DEEP_MARKER.search(body):
-        return tier == "deep"
-    return tier == "routine" and marker.search(body) is not None
+def _bot_bodies(text, since):
+    return [c.get("body") or "" for c in _comments(text)
+            if isinstance(c, dict) and (c.get("user") or {}).get("login") == BOT
+            and (c.get("created_at") or "") >= since]
+
+
+def _pick(bodies, tier, marker):
+    """The newest comment of `tier`. A routine comment carries `marker`, its
+    heading: a comment without one is never taken for the routine verdict,
+    since deep runs and requests post glyphs into the same thread. It is never
+    a deep comment, even one quoting the routine review, nor a request or
+    tracking comment that names the heading."""
+    if tier == "deep":
+        found = [b for b in bodies if DEEP_MARKER.search(b)]
+    else:
+        found = [b for b in bodies if marker.search(b) and not DEEP_MARKER.search(b)
+                 and not NOT_ROUTINE.search(b)]
+    return found[-1] if found else None
+
+
+def _line(body):
+    """The verdict line: the last holding a glyph. Without one, a line opening
+    with "Blocking" still blocks; a bare "LGTM" never passes, since prose like
+    "LGTM otherwise, but this must be fixed" opens the same way."""
+    lines = body.splitlines()
+    found = [l for l in lines if GLYPHS.search(l)]
+    if found:
+        return ("block" if "🔴" in found[-1] else "pass"), found[-1].strip(), "glyph"
+    found = [l for l in lines if BLOCKING.match(l)]
+    if found:
+        return "block", found[0].strip(), "word"
+    return "missing", "", ""
 
 
 def verdict(text, since, tier, marker=None):
     """The verdict in the bot's newest comment of `tier` posted at or after
-    `since`: the last line holding 🔴 or 🟢. A routine comment matches
-    `marker` and is never a deep one, even when a deep review quotes it."""
-    pattern = re.compile(marker) if marker else None
-    bodies = [c.get("body") or "" for c in _comments(text)
-              if isinstance(c, dict) and (c.get("user") or {}).get("login") == BOT
-              and (c.get("created_at") or "") >= since and _is_tier(c.get("body") or "", tier, pattern)]
-    if not bodies:
+    `since`. A block read from a glyph-less "Blocking" line adds `recovered`."""
+    body = _pick(_bot_bodies(text, since), tier, re.compile(marker) if marker else None)
+    if body is None:
         return {"verdict": "missing", "line": ""}
-    lines = [l for l in bodies[-1].splitlines() if "🔴" in l or "🟢" in l]
-    if not lines:
-        return {"verdict": "missing", "line": ""}
-    return {"verdict": "block" if "🔴" in lines[-1] else "pass", "line": lines[-1].strip()}
+    result, line, how = _line(body)
+    out = {"verdict": result, "line": line}
+    if how == "word":
+        out["recovered"] = "no 🔴/🟢 line; a line opening with Blocking"
+    return out
 
 
 def _check(status, conclusion, title, summary):

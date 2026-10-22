@@ -31,6 +31,13 @@ class Triage(unittest.TestCase):
         self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
         self.assertTrue(gate.triage([".github/workflows/x.yml", ".github/scripts/review_gate.py"]))
 
+    def test_deep_review_folders_count_whatever_the_file_type(self):
+        for path in (".github/scripts/json.pyc", ".github/scripts/run.sh", "redesign/notes.md",
+                     "_core/project-template/README.md", ".github/review-gate.yml"):
+            with self.subTest(path=path):
+                self.assertTrue(gate.triage([path]))
+        self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md"]))
+
     def test_an_incomplete_listing_is_reviewed(self):
         self.assertTrue(gate.triage(["README.md"], incomplete=True))
         self.assertTrue(gate.triage(["docs/%d.md" % i for i in range(gate.LISTING_CAP)]))
@@ -54,9 +61,70 @@ class Verdict(unittest.TestCase):
     def test_older_than_the_run_or_without_a_verdict_is_missing(self):
         old = self.pages([comment("## Code Review — claude-code-templates\n🟢 LGTM", "2026-10-21T08:00:00Z")])
         self.assertEqual(gate.verdict(old, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
-        bare = self.pages([comment("## Code Review — claude-code-templates\nLGTM")])
-        self.assertEqual(gate.verdict(bare, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+        none = self.pages([comment("## Code Review — claude-code-templates\nLooks fine overall.")])
+        self.assertEqual(gate.verdict(none, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
         self.assertEqual(gate.verdict("", "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+
+    def test_the_last_glyph_line_decides_and_a_glyphless_blocking_blocks(self):
+        head = "## Code Review — claude-code-templates\n"
+        cases = [
+            # (routine comment body, verdict, line, recovered)
+            (head + "**Blocking** — hook is not POSIX-portable", "block",
+             "**Blocking** — hook is not POSIX-portable", True),
+            (head + "The 🔴 from the last pass is fixed.\n🟢 LGTM", "pass", "🟢 LGTM", False),
+            (head + "The format is \"🟢 LGTM\".\n🔴 Must fix: hook is not portable", "block",
+             "🔴 Must fix: hook is not portable", False),
+            (head + "Post a binary 🔴/🟢 verdict", "block", "Post a binary 🔴/🟢 verdict", False),
+            ("**Code Review - claude-code-templates**\n🟢 LGTM", "pass", "🟢 LGTM", False),
+            # A bare LGTM never passes: prose opens the same way.
+            (head + "LGTM", "missing", "", False),
+            (head + "LGTM otherwise, but the END marker must be fixed", "missing", "", False),
+            (head + "no blocking issues found", "missing", "", False),
+            # Without its heading a comment is never the routine verdict.
+            ("Review done.\n🟢 LGTM", "missing", "", False),
+            ("Review done.\n🔴 Blocking — race in the writer", "missing", "", False),
+        ]
+        for body, result, line, recovered in cases:
+            with self.subTest(body=body):
+                got = gate.verdict(self.pages([comment(body)]), "2026-10-21T09:00:00Z", "routine", MARK)
+                want = {"verdict": result, "line": line}
+                if recovered:
+                    want["recovered"] = "no 🔴/🟢 line; a line opening with Blocking"
+                self.assertEqual(got, want)
+
+    def test_requests_and_tracking_comments_are_never_the_routine_verdict(self):
+        text = self.pages([
+            comment("## Code Review — claude-code-templates\n🟢 LGTM", "2026-10-21T09:10:00Z"),
+            comment("@claude review this PR — depth pass on the Code Review — claude-code-templates gate.\n"
+                    "🔴 Blocking when ANY real finding exists", "2026-10-21T09:11:00Z"),
+            comment("Claude Code is working… <img src=\"spinner\">\n🔴 Blocking", "2026-10-21T09:12:00Z"),
+            comment("**Claude encountered an error** — [View job](x)\n🔴 Blocking", "2026-10-21T09:13:00Z"),
+        ])
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "routine", MARK),
+                         {"verdict": "pass", "line": "🟢 LGTM"})
+        only_request = self.pages([comment("@claude review this PR\n🟢 LGTM")])
+        self.assertEqual(gate.verdict(only_request, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+
+    def test_deep_run_comments_never_stand_in_for_the_routine_verdict(self):
+        # However the deep review was asked for, its comments carry glyphs
+        # into the same thread; without the routine heading none counts.
+        for request_by in ("claude[bot]", "maintainer"):
+            text = self.pages([
+                comment("@claude review this PR — depth pass.", "2026-10-21T09:05:00Z", login=request_by),
+                comment("Review done.\n🔴 Blocking — race in the writer", "2026-10-21T09:10:00Z"),
+                comment("Deep pass notes\n🟢 LGTM", "2026-10-21T09:12:00Z"),
+                comment("# Deep Review — Code Review — claude-code-templates\n🟢 LGTM", "2026-10-21T09:13:00Z"),
+            ])
+            with self.subTest(request_by=request_by):
+                self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+
+    def test_a_deep_verdict_without_a_glyph_only_ever_blocks(self):
+        text = self.pages([comment("## Deep review\nBlocking — race in the writer")])
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "deep"),
+                         {"verdict": "block", "line": "Blocking — race in the writer",
+                          "recovered": "no 🔴/🟢 line; a line opening with Blocking"})
+        bare = self.pages([comment("## Deep review\nAll clear.\nLGTM")])
+        self.assertEqual(gate.verdict(bare, "2026-10-21T09:00:00Z", "deep")["verdict"], "missing")
 
     def test_the_tiers_never_read_each_others_comments(self):
         text = self.pages([
