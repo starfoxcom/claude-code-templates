@@ -11,8 +11,8 @@ import { defaults, CODE_RESEARCH_TOOLS } from "../model.js";
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const readFile = async (p) => readFileSync(join(repo, p), "utf8");
 const coreFiles = JSON.parse(readFileSync(join(repo, "engine", "core-files.json"), "utf8"));
-const profiles = JSON.parse(readFileSync(join(repo, "_core/global-template/hooks/code-research-profiles.json"), "utf8"));
 const canonical = (p) => readFileSync(join(repo, "_core/global-template", p), "utf8").replace(/\r\n/g, "\n");
+const profiles = JSON.parse(canonical("hooks/code-research-profiles.json"));
 
 async function globalFiles(edit = () => {}) {
   const a = defaults();
