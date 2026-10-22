@@ -179,6 +179,7 @@ jobs:
     # step puts them on a command line.
     outputs:
       floor: ${{ steps.pre-screen.outputs.floor }}
+      done: ${{ steps.repair.outputs.done }}
       reviewer: ${{ steps.claude-review-credits.outcome == 'success' && format('{0} {1} (API credits)', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review.outcome == 'success' && format('{0} {1}', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review-backup.outcome == 'success' && format('{0} {1} (backup)', needs.init-gate.outputs.fallback_model, needs.init-gate.outputs.fallback_effort) || 'none' }}
     env:
       ROUTINE_REVIEW_PROMPT: |
@@ -871,6 +872,7 @@ jobs:
       #     review in progress" — branch protection blocks merge until
       #     claude.yml PATCHes to success/failure.
       - name: Repair the deep-review label and resolve Claude On-Demand
+        id: repair
         if: always() && steps.claude-review-credits.conclusion != 'cancelled' && steps.claude-review.conclusion != 'cancelled'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -879,6 +881,10 @@ jobs:
           PR="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          # Every review attempt has ended: Evaluate reads the routine verdict
+          # only from comments posted between the floor and this moment, so a
+          # re-run of Evaluate alone cannot pick up a later comment.
+          echo "done=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
           # The reviewer may run only one exact spelling of the label command.
           # If it posted the deep-review trigger this run but the label is
@@ -957,20 +963,32 @@ jobs:
             echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — the deep tier has spoken; routine Resolve will not overwrite"
             exit 0
           fi
-          # A deep review asked for by hand may be running with no label: the
-          # Review gate then holds escalated=yes with no deep result yet.
-          # Skipping the check then would let both required checks pass while
-          # that review runs.
+          # A deep review asked for by hand may be running with no label. It
+          # shows on the Review gate (escalated=yes, no deep result yet) and,
+          # in case that write failed, on this check itself: claude.yml marks
+          # it "Deep review running". Skipping the check then would let both
+          # required checks pass while that review runs.
           GATE_NOW=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
             --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
+          EXISTING_TITLE=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.output.title // ""')
+          RUNNING=no
           case ";$GATE_NOW;" in
-            *";escalated=yes;deep=none;"*) LABELS="$LABELS,deep-review-running" ;;
+            *";escalated=yes;deep=none;"*) RUNNING=yes ;;
           esac
-          if echo "$LABELS" | grep -q "needs-deep-review\|deep-review-running"; then
+          if [ "$EXISTING_STATUS" = "in_progress" ] && [ "$EXISTING_TITLE" = "Deep review running" ]; then
+            RUNNING=yes
+          fi
+          REASON=""
+          if echo "$LABELS" | grep -q "needs-deep-review"; then
+            REASON="needs-deep-review applied. Waiting for the deep-tier verdict (claude.yml will PATCH this check on completion)."
+          elif [ "$RUNNING" = yes ]; then
+            REASON="A deep review was asked for on this head and has not reported yet (claude.yml will PATCH this check on completion). If no deep run is alive, ask again with a comment starting with \`@claude review this PR\`."
+          fi
+          if [ -n "$REASON" ]; then
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
               -F "output[title]=Deep review in progress" \
-              -F "output[summary]=needs-deep-review applied. Waiting for the deep-tier verdict (claude.yml will PATCH this check on completion)."
+              -F "output[summary]=$REASON"
             echo "::notice::Set Claude On-Demand check $CHECK_ID to in_progress (escalated)"
           else
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
@@ -1007,9 +1025,6 @@ jobs:
       # PATCH of Claude On-Demand to skipped (otherwise it would stay at
       # in_progress on docs/rules-only PRs and block the merge).
       checks: write
-      # Needed for the current-run-started-at lookup used as the stale-verdict
-      # floor. Without this the gh api call returns HTTP 403.
-      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -1055,8 +1070,9 @@ jobs:
           # review job began count: not the run's creation, since a run this
           # one replaced can still post during its cancellation.
           FLOOR="${{ needs.claude-review.outputs.floor }}"
-          if [ -z "$FLOOR" ]; then
-            echo "::error::The routine review's start time is unknown — refusing to evaluate verdict without a stale-comment floor"
+          DONE="${{ needs.claude-review.outputs.done }}"
+          if [ -z "$FLOOR" ] || [ -z "$DONE" ]; then
+            echo "::error::The routine review's start or end time is unknown — refusing to evaluate verdict without both bounds"
             echo "routine=error" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -1070,7 +1086,8 @@ jobs:
           # claude[bot]'s comments, never a deep-review comment, and takes the
           # LAST line holding 🔴 or 🟢, so a recap of an older 🔴 cannot
           # false-block a 🟢.
-          gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/comments.json
+          gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/all-comments.json
+          jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)]' /tmp/all-comments.json > /tmp/comments.json
           VERDICT=$(python3 .github/scripts/review_gate.py verdict --since "$FLOOR" --tier routine \
             --marker 'Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
           echo "$VERDICT"
@@ -1152,15 +1169,23 @@ jobs:
                 echo "::notice::Claude On-Demand check $CHECK_ID is at terminal state ($EXISTING_CONCLUSION) — will not overwrite with skipped"
                 exit 0
               fi
-              # Same for a deep review asked for by hand that is still running
-              # (the Review gate holds escalated=yes with no deep result yet).
+              # Same for a deep review asked for by hand that is still running:
+              # the Review gate holds escalated=yes with no deep result yet, or
+              # (if that write failed) this check reads "Deep review running".
               GATE_NOW=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
                 --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
+              EXISTING_TITLE=$(gh api "repos/$REPO/check-runs/$CHECK_ID" --jq '.output.title // ""')
+              RUNNING=no
               case ";$GATE_NOW;" in
-                *";escalated=yes;deep=none;"*)
-                  echo "::notice::A deep review is running on $HEAD_SHA — leaving Claude On-Demand at in_progress"
-                  exit 0 ;;
+                *";escalated=yes;deep=none;"*) RUNNING=yes ;;
               esac
+              if [ "$EXISTING_STATUS" = "in_progress" ] && [ "$EXISTING_TITLE" = "Deep review running" ]; then
+                RUNNING=yes
+              fi
+              if [ "$RUNNING" = yes ]; then
+                echo "::notice::A deep review is running on $HEAD_SHA — leaving Claude On-Demand at in_progress"
+                exit 0
+              fi
               gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
                 -F status="completed" \
                 -F conclusion="skipped" \

@@ -232,7 +232,7 @@ jobs:
           if [ -n "$CHECK_ID" ]; then
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
-              -F "output[title]=Deep review in progress" \
+              -F "output[title]=Deep review running" \
               -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment."
             echo "::notice::Set existing Claude On-Demand check $CHECK_ID to in_progress"
           else
@@ -240,7 +240,7 @@ jobs:
               -F name="Claude On-Demand" \
               -F head_sha="$HEAD_SHA" \
               -F status="in_progress" \
-              -F "output[title]=Deep review in progress" \
+              -F "output[title]=Deep review running" \
               -F "output[summary]=Manual @claude trigger fired on a HEAD SHA with no prior routine run. The deep reviewer is running."
             echo "::notice::Created in_progress Claude On-Demand check on $HEAD_SHA"
           fi
@@ -641,7 +641,10 @@ jobs:
                 exit 1
               fi
             else
+              # The write may have landed or not, and the owner is unknown:
+              # fail closed like a failed read, so Claude On-Demand fails too.
               echo "$OUT"
+              DEEP=error
               STATUS=1
             fi
           fi
