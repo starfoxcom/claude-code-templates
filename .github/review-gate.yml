@@ -47,8 +47,12 @@ fallback:
 # self-hosted runner that is not wiped between jobs it can leave files or
 # processes behind for the review; keep such checks on hosted or one-job
 # runners. Empty: none. This repo: its template and page checks.
+# attribution: on scans the lines a PR adds for AI-attribution markers
+# (co-author lines, "generated with" footers, vendor links), and the
+# reviewer checks the commits and the PR body for them; off skips both.
 prescreen:
   dir: .github/review-checks
+  attribution: on
 
 # The project's own deep-review triggers, on top of the gate's: path globs
 # (comma separated, any case; `*` crosses folders, a trailing `/` covers a
@@ -60,7 +64,12 @@ prescreen:
 # so a trigger on such a file never fires; list its path under
 # triage.always_review too. Empty: none. This repo: the templates every bind
 # ships, the page and its source.
+# auto: on lets the routine review ask for the deep review by itself: on
+# these triggers, on the gate's own files, and when it judges one needed.
+# off leaves every deep review to a person's `@claude review this PR`
+# comment, and the triggers are not used.
 escalate:
+  auto: on
   paths: _core/, redesign/, index.html
   patterns:
 
