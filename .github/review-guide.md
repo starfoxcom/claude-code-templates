@@ -18,7 +18,7 @@ The project's own part of the review prompt. Both review tiers read this file fr
 
 ## Also escalate when the diff includes
 
-These escalate on their own: the gate's own files in every project (`.github/scripts/**`, `.github/review-gate.yml`, the review workflows and the project's check folder), and this repo's trigger paths in `.github/review-gate.yml` (`escalate.paths`: `_core/`, `redesign/`, `index.html`). Mark these for escalation too:
+These escalate on their own: the gate's own files in every project (`.github/scripts/**`, `.github/review-gate.yml`, this guide, the review workflows and the project's check folder), and this repo's trigger paths in `.github/review-gate.yml` (`escalate.paths`: `_core/`, `redesign/`, `index.html`). Mark these for escalation too:
 
 - `bundles/<n>/bundle.toggles.md` defaults changes
 - SETUP.md contract changes
