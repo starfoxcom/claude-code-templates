@@ -454,19 +454,21 @@ jobs:
 
           def shown(text):
               """A name or finding as one inert report line: control characters,
-              bytes that are not UTF-8 and backticks are escaped, so a file name
-              cannot start a line of its own in the report the reviewer trusts."""
-              return ''.join(c if c.isprintable() and c != '`' else escape(c) for c in text)
+              bytes that are not UTF-8, backticks and backslashes are escaped,
+              so a file name cannot start a line of its own in the report the
+              reviewer trusts, and two names never show the same."""
+              return ''.join(c if c.isprintable() and c not in '`\\' else escape(c) for c in text)
 
           def escape(c):
               """One character as an escape that names it exactly: a byte that
-              is not UTF-8 (a surrogate after surrogateescape) as that byte,
-              anything else by its code point."""
+              is not UTF-8 (a surrogate after surrogateescape) as \\xNN, a
+              backslash doubled, anything else by its code point as \\uNNNN or
+              \\UNNNNNNNN."""
               n = ord(c)
               if 0xDC80 <= n <= 0xDCFF:
                   return f'\\x{n - 0xDC00:02x}'
-              if n <= 0xFF:
-                  return f'\\x{n:02x}'
+              if c == '\\':
+                  return '\\\\'
               return f'\\u{n:04x}' if n <= 0xFFFF else f'\\U{n:08x}'
 
           def rename_target(sec):
