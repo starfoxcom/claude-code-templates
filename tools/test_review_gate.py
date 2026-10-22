@@ -477,10 +477,63 @@ class Settings(unittest.TestCase):
     def test_bad_settings_are_errors(self):
         for text in ["checks: three", "routine:\n  model: Bad Model", "routine:\n  effort: huge", "routine:\n  max_turns: 0",
                      "deep:\n  colour: red", "  model: x", "model claude", "checks:", "checks:  # one",
-                     "colour:", "colour:\n  model: x"]:
+                     "colour:", "colour:\n  model: x",
+                     "runner: self hosted", "runner: a,,b", "runner: $(id)", "routine:\n  fallback_effort: huge",
+                     "prescreen:\n  dir: /etc", "prescreen:\n  dir: ../x", "prescreen:\n  dir: a/../b",
+                     "prescreen:\n  dir: a b", "escalate:\n  paths: a b", "escalate:\n  paths: $x",
+                     "escalate:\n  patterns: (unclosed", "reviewer:\n  allowed_tools: Bash(rm -rf $HOME)",
+                     "reviewer:\n  allowed_tools: Bash(a \"b\")", "reviewer:\n  allowed_tools: Write",
+                     "reviewer:\n  allowed_tools: Bash(a), Edit", "reviewer:\n  allowed_tools: Bash(a(b))"]:
             with self.subTest(text=text):
                 with self.assertRaises(gate.GateError):
                     gate.settings(text)
+
+    def test_a_tier_backup_follows_the_shared_one_unless_set(self):
+        got = gate.settings("fallback:\n  model: claude-opus-5-1\n  effort: medium\ndeep:\n  fallback_effort: max\n")
+        self.assertEqual((got["routine.fallback_model"], got["routine.fallback_effort"]),
+                         ("claude-opus-5-1", "medium"))
+        self.assertEqual((got["deep.fallback_model"], got["deep.fallback_effort"]), ("claude-opus-5-1", "max"))
+
+    def test_extension_settings_take_valid_values(self):
+        text = ("runner: self-hosted, linux\nprescreen:\n  dir: .github/review-prescreen\n"
+                "escalate:\n  paths: migrations/, src/**/auth*.py\n  patterns: \\b(eval|exec)\\(\n"
+                "reviewer:\n  allowed_tools: Bash(npm run lint *), Read, Grep\n")
+        got = gate.settings(text)
+        self.assertEqual((got["runner"], got["prescreen.dir"], got["escalate.paths"], got["escalate.patterns"],
+                          got["reviewer.allowed_tools"]),
+                         ("self-hosted, linux", ".github/review-prescreen", "migrations/, src/**/auth*.py",
+                          "\\b(eval|exec)\\(", "Bash(npm run lint *), Read, Grep"))
+        self.assertEqual(gate.settings("prescreen:\n  dir:\n")["prescreen.dir"], "")
+
+
+class Escalate(unittest.TestCase):
+    VALUES = dict(gate.DEFAULTS, **{"escalate.paths": "migrations/, src/*/auth.py",
+                                    "escalate.patterns": r"\beval\("})
+
+    def test_paths_match_globs_and_folders_in_any_case(self):
+        got = gate.escalate(["Migrations/001.sql", "src/api/AUTH.py", "src/auth.py", "docs/migrations.md"], [],
+                            self.VALUES)
+        self.assertEqual(got, {"escalate": True, "paths": ["Migrations/001.sql", "src/api/AUTH.py"], "lines": []})
+
+    def test_added_lines_match_the_pattern(self):
+        got = gate.escalate(["a.py"], ["x = 1", "y = eval(s)", "evaluate(s)"], self.VALUES)
+        self.assertEqual(got, {"escalate": True, "paths": [], "lines": ["y = eval(s)"]})
+
+    def test_nothing_set_never_escalates(self):
+        self.assertEqual(gate.escalate(["migrations/1.sql"], ["eval(x)"], gate.DEFAULTS),
+                         {"escalate": False, "paths": [], "lines": []})
+
+    def test_command_reads_the_diff_and_names_what_matched(self):
+        with tempfile.TemporaryDirectory() as d:
+            files, diff, conf = (os.path.join(d, n) for n in ("files.txt", "pr.diff", "gate.yml"))
+            for path, text in ((files, "migrations/1.sql\nREADME.md\n"),
+                               (diff, "+++ b/a.py\n+y = eval(s)\n-z = eval(t)\n x = eval(u)\n"),
+                               (conf, "escalate:\n  paths: migrations/\n  patterns: eval\n")):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            r = subprocess.run([sys.executable, SCRIPT, "escalate", files, diff, "--file", conf], capture_output=True)
+        self.assertEqual((r.returncode, json.loads(r.stdout)),
+                         (0, {"escalate": True, "paths": ["migrations/1.sql"], "lines": ["y = eval(s)"]}))
 
 
 class Command(unittest.TestCase):

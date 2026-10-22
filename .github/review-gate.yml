@@ -1,25 +1,58 @@
 # Settings for the review gate (.github/scripts/review_gate.py). Every value
 # here is the default; delete a line to keep the default.
 # Unknown keys and bad values fail the gate instead of being ignored.
+# The workflows read this file from the PR's base branch, so a PR cannot
+# change the settings its own review runs under.
 
 # The "Review gate" check is always reported. "two" also keeps the older
 # "Claude On-Demand" check up to date, for branch rules that still require
 # it; "one" once they require "Review gate" alone.
 checks: one
 
-# The review that runs on every PR with reviewable files.
+# The runner label (runs-on) for the review jobs; several labels, comma
+# separated, pick a self-hosted runner ("self-hosted, linux").
+runner: ubuntu-latest
+
+# The review that runs on every PR with reviewable files. Its backup runs
+# once when the attempts on its own model fail, a usage limit included.
 routine:
   model: claude-fable-5-1
   effort: low
   max_turns: 120
+  fallback_model: claude-opus-5-5
+  fallback_effort: high
 
 # The deeper review the routine one asks for on risky diffs.
 deep:
   model: claude-fable-5-1
   effort: low
   max_turns: 120
+  fallback_model: claude-opus-5-5
+  fallback_effort: high
 
-# The backup each tier falls back to when its own model's attempts fail.
+# The backup a tier uses when its own fallback_model or fallback_effort
+# line is left out.
 fallback:
   model: claude-opus-5-5
   effort: high
+
+# A folder of the project's own pre-screen checks (*.py and *.sh), run from
+# the base branch with the changed-file list; their output joins the review
+# context, and a check that exits non-zero is reported as a violation.
+# Empty: none.
+prescreen:
+  dir:
+
+# The project's own deep-review triggers, on top of the gate's: path globs
+# (comma separated, any case; `*` crosses folders, a trailing `/` covers a
+# folder), and a Python regex matched against the lines a PR adds (no `#`,
+# which starts a comment here). Empty: none.
+escalate:
+  paths:
+  patterns:
+
+# Extra tools both reviewers may use, comma separated: Bash(...) patterns,
+# Read, Grep or Glob. A Bash pattern that runs the PR's code hands that code
+# the review's tokens; add one only when that is acceptable. Empty: none.
+reviewer:
+  allowed_tools:
