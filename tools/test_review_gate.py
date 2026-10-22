@@ -480,7 +480,7 @@ class Settings(unittest.TestCase):
                      "colour:", "colour:\n  model: x",
                      "runner: self hosted", "runner: a,,b", "runner: $(id)", "routine:\n  fallback_effort: huge",
                      "prescreen:\n  dir: /etc", "prescreen:\n  dir: ../x", "prescreen:\n  dir: a/../b",
-                     "prescreen:\n  dir: a b", "escalate:\n  paths: a b", "escalate:\n  paths: $x",
+                     "prescreen:\n  dir: a b", "prescreen:\n  dir: -x", "prescreen:\n  dir: -", "escalate:\n  paths: a b", "escalate:\n  paths: $x",
                      "escalate:\n  patterns: (unclosed", "reviewer:\n  allowed_tools: Bash(rm -rf $HOME)",
                      "reviewer:\n  allowed_tools: Bash(a \"b\")", "reviewer:\n  allowed_tools: Write",
                      "reviewer:\n  allowed_tools: Bash(a), Edit", "reviewer:\n  allowed_tools: Bash(a(b))"]:
@@ -519,6 +519,40 @@ class Escalate(unittest.TestCase):
         got = gate.escalate(["a.py"], ["x = 1", "y = eval(s)", "evaluate(s)"], self.VALUES)
         self.assertEqual(got, {"escalate": True, "paths": [], "lines": ["y = eval(s)"]})
 
+    def test_added_lines_come_from_the_hunks_only(self):
+        diff = ("diff --git a/a.c b/a.c\n--- a/a.c\n+++ b/a.c\n@@ -1,3 +1,4 @@\n ctx\n-old\n++i; eval(s);\n"
+                "++++ b/x\n\\ No newline at end of file\n ctx\n"
+                "diff --git a/b.c b/b.c\nnew file mode 100644\n--- /dev/null\n+++ b/b.c\n@@ -0,0 +1 @@\n+only\n")
+        self.assertEqual(gate.added_lines(diff), ["+i; eval(s);", "+++ b/x", "only"])
+        got = gate.escalate(["a.c"], gate.added_lines(diff), self.VALUES)
+        self.assertEqual(got["lines"], ["+i; eval(s);"])
+
+    def test_one_pair_of_outer_quotes_is_stripped_never_more(self):
+        self.assertEqual(gate.settings("escalate:\n  patterns: '(?:\\\\.|[^'])*'\n")["escalate.patterns"],
+                         "(?:\\\\.|[^'])*")
+        self.assertEqual(gate.settings("escalate:\n  patterns: =\"\n")["escalate.patterns"], '="')
+        self.assertEqual(gate.settings("escalate:\n  patterns: \"'x'\"\n")["escalate.patterns"], "'x'")
+        for text in ("escalate:\n  patterns: \"a#b\"\n", "escalate:\n  patterns: 'x\n"):
+            with self.subTest(text=text):
+                with self.assertRaises(gate.GateError):
+                    gate.settings(text)
+
+    def test_command_keeps_a_carriage_return_inside_an_added_line(self):
+        with tempfile.TemporaryDirectory() as d:
+            files, diff, conf = (os.path.join(d, n) for n in ("files.txt", "pr.diff", "gate.yml"))
+            for path, text in ((files, "a.py\n"), (diff, "--- /dev/null\n+++ b/a.py\n@@ -0,0 +1,2 @@\n+foo\reval(x)\n+bar\n"),
+                               (conf, "escalate:\n  patterns: eval\n")):
+                with open(path, "w", encoding="utf-8", newline="") as fh:
+                    fh.write(text)
+            r = subprocess.run([sys.executable, SCRIPT, "escalate", files, diff, "--file", conf], capture_output=True)
+        self.assertEqual((r.returncode, json.loads(r.stdout)["lines"]), (0, ["foo\reval(x)"]))
+
+    def test_a_crlf_ending_does_not_dodge_an_anchored_pattern(self):
+        diff = "--- a/a.py\n+++ b/a.py\n@@ -0,0 +1,2 @@\n+eval(x)\r\n+a\rb\r\n"
+        self.assertEqual(gate.added_lines(diff), ["eval(x)", "a\rb"])
+        values = dict(gate.DEFAULTS, **{"escalate.patterns": r"eval\(x\)$"})
+        self.assertTrue(gate.escalate(["a.py"], gate.added_lines(diff), values)["escalate"])
+
     def test_nothing_set_never_escalates(self):
         self.assertEqual(gate.escalate(["migrations/1.sql"], ["eval(x)"], gate.DEFAULTS),
                          {"escalate": False, "paths": [], "lines": []})
@@ -527,9 +561,9 @@ class Escalate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             files, diff, conf = (os.path.join(d, n) for n in ("files.txt", "pr.diff", "gate.yml"))
             for path, text in ((files, "migrations/1.sql\nREADME.md\n"),
-                               (diff, "+++ b/a.py\n+y = eval(s)\n-z = eval(t)\n x = eval(u)\n"),
+                               (diff, "--- a/a.py\n+++ b/a.py\n@@ -1,2 +1,2 @@\n+y = eval(s)\n-z = eval(t)\n x = eval(u)\n"),
                                (conf, "escalate:\n  paths: migrations/\n  patterns: eval\n")):
-                with open(path, "w", encoding="utf-8") as fh:
+                with open(path, "w", encoding="utf-8", newline="") as fh:
                     fh.write(text)
             r = subprocess.run([sys.executable, SCRIPT, "escalate", files, diff, "--file", conf], capture_output=True)
         self.assertEqual((r.returncode, json.loads(r.stdout)),
