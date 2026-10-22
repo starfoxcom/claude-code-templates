@@ -376,10 +376,16 @@ jobs:
           # Local git, not `gh pr diff` — the API diff endpoint 406s past 300
           # files. The checkout above is fetch-depth 0, so the base branch is
           # present; three-dot (merge-base..HEAD) equals the PR's diff.
-          git diff "origin/$BASE...HEAD" > /tmp/pr_diff.txt
           # --no-renames lists a renamed file's old path too, so moving a file
-          # off the deep-review trigger list still counts as touching it.
-          git diff --no-renames --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
+          # off the deep-review trigger list still counts as touching it, and
+          # keys every diff section by one path. -z lists every name raw;
+          # without it git quotes names with accents, quotes or backslashes,
+          # and a quoted name misses every trigger prefix. quotePath=false
+          # keeps accented names raw in diff headers too; headers still quote
+          # names with quotes, backslashes or control characters, which the
+          # parser below unquotes.
+          git -c core.quotePath=false diff --no-renames "origin/$BASE...HEAD" > /tmp/pr_diff.txt
+          git diff -z --no-renames --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
 
           # The verdict floor for Evaluate: no review attempt of this run
           # starts before this moment, and a run this one replaced was
@@ -398,18 +404,48 @@ jobs:
 
           PR = os.environ.get('PR_NUMBER', '?')
 
-          with open('/tmp/pr_diff.txt') as f:
+          # surrogateescape keeps names that are not UTF-8 byte for byte, so
+          # the diff's names equal the list's and open() still finds them.
+          with open('/tmp/pr_diff.txt', encoding='utf-8', errors='surrogateescape') as f:
               diff = f.read()
-          with open('/tmp/changed_files.txt') as f:
-              changed = [l.strip() for l in f if l.strip()]
+          with open('/tmp/changed_files.txt', 'rb') as f:
+              changed = [p.decode('utf-8', 'surrogateescape') for p in f.read().split(b'\0') if p]
+
+          GIT_ESCAPES = {'a': 7, 'b': 8, 't': 9, 'n': 10, 'v': 11, 'f': 12, 'r': 13, '"': 34, '\\': 92}
+
+          def unquote_git_path(text):
+              """Undo git's C-style quoting: named escapes and \\ooo octal bytes."""
+              out, i = bytearray(), 0
+              while i < len(text):
+                  if text[i] == '\\' and re.fullmatch(r'[0-7]{3}', text[i + 1:i + 4]):
+                      out.append(int(text[i + 1:i + 4], 8))
+                      i += 4
+                  elif text[i] == '\\' and text[i + 1:i + 2] in GIT_ESCAPES:
+                      out.append(GIT_ESCAPES[text[i + 1]])
+                      i += 2
+                  else:
+                      out += text[i].encode('utf-8', 'surrogateescape')
+                      i += 1
+              return out.decode('utf-8', 'surrogateescape')
+
+          def header_path(line):
+              """The path in a `diff --git` header. With --no-renames both sides
+              name the same path, which splits even a name holding " b/"."""
+              rest = line[len('diff --git '):]
+              if rest.startswith('"'):
+                  m = re.match(r'"((?:[^"\\]|\\.)*)"', rest)
+                  return unquote_git_path(m.group(1))[2:] if m else None
+              size = (len(rest) - 5) // 2
+              if rest[2 + size:] == ' b/' + rest[2:2 + size]:
+                  return rest[2:2 + size]
+              return None
 
           # Parse the diff into per-file added-line sections.
           per_file_added = {}
           for sec in re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE):
-              m = re.search(r'^diff --git a/(.+?) b/', sec, re.MULTILINE)
-              if not m:
+              fname = header_path(sec.split('\n', 1)[0])
+              if fname is None:
                   continue
-              fname = m.group(1)
               added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
               per_file_added[fname] = added
 
@@ -565,7 +601,9 @@ jobs:
               gh_out.write(f"deep_paths={'true' if deep_paths else 'false'}\n")
 
           # ── Write the review context ─────────────────────────────────────────
-          with open('/tmp/review_context.md', 'w') as out:
+          # backslashreplace: a name that is not UTF-8 is written escaped
+          # instead of stopping the step.
+          with open('/tmp/review_context.md', 'w', encoding='utf-8', errors='backslashreplace') as out:
               out.write(f'# Pre-screen report for PR #{PR}\n\n')
 
               if violations:
@@ -757,6 +795,16 @@ jobs:
             | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("^[\\s#*_]*Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
             | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
+            # A verdict posted without its heading still counts as posted: a
+            # second review would bury its 🔴 under a fresh verdict. Requests,
+            # tracking comments and deep reviews are skipped, as in the gate.
+            stray=$(printf '%s' "$comments" \
+              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("🔴|🟢")) | select(test("^(@claude review this pr|\\*\\*claude |claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
+            if [ "$stray" != 0 ]; then
+              echo "halt=true" >> "$GITHUB_OUTPUT"
+              echo "::error::The credits run posted a verdict without its heading, which the gate cannot read"
+              exit 1
+            fi
             echo "::warning::The credits run posted no verdict: the review runs on the subscription"
             exit 1
           fi
@@ -940,11 +988,19 @@ jobs:
           # on count: the reviewer's, or one from someone with write access.
           # A re-run fixes it: the pre-screen makes the reviewer ask again.
           if echo "$LABELS" | grep -q "needs-deep-review"; then
-            ASKERS=$(printf '%s' "$COMMENTS" \
+            # claude.yml also starts on review bodies and review comments, and
+            # Actions' startsWith ignores case, so all three count, lower-cased.
+            # Each fetch on its own line, so a failed one stops the step.
+            REVIEWS=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews")
+            REVIEW_COMMENTS=$(gh api --paginate "repos/$REPO/pulls/$PR/comments")
+            ASKERS=$(printf '%s\n%s\n%s' "$COMMENTS" "$REVIEWS" "$REVIEW_COMMENTS" \
               | jq -s -r --arg ts "$RUN_STARTED_AT" \
-                  '[.[][] | select(.created_at >= $ts) | select(.body | startswith("@claude review this PR")) | .user.login] | unique | .[]')
+                  '[.[][] | select((.created_at // .submitted_at // "") >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr")) | .user.login] | unique | .[]')
             REQUESTED=no
-            for ASKER in $ASKERS; do
+            # Read line by line, never word-split: the bot's login ends in
+            # "[bot]", a glob that would match files the PR checkout holds.
+            while IFS= read -r ASKER; do
+              [ -n "$ASKER" ] || continue
               if [ "$ASKER" = "claude[bot]" ]; then
                 REQUESTED=yes
                 break
@@ -954,7 +1010,7 @@ jobs:
               case "$PERM" in
                 admin|maintain|write) REQUESTED=yes; break ;;
               esac
-            done
+            done <<< "$ASKERS"
             GATE_STATE=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
               --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
             if [ "$REQUESTED" = no ] && { [ -z "$GATE_STATE" ] || echo "$GATE_STATE" | grep -q "deep=none"; }; then
