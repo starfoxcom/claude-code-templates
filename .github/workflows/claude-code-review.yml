@@ -1408,7 +1408,7 @@ jobs:
                 -F status="completed" \
                 -F conclusion="skipped" \
                 -F "output[title]=Deep review skipped — diff non-reviewable" \
-                -F "output[summary]=Triage classified the diff as non-reviewable (docs, rules, manifest tweaks). Deep review not applicable."
+                -F "output[summary]=Triage classified the diff as non-reviewable (only Markdown, images and fonts outside the deep-review folders). Deep review not applicable."
               echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (non-reviewable diff)"
             else
               # Self-heal: init-gate didn't create the check (Checks API 5xx,
