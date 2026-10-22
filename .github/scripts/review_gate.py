@@ -27,9 +27,14 @@ The two workflows can write at the same moment, and a write carries the whole
 state as its writer read it, so one can wipe the other's facts. Two rules make
 that harmless:
   - Each tier's facts carry the --order of the step that wrote them,
-    RUN_ID.ATTEMPT.STEP (routine_by for triage and routine, deep_by for deep).
-    A write from an older run never replaces a newer run's facts, so a
-    cancelled deep run cannot undo the run that replaced it.
+    RUN.ATTEMPT.STEP (routine_by for triage and routine, deep_by for deep),
+    compared as numbers, field by field. RUN is whatever makes the run that
+    counts the newest within its tier: the routine workflow uses its run id,
+    and the deep workflow uses the moment its review job started, in
+    nanoseconds, since its newest run cancels the one in flight. The two tiers'
+    stamps are never compared with each other. A write from an older run never
+    replaces a newer run's facts, so a cancelled deep run cannot undo the run
+    that replaced it.
   - After writing, upsert reads the check back twice, a few seconds apart, and
     writes again when its own facts are gone.
 
@@ -200,7 +205,7 @@ def gate(state_text, triage=None, routine=None, escalated=False, deep=None, orde
     With `order`, a tier's facts are set only when no newer run wrote them."""
     state = parse_state(state_text)
     if order is not None and not ORDER.fullmatch(order):
-        raise GateError("--order must be RUN_ID.ATTEMPT.STEP")
+        raise GateError("--order must be RUN.ATTEMPT.STEP, three numbers")
     for key, value in (("triage", triage), ("routine", routine), ("deep", deep)):
         if value is None:
             continue
