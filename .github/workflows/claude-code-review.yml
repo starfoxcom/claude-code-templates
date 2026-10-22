@@ -205,7 +205,7 @@ jobs:
 
         The review runs on the base branch's config, so in your working folder the top-level `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc` and `.husky/` hold the base branch's copies: read the PR's version of any of those with `git show HEAD:<path>`, never with Read.
 
-        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history. If the diff shows a file as binary (the pre-screen's `BINARY_IN_DIFF` names them), Read that file in full: a single NUL byte makes git hide a code file that way.
+        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history. If the diff shows a file as binary (the pre-screen's `BINARY_IN_DIFF` names them), Read that file in full (for the base-config paths above, `git show HEAD:<path>` instead): a single NUL byte makes git hide a code file that way.
 
         **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Read architecture-critical files in full (with `git show HEAD:<path>` for the base-config paths above); use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks`, `gh pr comment` on this PR, the exact `gh pr edit … --add-label needs-deep-review` command from Step 4, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied.
 
@@ -322,7 +322,7 @@ jobs:
 
         **Out of scope:** <list of intentional deferrals>
 
-        If the diff shows a file as binary, Read that file in full in the working folder: a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way. The review runs on the base branch's config, so in your working folder the top-level `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc` and `.husky/` hold the base branch's copies: read the PR's version of any of those with `git show HEAD:<path>`, never with Read.
+        If the diff shows a file as binary, Read that file in full in the working folder (for the base-config paths below, `git show HEAD:<path>` instead): a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way. The review runs on the base branch's config, so in your working folder the top-level `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc` and `.husky/` hold the base branch's copies: read the PR's version of any of those with `git show HEAD:<path>`, never with Read.
 
         **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
         - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
@@ -663,7 +663,7 @@ jobs:
           MEDIA = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.ttf', '.otf', '.woff', '.woff2')
           binary = [s[4:] for s in stats if s.startswith('-\t-\t') and not s[4:].lower().endswith(MEDIA)]
           if binary:
-              warnings.append(f'BINARY_IN_DIFF: {", ".join(binary)} — git diff shows these as binary; Read each one in full')
+              warnings.append(f'BINARY_IN_DIFF: {", ".join(binary)} — git diff shows these as binary; Read each one in full (git show HEAD:<path> for the base-config paths)')
 
           # ── Check 5: Categorize files ────────────────────────────────────────
           # Everything triage always reviews (review_gate.ALWAYS_REVIEWED, in
