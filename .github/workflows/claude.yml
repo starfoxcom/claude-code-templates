@@ -52,10 +52,18 @@ jobs:
     # comments may quote the phrase when discussing the filter itself (e.g.
     # listing invariants for the deep tier to verify). Using `!contains` here would
     # reject any such quote and silently block the deep tier from firing.
+    #
+    # Asker filter, here and not only in a step: a run that passes this `if:`
+    # joins the concurrency group below and cancels the deep run in flight.
+    # Only the routine reviewer (claude[bot]) or the repo's owner, members and
+    # collaborators get past it; the Resolve step then checks for write access.
     if: |
-      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working')) ||
-      (github.event_name == 'pull_request_review' && startsWith(github.event.review.body, '@claude review this PR') && !startsWith(github.event.review.body, 'Claude Code is working'))
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working') &&
+        (github.event.comment.user.login == 'claude[bot]' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) ||
+      (github.event_name == 'pull_request_review_comment' && startsWith(github.event.comment.body, '@claude review this PR') && !startsWith(github.event.comment.body, 'Claude Code is working') &&
+        (github.event.comment.user.login == 'claude[bot]' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))) ||
+      (github.event_name == 'pull_request_review' && startsWith(github.event.review.body, '@claude review this PR') && !startsWith(github.event.review.body, 'Claude Code is working') &&
+        (github.event.review.user.login == 'claude[bot]' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)))
     # CRITICAL: this MUST live at the job level (not workflow level). The
     # action's own progress comment ("Claude Code is working…") contains the
     # `@claude` substring, so workflow-level concurrency would accept it and
@@ -79,9 +87,12 @@ jobs:
       # (success/failure based on verdict).
       checks: write
     steps:
+      # No token left in .git/config: the review steps read files from this
+      # folder while acting on PR content. Fetches pass the token per command.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # ── Resolve PR HEAD SHA once for downstream Checks API calls ──────────
       # claude.yml fires on issue_comment events, where the PR head SHA is
@@ -104,7 +115,9 @@ jobs:
           # comment leaves no head commit, so no later step touches the gate
           # checks: a stranger's comment cannot hold or fail a PR's gate.
           if [ "$ASKER" != "claude[bot]" ]; then
-            PERM=$(gh api "repos/${{ github.repository }}/collaborators/$ASKER/permission" --jq .permission 2>/dev/null || echo none)
+            # A failed lookup stops the run: it must not read as "no access" and
+            # silently drop a maintainer's request.
+            PERM=$(gh api "repos/${{ github.repository }}/collaborators/$ASKER/permission" --jq .permission)
             case "$PERM" in
               admin|maintain|write) ;;
               *)
@@ -124,7 +137,11 @@ jobs:
 
       # The gate's script and settings from the PR's base commit, kept outside
       # the checkout: the review steps switch the checkout to the PR's own
-      # code, and on review events the checkout already is the PR's.
+      # code, and on review events the checkout already is the PR's. Read
+      # from local history (the checkout has every branch), fetching the base
+      # commit only when it moved since. The script's path is written before
+      # the settings are read, so a bad settings file still leaves Evaluate a
+      # script to fail the gate with.
       - name: Fetch the gate script and settings
         id: gate
         if: steps.pr-head.outputs.head_sha != ''
@@ -132,30 +149,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ steps.pr-head.outputs.base_sha }}
         run: |
-          set -o pipefail
-          REPO="${{ github.repository }}"
           dir="$RUNNER_TEMP/gate"
           mkdir -p "$dir"
-          gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$REPO/contents/.github/scripts/review_gate.py?ref=$BASE_SHA" > "$dir/review_gate.py"
-          # No settings file means the defaults; any other failure stops here.
-          if ! err=$(gh api -H "Accept: application/vnd.github.raw" \
-              "repos/$REPO/contents/.github/review-gate.yml?ref=$BASE_SHA" 2>&1 > "$dir/review-gate.yml"); then
-            if ! printf '%s' "$err" | grep -q "HTTP 404"; then
-              echo "::error::Could not fetch the gate settings: $err"
-              exit 1
-            fi
-            rm -f "$dir/review-gate.yml"
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            echo "::add-mask::$auth"
+            git -c http.extraheader="AUTHORIZATION: basic $auth" fetch --quiet --no-tags origin "$BASE_SHA"
+          fi
+          git show "$BASE_SHA:.github/scripts/review_gate.py" > "$dir/review_gate.py"
+          echo "script=$dir/review_gate.py" >> "$GITHUB_OUTPUT"
+          # No settings file means the defaults.
+          if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
+            git show "$BASE_SHA:.github/review-gate.yml" > "$dir/review-gate.yml"
           fi
           if ! out=$(python3 "$dir/review_gate.py" settings --file "$dir/review-gate.yml"); then
             echo "::error::Bad review gate settings: $out"
             exit 1
           fi
           printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
-          echo "script=$dir/review_gate.py" >> "$GITHUB_OUTPUT"
 
       # ── Upsert Claude On-Demand check to in_progress ──────────────────────
-      # claude-code-review.yml's init-deep-check job created the check at
+      # claude-code-review.yml's init-gate job created the check at
       # status=in_progress; routine auto-escalation may have already PATCHed
       # the title to "Deep review in progress". For manual `@claude review
       # this PR` triggers without a prior routine run on this HEAD SHA, the
@@ -170,7 +184,7 @@ jobs:
         run: |
           python3 "${{ steps.gate.outputs.script }}" upsert --repo "${{ github.repository }}" \
             --sha "${{ steps.pr-head.outputs.head_sha }}" --escalated --deep none \
-            --note "A deep review is running."
+            --order "${{ github.run_id }}.${{ github.run_attempt }}.0" --note "A deep review is running."
 
       - name: Upsert Claude On-Demand check to in_progress
         if: steps.pr-head.outputs.head_sha != '' && steps.gate.outputs.checks == 'two'
@@ -227,6 +241,7 @@ jobs:
           EFFORT: ${{ steps.gate.outputs.deep_effort }}
           MAX_TURNS: ${{ steps.gate.outputs.deep_max_turns }}
           REQUEST: ${{ github.event.comment.body || github.event.review.body }}
+          FETCH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ -z "$ANTHROPIC_API_KEY" ]; then
@@ -246,7 +261,9 @@ jobs:
             git worktree remove --force "$wt" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          git fetch --quiet --no-tags origin "$HEAD_SHA" "$BASE_SHA"
+          auth=$(printf 'x-access-token:%s' "$FETCH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" fetch --quiet --no-tags origin "$HEAD_SHA" "$BASE_SHA"
           git worktree add --quiet --detach "$wt" "$HEAD_SHA"
           for p in .claude .mcp.json .claude.json .gitmodules .ripgreprc CLAUDE.md CLAUDE.local.md .husky; do
             rm -rf "${wt:?}/$p"
@@ -546,10 +563,18 @@ jobs:
           echo "Deep verdict: $DEEP (reviewer: $REVIEWER; $ATTEMPTS)"
 
           STATUS=0
-          python3 "$GATE" upsert --repo "$REPO" --sha "$HEAD_SHA" --escalated --deep "$DEEP" \
-            --note "Deep reviewer: $REVIEWER." || STATUS=1
+          if [ -z "$GATE" ]; then
+            echo "::error::The gate script could not be read from the PR's base commit, so the Review gate was not updated"
+            STATUS=1
+          else
+            python3 "$GATE" upsert --repo "$REPO" --sha "$HEAD_SHA" --escalated --deep "$DEEP" \
+              --order "${{ github.run_id }}.${{ github.run_attempt }}.1" --note "Deep reviewer: $REVIEWER." || STATUS=1
+          fi
 
-          if [ "$CHECKS" = "two" ]; then
+          # Unknown settings (they failed to load) count as `two`: a Claude
+          # On-Demand check that exists must not keep a passing state while
+          # the deep review it stands for never ran.
+          if [ "$CHECKS" = "two" ] || [ -z "$CHECKS" ]; then
             RETRY="re-trigger with a comment starting with \`@claude review this PR — depth pass on <focus>\`"
             case "$DEEP" in
               pass)
@@ -573,10 +598,10 @@ jobs:
             CHECK_ID=$(gh api \
               "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
               --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty') || CHECK_ID=""
-            if [ -z "$CHECK_ID" ]; then
+            if [ -z "$CHECK_ID" ] && [ -n "$CHECKS" ]; then
               echo "::error::Claude On-Demand check not found on $HEAD_SHA — Upsert step must have failed"
               STATUS=1
-            else
+            elif [ -n "$CHECK_ID" ]; then
               gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
                 -F status="completed" \
                 -F conclusion="$CONCLUSION" \

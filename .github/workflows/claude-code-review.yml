@@ -10,8 +10,10 @@
 #   • Routine verdict, no escalation   → success or failure
 #   • Routine escalates                → in_progress until the deep verdict (claude.yml)
 #   • A missing verdict or an error    → failure (fail closed)
-# The check stores each tier's result in its external_id, so this workflow and
-# claude.yml can finish in either order and the last one still decides right.
+# The check stores each tier's result in its external_id, stamped with the run
+# step that wrote it, and every write is read back and redone if another one
+# wiped it. So this workflow and claude.yml can finish in either order, or at
+# the same moment, and the gate still holds both results.
 #
 # The older pair stays for branch rules that still require it: the
 # "Evaluate review outcome" job reports either way, and `checks: two` in the
@@ -80,14 +82,16 @@ jobs:
           fi
           printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
 
-      # Re-running this job keeps whatever the gate already holds: upsert with
-      # no facts rewrites the stored decision unchanged.
+      # Each run starts the routine tier over: until this run's verdict lands,
+      # the gate waits, even on a re-run after an earlier verdict. Facts from
+      # a deep review are kept.
       - name: Create the Review gate check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 .github/scripts/review_gate.py upsert --repo "${{ github.repository }}" \
-            --sha "${{ github.event.pull_request.head.sha }}"
+            --sha "${{ github.event.pull_request.head.sha }}" \
+            --routine pending --order "${{ github.run_id }}.${{ github.run_attempt }}.0"
 
       - name: Create Claude On-Demand check at in_progress on PR HEAD SHA
         if: steps.settings.outputs.checks == 'two'
@@ -220,6 +224,8 @@ jobs:
         - SETUP.md contract changes
         - `_core/project-template/.github/workflows/*.template` (canonical CI)
 
+        **Always mark, too, when the pre-screen report says a deep review is owed** (the PR already carries `needs-deep-review` from an earlier push). The deep check waits on every new head until a deep pass runs on it, so skipping Step 4 here leaves the PR blocked with nothing coming, and the workflow fails this run.
+
         **Do NOT mark for escalation:** docs, comments, formatting, naming nits, "consider extracting", pure refactors with no behavior change.
 
         ## Step 3 — Post the verdict comment FIRST
@@ -268,7 +274,7 @@ jobs:
         A depth-pass request follows in the next comment.
         ```
 
-        For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the trigger comment in Step 4 already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4.
+        For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the trigger comment in Step 4 already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4. The one exception is an owed deep review: never skip Step 4 then. Name what changed since the last deep pass, and ask the deep tier to confirm the new head.
 
         🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for the deep tier). Binary verdict + optional 🟡 section are independent dimensions.
 
@@ -883,13 +889,28 @@ jobs:
 
           # Backstop: while the label is on, the deep check waits on this head
           # until a deep run reports. With no deep-review request since this
-          # run started (from the reviewer or a person) and no deep result yet,
-          # nothing would ever start one: fail loudly instead of a silent wait.
+          # run started and no deep result yet, nothing would ever start one:
+          # fail loudly instead of a silent wait. Only requests claude.yml acts
+          # on count: the reviewer's, or one from someone with write access.
           # A re-run fixes it: the pre-screen makes the reviewer ask again.
           if echo "$LABELS" | grep -q "needs-deep-review"; then
-            REQUESTS=$(printf '%s' "$COMMENTS"               | jq -s -r --arg ts "$RUN_STARTED_AT"                   '[.[][] | select(.created_at >= $ts) | select(.body | startswith("@claude review this PR"))] | length')
-            GATE_STATE=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100"               --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
-            if [ "$REQUESTS" -eq 0 ] && { [ -z "$GATE_STATE" ] || echo "$GATE_STATE" | grep -q "deep=none"; }; then
+            ASKERS=$(printf '%s' "$COMMENTS" \
+              | jq -s -r --arg ts "$RUN_STARTED_AT" \
+                  '[.[][] | select(.created_at >= $ts) | select(.body | startswith("@claude review this PR")) | .user.login] | unique | .[]')
+            REQUESTED=no
+            for ASKER in $ASKERS; do
+              if [ "$ASKER" = "claude[bot]" ]; then
+                REQUESTED=yes
+                break
+              fi
+              PERM=$(gh api "repos/$REPO/collaborators/$ASKER/permission" --jq .permission)
+              case "$PERM" in
+                admin|maintain|write) REQUESTED=yes; break ;;
+              esac
+            done
+            GATE_STATE=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
+            if [ "$REQUESTED" = no ] && { [ -z "$GATE_STATE" ] || echo "$GATE_STATE" | grep -q "deep=none"; }; then
               echo "::error::needs-deep-review is on, but no deep review was requested this run and none has reported on $HEAD_SHA. Re-run this workflow so the reviewer requests it."
               exit 1
             fi
@@ -974,8 +995,8 @@ jobs:
           sparse-checkout-cone-mode: false
 
       # Gathers the facts; never fails on a verdict, so the next two steps
-      # both see them. A step that dies here leaves no outputs, which both
-      # read as an error.
+      # both see them. If this step dies, both read the routine tier as an
+      # error, whatever outputs it wrote before dying (the runner keeps them).
       - name: Read the routine verdict
         id: routine
         env:
@@ -1028,27 +1049,36 @@ jobs:
           VERDICT=$(python3 .github/scripts/review_gate.py verdict --since "$RUN_STARTED_AT" --tier routine \
             --marker 'Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
           echo "$VERDICT"
-          echo "routine=$(printf '%s' "$VERDICT" | jq -r .verdict)" >> "$GITHUB_OUTPUT"
+          ROUTINE=$(printf '%s' "$VERDICT" | jq -r .verdict)
           LABELS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
+          # The verdict is written last, so it never stands without the label
+          # read that tells whether a deep review was asked for.
           if echo "$LABELS" | grep -q "needs-deep-review"; then
             echo "escalated=true" >> "$GITHUB_OUTPUT"
           fi
+          echo "routine=$ROUTINE" >> "$GITHUB_OUTPUT"
 
       - name: Update the Review gate
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          READ: ${{ steps.routine.outcome }}
           TRIAGE: ${{ steps.routine.outputs.triage || 'reviewable' }}
           ROUTINE: ${{ steps.routine.outputs.routine || (steps.routine.outputs.triage != 'skip' && 'error' || '') }}
           ESCALATED: ${{ steps.routine.outputs.escalated }}
           REVIEWER: ${{ needs.claude-review.outputs.reviewer }}
         run: |
+          if [ "$READ" != "success" ]; then
+            TRIAGE=reviewable
+            ROUTINE=error
+          fi
           ARGS=(--triage "$TRIAGE")
           if [ -n "$ROUTINE" ]; then ARGS+=(--routine "$ROUTINE"); fi
           if [ "$ESCALATED" = "true" ]; then ARGS+=(--escalated); fi
           if [ -n "$REVIEWER" ]; then ARGS+=(--note "Routine reviewer: $REVIEWER."); fi
           python3 .github/scripts/review_gate.py upsert --repo "${{ github.repository }}" \
-            --sha "${{ github.event.pull_request.head.sha }}" "${ARGS[@]}"
+            --sha "${{ github.event.pull_request.head.sha }}" \
+            --order "${{ github.run_id }}.${{ github.run_attempt }}.1" "${ARGS[@]}"
 
       - name: Resolve routine verdict
         if: always()
