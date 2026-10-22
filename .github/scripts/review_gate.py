@@ -69,9 +69,9 @@ DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
 # the review action's tracking comments, whose glyphs belong to other runs.
 NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude )")
 GLYPHS = re.compile("🔴|🟢")
-PHRASE = re.compile(r"🔴[\s*_]*Blocking|🟢[\s*_]*LGTM")
 # A verdict word opening a line, as written when the glyph is dropped.
 WORD = re.compile(r"^[\s*_#]*(Blocking|LGTM)\b", re.M)
+BLOCKING = re.compile(r"[\s*_#]*Blocking\b")
 VERDICTS = ("pass", "block", "missing", "error")
 STATE_VALUES = {
     "triage": ("reviewable", "skip"),
@@ -152,18 +152,16 @@ def _pick(bodies, tier, marker):
 
 
 def _line(body):
-    """The verdict line: the last stating the verdict phrase, else the last
-    holding a glyph, else one opening with a verdict word, Blocking first so
-    an unclear comment blocks."""
+    """The verdict line: the last holding a glyph. Without one, a line opening
+    with "Blocking" still blocks; a bare "LGTM" never passes, since prose like
+    "LGTM otherwise, but this must be fixed" opens the same way."""
     lines = body.splitlines()
-    for how, test in (("phrase", PHRASE.search), ("glyph", GLYPHS.search)):
-        found = [l for l in lines if test(l)]
-        if found:
-            return ("block" if "🔴" in found[-1] else "pass"), found[-1].strip(), how
-    for word, result in (("Blocking", "block"), ("LGTM", "pass")):
-        found = [l for l in lines if WORD.match(l) and WORD.match(l).group(1) == word]
-        if found:
-            return result, found[0].strip(), "word"
+    found = [l for l in lines if GLYPHS.search(l)]
+    if found:
+        return ("block" if "🔴" in found[-1] else "pass"), found[-1].strip(), "glyph"
+    found = [l for l in lines if BLOCKING.match(l)]
+    if found:
+        return "block", found[0].strip(), "word"
     return "missing", "", ""
 
 

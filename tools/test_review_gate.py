@@ -68,17 +68,22 @@ class Verdict(unittest.TestCase):
     def test_a_dropped_heading_or_glyph_is_recovered(self):
         cases = [
             # (routine comment body, verdict, line, recovered)
-            ("## Code Review — claude-code-templates\nLGTM", "pass", "LGTM", "comment by marker, line by word"),
-            ("**Code Review - claude-code-templates**\n**LGTM!** — no blocking issues", "pass",
-             "**LGTM!** — no blocking issues", "comment by marker, line by word"),
-            ("Review done.\n🟢 LGTM", "pass", "🟢 LGTM", "comment by glyph, line by phrase"),
+            ("Review done.\n🟢 LGTM", "pass", "🟢 LGTM", "comment by glyph, line by glyph"),
+            ("## Code Review — claude-code-templates\n**Blocking** — hook is not POSIX-portable", "block",
+             "**Blocking** — hook is not POSIX-portable", "comment by marker, line by word"),
             ("Review done.\n**Blocking** — race in the writer\nLGTM otherwise", "block",
              "**Blocking** — race in the writer", "comment by word, line by word"),
-            ("## Code Review — claude-code-templates\nThe 🔴 from the last pass is fixed.\n🟢 LGTM\nNext: 🟢 ship", "pass",
+            ("## Code Review — claude-code-templates\nThe 🔴 from the last pass is fixed.\n🟢 LGTM", "pass",
              "🟢 LGTM", None),
-            ("## Code Review — claude-code-templates\nno blocking issues found, LGTM overall", "missing", "", None),
+            ("## Code Review — claude-code-templates\nThe format is \"🟢 LGTM\".\n🔴 Must fix: hook is not portable",
+             "block", "🔴 Must fix: hook is not portable", None),
             ("## Code Review — claude-code-templates\nPost a binary 🔴/🟢 verdict", "block",
              "Post a binary 🔴/🟢 verdict", None),
+            # A bare LGTM never passes: prose opens the same way.
+            ("## Code Review — claude-code-templates\nLGTM", "missing", "", None),
+            ("## Code Review — claude-code-templates\nLGTM otherwise, but the END marker must be fixed", "missing", "", None),
+            ("Review done.\n**LGTM!** — no blocking issues", "missing", "", None),
+            ("## Code Review — claude-code-templates\nno blocking issues found", "missing", "", None),
         ]
         for body, result, line, recovered in cases:
             with self.subTest(body=body):
@@ -100,10 +105,13 @@ class Verdict(unittest.TestCase):
         only_request = self.pages([comment("@claude review this PR\n🟢 LGTM")])
         self.assertEqual(gate.verdict(only_request, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
 
-    def test_a_deep_verdict_word_is_recovered_too(self):
-        text = self.pages([comment("## Deep review\nAll clear.\nLGTM")])
+    def test_a_deep_verdict_without_a_glyph_only_ever_blocks(self):
+        text = self.pages([comment("## Deep review\nBlocking — race in the writer")])
         self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "deep"),
-                         {"verdict": "pass", "line": "LGTM", "recovered": "comment by marker, line by word"})
+                         {"verdict": "block", "line": "Blocking — race in the writer",
+                          "recovered": "comment by marker, line by word"})
+        bare = self.pages([comment("## Deep review\nAll clear.\nLGTM")])
+        self.assertEqual(gate.verdict(bare, "2026-10-21T09:00:00Z", "deep")["verdict"], "missing")
 
     def test_the_tiers_never_read_each_others_comments(self):
         text = self.pages([
