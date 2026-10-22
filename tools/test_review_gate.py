@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,18 +26,35 @@ class Triage(unittest.TestCase):
         self.assertTrue(gate.triage(["_core/project-template/CLAUDE.md"]))
         self.assertTrue(gate.triage(["bundles/2-multi-dev-oss/bundle.toggles.md"]))
         self.assertFalse(gate.triage(["README.md", "docs/v2/PLAN.md"]))
+        self.assertFalse(gate.triage(["assets/logo.PNG", "fonts/geist.woff2", "docs/a.jpeg"]))
         self.assertFalse(gate.triage([]))
 
-    def test_workflows_never_count_whatever_their_extension(self):
-        self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
-        self.assertTrue(gate.triage([".github/workflows/x.yml", ".github/scripts/review_gate.py"]))
+    def test_anything_but_markdown_images_and_fonts_is_reviewed(self):
+        for path in ("tools/run.sh", ".gitattributes", ".lfsconfig", "assets/logo.svg",
+                     "LICENSE", "VERSION", "index.html", "package-lock.json"):
+            with self.subTest(path=path):
+                self.assertTrue(gate.triage(["README.md", path]))
 
-    def test_deep_review_folders_count_whatever_the_file_type(self):
-        for path in (".github/scripts/json.pyc", ".github/scripts/run.sh", "redesign/notes.md",
-                     "_core/project-template/README.md", ".github/review-gate.yml"):
+    def test_only_the_review_workflows_never_count(self):
+        self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
+        self.assertFalse(gate.triage([".github/workflows/claude-code-review.yaml", "README.md"]))
+        for path in (".github/workflows/helper.sh", ".github/workflows/lib/action.yml", ".github/workflows/sub/x.py",
+                     ".github/workflows/tests.yml", ".github/workflows/pages.yaml", ".github/workflows/claude.yml",
+                     ".github/workflows/claude-deploy.yml", ".github/workflows/sub/claude-code-review.yml"):
             with self.subTest(path=path):
                 self.assertTrue(gate.triage([path]))
-        self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md"]))
+
+    def test_always_reviewed_paths_count_whatever_the_file_type(self):
+        for path in (".github/scripts/json.pyc", ".github/scripts/run.sh", "redesign/notes.md",
+                     "_core/project-template/README.md", ".github/review-gate.yml", "SETUP.md",
+                     "CLAUDE.md", "engine/CLAUDE.md", ".claude/rules/git.md", ".claude/skills/find/SKILL.md",
+                     "bundles/1-solo-personal/bundle.toggles.md", "_core/x/logo.png",
+                     "_Core/project-template/.claude/rules/zz.md", "Bundles/x/bundle.toggles.md", "setup.MD",
+                     "TOGGLES.md", "COMPARISON.md", "CLAUDE.local.md", "engine/claude.LOCAL.md",
+                     "engine/.claude/skills/x/SKILL.md", "a/b/.Claude/rules/r.md"):
+            with self.subTest(path=path):
+                self.assertTrue(gate.triage([path]))
+        self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md", "docs/a.claude/x.md", "docs/xclaude.md"]))
 
     def test_an_incomplete_listing_is_reviewed(self):
         self.assertTrue(gate.triage(["README.md"], incomplete=True))
@@ -65,6 +83,63 @@ class Verdict(unittest.TestCase):
         self.assertEqual(gate.verdict(none, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
         self.assertEqual(gate.verdict("", "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
 
+    def test_a_long_run_of_markup_reads_in_linear_time(self):
+        # A comment can be 65,536 characters; a pattern that backtracks over
+        # every split of a run would hang the verdict step.
+        for seed in (" ", "_", "*", "#", "-", "[ ]", ":", "—", "> ", "`a`", "x"):
+            line = (seed * 60000)[:60000]
+            started = time.perf_counter()
+            gate._line("## Deep review\n" + line + "Blockin\n🟢 LGTM")
+            gate._line(line)
+            self.assertLess(time.perf_counter() - started, 2, repr(seed))
+
+    def test_the_actions_footer_under_the_verdict_is_skipped(self):
+        for tail in ("", "\n\n---\n[View job](https://github.com/o/r/actions/runs/1) · "
+                     "[Branch](https://github.com/o/r/tree/b)", "\n · `fix/x`", "\n• [Branch](https://github.com/o/r/tree/b)  ",
+                     "\n---\n[View job](https://github.com/o/r/actions/runs/1)\n***",
+                     "\n\n---\n · branch [`feat/x`](https://github.com/o/r/tree/feat/x)", "\n--- · `chore/x`",
+                     "\n · `fix/x` ·", "\n• Branch: `fix/x`", "\n ·", "\n--- · [branch](https://github.com/o/r/tree/b)",
+                     "\n[View job](https://github.com/o/r/actions/runs/1) · Branch: [`b`](https://github.com/o/r/tree/b)"):
+            body = "**Claude finished**\n\n🟢 LGTM" + tail
+            self.assertEqual(gate._line(body)[:2], ("pass", "🟢 LGTM"), tail)
+        body = "**Claude finished**\n\n## 🟢 All clear\nVerdict = Blocking\n---\n[View job](https://github.com/o/r/actions/runs/1)"
+        self.assertEqual(gate._line(body)[0], "missing")
+
+    def test_a_trailing_line_with_words_is_the_last_line(self):
+        # Only lines that say nothing are skipped: an open item, a bullet with
+        # words or a link followed by text ends the comment and is missing.
+        for tail in ("\n- [ ] `a.py:12` drops the filter, fix before merge", "\n- [x] Post verdict",
+                     "\n• Actually this needs changes: a.py:12", "\n· request changes: fix a.py",
+                     "\n---\n• Request changes", "\n[View job](https://github.com/o/r/actions/runs/1) request changes",
+                     "\n· `fix/x` must change", "\n[Docs](https://example.com/x)", "\n· `must fix a.py`",
+                     "\n· [fix this](https://github.com/o/r/pull/1)", "\n***bold claim***",
+                     "\n`DO-NOT-MERGE`", "\n[Changes_requested](https://github.com/o/r/pull/1)",
+                     "\n--- `wip`", "\n· `must-fix-a.py:12`", "\n· [Changes](https://github.com/o/r/pull/1)"):
+            body = "## Code Review — claude-code-templates\n### 🟢 All clear on hooks" + tail
+            self.assertEqual(gate._line(body)[0], "missing", tail)
+        # A glyph anywhere in a link keeps the line: it is never a footer.
+        for tail in ("\n · [View job](https://github.com/o/r🔴/actions/runs/1)",
+                     "\n · [`b`](https://github.com/o🔴/r/tree/b)"):
+            self.assertEqual(gate._line("## Deep review\n🟢 LGTM" + tail)[0], "block", tail)
+
+    def test_a_red_on_the_last_glyph_line_blocks_without_a_verdict_line(self):
+        # Never missing: a missing deep verdict starts a second review that
+        # could bury the 🔴.
+        for body, line in (
+                ("## Deep review\nx\n**Verdict — 🔴 request changes**\n\nHappy to re-check after a fix.",
+                 "**Verdict — 🔴 request changes**"),
+                ("## Deep review\nx\nVerdict: 🔴 the writer races in a.py:40\nHappy to re-check.",
+                 "Verdict: 🔴 the writer races in a.py:40"),
+                ("## Deep review\n🟢 hooks\nFinal verdict 🔴 — a.py:40 races\n- [x] Post verdict",
+                 "Final verdict 🔴 — a.py:40 races")):
+            self.assertEqual(gate._line(body), ("block", line, "glyph"))
+        self.assertEqual(gate._line("## Deep review\nVerdict: 🔴 x\n🟢 hooks are fine\nThanks")[0], "missing")
+
+    def test_a_quoted_verdict_is_not_this_reviews_verdict(self):
+        body = "## Deep review\nThe writer races in a.py:40; this must be fixed.\nThe routine review said:\n> 🟢 LGTM"
+        self.assertEqual(gate._line(body)[0], "missing")
+        self.assertEqual(gate._line("## Deep review\n> 🔴 Blocking — x")[0], "block")
+
     def test_the_last_glyph_line_decides_and_a_glyphless_blocking_blocks(self):
         head = "## Code Review — claude-code-templates\n"
         alone = "no 🔴/🟢 line; a line opening with Blocking"
@@ -77,7 +152,9 @@ class Verdict(unittest.TestCase):
             (head + "The 🔴 from the last pass is fixed.\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "The format is \"🟢 LGTM\".\n🔴 Must fix: hook is not portable", "block",
              "🔴 Must fix: hook is not portable", None),
+            # No line opens with a glyph: a 🔴 on the last glyph line still blocks.
             (head + "Post a binary 🔴/🟢 verdict", "block", "Post a binary 🔴/🟢 verdict", None),
+            (head + "Post a binary verdict 🟢 or not", "missing", "", None),
             ("**Code Review - claude-code-templates**\n🟢 LGTM", "pass", "🟢 LGTM", None),
             # A dropped glyph next to a 🟢 elsewhere still blocks.
             (head + "**Blocking** — must fix\nOnce fixed, this is 🟢 LGTM.", "block",
@@ -97,17 +174,37 @@ class Verdict(unittest.TestCase):
             (head + "_Blocking_ — drops the filter\n🟢 LGTM", "block", "_Blocking_ — drops the filter", over),
             # A 🔴 Blocking list item between a 🟢 recap and a 🟢 heading.
             (head + "The routine tier said 🟢 LGTM.\n1. 🔴 **Blocking** — drops the filter\n"
-             "## 🟢 All clear on hooks", "block", "1. 🔴 **Blocking** — drops the filter", over),
+             "## 🟢 All clear on hooks", "block", "1. 🔴 **Blocking** — drops the filter", red),
             (head + "- 🔴 Blocking — drops the filter\n🟢 LGTM", "block",
-             "- 🔴 Blocking — drops the filter", over),
-            # A list item quoting the rule or recapping a fixed finding does
-            # not open with the glyph, whatever its bullet.
-            (head + "  - 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "* 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "+ 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "1. 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "> 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
-            (head + "- 🔴 `hook.sh:12` — raised earlier, now fixed\n🟢 LGTM", "pass", "🟢 LGTM", None),
+             "- 🔴 Blocking — drops the filter", red),
+            # A 🔴 after any bullet blocks too: prose naming a 🔴 keeps it in backticks.
+            (head + "  - 🔴 when any finding exists: checked\n🟢 LGTM", "block", "- 🔴 when any finding exists: checked", red),
+            (head + "* 🔴 when any finding exists: checked\n🟢 LGTM", "block", "* 🔴 when any finding exists: checked", red),
+            (head + "+ 🔴 when any finding exists: checked\n🟢 LGTM", "block", "+ 🔴 when any finding exists: checked", red),
+            (head + "1. 🔴 when any finding exists: checked\n🟢 LGTM", "block", "1. 🔴 when any finding exists: checked", red),
+            (head + "> 🔴 when any finding exists: checked\n🟢 LGTM", "block", "> 🔴 when any finding exists: checked", red),
+            (head + "- 🔴 `hook.sh:12` — raised earlier, now fixed\n🟢 LGTM", "block", "- 🔴 `hook.sh:12` — raised earlier, now fixed", red),
+            (head + "- `🔴` when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # A label then "Blocking" in any case blocks; a hyphenated word does not.
+            (head + "## 🟢 All clear\n**Verdict:** blocking — must fix", "block",
+             "**Verdict:** blocking — must fix", over),
+            (head + "**VERDICT:** BLOCKING\n🟢 LGTM", "block", "**VERDICT:** BLOCKING", over),
+            (head + "- `a.py:1` — Blocking: the writer races\n🟢 LGTM", "block",
+             "- `a.py:1` — Blocking: the writer races", over),
+            (head + "Non-blocking: none\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # After a dash only "Blocking"/"BLOCKING" counts: the adjective in prose passes.
+            (head + "**Change 3 — blocking verdict output summary (~line 244):**\n🟢 LGTM",
+             "pass", "🟢 LGTM", None),
+            (head + "- Step 2 – blocking call removed\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "**Verdict** — BLOCKING\n🟢 LGTM", "block", "**Verdict** — BLOCKING", over),
+            (head + "- `a.py:1` 🔴 Blocking: race\n🟢 LGTM", "block",
+             "- `a.py:1` 🔴 Blocking: race", over),
+            (head + "\u26a0\ufe0f Blocking — race\n🟢 LGTM", "block", "\u26a0\ufe0f Blocking — race", over),
+            (head + "| [ ] " * 200 + "| ok\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # A glyph-less verdict under a 🟢 heading is missing, never a pass.
+            (head + "## 🟢 All clear on hooks\nVerdict = request changes", "missing", "", None),
+            (head + "## 🟢 All clear on hooks\n\u274c Request changes", "missing", "", None),
+            (head + "🟢 LGTM\nThanks!", "missing", "", None),
             # Bold, italics and headings are markup, not bullets: they open.
             (head + "**🔴 Blocking — the writer races**\n## 🟢 All clear on hooks", "block",
              "**🔴 Blocking — the writer races**", red),
