@@ -2,12 +2,12 @@
 
 Every PR gets an AI review with a pass or block verdict, run by `.github/workflows/`. Local sessions never start the CI reviews themselves; the one local review is the workflow-only PR path in § PRs that edit the review workflow.
 
-| Tier | Starts when | Model | Gate check |
-|---|---|---|---|
-| Routine | Every PR (`claude-code-review.yml`) | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high | `Evaluate review outcome` |
-| Deep | A comment starting with `@claude review this PR` (`claude.yml`) | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high | `Claude On-Demand` |
+| Tier | Starts when | Model |
+|---|---|---|
+| Routine | Every PR (`claude-code-review.yml`) | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high |
+| Deep | A comment starting with `@claude review this PR` (`claude.yml`), posted by the routine reviewer or by someone with write access | `claude-fable-5-1` at low effort; backup `claude-opus-5-5` at high |
 
-Both checks are required on protected branches, and branch protection has no bypass actors. With a single maintainer, require zero approvals so the two checks alone decide, since authors cannot approve their own PRs. With more people, also require one approval from someone other than the author. Docs-only and other non-reviewable diffs pass both automatically in about 30 seconds. Model pins change only after a side-by-side comparison of candidate models on the same saved PRs, never just because a newer model exists.
+Both tiers report into one check, `Review gate`, written by `.github/scripts/review_gate.py` with its settings in `.github/review-gate.yml`. It passes only when the routine review passed and, if a deep review was asked for on that head, the deep review passed too; it waits while a deep review runs, and any 🔴, missing verdict or errored run fails it. Diffs on the deep-review trigger list always owe a deep review: the workflow applies `needs-deep-review` itself and fails the routine run if no request was posted. `Review gate` is the required review check on protected branches, and branch protection has no bypass actors. With a single maintainer, require zero approvals so the gate alone decides, since authors cannot approve their own PRs. With more people, also require one approval from someone other than the author. Docs-only and other non-reviewable diffs pass automatically in about 30 seconds. Model pins change only after a side-by-side comparison of candidate models on the same saved PRs, never just because a newer model exists.
 
 ## The verdict rule (both tiers)
 
