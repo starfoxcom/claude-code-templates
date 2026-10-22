@@ -77,6 +77,8 @@ class Decide(unittest.TestCase):
             (("skip",), {}, "completed", "success"),
             (("skip",), {"deep": "pass"}, "completed", "success"),
             (("skip",), {"deep": "block"}, "completed", "failure"),
+            (("skip",), {"escalated": True}, "in_progress", None),
+            (("skip",), {"escalated": True, "deep": "pass"}, "completed", "success"),
             (("reviewable", "pass"), {}, "completed", "success"),
             (("reviewable", "block"), {}, "completed", "failure"),
             (("reviewable", "missing"), {}, "completed", "failure"),

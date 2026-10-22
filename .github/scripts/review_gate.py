@@ -140,6 +140,8 @@ def decide(triage_result, routine=None, escalated=False, deep=None):
     if triage_result == "skip":
         if deep == "pass":
             return _check("completed", "success", "Deep review 🟢", "The diff has no reviewable files and the deep review passed.")
+        if escalated:
+            return _check("in_progress", None, "Deep review in progress", "A deep review was asked for on a diff with no reviewable files.")
         return _check("completed", "success", "No review needed", "The diff has no reviewable files.")
     if routine == "pending":
         return _check("in_progress", None, "Routine review in progress", "Waiting for the routine review's verdict.")
