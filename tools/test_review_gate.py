@@ -69,6 +69,7 @@ class Verdict(unittest.TestCase):
         head = "## Code Review — claude-code-templates\n"
         alone = "no 🔴/🟢 line; a line opening with Blocking"
         over = "a line opening with Blocking outranks the 🟢 line"
+        red = "a line opening with 🔴 outranks the later 🟢 line"
         cases = [
             # (routine comment body, verdict, line, recovered)
             (head + "**Blocking** — hook is not POSIX-portable", "block",
@@ -85,7 +86,7 @@ class Verdict(unittest.TestCase):
              "Blocking: the writer races", over),
             # A verdict line with a 🟢 heading after it, and list-style tags.
             (head + "🔴 Blocking — the writer races\n## 🟢 All clear on hooks", "block",
-             "🔴 Blocking — the writer races", "a line opening with 🔴 outranks the later 🟢 line"),
+             "🔴 Blocking — the writer races", red),
             (head + "1. **Blocking** — drops the filter\n## 🟢 All clear on hooks", "block",
              "1. **Blocking** — drops the filter", over),
             (head + "- **[Blocking]** — drops the filter", "block",
@@ -103,7 +104,15 @@ class Verdict(unittest.TestCase):
             # not open with the glyph, whatever its bullet.
             (head + "  - 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "* 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "+ 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "1. 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "> 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "- 🔴 `hook.sh:12` — raised earlier, now fixed\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            # Bold, italics and headings are markup, not bullets: they open.
+            (head + "**🔴 Blocking — the writer races**\n## 🟢 All clear on hooks", "block",
+             "**🔴 Blocking — the writer races**", red),
+            (head + "*🔴 the writer races*\n🟢 LGTM", "block", "*🔴 the writer races*", red),
+            (head + "# 🔴 the writer races\n🟢 LGTM", "block", "# 🔴 the writer races", red),
             (head + "Blockings and Blockingly are not the word.\n🟢 LGTM", "pass", "🟢 LGTM", None),
             # Fails closed on a heading that opens with the word: none of the
             # repo's 513 passing verdicts to 2026-10-22 had one.
