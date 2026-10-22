@@ -732,10 +732,11 @@ jobs:
       # PR. Nothing posted (no key, credits or the workspace cap spent, the
       # exchange refused, an API error) leaves the review to the action steps
       # below, which run on the subscription exactly as before. A verdict from
-      # a run that then broke, or any other comment it posted that the gate
-      # cannot take as a verdict, sets `halt` and fails the job instead: a
+      # a run that then broke sets `halt` and fails the job instead, and so,
+      # when no verdict is found, does any other bot comment posted since the
+      # run started (outside the request and the deep run's comments): a
       # second review would post a second verdict, and Evaluate reads the
-      # newest one.
+      # newest one. Bot comments next to a found verdict are not checked.
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
         continue-on-error: true
