@@ -152,10 +152,18 @@ jobs:
           # moving a file out of a reviewable path is reviewed. A listing that
           # fails is passed on as incomplete, which the script reviews; so is
           # one that reaches the API's 3,000-file cap. Which files count, and
-          # why workflow files never do, is in the script.
+          # why workflow files never do, is in the script. A carriage return
+          # or newline in a name becomes a space, so one name stays one line:
+          # split, "tools/a<LF>.github/workflows/b.py" would read as a file
+          # with no extension and a workflow file, and skip the review. A
+          # space, unlike an escape, keeps "x.py<LF>" ending in .py once the
+          # script strips the line. Leading whitespace (anything Python's
+          # strip() removes) becomes "_", so " .github/workflows/x.py", a
+          # file in a folder named " .github", can't strip down to a
+          # workflow path.
           INCOMPLETE=""
           if ! gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" \
-              --jq '.[] | .filename, (.previous_filename // empty)' > /tmp/changed_files.txt; then
+              --jq '.[] | .filename, (.previous_filename // empty) | gsub("[\r\n]"; " ") | sub("^[\t\u000b\f\u001c-\u001f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+"; "_")' > /tmp/changed_files.txt; then
             echo "::warning::The file listing failed; treating the diff as reviewable"
             INCOMPLETE="--incomplete"
           fi
@@ -195,7 +203,7 @@ jobs:
         - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
         - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
 
-        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history.
+        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history. If the diff shows a file as binary (the pre-screen's `BINARY_IN_DIFF` names them), Read that file in full: a single NUL byte makes git hide a code file that way.
 
         **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks`, `gh pr comment` on this PR, the exact `gh pr edit … --add-label needs-deep-review` command from Step 4, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied.
 
@@ -246,7 +254,7 @@ jobs:
 
         **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
 
-        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The gate reads the verdict from your comment mechanically: the final line, starting with 🔴 or 🟢. A comment it cannot read is a MISSING verdict and the gate FAILS CLOSED. Do not count on any recovery from a different format. The emoji line is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
+        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The gate reads the verdict from your comment mechanically: the last line holding 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` blocks first, wherever it sits. A comment with no 🔴 or 🟢 line and no line opening with `Blocking` is a MISSING verdict and the gate FAILS CLOSED. Do not count on any recovery from a different format. The emoji line is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
 
         Body MUST:
         - Be titled `## Code Review — claude-code-templates`
@@ -254,12 +262,13 @@ jobs:
           - `🟢 LGTM`
           - `🔴 Blocking — must fix`
 
-        **WRONG formats — every one of these fails the gate:**
+        **WRONG formats — never post any of these** (the gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
         - `LGTM` (missing 🟢 prefix — the most common mistake; do not do this)
         - `LGTM ✅` / `✅ LGTM` (wrong emoji — parser matches 🟢 only, not ✅)
         - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
         - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule below forces 🔴)
         - Any verdict line followed by trailing prose (`🟢 LGTM, ship it!` — must be the FINAL line, nothing after)
+        - A 🟢 review that writes 🔴 or the word `Blocking` outside inline backticks (`### Blocking issues`, `**Blocking:** none`, `**🔴 …**`, `1. 🔴 Blocking …`): the gate blocks on lines like these wherever they sit, and on a 🔴 anywhere in the last line holding 🔴 or 🟢, backticks or not, so a 🟢 verdict line holds no 🔴 at all. A clean review writes neither except inside inline backticks on the same line; a line inside a fenced code block counts like any other
 
         **Self-check immediately before invoking `gh pr comment`:** Look at the literal last line of your draft body. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure on this repo is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
 
@@ -311,19 +320,22 @@ jobs:
 
         **Out of scope:** <list of intentional deferrals>
 
+        If the diff shows a file as binary, Read that file in full in the working folder: a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way.
+
         **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
         - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
         - 🔴 Blocking when ANY real finding exists, regardless of framing.
         - DROP style preferences and micro-optimisations entirely.
 
-        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically: the final line, starting with 🔴 or 🟢 — the SAME strict contract as the routine gate. A comment it cannot read is a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
+        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically — the SAME strict contract as the routine gate: the last line holding 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` blocks first, wherever it sits. A comment with no 🔴 or 🟢 line and no line opening with `Blocking` is a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
 
-        **WRONG formats — every one of these fails the deep gate:**
+        **WRONG formats — never post any of these** (the deep gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
         - `LGTM` (missing 🟢 prefix — the most common mistake)
         - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
         - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
         - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
         - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+        - A 🟢 review that writes 🔴 or the word `Blocking` outside inline backticks (`### Blocking issues`, `**Blocking:** none`, `**🔴 …**`, `1. 🔴 Blocking …`): the gate blocks on lines like these wherever they sit, and on a 🔴 anywhere in the last line holding 🔴 or 🟢, backticks or not, so a 🟢 verdict line holds no 🔴 at all. A clean review writes neither except inside inline backticks on the same line; a line inside a fenced code block counts like any other
 
         **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
 
@@ -349,6 +361,20 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # The PR's own .gitattributes must not change what the pre-screen and
+      # the reviewer read: `-diff` or `binary` shows a file as "Binary files
+      # differ", and working-tree-encoding, filter (git-lfs is installed on
+      # the runner, and the PR controls .lfsconfig) or ident rewrite the
+      # checked-out bytes.
+      # .git/info/attributes outranks every .gitattributes and is shared by
+      # the credits reviewer's worktree; the checkout is then redone under it.
+      # A NUL byte still makes git call a file binary: the pre-screen warns.
+      - name: Override the PR's git attributes
+        run: |
+          mkdir -p .git/info
+          printf '%s\n' '* !diff -text !eol !working-tree-encoding !filter !ident' > .git/info/attributes
+          git rm -rq --cached --ignore-unmatch . && git reset -q --hard
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -376,10 +402,28 @@ jobs:
           # Local git, not `gh pr diff` — the API diff endpoint 406s past 300
           # files. The checkout above is fetch-depth 0, so the base branch is
           # present; three-dot (merge-base..HEAD) equals the PR's diff.
-          git diff "origin/$BASE...HEAD" > /tmp/pr_diff.txt
-          # --no-renames lists a renamed file's old path too, so moving a file
-          # off the deep-review trigger list still counts as touching it.
-          git diff --no-renames --name-only "origin/$BASE...HEAD" > /tmp/changed_files.txt
+          # The name list uses --no-renames, so a renamed file's old path is
+          # listed too and moving a file off the deep-review trigger list still
+          # counts as touching it. The content diff keeps rename detection, so
+          # a moved file's unchanged text is not read as added; its section is
+          # keyed by the "rename to" path. -z lists every name raw;
+          # without it git quotes names with accents, quotes or backslashes,
+          # and a quoted name misses every trigger prefix. quotePath=false
+          # keeps accented names raw in diff headers too; headers still quote
+          # names with quotes, backslashes or control characters, which the
+          # parser below unquotes.
+          # --text, --no-ext-diff, --no-textconv: the checkout is the PR's, so
+          # its .gitattributes could mark every file binary or route it through
+          # a filter, and the scans below would read an empty diff.
+          # --ignore-submodules=none: its .gitmodules could set `ignore = all`
+          # on a submodule under a trigger folder and hide it from both lists.
+          git -c core.quotePath=false diff --text --no-ext-diff --no-textconv \
+            --ignore-submodules=none "origin/$BASE...HEAD" > /tmp/pr_diff.txt
+          git diff -z --no-renames --name-only --ignore-submodules=none \
+            "origin/$BASE...HEAD" > /tmp/changed_files.txt
+          # Without --text, as the reviewer's own `git diff` runs: "-" counts
+          # mark the files it will show as binary.
+          git diff -z --no-renames --diff-filter=d --numstat "origin/$BASE...HEAD" > /tmp/numstat.txt
 
           # The verdict floor for Evaluate: no review attempt of this run
           # starts before this moment, and a run this one replaced was
@@ -398,23 +442,96 @@ jobs:
 
           PR = os.environ.get('PR_NUMBER', '?')
 
-          with open('/tmp/pr_diff.txt') as f:
+          # surrogateescape keeps names that are not UTF-8 byte for byte, so
+          # the diff's names equal the list's and open() still finds them.
+          # newline='': only git's own \n ends a diff line. Text mode would turn
+          # a lone \r inside an added line into a break, and the text after it
+          # would lose its "+" and skip every scan.
+          with open('/tmp/pr_diff.txt', encoding='utf-8', errors='surrogateescape', newline='') as f:
               diff = f.read()
-          with open('/tmp/changed_files.txt') as f:
-              changed = [l.strip() for l in f if l.strip()]
+          with open('/tmp/changed_files.txt', 'rb') as f:
+              changed = [p.decode('utf-8', 'surrogateescape') for p in f.read().split(b'\0') if p]
+
+          GIT_ESCAPES = {'a': 7, 'b': 8, 't': 9, 'n': 10, 'v': 11, 'f': 12, 'r': 13, '"': 34, '\\': 92}
+
+          def unquote_git_path(text):
+              """Undo git's C-style quoting: named escapes and \\ooo octal bytes."""
+              out, i = bytearray(), 0
+              while i < len(text):
+                  if text[i] == '\\' and re.fullmatch(r'[0-7]{3}', text[i + 1:i + 4]):
+                      out.append(int(text[i + 1:i + 4], 8))
+                      i += 4
+                  elif text[i] == '\\' and text[i + 1:i + 2] in GIT_ESCAPES:
+                      out.append(GIT_ESCAPES[text[i + 1]])
+                      i += 2
+                  else:
+                      out += text[i].encode('utf-8', 'surrogateescape')
+                      i += 1
+              return out.decode('utf-8', 'surrogateescape')
+
+          def header_path(line):
+              """The path in a `diff --git` header. Outside renames (keyed by
+              rename_target) both sides name the same path, which splits even a
+              name holding " b/"."""
+              rest = line[len('diff --git '):]
+              if rest.startswith('"'):
+                  m = re.match(r'"((?:[^"\\]|\\.)*)"', rest)
+                  return unquote_git_path(m.group(1))[2:] if m else None
+              size = (len(rest) - 5) // 2
+              if rest[2 + size:] == ' b/' + rest[2:2 + size]:
+                  return rest[2:2 + size]
+              return None
+
+          def shown(text):
+              """A name or finding as one inert report line: control characters,
+              bytes that are not UTF-8, backticks and backslashes are escaped,
+              so a file name cannot start a line of its own in the report the
+              reviewer trusts, and two names never show the same."""
+              return ''.join(c if c.isprintable() and c not in '`\\' else escape(c) for c in text)
+
+          def escape(c):
+              """One character as an escape that names it exactly: a byte that
+              is not UTF-8 (a surrogate after surrogateescape) as \\xNN, a
+              backslash doubled, anything else by its code point as \\uNNNN or
+              \\UNNNNNNNN."""
+              n = ord(c)
+              if 0xDC80 <= n <= 0xDCFF:
+                  return f'\\x{n - 0xDC00:02x}'
+              if c == '\\':
+                  return '\\\\'
+              return f'\\u{n:04x}' if n <= 0xFFFF else f'\\U{n:08x}'
+
+          def rename_target(sec):
+              """The new path of a renamed file, from its "rename to" line."""
+              m = re.search(r'^rename to (.*)$', sec.split('\n@@', 1)[0], re.MULTILINE)
+              if not m:
+                  return None
+              name = m.group(1)
+              return unquote_git_path(name[1:-1]) if name.startswith('"') else name
 
           # Parse the diff into per-file added-line sections.
-          per_file_added = {}
-          for sec in re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE):
-              m = re.search(r'^diff --git a/(.+?) b/', sec, re.MULTILINE)
-              if not m:
-                  continue
-              fname = m.group(1)
-              added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
-              per_file_added[fname] = added
-
           violations = []   # rule-breakage — likely 🔴 unless the reviewer disagrees
           warnings   = []   # likely-needs-attention — reviewer judges
+
+          per_file_added = {}
+          for n, sec in enumerate(re.split(r'(?=^diff --git )', diff, flags=re.MULTILINE)):
+              first = sec.split('\n', 1)[0]
+              if not first.startswith('diff --git '):
+                  continue
+              fname = rename_target(sec) or header_path(first)
+              # A header the parser cannot read is still scanned, never skipped.
+              if fname is None:
+                  fname = f'<unread diff header {n}>'
+                  warnings.append(f'UNREAD_DIFF_HEADER: {first[:120]}')
+              # Added lines are the "+" lines inside hunks; the "+++ b/" header
+              # comes before the first "@@", so content opening with "++" counts.
+              added, in_hunk = [], False
+              for l in sec.split('\n'):
+                  if l.startswith('@@'):
+                      in_hunk = True
+                  elif in_hunk and l.startswith('+'):
+                      added.append(l[1:])
+              per_file_added[fname] = added
 
           # ── Check 1: Toggle marker balance ───────────────────────────────────
           # Every `<!-- TOGGLE:name START -->` (and `name:off`) must have a
@@ -433,7 +550,7 @@ jobs:
               if not fname.endswith(('.md', '.template', '.yml', '.yaml', '.html')):
                   continue
               try:
-                  with open(fname) as f:
+                  with open(fname, encoding='utf-8', errors='replace') as f:
                       src = f.read()
               except OSError:
                   continue
@@ -496,7 +613,7 @@ jobs:
               if not fname.startswith('_core/project-template/'):
                   continue
               try:
-                  with open(fname) as f:
+                  with open(fname, encoding='utf-8', errors='replace') as f:
                       src = f.read()
               except OSError:
                   continue
@@ -530,6 +647,21 @@ jobs:
           jsx_changed = [f for f in changed if f.startswith('redesign/') and f.endswith('.jsx')]
           if jsx_changed and 'index.html' not in changed:
               warnings.append(f'JSX_HTML_PARITY: {", ".join(jsx_changed)} touched but index.html not in diff — production may be out of sync')
+
+          # ── Check 4b: what the reviewer's diff hides ─────────────────────────
+          # The workflow overrides the PR's attributes for this run, so a new
+          # .gitattributes only matters once merged; the reviewer judges that.
+          # A NUL byte still makes the reviewer's plain `git diff` print
+          # "Binary files differ" for a code file, so those files are named.
+          attrs = [f for f in changed if f.rsplit('/', 1)[-1] == '.gitattributes']
+          if attrs:
+              warnings.append(f'GITATTRIBUTES_CHANGED: {", ".join(attrs)} — overridden for this review; judge what the new attributes do once merged')
+          with open('/tmp/numstat.txt', 'rb') as f:
+              stats = [p.decode('utf-8', 'surrogateescape') for p in f.read().split(b'\0') if p]
+          MEDIA = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.ttf', '.otf', '.woff', '.woff2', '.pdf')
+          binary = [s[4:] for s in stats if s.startswith('-\t-\t') and not s[4:].lower().endswith(MEDIA)]
+          if binary:
+              warnings.append(f'BINARY_IN_DIFF: {", ".join(binary)} — git diff shows these as binary; Read each one in full')
 
           # ── Check 5: Categorize files ────────────────────────────────────────
           ARCH_PREFIXES = ('_core/', 'redesign/')
@@ -565,13 +697,15 @@ jobs:
               gh_out.write(f"deep_paths={'true' if deep_paths else 'false'}\n")
 
           # ── Write the review context ─────────────────────────────────────────
-          with open('/tmp/review_context.md', 'w') as out:
+          # backslashreplace is a backstop: shown() escapes every name first,
+          # so a byte that is not UTF-8 should never reach the writer.
+          with open('/tmp/review_context.md', 'w', encoding='utf-8', errors='backslashreplace') as out:
               out.write(f'# Pre-screen report for PR #{PR}\n\n')
 
               if violations:
                   out.write(f'## Pre-screen violations ({len(violations)}) — likely 🔴 unless you can refute each\n\n')
                   for v in violations:
-                      out.write(f'- `{v}`\n')
+                      out.write(f'- `{shown(v)}`\n')
                   out.write('\n')
               else:
                   out.write('## Pre-screen violations: none\n\n')
@@ -579,7 +713,7 @@ jobs:
               if warnings:
                   out.write(f'## Pre-screen warnings ({len(warnings)}) — reviewer judges\n\n')
                   for w in warnings:
-                      out.write(f'- `{w}`\n')
+                      out.write(f'- `{shown(w)}`\n')
                   out.write('\n')
 
               deep_owed = os.environ.get('DEEP_OWED') == '1'
@@ -590,7 +724,7 @@ jobs:
                   if deep_paths:
                       out.write('These paths are on the deep-review trigger list, so escalation is decided already, not by your judgment. The workflow applies `needs-deep-review` itself and fails this run if your structured `@claude review this PR` comment is missing. Run Step 4 in full (label AND comment), no exceptions:\n\n')
                       for p in deep_paths:
-                          out.write(f'- `{p}`\n')
+                          out.write(f'- `{shown(p)}`\n')
                   out.write('\n')
               else:
                   out.write('## Deep-review trigger surface: none (Step 4 skipped)\n\n')
@@ -598,7 +732,7 @@ jobs:
               out.write('## Architecture-critical files (READ THESE)\n\n')
               if arch_critical:
                   for f in arch_critical:
-                      out.write(f'- `{f}`\n')
+                      out.write(f'- `{shown(f)}`\n')
               else:
                   out.write('_(none)_\n')
               out.write('\n')
@@ -606,7 +740,7 @@ jobs:
               out.write('## Docs / markdown changes (low-risk, scan only)\n\n')
               if docs:
                   for f in docs:
-                      out.write(f'- `{f}`\n')
+                      out.write(f'- `{shown(f)}`\n')
               else:
                   out.write('_(none)_\n')
               out.write('\n')
@@ -614,7 +748,7 @@ jobs:
               out.write('## Other code changes\n\n')
               if other_code:
                   for f in other_code:
-                      out.write(f'- `{f}`\n')
+                      out.write(f'- `{shown(f)}`\n')
               else:
                   out.write('_(none)_\n')
 
@@ -632,11 +766,14 @@ jobs:
       # exchanged at Anthropic's GitHub app endpoint), because comments posted
       # with the job's own token would not start the deep-review workflow.
       # The step succeeds only when a verdict comment from this run is on the
-      # PR. No verdict (no key, credits or the workspace cap spent, the
+      # PR. Nothing posted (no key, credits or the workspace cap spent, the
       # exchange refused, an API error) leaves the review to the action steps
       # below, which run on the subscription exactly as before. A verdict from
-      # a run that then broke sets `halt` and fails the job instead: a second
-      # review would post a second verdict, and Evaluate reads the newest one.
+      # a run that then broke sets `halt` and fails the job instead, and so,
+      # when no verdict is found, does any other bot comment posted since the
+      # run started (outside the request and the deep run's comments): a
+      # second review would post a second verdict, and Evaluate reads the
+      # newest one. Bot comments next to a found verdict are not checked.
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
         continue-on-error: true
@@ -757,6 +894,18 @@ jobs:
             | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("^[\\s#*_]*Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
             | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
+            # Anything else the bot posted since this run started counts as
+            # posted: a verdict without its heading, or a headed one whose
+            # glyph was dropped ("Blocking — must fix"). A second review would
+            # bury it under a fresh verdict. Only the deep-review request, the
+            # deep run's tracking comments and deep reviews are skipped.
+            stray=$(printf '%s' "$comments" \
+              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
+            if [ "$stray" != 0 ]; then
+              echo "halt=true" >> "$GITHUB_OUTPUT"
+              echo "::error::A bot comment posted since this run started is not a verdict this step can take (no heading, or no 🔴/🟢 line), and a second review would bury it; read it, then re-run the job"
+              exit 1
+            fi
             echo "::warning::The credits run posted no verdict: the review runs on the subscription"
             exit 1
           fi
@@ -917,7 +1066,7 @@ jobs:
           COMMENTS=$(gh api --paginate "repos/$REPO/issues/$PR/comments")
           TRIGGERS=$(printf '%s' "$COMMENTS" \
             | jq -s -r --arg ts "$RUN_STARTED_AT" \
-                '[.[][] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | select(.body | startswith("@claude review this PR"))] | length')
+                '[.[][] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr"))] | length')
           LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           if [ "$TRIGGERS" -gt 0 ] && ! echo "$LABELS" | grep -q "needs-deep-review"; then
             gh api "repos/$REPO/issues/$PR/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null
@@ -940,11 +1089,19 @@ jobs:
           # on count: the reviewer's, or one from someone with write access.
           # A re-run fixes it: the pre-screen makes the reviewer ask again.
           if echo "$LABELS" | grep -q "needs-deep-review"; then
-            ASKERS=$(printf '%s' "$COMMENTS" \
+            # claude.yml also starts on review bodies and review comments, and
+            # Actions' startsWith ignores case, so all three count, lower-cased.
+            # Each fetch on its own line, so a failed one stops the step.
+            REVIEWS=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews")
+            REVIEW_COMMENTS=$(gh api --paginate "repos/$REPO/pulls/$PR/comments")
+            ASKERS=$(printf '%s\n%s\n%s' "$COMMENTS" "$REVIEWS" "$REVIEW_COMMENTS" \
               | jq -s -r --arg ts "$RUN_STARTED_AT" \
-                  '[.[][] | select(.created_at >= $ts) | select(.body | startswith("@claude review this PR")) | .user.login] | unique | .[]')
+                  '[.[][] | select((.created_at // .submitted_at // "") >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr")) | .user.login] | unique | .[]')
             REQUESTED=no
-            for ASKER in $ASKERS; do
+            # Read line by line, never word-split: the bot's login ends in
+            # "[bot]", a glob that would match files the PR checkout holds.
+            while IFS= read -r ASKER; do
+              [ -n "$ASKER" ] || continue
               if [ "$ASKER" = "claude[bot]" ]; then
                 REQUESTED=yes
                 break
@@ -954,7 +1111,7 @@ jobs:
               case "$PERM" in
                 admin|maintain|write) REQUESTED=yes; break ;;
               esac
-            done
+            done <<< "$ASKERS"
             GATE_STATE=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
               --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
             if [ "$REQUESTED" = no ] && { [ -z "$GATE_STATE" ] || echo "$GATE_STATE" | grep -q "deep=none"; }; then
@@ -1127,9 +1284,10 @@ jobs:
           # comment starts: the deep-review request and a deep run's tracking
           # comment can name the heading further down and quote both verdict
           # formats, and both are posted after the verdict. The script reads
-          # only claude[bot]'s comments that match, never a deep-review comment;
-          # the last line holding 🔴 or 🟢 decides, so a recap of an older 🔴
-          # cannot false-block a 🟢 (details in the script).
+          # only claude[bot]'s comments that match, never a deep-review comment.
+          # Lines like `**🔴 …**` or `### Blocking issues` block wherever they
+          # sit; otherwise the last line holding 🔴 or 🟢 decides, and any 🔴
+          # on it blocks (the script lists exactly which openings count).
           gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/all-comments.json
           jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)]' /tmp/all-comments.json > /tmp/comments.json
           VERDICT=$(python3 .github/scripts/review_gate.py verdict --since "$FLOOR" --tier routine \

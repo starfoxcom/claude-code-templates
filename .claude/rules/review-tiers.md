@@ -14,6 +14,7 @@ Both tiers report into one check, `Review gate`, written by `.github/scripts/rev
 - 🟢 LGTM only when the review is fully clean: no caveats, no nits, no "non-blocking" findings.
 - 🔴 Blocking when any real finding exists, however it is framed. "LGTM with caveats" is 🔴.
 - Style preferences and speculative future-proofing are dropped, not listed as minor.
+- In a 🟢 review, 🔴 and the word Blocking appear only inside inline backticks on the same line (a line inside a fenced code block counts like any other; no "Blocking issues" heading, no "Blocking: none"). The gate blocks on lines like `**🔴 …**`, `### Blocking issues` or `- Blocking: none` wherever they sit, and on a 🔴 anywhere in the last line holding 🔴 or 🟢, backticks or not, so a 🟢 verdict line holds no 🔴 at all.
 
 A 🟢 that carries findings lets them merge and come back later as the same review.
 
