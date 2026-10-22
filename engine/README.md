@@ -6,6 +6,7 @@ A Python twin (`model.py`, `render.py`, `bind.py`, standard library only, Python
 
 - `--code bw1-...` reads the answers from a setup code instead of stdin.
 - `--write DIR` writes the files into `DIR` and prints `{"written", "staged", "skipped"}` instead. `/bindwright:setup` runs this.
+- `--adopt` (with `--write`) is adopt mode, for a repo with its own setup: every file outside `.bindwright/` is staged, new or not, so setup offers each one before it lands.
 - `--year N` sets the copyright year. `bind.py --batch` (Python only) binds a list of `{"answers", "year", "version"}` jobs for the golden test.
 
 | File | Job |
@@ -15,6 +16,7 @@ A Python twin (`model.py`, `render.py`, `bind.py`, standard library only, Python
 | `bind.js`, `bind.py` | Picks which templates ship, where each lands, and renders them all. |
 | `setupcode.js`, `setupcode.py` | The setup code the page hands to `/bindwright:setup`: `bw1-` plus the answers as UTF-8 JSON in base64url without padding. JS encodes and decodes; Python decodes. Both refuse a bad code with the same message. |
 | `apply.js`, `apply.py` | Writes a bind into a repo (Node and Python only). Never overwrites: a file the repo already has gets the new text at `.bindwright/incoming/<path>` instead, and a path that would leave the repo fails the whole write. |
+| `keep.js`, `keep.py` | The project-owned parts of a set-up repo, which `/bindwright:update` never changes: whole files matching a pattern in `.bindwright/owned` (one per line, from the repo root; `*` within a folder, `**` across folders, `?` one character, a trailing `/` for a whole folder; `#` comments), and sections of shared files between a line holding `bindwright:keep` and one holding `bindwright:end-keep`, in any comment style. Nested, unopened or unclosed markers fail, naming the line. |
 | `cli.js` | The engine as a command for machines with Node and no Python, matching `bind.py`'s command. |
 | `home.py` | Installs the extras setup offers into `~/.claude`, one consented step at a time: finds a system Python, registers hooks in the launcher form, adds and removes allow rules, turns off the CLI's credit lines, installs mods. Python only, since every extra is a Python hook or a mod. Each change backs up `settings.json` and writes through a temporary file. |
 | `core-files.json` | List of every file under `_core/project-template/`, because the browser cannot list folders. |

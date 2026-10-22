@@ -29,9 +29,11 @@ def _write(target, text):
         fh.write(text)
 
 
-def apply_files(files, root):
+def apply_files(files, root, adopt=False):
     """files: [[path, text], ...]. Returns {"written", "staged", "skipped"}, each a
-    list of the given paths; a staged file sits at STAGING + path."""
+    list of the given paths; a staged file sits at STAGING + path. With
+    `adopt` (a repo that has its own setup), every file outside .bindwright/
+    is staged, new or not, so setup can offer each one before it lands."""
     bad = [path for path, _ in files if not _safe(path)]
     if bad:
         raise ApplyError("Refusing to write outside the repo: " + ", ".join(bad))
@@ -41,10 +43,11 @@ def apply_files(files, root):
         return os.path.join(root, *path.split("/"))
 
     for path, text in files:
-        if not os.path.lexists(at(path)):
+        own = path.startswith(".bindwright/")
+        if (own or not adopt) and not os.path.lexists(at(path)):
             _write(at(path), text)
             result["written"].append(path)
-        elif not path.startswith(".bindwright/") and not os.path.lexists(at(STAGING + path)):
+        elif not own and not os.path.lexists(at(STAGING + path)):
             _write(at(STAGING + path), text)
             result["staged"].append(path)
         else:

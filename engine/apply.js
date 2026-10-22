@@ -33,17 +33,20 @@ function write(target, text) {
 }
 
 // files: [[path, text], ...]. Returns { written, staged, skipped }, each a
-// list of the given paths; a staged file sits at STAGING + path.
-export function applyFiles(files, root) {
+// list of the given paths; a staged file sits at STAGING + path. With
+// `adopt` (a repo that has its own setup), every file outside .bindwright/
+// is staged, new or not, so setup can offer each one before it lands.
+export function applyFiles(files, root, { adopt = false } = {}) {
   const bad = files.map(([path]) => path).filter((path) => !safe(path));
   if (bad.length) throw new Error(`Refusing to write outside the repo: ${bad.join(", ")}`);
   const result = { written: [], staged: [], skipped: [] };
   const at = (path) => join(root, ...path.split("/"));
   for (const [path, text] of files) {
-    if (!exists(at(path))) {
+    const own = path.startsWith(".bindwright/");
+    if ((own || !adopt) && !exists(at(path))) {
       write(at(path), text);
       result.written.push(path);
-    } else if (!path.startsWith(".bindwright/") && !exists(at(STAGING + path))) {
+    } else if (!own && !exists(at(STAGING + path))) {
       write(at(STAGING + path), text);
       result.staged.push(path);
     } else {
