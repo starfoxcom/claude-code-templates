@@ -96,15 +96,20 @@ RED_OPENER = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🔴🟢])[\W\d_])*🔴")
 BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|BLOCKING)(?![^\W_])")
 # 3. "Blocking" right after a short label: up to 30 characters (an inline
 #    code span counts as one) ending in a colon, a dash or a 🔴. After a
-#    colon any case counts ("**Verdict:** blocking"); after a dash or a 🔴
-#    only "Blocking" or "BLOCKING" does ("- `a.py:1` — Blocking: x"), since
-#    prose like "Change 3 — blocking output" uses the adjective. A hyphen
-#    right after a letter or digit joins a word ("Non-blocking: none") and
-#    ends no label.
+#    colon any case counts ("**Verdict:** blocking"). After a dash or a 🔴,
+#    "Blocking" and "BLOCKING" always count ("- `a.py:1` — Blocking: x"),
+#    and a lower-case "blocking" counts unless a word or a code span
+#    follows it, which makes it an adjective in prose ("Change 3 — blocking
+#    output", "— blocking `wait()`"); "— blocking finding" and "— blocking
+#    issue" still count. A hyphen right after a letter or digit joins a
+#    word ("Non-blocking: none") and ends no label.
 _AFTER_LABEL = r"(?:(?![`🟢])[\W\d_])*"
+# A word or a code span after the lower-case word, other than "finding" or "issue".
+_ADJECTIVE = r"\s+(?!(?i:findings?|issues?)(?![^\W_]))(?:[^\W_]|`)"
 LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?"
                    r"(?:[:：]" + _AFTER_LABEL + r"(?i:Blocking)"
-                   r"|(?:[—–−]|(?<![^\W_])[-‐‑]|🔴)" + _AFTER_LABEL + r"(?:Blocking|BLOCKING))"
+                   r"|(?:[—–−]|(?<![^\W_])[-‐‑]|🔴)" + _AFTER_LABEL
+                   + r"(?:Blocking|BLOCKING|(?i:blocking)(?![^\W_])(?!" + _ADJECTIVE + r")))"
                    r"(?![^\W_])")
 # The verdict is the last line, under the review action's footer. Only lines
 # that say nothing are skipped: a rule line, or an optional rule then pieces

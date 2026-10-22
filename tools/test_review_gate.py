@@ -197,6 +197,17 @@ class Verdict(unittest.TestCase):
              "pass", "🟢 LGTM", None),
             (head + "- Step 2 – blocking call removed\n🟢 LGTM", "pass", "🟢 LGTM", None),
             (head + "**Verdict** — BLOCKING\n🟢 LGTM", "block", "**Verdict** — BLOCKING", over),
+            # A lower-case "blocking" after a dash or a 🔴 is a verdict unless a word
+            # or a code span follows it; "finding" and "issue" still make it one.
+            (head + "#### Finding \u2014 blocking\n🟢 LGTM", "block",
+             "#### Finding \u2014 blocking", over),
+            (head + "- **#1 (threading) \u2014 blocking, real correctness bug.**\n🟢 LGTM",
+             "block", "- **#1 (threading) \u2014 blocking, real correctness bug.**", over),
+            (head + "**`a.json` \u2014 blocking finding:**\n🟢 LGTM", "block",
+             "**`a.json` \u2014 blocking finding:**", over),
+            (head + "Verdict 🔴 blocking\n🟢 LGTM", "block", "Verdict 🔴 blocking", over),
+            (head + "### 4. Invariant 3 \u2014 blocking `wait()` in the loop\n🟢 LGTM",
+             "pass", "🟢 LGTM", None),
             (head + "- `a.py:1` 🔴 Blocking: race\n🟢 LGTM", "block",
              "- `a.py:1` 🔴 Blocking: race", over),
             (head + "\u26a0\ufe0f Blocking — race\n🟢 LGTM", "block", "\u26a0\ufe0f Blocking — race", over),
