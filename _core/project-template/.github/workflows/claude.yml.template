@@ -1,8 +1,9 @@
 # On-demand deep review
 # Filters on body SIGNATURE (`@claude review this PR`), not author. Mirrors
 # GameProject's proven shape: the routine review's structured trigger comment
-# (claude-code-review.yml Step 4.B) is posted by GITHUB_TOKEN — author =
-# `claude[bot]`. So is the action's own progress comment. Body content
+# (claude-code-review.yml Step 4.B) is posted with the review app's
+# installation token, not GITHUB_TOKEN (whose comments start no workflow) —
+# author = `claude[bot]`. So is the action's own progress comment. Body content
 # distinguishes the two cleanly:
 #   • Trigger comment body STARTS with `@claude review this PR — depth pass`.
 #   • Progress comment body is `Claude Code is working…` and contains
@@ -50,8 +51,8 @@ jobs:
     #
     # Note for humans triggering manually: start the comment with the exact
     # phrase `@claude review this PR` (not just `@claude review`). Matches
-    # the structured trigger format documented in
-    # `.claude/rules/review-tiers.md`.
+    # the structured trigger format the routine review posts (Step 4.B in
+    # claude-code-review.yml).
     # Anchor the bot-loop guard to startsWith — the action's progress comment
     # body STARTS with "Claude Code is working"; legitimate escalation
     # comments may quote the phrase when discussing the filter itself (e.g.
@@ -140,13 +141,15 @@ jobs:
       checks: write
     steps:
       # A self-hosted runner shares one workspace between jobs and workflows,
-      # and the routine review's sparse checkouts leave a partial clone there
-      # (file contents fetched on demand). A full fetch into it stays partial,
-      # and reading the diff would then fetch contents without a token, which
-      # fails on a private repo. So this full checkout starts fresh.
+      # where a sparse or partial clone can sit (left by an older routine
+      # review, or another workflow). A full fetch into a partial clone stays
+      # partial, and reading the diff would then fetch contents without a
+      # token, which fails on a private repo; a sparse one leaves most files
+      # out. So this full checkout starts fresh from such a clone.
       - name: Drop a partial clone left by an earlier job
         run: |
-          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ] \
+              || [ "$(git -C "$GITHUB_WORKSPACE" config --get core.sparsecheckout 2>/dev/null)" = true ]; then
             rm -rf "$GITHUB_WORKSPACE/.git"
           fi
 
@@ -154,9 +157,9 @@ jobs:
       # the credits reviewer reads files next to it while acting on PR
       # content. Fetches pass the token per command. The review action steps
       # later write their own bot token into the origin URL; that is the
-      # action's own setup and predates this file. The fetches before that
-      # are anonymous, which works on a public repo: a private one needs
-      # persisted credentials here or a fetch of its own.
+      # action's own setup and predates this file. The action's fetch of the
+      # PR branch before that reads a local copy (see the step before the
+      # attempts), so it needs no login on a private repo.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -191,7 +194,7 @@ jobs:
             echo "head_sha=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          read -r HEAD_SHA BASE_SHA < <(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '"\(.head.sha) \(.base.sha)"')
+          read -r HEAD_SHA BASE_SHA HEAD_REF < <(gh api "repos/${{ github.repository }}/pulls/$PR_NUMBER" --jq '"\(.head.sha) \(.base.sha) \(.head.ref)"')
           if [ -z "$HEAD_SHA" ] || [ -z "$BASE_SHA" ]; then
             echo "::error::Could not resolve the head and base commits of PR $PR_NUMBER"
             exit 1
@@ -199,6 +202,7 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$HEAD_REF" >> "$GITHUB_OUTPUT"
           # The order stamp for this run's gate writes: the moment this job
           # started, in nanoseconds, not the run id. Each approved request
           # joins the review group above and cancels the run in flight, so
@@ -461,7 +465,7 @@ jobs:
           $REQUEST
           ----- end of request -----
 
-          The working folder holds the PR's head commit, except that its top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies: read the PR's version of any of those with \`git show HEAD:<path>\`, never with Read. First read CLAUDE.md and .claude/rules/review-tiers.md there (the base copies, on purpose): they hold this project's rules and the verdict rule. ${GUIDE_NOTE:+$GUIDE_NOTE }Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
+          The working folder holds the PR's head commit, except that its top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies: read the PR's version of any of those with \`git show HEAD:<path>\`, never with Read. First read CLAUDE.md there, and .claude/rules/review-tiers.md when the project has it (the base copies, on purpose): they hold this project's rules and its review rules. ${GUIDE_NOTE:+$GUIDE_NOTE }Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
 
           You work alone and this is a one-shot session: the moment you end your turn it is over and nothing else runs. Never delegate to helper agents, never schedule a wake-up, never wait for anything. Read the diff file by file in this turn and post the review before you stop.
 
@@ -508,6 +512,38 @@ jobs:
               echo "::warning::The credits run posted no verdict: the deep review runs on the subscription"
               exit 1 ;;
           esac
+
+      # Each review action attempt fetches the PR branch from origin before
+      # it writes its own token into the origin URL, and revokes that token
+      # when it ends. The checkout above left no login, so on a private repo
+      # the first fetch fails, and a retry's fetch carries the revoked token
+      # and fails on any repo. The workflow token (it can write checks) must
+      # not go into .git/config: the reviewer can read that file and post a
+      # comment. So origin points at a local bare repo that shares this
+      # checkout's objects and holds only the PR's head commit, under the
+      # names the action fetches (the branch, and the pull ref for a fork).
+      # The attempts fetch from it with no network and no token; the step
+      # after them points origin back at GitHub. Each attempt starts with no
+      # branch checked out: a fork PR's fetch writes into a local branch of
+      # the PR's branch name, and git refuses that for the checked-out one.
+      - name: Serve the PR branch to the review action locally
+        id: pr-origin
+        if: steps.pr-head.outputs.head_sha != '' && steps.claude_credits.outcome != 'success'
+        continue-on-error: true
+        env:
+          PR_NUMBER: ${{ steps.pr-head.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
+          HEAD_REF: ${{ steps.pr-head.outputs.head_ref }}
+        run: |
+          origin="$RUNNER_TEMP/pr-origin.git"
+          rm -rf "$origin"
+          git init --quiet --bare "$origin"
+          echo "$(git rev-parse --absolute-git-dir)/objects" > "$origin/objects/info/alternates"
+          git -C "$origin" update-ref "refs/heads/$HEAD_REF" "$HEAD_SHA"
+          git -C "$origin" update-ref "refs/pull/$PR_NUMBER/head" "$HEAD_SHA"
+          echo "url=$origin" >> "$GITHUB_OUTPUT"
+          git remote set-url origin "$origin"
+          git checkout --quiet --detach
 
       - name: Run Claude
         id: claude_attempt_1
@@ -595,6 +631,16 @@ jobs:
         if: steps.claude_attempt_1.outcome == 'failure'
         run: sleep 90
 
+      # The attempt before left its revoked token in the origin URL and the
+      # PR branch checked out. Same for the next attempt below.
+      - name: Serve the PR branch locally again
+        if: steps.claude_attempt_1.outcome == 'failure' && steps.pr-origin.outcome == 'success'
+        env:
+          ORIGIN: ${{ steps.pr-origin.outputs.url }}
+        run: |
+          git remote set-url origin "$ORIGIN"
+          git checkout --quiet --detach
+
       # Attempt 2a: same-model retry, for transient failures only.
       - name: Run Claude (retry, same model)
         id: claude_retry
@@ -656,6 +702,14 @@ jobs:
           echo "Claude Code $installed at $dest"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
 
+      - name: Serve the PR branch locally for the fallback
+        if: steps.claude_retry.outcome == 'failure' && steps.pr-origin.outcome == 'success'
+        env:
+          ORIGIN: ${{ steps.pr-origin.outputs.url }}
+        run: |
+          git remote set-url origin "$ORIGIN"
+          git checkout --quiet --detach
+
       # Attempt 2b: the fallback model from the settings. Fires on a usage limit,
       # or when the same-model retry also failed. The Evaluate step below owns
       # the outcome, so every attempt continues on error.
@@ -680,6 +734,12 @@ jobs:
           additional_permissions: |
             actions: read
           allowed_bots: "claude"
+
+      # Whatever happened: a self-hosted runner keeps the workspace for later
+      # jobs, and the local repo goes with this job's temp folder.
+      - name: Point origin back at GitHub
+        if: always() && steps.pr-origin.outcome == 'success'
+        run: git remote set-url origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
 
       - name: Evaluate deep-tier verdict
         # Reads this run's deep verdict and writes it into the Review gate on
