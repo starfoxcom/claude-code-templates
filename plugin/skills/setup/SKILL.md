@@ -9,13 +9,14 @@ argument-hint: <setup code>
 
 The setup code is: `$ARGUMENTS`
 
-This skill writes the files the code describes into the repo, then fits them to it. It never overwrites a file without the user's yes, and it changes nothing outside the repo.
+This skill writes the files the code describes into the repo, then fits them to it, then offers extras for the user's own `~/.claude`. It never overwrites a file without the user's yes, and outside the repo it changes only what the user agrees to, one extra at a time.
 
 ## 1. Check the code and the repo
 
 - If the code above is empty or does not start with `bw1-`, ask the user to copy the setup code from the last step of the Bindwright page and run `/bindwright:setup <code>` again. Stop.
 - Find the repo root with `git rev-parse --show-toplevel`. If this is not a git repo, ask whether to run `git init` here or stop.
 - If `git status --porcelain` shows uncommitted changes, say so and ask whether to continue. The setup is easier to review on a clean tree.
+- If `.bindwright/incoming/` or `.bindwright/global/` already exists, an earlier setup stopped before it finished. Ask whether to finish its merges first (steps 3 and 6 on those files) or delete both folders and start fresh.
 
 ## 2. Write the files
 
@@ -65,7 +66,7 @@ Search the repo's new and merged files for these placeholders and replace each o
 | `{{LINT_COMMAND}}`, `{{TYPECHECK_COMMAND}}`, `{{TEST_COMMAND}}` | Package scripts, Makefile targets, tool config and the CI workflows. Run each once when it is quick, to check it works |
 | `{{CONVERSATION_LANGUAGE}}` | The language the user writes to you in |
 | `{{CODE_LANGUAGE}}` | The language of the existing code comments and docs; English for a new repo |
-| `{{STACK_COMMANDS_ALLOWLIST}}` | The commands above as permission entries, each written `,` then a new line and `"Bash(<command>:*)"`, matching the list it sits in; nothing when there are none |
+| `{{STACK_COMMANDS_ALLOWLIST}}` | The commands above as permission entries, each written `,` then a new line and `"Bash(<command>:*)"`, matching the list it sits in; nothing when there are none. Never add a rule for `git push` or a bare `git`: either would approve force pushes. When a command runs other commands (`npm run`, `npx`, `make`, `uv`, `poetry`, `bundle exec`, `docker run`), tell the user its rule approves whatever runs through it |
 | `{{TEAM_OR_USER}}`, `{{LEAD_USER}}` | The GitHub team or user who owns the repo (from `git remote get-url origin`, or ask) |
 
 When the project has no such command (no type checker, no tests yet), remove that part of the sentence or the hook entry instead of inventing a command, and tell the user what was left out.
@@ -77,12 +78,31 @@ When the project has no such command (no type checker, no tests yet), remove tha
 - `.claude/rules/git.md` names the branches work lands on. If it names a development branch the repo does not have (`git branch --list <name>`), offer to create it from the current branch, locally only.
 - Check that every command and path the new files name exists in the repo. Fix what you can; list the rest for the user.
 
-## 6. Finish
+## 6. Offer the extras for `~/.claude`
+
+`.bindwright/global/` holds files for the user's own `~/.claude`, which every project on this machine shares. Offer each extra below on its own: say in one or two sentences what it does, and install it only on a yes. Changes go through `python "${CLAUDE_PLUGIN_ROOT}/engine/home.py" <command>` (any Python 3.8+ can run it). It backs up `~/.claude/settings.json` before each change, refuses a settings file that is not valid JSON, and prints one line of JSON; on `{"error": ...}`, show the message and skip that extra.
+
+The hooks need a system Python: run `home.py find-python` once. On an error, skip every hook below, and tell the user why and that a later run can add them.
+
+- **Global instructions** (recommended): merge `CLAUDE.md.additions` into `~/.claude/CLAUDE.md`, everything from its first `---` line on. Create the file when it is missing. Never add a section the file already has; where the two differ, show both and ask.
+- **Project memory** (recommended): copy `memory/MEMORY.md` to `~/.claude/projects/<folder>/memory/MEMORY.md`, only when no index is there yet. `<folder>` is this repo's folder under `~/.claude/projects/`: the CLI names it after the repo's full path, with every character other than a letter or digit turned into `-`.
+- **Code-research tool:** `${CLAUDE_PLUGIN_ROOT}/_core/global-template/hooks/code-research-profiles.json` has the chosen tool's install command per system, the step that wires it into the agent, and its indexing step. Show each command, run it only on a yes, and stop at the first failure.
+- **Code-research hook:** when `hooks/` holds a `*-first.py`, install it with `home.py install-hook <that file> --python <found> --matcher "Grep|Glob|Bash"`. If `~/.claude/hooks/` already has a different copy, show the difference first. Then `home.py list-hooks`: offer to remove any other `*-first.py` with `home.py remove-hook <name>`, since two of them would fight over every search. Warn that the hook blocks searches only while the tool is available.
+- **Push guard:** recommended when the repo has no `.claude/hooks/push-guard.py`; otherwise the repo's own copy already guards this project, and the global one only adds the other projects on this machine. `home.py install-hook hooks/push-guard.py --python <found> --matcher "Bash|PowerShell"`. It only ever blocks, so it needs no other change. Then ask separately: "Let every `git push` run without a prompt in every project on this machine? The guard blocks force pushes written the ordinary way; it cannot see one built at run time, set in git config, or run by another program." On a yes, `home.py allow "Bash(git push:*)"`. If that rule is already there, ask whether to keep it, and remove it with `home.py disallow` on a no.
+- **Attribution guard:** when `hooks/` holds `no-ai-attribution.py`, install it the same way with `--matcher "Bash|PowerShell"`, then run `home.py attribution-off`, which stops the CLI adding its own credit lines.
+- **Mods:** they need CLI 2.1.287 or later (`claude --version`) and Node; skip them otherwise. Read the table in `${CLAUDE_PLUGIN_ROOT}/_core/global-template/mods/README.md` and offer `session-facts` as recommended and the rest as opt-in, one line each. Install each chosen one with `home.py add-mod "${CLAUDE_PLUGIN_ROOT}/_core/global-template/mods/<name>"`. A mod already installed keeps its copy (`"kept_existing": true`), since it may hold the user's edits. Mods load at start-up, so the user restarts the CLI after.
+
+After a hook install, check it works: pipe `{"tool_name": "Bash", "tool_input": {"command": "git push -qf origin main"}}` into the registered command and arguments (`home.py` printed the settings path; the entry is the last one under `hooks.PreToolUse`). The push guard must exit 2.
+
+Delete `.bindwright/global/`, then `.bindwright/` if it is empty.
+
+## 7. Finish
 
 Tell the user, in plain words:
 
 - What was written, merged and left out, grouped by kind (rules, skills, hooks, workflows, docs), not file by file.
+- Which extras went into `~/.claude` and which were declined, and that `~/.claude/settings.json.bak` holds the settings from before the last change.
 - What still needs them: for a repo with AI review workflows, the repository secret and branch rules those workflows describe.
 - That nothing is committed yet: they can read the changes with `git diff` and `git status`, and commit when happy.
 
-Do not commit, push or change anything outside the repo.
+Do not commit or push. Outside the repo, change only what the user said yes to in step 6.
