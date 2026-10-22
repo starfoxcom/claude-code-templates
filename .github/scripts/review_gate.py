@@ -49,14 +49,26 @@ import time
 
 # Never reviewed: the review action refuses to run on a PR whose copy of the
 # review workflow differs from the default branch's, so a workflow-only PR has
-# to pass as non-reviewable. Excluded by path on purpose, never by extension.
-NEVER = re.compile(r"^\.github/workflows/")
-# Source, data and contract files, plus every file of any type in the
-# deep-review folders: _core/, which lands verbatim in users' repos (and
-# CLAUDE.md.additions in their ~/.claude), redesign/, and .github/scripts/,
-# where a file Python loads before the standard library could run in the gate.
-REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^(_core|redesign|\.github/scripts)/"
-                        r"|\.additions$|/bundle\.toggles\.md$")
+# to pass as non-reviewable. Only that one workflow: claude.yml (the deep tier
+# runs the default branch's copy), any other workflow, and a script or action
+# kept under .github/workflows/ are reviewed like any other file.
+NEVER = re.compile(r"^\.github/workflows/claude-code-review\.ya?ml$")
+# Skipped only when every other path is Markdown, an image or a font that is
+# not always reviewed. Always reviewed, whatever the file type: _core/, which
+# lands verbatim in users' repos; bundles/, whose toggles drive what a bind
+# writes; SETUP.md, which every bundle ships as its setup prompt, and
+# TOGGLES.md and COMPARISON.md, which it reads and the pre-screen treats as
+# architecture files; redesign/;
+# .github/scripts/, where a file Python loads before the standard library
+# could run in the gate; and a .claude/ folder at any depth and any CLAUDE.md
+# or CLAUDE.local.md, the instructions and skills both review tiers load
+# (Claude Code reads a subfolder's when it reads files there). Matched in any case, as a case-insensitive checkout
+# would place the file. Anything else gets a review: scripts, config,
+# lockfiles, an SVG, which can carry script, and a .gitattributes or .lfsconfig.
+SKIPPABLE = re.compile(r"\.(md|png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$", re.I)
+ALWAYS_REVIEWED = re.compile(r"^(_core|bundles|redesign|\.github/scripts)/|(^|/)\.claude/"
+                             r"|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE(\.local)?\.md$", re.I)
+
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
 
@@ -73,8 +85,53 @@ DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
 NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude |Claude Code is working"
                          r"|[#*_\s]*deep review)", re.I)
 GLYPHS = re.compile("🔴|🟢")
-# "Blocking" opening a line, as written when the glyph is dropped.
-BLOCKING = re.compile(r"[\s*_#]*Blocking\b")
+# A line that blocks wherever it sits. Each prefix reads a checkbox ("[ ]",
+# "[x]") as one unit and any other non-letter as another, never both ways,
+# so a long row of checkboxes cannot make the match backtrack.
+# 1. A 🔴 after list, quote, table, heading or emphasis markup: "**🔴 …**",
+#    "- 🔴 x", "1. 🔴 Blocking …". Prose naming a 🔴 keeps it in backticks.
+RED_OPENER = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🔴🟢])[\W\d_])*🔴")
+# 2. "Blocking" opening a line after the same markup, as written when the
+#    glyph is dropped: "1. **Blocking** — …", "### Blocking issues", "_Blocking_".
+BLOCKING = re.compile(r"(?:\[[ xX]\]|(?!\[[ xX]\]|[`🟢])[\W\d_])*(?:Blocking|BLOCKING)(?![^\W_])")
+# 3. "Blocking" right after a short label: up to 30 characters (an inline
+#    code span counts as one) ending in a colon, a dash or a 🔴. After a
+#    colon any case counts ("**Verdict:** blocking"); after a dash or a 🔴
+#    only "Blocking" or "BLOCKING" does ("- `a.py:1` — Blocking: x"), since
+#    prose like "Change 3 — blocking output" uses the adjective. A hyphen
+#    right after a letter or digit joins a word ("Non-blocking: none") and
+#    ends no label.
+_AFTER_LABEL = r"(?:(?![`🟢])[\W\d_])*"
+LABEL = re.compile(r"(?:`[^`]*`|[^`🔴🟢]){0,30}?"
+                   r"(?:[:：]" + _AFTER_LABEL + r"(?i:Blocking)"
+                   r"|(?:[—–−]|(?<![^\W_])[-‐‑]|🔴)" + _AFTER_LABEL + r"(?:Blocking|BLOCKING))"
+                   r"(?![^\W_])")
+# The verdict is the last line, under the review action's footer. Only lines
+# that say nothing are skipped: a rule line, or an optional rule then pieces
+# joined by "·" or "•", each empty or one item after an optional "branch:":
+# a job or branch link on GitHub, or a branch name in a code span (no space
+# or other character git refuses in a branch name). A lone item needs a
+# "branch:" or "[View job]" in front ("[View job](…) · Branch: [`b`](…)",
+# "--- · `b`"). Any words on a trailing line make it the last line.
+FOOTER_RULE = re.compile(r"(?:-{3,}|\*{3,}|_{3,})")
+_BRANCH = r"[^`\s~^:?*\[\\\]🔴🟢]{1,200}"
+FOOTER_ITEM = re.compile(r"(?:[Bb]ranch:?\s*)?(?:\[(?:View job|`?%s`?)\]\(https://github\.com/"
+                         r"[\w.-]+/[\w.-]+/(?:tree|actions/runs)/[^\s)🔴🟢]*\)|`%s`)" % (_BRANCH, _BRANCH))
+FOOTER_LONE = re.compile(r"[Bb]ranch|\[View job\]")
+
+
+def _footer(line):
+    rest = line.strip()
+    rule = FOOTER_RULE.match(rest)
+    if rule:
+        rest = rest[rule.end():].strip()
+    if not rest:
+        return True
+    parts = re.split("[·•]", rest)
+    return (all(not p.strip() or FOOTER_ITEM.fullmatch(p.strip()) for p in parts)
+            and (len(parts) > 1 or bool(FOOTER_LONE.match(rest))))
+# A quoted line ("> 🟢 LGTM") is someone else's verdict, never this one.
+VERDICT_LINE = re.compile(r"[\s#*_]*(?:🔴|🟢)")
 VERDICTS = ("pass", "block", "missing", "error")
 STATE_VALUES = {
     "triage": ("reviewable", "skip"),
@@ -115,7 +172,7 @@ def triage(paths, incomplete=False):
     """Whether a diff with these changed paths gets an AI review."""
     if incomplete or len(paths) >= LISTING_CAP:
         return True
-    return any(REVIEWABLE.search(p) and not NEVER.search(p) for p in paths)
+    return any(not NEVER.search(p) and (ALWAYS_REVIEWED.search(p) or not SKIPPABLE.search(p)) for p in paths)
 
 
 def _comments(text):
@@ -153,22 +210,42 @@ def _pick(bodies, tier, marker):
 
 
 def _line(body):
-    """The verdict line: the last holding a glyph. Without one, a line opening
-    with "Blocking" still blocks; a bare "LGTM" never passes, since prose like
-    "LGTM otherwise, but this must be fixed" opens the same way."""
+    """The verdict line: the last line under the action's footer, which must
+    open with 🔴 or 🟢; any 🔴 on it blocks. A line that blocks wherever it
+    sits (RED_OPENER, BLOCKING, LABEL) blocks whatever the verdict line says:
+    a 🟢 after it ("once fixed, this is 🟢 LGTM", a "🟢 All clear on X"
+    heading) must not pass it, and the glyph is what gets dropped. With any
+    other last line, a 🔴 on the last line holding a glyph blocks; otherwise
+    the verdict is missing: a bare "LGTM", or "Verdict = Blocking" under a
+    "🟢 All clear on X" heading, never passes."""
     lines = body.splitlines()
-    found = [l for l in lines if GLYPHS.search(l)]
-    if found:
-        return ("block" if "🔴" in found[-1] else "pass"), found[-1].strip(), "glyph"
-    found = [l for l in lines if BLOCKING.match(l)]
-    if found:
-        return "block", found[0].strip(), "word"
+    glyph = any("🔴" in l or "🟢" in l for l in lines)
+    early = next(((l, how) for l in lines for how, rule in
+                  (("red-over-glyph", RED_OPENER), ("word-over-glyph", BLOCKING), ("word-over-glyph", LABEL))
+                  if rule.match(l)), None)
+    while lines and _footer(lines[-1]):
+        lines.pop()
+    last = lines[-1].strip() if lines else ""
+    if VERDICT_LINE.match(last) and "🔴" in last:
+        return "block", last, "glyph"
+    if early:
+        line, how = early
+        return "block", line.strip(), (how if glyph else "word")
+    if VERDICT_LINE.match(last):
+        return "pass", last, "glyph"
+    # No verdict line, but the last line holding a glyph holds a 🔴 ("Verdict:
+    # 🔴 the writer races", then a closing remark): a block, never a missing
+    # verdict, which would start a second deep review that could bury it.
+    marked = [l for l in lines if "🔴" in l or "🟢" in l]
+    if marked and "🔴" in marked[-1]:
+        return "block", marked[-1].strip(), "glyph"
     return "missing", "", ""
 
 
 def verdict(text, since, tier, marker=None):
     """The verdict in the bot's newest comment of `tier` posted at or after
-    `since`. A block read from a glyph-less "Blocking" line adds `recovered`."""
+    `since`. A block read from a "Blocking" line rather than a 🔴 adds
+    `recovered`."""
     body = _pick(_bot_bodies(text, since), tier, re.compile(marker) if marker else None)
     if body is None:
         return {"verdict": "missing", "line": ""}
@@ -176,6 +253,10 @@ def verdict(text, since, tier, marker=None):
     out = {"verdict": result, "line": line}
     if how == "word":
         out["recovered"] = "no 🔴/🟢 line; a line opening with Blocking"
+    elif how == "word-over-glyph":
+        out["recovered"] = "a line opening with Blocking outranks the 🟢 line"
+    elif how == "red-over-glyph":
+        out["recovered"] = "a line opening with 🔴 outranks the later 🟢 line"
     return out
 
 
