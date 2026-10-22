@@ -1,6 +1,7 @@
 # Weekly pin check. The review workflows pin the CLI version their credits and
-# backup steps install and the review action's commit, and the mod tests pin a
-# CLI version, so a new release never changes a PR's result. This run says
+# backup steps install and the review action's commit, and a project's test
+# workflow can pin a CLI version too (PINNED_VERSION), so a new release never
+# changes a PR's result. This run says
 # when those pins fall behind: it looks up the newest CLI release and the
 # commit the action's v1 tag points to, and keeps one issue listing every pin
 # that is behind, closed again once all are current. It can also be started by
@@ -71,7 +72,7 @@ jobs:
             fi
             exit 0
           fi
-          body=$(printf '%s\n\nMove a pin only after the review or the mods pass on the newer release. Run: %s\n' "$stale" "$RUN_URL")
+          body=$(printf '%s\n\nMove a pin only after the reviews or tests that use it pass on the newer release. Run: %s\n' "$stale" "$RUN_URL")
           # The body always holds the current list: no weekly comment noise.
           if [ -n "$number" ]; then
             gh issue edit "$number" --repo "$REPO" --body "$body"
