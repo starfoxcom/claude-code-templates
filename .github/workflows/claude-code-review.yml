@@ -177,13 +177,28 @@ jobs:
       pull-requests: read
     outputs:
       run_review: ${{ steps.classify.outputs.run_review }}
+    # A self-hosted runner shares one workspace between jobs and workflows,
+    # so this light checkout goes in a folder of its own: a sparse, partial
+    # checkout of the workspace itself would leave other workflows' later
+    # checkouts there sparse (and partial), missing most files.
+    defaults:
+      run:
+        working-directory: .review-gate
     steps:
+      # A PR checked out earlier in this workspace can leave `.review-gate`
+      # behind, even as a link to another folder, which the checkout below
+      # would then empty. Removing it takes the link, never its target.
+      - name: Start the gate folder fresh
+        working-directory: ${{ github.workspace }}
+        run: rm -rf .review-gate
+
       # The gate's script and settings from Init's commit (the base, or the
       # default branch's tip): which paths always get a review is a gate
       # setting, so a PR cannot change it for itself.
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
+          path: .review-gate
           persist-credentials: false
           sparse-checkout: |
             .github/scripts/
@@ -245,14 +260,18 @@ jobs:
       escalate: ${{ steps.triggers.outputs.escalate }}
       context: ${{ steps.triggers.outputs.context }}
     steps:
-      # A self-hosted runner shares one workspace between jobs and workflows,
-      # and the light jobs' sparse checkouts leave a partial clone there (file
-      # contents fetched on demand). A full fetch into it stays partial, and
-      # the diff below would then fetch contents after the token is gone,
-      # which fails on a private repo. So the full checkouts start fresh.
+      # A self-hosted runner shares one workspace between jobs and workflows.
+      # The light jobs here check out into a folder of their own, but a
+      # sparse or partial clone can still sit in the workspace (left by an
+      # older version of this workflow, or another workflow). A full fetch
+      # into a partial clone stays partial, and the diff below would then
+      # fetch contents after the token is gone, which fails on a private
+      # repo; a sparse one leaves most files out. So the full checkouts
+      # start fresh from such a clone.
       - name: Drop a partial clone left by an earlier job
         run: |
-          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ] \
+              || [ "$(git -C "$GITHUB_WORKSPACE" config --get core.sparsecheckout 2>/dev/null)" = true ]; then
             rm -rf "$GITHUB_WORKSPACE/.git"
           fi
 
@@ -355,7 +374,8 @@ jobs:
       - name: Drop a partial clone left by an earlier job
         if: needs.init-gate.outputs.prescreen_dir != ''
         run: |
-          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ] \
+              || [ "$(git -C "$GITHUB_WORKSPACE" config --get core.sparsecheckout 2>/dev/null)" = true ]; then
             rm -rf "$GITHUB_WORKSPACE/.git"
           fi
 
@@ -610,7 +630,8 @@ jobs:
       # As in Project triggers: a full checkout starts from a fresh clone.
       - name: Drop a partial clone left by an earlier job
         run: |
-          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ]; then
+          if [ "$(git -C "$GITHUB_WORKSPACE" config --get remote.origin.promisor 2>/dev/null)" = true ] \
+              || [ "$(git -C "$GITHUB_WORKSPACE" config --get core.sparsecheckout 2>/dev/null)" = true ]; then
             rm -rf "$GITHUB_WORKSPACE/.git"
           fi
 
@@ -1459,10 +1480,20 @@ jobs:
       # PATCH of Claude On-Demand to skipped (otherwise it would stay at
       # in_progress on docs-only PRs and block the merge).
       checks: write
+    # As in Diff triage: the light checkout gets a folder of its own.
+    defaults:
+      run:
+        working-directory: .review-gate
     steps:
+      # As in Diff triage: a `.review-gate` a PR left behind goes first.
+      - name: Start the gate folder fresh
+        working-directory: ${{ github.workspace }}
+        run: rm -rf .review-gate
+
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
+          path: .review-gate
           persist-credentials: false
           sparse-checkout: .github/scripts/
           sparse-checkout-cone-mode: false
