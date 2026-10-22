@@ -701,7 +701,8 @@ jobs:
               echo "::warning::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           cli="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$cli" ]; then
@@ -753,7 +754,7 @@ jobs:
             exit 1
           fi
           verdict=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.body | test("Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
+            | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("^[\\s#*_]*Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
             | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
             echo "::warning::The credits run posted no verdict: the review runs on the subscription"
@@ -836,7 +837,8 @@ jobs:
               echo "::error::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           src="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$src" ]; then
@@ -1121,16 +1123,23 @@ jobs:
           # Title-tolerant marker: the reviewer does not reliably reproduce the
           # exact `## Code Review — claude-code-templates` heading (observed
           # `**Code Review - …**` and a heading-less `Code Review — …`), so it
-          # matches the stable phrase with any separator. The script reads only
-          # claude[bot]'s comments, never a deep-review comment, and takes the
-          # LAST line holding 🔴 or 🟢, so a recap of an older 🔴 cannot
-          # false-block a 🟢.
+          # matches the stable phrase with any separator, but only where the
+          # comment starts: the deep-review request and a deep run's tracking
+          # comment can name the heading further down and quote both verdict
+          # formats, and both are posted after the verdict. The script reads
+          # only claude[bot]'s comments that match, never a deep-review comment;
+          # the last line holding 🔴 or 🟢 decides, so a recap of an older 🔴
+          # cannot false-block a 🟢 (details in the script).
           gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/all-comments.json
           jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)]' /tmp/all-comments.json > /tmp/comments.json
           VERDICT=$(python3 .github/scripts/review_gate.py verdict --since "$FLOOR" --tier routine \
-            --marker 'Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
+            --marker '^[\s#*_]*Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
           echo "$VERDICT"
           ROUTINE=$(printf '%s' "$VERDICT" | jq -r .verdict)
+          RECOVERED=$(printf '%s' "$VERDICT" | jq -r '.recovered // empty')
+          if [ -n "$RECOVERED" ]; then
+            echo "::warning::Routine verdict read from a malformed comment: $RECOVERED"
+          fi
           LABELS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           # The verdict is written last, so it never stands without the label
           # read that tells whether a deep review was asked for.
