@@ -91,8 +91,20 @@ class Verdict(unittest.TestCase):
             (head + "- **[Blocking]** — drops the filter", "block",
              "- **[Blocking]** — drops the filter", alone),
             (head + "> Blocking: the writer races\n🟢 LGTM", "block", "> Blocking: the writer races", over),
-            # A list item quoting the rule does not open with the glyph.
+            (head + "+ Blocking — drops the filter\n🟢 LGTM", "block", "+ Blocking — drops the filter", over),
+            (head + "[Blocking] — drops the filter", "block", "[Blocking] — drops the filter", alone),
+            (head + "_Blocking_ — drops the filter\n🟢 LGTM", "block", "_Blocking_ — drops the filter", over),
+            # A 🔴 Blocking list item between a 🟢 recap and a 🟢 heading.
+            (head + "The routine tier said 🟢 LGTM.\n1. 🔴 **Blocking** — drops the filter\n"
+             "## 🟢 All clear on hooks", "block", "1. 🔴 **Blocking** — drops the filter", over),
+            (head + "- 🔴 Blocking — drops the filter\n🟢 LGTM", "block",
+             "- 🔴 Blocking — drops the filter", over),
+            # A list item quoting the rule or recapping a fixed finding does
+            # not open with the glyph, whatever its bullet.
             (head + "  - 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "* 🔴 when any finding exists: checked\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "- 🔴 `hook.sh:12` — raised earlier, now fixed\n🟢 LGTM", "pass", "🟢 LGTM", None),
+            (head + "Blockings and Blockingly are not the word.\n🟢 LGTM", "pass", "🟢 LGTM", None),
             # Fails closed on a heading that opens with the word: none of the
             # repo's 513 passing verdicts to 2026-10-22 had one.
             (head + "## Blocking findings\nNone.\n🟢 LGTM", "block", "## Blocking findings", over),

@@ -74,12 +74,14 @@ NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude |Claude Code is 
                          r"|[#*_\s]*deep review)", re.I)
 GLYPHS = re.compile("🔴|🟢")
 # "Blocking" opening a line, as written when the glyph is dropped, also as a
-# list item, numbered item, quote or bracketed tag ("1. **Blocking** — …").
-BLOCKING = re.compile(r"[ \t>*_#+-]*(?:[0-9]+[.)][ \t]*)?[ \t*_\[]*Blocking\b")
-# A 🔴 opening a line, after markup only: a verdict line. A list item quoting
-# the rule ("- 🔴 when any finding exists") or prose naming a fixed 🔴 does
-# not open with it.
-RED_OPENER = re.compile(r"[ \t*_#]*🔴")
+# list item, numbered item, quote or bracketed tag, with or without a 🔴
+# before it ("1. **Blocking** — …", "- 🔴 **Blocking** — …", "_Blocking_").
+BLOCKING = re.compile(r"[ \t>*_#+-]*(?:[0-9]+[.)][ \t]*)?[ \t*_\[]*(?:🔴[ \t*_\[]*)?"
+                      r"Blocking(?![^\W_])")
+# A 🔴 opening a line, after markup only: a verdict line. A list item ("- ",
+# "+ ", "* ", "1. ") quoting the rule ("- 🔴 when any finding exists") or
+# recapping a fixed finding does not count, nor does prose naming a fixed 🔴.
+RED_OPENER = re.compile(r"(?:[ \t#_]|\*(?![ \t]))*🔴")
 VERDICTS = ("pass", "block", "missing", "error")
 STATE_VALUES = {
     "triage": ("reviewable", "skip"),
