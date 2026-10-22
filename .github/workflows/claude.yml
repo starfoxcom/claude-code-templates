@@ -223,6 +223,11 @@ jobs:
           fi
           git show "$BASE_SHA:.github/scripts/review_gate.py" > "$dir/review_gate.py"
           echo "script=$dir/review_gate.py" >> "$GITHUB_OUTPUT"
+          # The project's review guide, read from the base commit so the PR
+          # cannot change the guide its own review follows. No guide, no note.
+          if git cat-file -e "$BASE_SHA:.github/review-guide.md" 2>/dev/null; then
+            echo "guide_note=This project's review guide (what the project is and the invariants to verify) is .github/review-guide.md on the base branch: read it with \`git show $BASE_SHA:.github/review-guide.md\`, never the PR's copy, and verify the invariants it lists." >> "$GITHUB_OUTPUT"
+          fi
           # No settings file means the defaults.
           if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
             git show "$BASE_SHA:.github/review-gate.yml" > "$dir/review-gate.yml"
@@ -364,6 +369,7 @@ jobs:
           EFFORT: ${{ steps.gate.outputs.deep_effort }}
           MAX_TURNS: ${{ steps.gate.outputs.deep_max_turns }}
           EXTRA_TOOLS: ${{ steps.gate.outputs.tools_suffix }}
+          GUIDE_NOTE: ${{ steps.gate.outputs.guide_note }}
           REQUEST: ${{ github.event.comment.body || github.event.review.body }}
         # No workflow token in this step's environment: the reviewer it starts
         # reads PR content and could read its environment. The head and base
@@ -434,7 +440,7 @@ jobs:
           $REQUEST
           ----- end of request -----
 
-          The working folder holds the PR's head commit, except that its top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies: read the PR's version of any of those with \`git show HEAD:<path>\`, never with Read. First read CLAUDE.md and .claude/rules/review-tiers.md there (the base copies, on purpose): they hold this project's rules and the verdict rule. Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
+          The working folder holds the PR's head commit, except that its top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies: read the PR's version of any of those with \`git show HEAD:<path>\`, never with Read. First read CLAUDE.md and .claude/rules/review-tiers.md there (the base copies, on purpose): they hold this project's rules and the verdict rule. ${GUIDE_NOTE:+$GUIDE_NOTE }Read the change with \`gh pr view $PR_NUMBER\` and \`gh pr diff $PR_NUMBER\`, and open the files it touches with Read. Review the whole diff adversarially, going deepest on the focus above.
 
           You work alone and this is a one-shot session: the moment you end your turn it is over and nothing else runs. Never delegate to helper agents, never schedule a wake-up, never wait for anything. Read the diff file by file in this turn and post the review before you stop.
 
@@ -518,7 +524,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The action puts the base branch's config in the checkout before the
           # reviewer starts; this tells it where the PR's own copies are.
-          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
+          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules. ${{ steps.gate.outputs.guide_note }}"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ steps.gate.outputs.tools_suffix }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
@@ -529,9 +535,10 @@ jobs:
           # Allow the routine review's `claude[bot]` to trigger this workflow: the
           # routine tier is the caller for deep-review escalations.
           # This action has no `system_prompt:` input. Claude Code loads
-          # `CLAUDE.md` + `.claude/rules/*.md` from the checkout, and the
+          # `CLAUDE.md` + `.claude/rules/*.md` from the checkout, the
           # structured `@claude` comment from the routine review gives the
-          # per-PR focus, invariants and the binary verdict rule.
+          # per-PR focus, invariants and the binary verdict rule, and the
+          # system prompt points to the project's review guide, if any.
 
       # ── Usage-limit exhaustion vs transient failure ──────────────────────
       # On a usage limit: skip the same-model retry and use the fallback model.
@@ -577,7 +584,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The action puts the base branch's config in the checkout before the
           # reviewer starts; this tells it where the PR's own copies are.
-          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
+          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules. ${{ steps.gate.outputs.guide_note }}"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ steps.gate.outputs.tools_suffix }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_model }} --effort ${{ steps.gate.outputs.deep_effort }}'
@@ -643,7 +650,7 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The action puts the base branch's config in the checkout before the
           # reviewer starts; this tells it where the PR's own copies are.
-          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules."
+          APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules. ${{ steps.gate.outputs.guide_note }}"
         with:
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
