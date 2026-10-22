@@ -1,0 +1,24 @@
+# Settings for the review gate (.github/scripts/review_gate.py). Every value
+# here is the default; delete a line to keep the default, or change it.
+# Unknown keys and bad values fail the gate instead of being ignored.
+
+# "one": a single required check, "Review gate".
+# "two": the older pair, "Evaluate review outcome" and "Claude On-Demand".
+checks: one
+
+# The review that runs on every PR with reviewable files.
+routine:
+  model: claude-fable-5-1
+  effort: low
+  max_turns: 120
+
+# The deeper review the routine one asks for on risky diffs.
+deep:
+  model: claude-fable-5-1
+  effort: low
+  max_turns: 120
+
+# The backup each tier falls back to when its own model's attempts fail.
+fallback:
+  model: claude-opus-5-5
+  effort: high
