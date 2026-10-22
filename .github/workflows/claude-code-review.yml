@@ -203,7 +203,7 @@ jobs:
         - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
         - **Categorized file lists** — architecture-critical files to READ first, then docs (scan only), then other code.
 
-        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history. If the pre-screen warns `GITATTRIBUTES_CHANGED`, Read every changed file instead of trusting the diff: the PR's own `.gitattributes` can make `git diff` show its files as binary.
+        Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history. If the diff shows a file as binary (the pre-screen's `BINARY_IN_DIFF` names them), Read that file in full: a single NUL byte makes git hide a code file that way.
 
         **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (toggle balance, placeholder validation, AI-attribution scan, JSX/HTML parity). Use Read for architecture-critical files; use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks`, `gh pr comment` on this PR, the exact `gh pr edit … --add-label needs-deep-review` command from Step 4, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied.
 
@@ -320,7 +320,7 @@ jobs:
 
         **Out of scope:** <list of intentional deferrals>
 
-        If the PR adds or changes a .gitattributes file, Read every changed file instead of trusting the diff: the PR can make the diff show its files as binary.
+        If the diff shows a file as binary, Read that file in full in the working folder: a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way.
 
         **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
         - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
@@ -361,6 +361,18 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # The PR's own .gitattributes must not change what the pre-screen and
+      # the reviewer read: `-diff` or `binary` shows a file as "Binary files
+      # differ", and working-tree-encoding rewrites the checked-out bytes.
+      # .git/info/attributes outranks every .gitattributes and is shared by
+      # the credits reviewer's worktree; the checkout is then redone under it.
+      # A NUL byte still makes git call a file binary: the pre-screen warns.
+      - name: Override the PR's git attributes
+        run: |
+          mkdir -p .git/info
+          printf '%s\n' '* !diff -text !eol !working-tree-encoding' > .git/info/attributes
+          git rm -rq --cached . && git reset -q --hard
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -407,6 +419,9 @@ jobs:
             --ignore-submodules=none "origin/$BASE...HEAD" > /tmp/pr_diff.txt
           git diff -z --no-renames --name-only --ignore-submodules=none \
             "origin/$BASE...HEAD" > /tmp/changed_files.txt
+          # Without --text, as the reviewer's own `git diff` runs: "-" counts
+          # mark the files it will show as binary.
+          git diff -z --no-renames --numstat "origin/$BASE...HEAD" > /tmp/numstat.txt
 
           # The verdict floor for Evaluate: no review attempt of this run
           # starts before this moment, and a run this one replaced was
@@ -631,14 +646,20 @@ jobs:
           if jsx_changed and 'index.html' not in changed:
               warnings.append(f'JSX_HTML_PARITY: {", ".join(jsx_changed)} touched but index.html not in diff — production may be out of sync')
 
-          # ── Check 4b: .gitattributes in the PR ───────────────────────────────
-          # The scans above read the diff with --text, but the reviewer runs
-          # plain `git diff` in the PR's own checkout, where a .gitattributes
-          # from the PR (`* -diff`, `binary`) can show every file as "Binary
-          # files differ" and hide the code from the review.
+          # ── Check 4b: what the reviewer's diff hides ─────────────────────────
+          # The workflow overrides the PR's attributes for this run, so a new
+          # .gitattributes only matters once merged; the reviewer judges that.
+          # A NUL byte still makes the reviewer's plain `git diff` print
+          # "Binary files differ" for a code file, so those files are named.
           attrs = [f for f in changed if f.rsplit('/', 1)[-1] == '.gitattributes']
           if attrs:
-              warnings.append(f'GITATTRIBUTES_CHANGED: {", ".join(attrs)} — the PR can make git diff show files as binary; Read every changed file instead of trusting the diff')
+              warnings.append(f'GITATTRIBUTES_CHANGED: {", ".join(attrs)} — overridden for this review; judge what the new attributes do once merged')
+          with open('/tmp/numstat.txt', 'rb') as f:
+              stats = [p.decode('utf-8', 'surrogateescape') for p in f.read().split(b'\0') if p]
+          MEDIA = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.ttf', '.otf', '.woff', '.woff2', '.pdf')
+          binary = [s[4:] for s in stats if s.startswith('-\t-\t') and not s[4:].lower().endswith(MEDIA)]
+          if binary:
+              warnings.append(f'BINARY_IN_DIFF: {", ".join(binary)} — git diff shows these as binary; Read each one in full')
 
           # ── Check 5: Categorize files ────────────────────────────────────────
           ARCH_PREFIXES = ('_core/', 'redesign/')
