@@ -26,8 +26,8 @@
 #   The Anthropic Claude Code GitHub App validates that the workflow file on a PR's
 #   head ref is byte-identical to the version on the default branch before granting
 #   an OIDC-exchanged token, so the review action cannot run on a PR that edits this
-#   file. Triage therefore never reviews the review workflows (.github/workflows/claude*.yml
-#   and *.yaml): a workflow-only PR passes as non-reviewable. Keep workflow edits in PRs of their own (mixed with reviewable
+#   file. Triage therefore never reviews this workflow (.github/workflows/claude-code-review.yml
+#   or .yaml): a PR of only it passes as non-reviewable. Keep workflow edits in PRs of their own (mixed with reviewable
 #   files, the review starts and fails `Workflow validation failed`), and the
 #   maintainer reads those diffs before merge.
 
@@ -152,15 +152,15 @@ jobs:
           # moving a file out of a reviewable path is reviewed. A listing that
           # fails is passed on as incomplete, which the script reviews; so is
           # one that reaches the API's 3,000-file cap. Which files count, and
-          # why workflow files never do, is in the script. A carriage return
-          # or newline in a name becomes a space, so one name stays one line:
-          # split, "tools/a<LF>.github/workflows/b.py" would read as a file
-          # with no extension and a workflow file, and skip the review. A
-          # space, unlike an escape, keeps "x.py<LF>" ending in .py once the
-          # script strips the line. Leading whitespace (anything Python's
-          # strip() removes) becomes "_", so " .github/workflows/x.py", a
-          # file in a folder named " .github", can't strip down to a
-          # workflow path.
+          # why this workflow never does, is in the script. A carriage
+          # return or newline in a name becomes a space, so one name stays one
+          # line: split, "docs/a.md<LF>.github/workflows/claude-code-review.yml",
+          # one .yml file, would read as a Markdown file and this workflow,
+          # and skip the review. A space, unlike an escape, keeps "x.py<LF>" ending in .py
+          # once the script strips the line. Leading whitespace (anything
+          # Python's strip() removes) becomes "_", so
+          # " .github/workflows/claude-code-review.yml", a file in a folder
+          # named " .github", can't strip down to this workflow's path.
           INCOMPLETE=""
           if ! gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" \
               --jq '.[] | .filename, (.previous_filename // empty) | gsub("[\r\n]"; " ") | sub("^[\t\u000b\f\u001c-\u001f \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+"; "_")' > /tmp/changed_files.txt; then
@@ -664,16 +664,15 @@ jobs:
               warnings.append(f'BINARY_IN_DIFF: {", ".join(binary)} — git diff shows these as binary; Read each one in full')
 
           # ── Check 5: Categorize files ────────────────────────────────────────
-          ARCH_PREFIXES = ('_core/', 'redesign/')
-          ARCH_FILES    = {'index.html', 'SETUP.md', 'TOGGLES.md', 'COMPARISON.md'}
-          # Markdown that triage always reviews (review_gate.ALWAYS_REVIEWED):
-          # the reviewers' own instructions and what a bind writes are read in
-          # full, never filed as low-risk docs.
-          STEERING = re.compile(r'(^|/)\.claude/|(^|/)CLAUDE(\.local)?\.md$|^(bundles|\.github/scripts)/', re.I)
+          # Everything triage always reviews (review_gate.ALWAYS_REVIEWED, in
+          # any case) plus the page and every workflow: the reviewers'
+          # own instructions and what a bind writes are read in full, never
+          # filed as low-risk docs.
+          ARCH = re.compile(r'^(_core|redesign|bundles|\.github/scripts)/|(^|/)\.claude/'
+                            r'|^(SETUP|TOGGLES|COMPARISON)\.md$|(^|/)CLAUDE(\.local)?\.md$', re.I)
           arch_critical, docs, other_code = [], [], []
           for f in changed:
-              if (f.startswith('.github/workflows/claude') or any(f.startswith(p) for p in ARCH_PREFIXES)
-                      or f in ARCH_FILES or STEERING.search(f)):
+              if f.startswith('.github/workflows/') or f == 'index.html' or ARCH.search(f):
                   arch_critical.append(f)
               elif f.endswith('.md'):
                   docs.append(f)
@@ -1413,7 +1412,7 @@ jobs:
                 -F status="completed" \
                 -F conclusion="skipped" \
                 -F "output[title]=Deep review skipped — diff non-reviewable" \
-                -F "output[summary]=Triage classified the diff as non-reviewable (only the review workflows, and Markdown, images and fonts outside the always-reviewed paths). Deep review not applicable."
+                -F "output[summary]=Triage classified the diff as non-reviewable (only the routine review workflow, and Markdown, images and fonts outside the always-reviewed paths). Deep review not applicable."
               echo "::notice::Set Claude On-Demand check $CHECK_ID to skipped (non-reviewable diff)"
             else
               # Self-heal: init-gate didn't create the check (Checks API 5xx,
