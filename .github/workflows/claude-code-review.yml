@@ -990,6 +990,12 @@ jobs:
           if [ "$RUNNING" = yes ]; then
             TITLE="Deep review running"
           fi
+          # Already marked by a running deep review: leave it to that review,
+          # whose final write may land at any moment and must not be undone.
+          if [ "$EXISTING_STATUS" = "in_progress" ] && [ "$EXISTING_TITLE" = "Deep review running" ]; then
+            echo "::notice::A deep review is running on $HEAD_SHA; Claude On-Demand stays as it marked it"
+            exit 0
+          fi
           if [ -n "$REASON" ]; then
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
@@ -1189,10 +1195,15 @@ jobs:
                 RUNNING=yes
               fi
               if [ "$RUNNING" = yes ]; then
+                # Rewrite only a check the deep run has not marked itself (say,
+                # one a racing skip left skipped): a marked one is that run's,
+                # and its final write must not be undone.
+                if [ "$EXISTING_STATUS" != "in_progress" ] || [ "$EXISTING_TITLE" != "Deep review running" ]; then
                 gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
                   -F status="in_progress" \
                   -F "output[title]=Deep review running" \
                   -F "output[summary]=A deep review was asked for on this head and has not reported yet (claude.yml will PATCH this check on completion). If no deep run is alive, ask again with a comment starting with \`@claude review this PR\`." >/dev/null
+                fi
                 echo "::notice::A deep review is running on $HEAD_SHA — leaving Claude On-Demand at in_progress"
                 exit 0
               fi

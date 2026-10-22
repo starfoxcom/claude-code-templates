@@ -233,7 +233,7 @@ jobs:
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
               -F "output[title]=Deep review running" \
-              -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment."
+              -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment. If no deep run is alive, ask again with a comment starting with `@claude review this PR`."
             echo "::notice::Set existing Claude On-Demand check $CHECK_ID to in_progress"
           else
             gh api "repos/$REPO/check-runs" -X POST \
@@ -257,17 +257,36 @@ jobs:
             gh api "repos/$REPO/check-runs/$CHECK_ID" -X PATCH \
               -F status="in_progress" \
               -F "output[title]=Deep review running" \
-              -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment." >/dev/null || true
+              -F "output[summary]=The deep reviewer is running. This check will be updated to success/failure when the Evaluate deep-tier verdict step parses the completion comment. If no deep run is alive, ask again with a comment starting with `@claude review this PR`." >/dev/null || true
           fi
 
       # Comments older than this moment cannot be this run's verdict: a run
       # this one cancelled is gone by now (the gate write above alone takes
       # seconds after this job joined the group), and every review attempt
       # starts after it.
+      # With `checks: two` it also marks Claude On-Demand running once more
+      # (best effort), in case a slow routine skip landed after the first
+      # re-mark.
       - name: Mark the start of the review
         id: floor
         if: steps.pr-head.outputs.head_sha != ''
-        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKS: ${{ steps.gate.outputs.checks }}
+          HEAD_SHA: ${{ steps.pr-head.outputs.head_sha }}
+        run: |
+          echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          if [ "$CHECKS" = "two" ]; then
+            CHECK_ID=$(gh api \
+              "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Claude On-Demand")] | first | .id // empty') || CHECK_ID=""
+            if [ -n "$CHECK_ID" ]; then
+              gh api "repos/${{ github.repository }}/check-runs/$CHECK_ID" -X PATCH \
+                -F status="in_progress" \
+                -F "output[title]=Deep review running" \
+                -F "output[summary]=The deep reviewer is running. If no deep run is alive, ask again with a comment starting with \`@claude review this PR\`." >/dev/null || true
+            fi
+          fi
 
       # ── First attempt: the plan's monthly API credits ─────────────────────
       # The routine tier's credits path (see its step in claude-code-review.yml
@@ -692,10 +711,12 @@ jobs:
             # The verdict stands as read, but its write to the Review gate (or
             # the read-back confirming this run owns it) failed: fail closed,
             # and say what the reviewer found instead of "nothing was judged".
-            if [ "$GATE_UNSURE" = yes ]; then
+            if [ "$GATE_UNSURE" = yes ] && { [ "$DEEP" = pass ] || [ "$DEEP" = block ]; }; then
               CONCLUSION=failure
               TITLE="Deep review ran ($DEEP) but the Review gate could not be updated"
               SUMMARY="The deep reviewer ($REVIEWER) finished with verdict: $DEEP. This run could not write it to the Review gate or confirm it owns the result there, so this check fails closed. See the deep review comment for its findings, then $RETRY."
+            elif [ "$GATE_UNSURE" = yes ]; then
+              SUMMARY="$SUMMARY The Review gate could not be updated either."
             fi
             CHECK_ID=$(gh api \
               "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Claude%20On-Demand&per_page=100" \
