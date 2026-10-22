@@ -547,6 +547,12 @@ class Escalate(unittest.TestCase):
             r = subprocess.run([sys.executable, SCRIPT, "escalate", files, diff, "--file", conf], capture_output=True)
         self.assertEqual((r.returncode, json.loads(r.stdout)["lines"]), (0, ["foo\reval(x)"]))
 
+    def test_a_crlf_ending_does_not_dodge_an_anchored_pattern(self):
+        diff = "--- a/a.py\n+++ b/a.py\n@@ -0,0 +1,2 @@\n+eval(x)\r\n+a\rb\r\n"
+        self.assertEqual(gate.added_lines(diff), ["eval(x)", "a\rb"])
+        values = dict(gate.DEFAULTS, **{"escalate.patterns": r"eval\(x\)$"})
+        self.assertTrue(gate.escalate(["a.py"], gate.added_lines(diff), values)["escalate"])
+
     def test_nothing_set_never_escalates(self):
         self.assertEqual(gate.escalate(["migrations/1.sql"], ["eval(x)"], gate.DEFAULTS),
                          {"escalate": False, "paths": [], "lines": []})

@@ -516,7 +516,9 @@ def added_lines(diff):
                 old, new = int(m.group(1) or 1), int(m.group(2) or 1)
             continue
         if line.startswith("+"):
-            added.append(line[1:])
+            # One trailing CR is the file's CRLF ending, dropped so a
+            # `$`-anchored pattern still matches; a CR inside the line stays.
+            added.append(line[1:-1] if line.endswith("\r") else line[1:])
             new -= 1
         elif line.startswith("-"):
             old -= 1
