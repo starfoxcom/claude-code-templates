@@ -151,6 +151,14 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          # The order stamp for this run's gate writes: the moment this job
+          # started, in nanoseconds, not the run id. Each approved request
+          # joins the review group above and cancels the run in flight, so
+          # the run that started last is the one whose verdict counts, even
+          # when it is an older run re-run by hand or the queue let requests
+          # in out of run order. The runs it cancelled carry older stamps, so
+          # their last writes are ignored.
+          echo "stamp=$(date +%s%N)" >> "$GITHUB_OUTPUT"
           echo "::notice::PR #$PR_NUMBER HEAD SHA = $HEAD_SHA, base = $BASE_SHA"
 
       # The gate's script and settings from the PR's base commit, kept outside
@@ -189,6 +197,21 @@ jobs:
           fi
           printf '%s\n' "$out" | tee -a "$GITHUB_OUTPUT"
 
+      # A deep review now counts as asked for, and its earlier result (if any)
+      # no longer stands: the gate waits on this run's verdict. With
+      # `checks: two` the branch rules still require the older pair, so a
+      # failed write to the new check must not skip the review and leave
+      # Claude On-Demand failed: it stays visible on this step only.
+      - name: Hold the Review gate for the deep review
+        if: steps.pr-head.outputs.head_sha != ''
+        continue-on-error: ${{ steps.gate.outputs.checks == 'two' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 "${{ steps.gate.outputs.script }}" upsert --repo "${{ github.repository }}" \
+            --sha "${{ steps.pr-head.outputs.head_sha }}" --escalated --deep none \
+            --order "${{ steps.pr-head.outputs.stamp }}.${{ github.run_attempt }}.0" --note "A deep review is running."
+
       # ── Upsert Claude On-Demand check to in_progress ──────────────────────
       # claude-code-review.yml's init-gate job created the check at
       # status=in_progress; routine auto-escalation may have already PATCHed
@@ -196,17 +219,6 @@ jobs:
       # this PR` triggers without a prior routine run on this HEAD SHA, the
       # check may not yet exist — create it. Either way, the PR's check
       # rollup now shows "Claude On-Demand: in_progress" while the review runs.
-      # A deep review now counts as asked for, and its earlier result (if any)
-      # no longer stands: the gate waits on this run's verdict.
-      - name: Hold the Review gate for the deep review
-        if: steps.pr-head.outputs.head_sha != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 "${{ steps.gate.outputs.script }}" upsert --repo "${{ github.repository }}" \
-            --sha "${{ steps.pr-head.outputs.head_sha }}" --escalated --deep none \
-            --order "${{ github.run_id }}.${{ github.run_attempt }}.0" --note "A deep review is running."
-
       - name: Upsert Claude On-Demand check to in_progress
         if: steps.pr-head.outputs.head_sha != '' && steps.gate.outputs.checks == 'two'
         env:
@@ -597,13 +609,19 @@ jobs:
             echo "::error::The gate script could not be read from the PR's base commit, so the Review gate was not updated"
             STATUS=1
           else
-            ORDER="${{ github.run_id }}.${{ github.run_attempt }}.1"
+            ORDER="${{ steps.pr-head.outputs.stamp }}.${{ github.run_attempt }}.1"
             if OUT=$(python3 "$GATE" upsert --repo "$REPO" --sha "$HEAD_SHA" --escalated --deep "$DEEP" \
                 --order "$ORDER" --note "Deep reviewer: $REVIEWER."); then
-              # A newer deep run on this head owns the gate's deep result, so
-              # this one (an older run re-run by hand) did not count.
-              if [ "$(printf '%s' "$OUT" | jq -r .state | sed 's/.*;deep_by=//')" != "$ORDER" ]; then
-                echo "::error::A newer deep run already reported on $HEAD_SHA, so this run's verdict ($DEEP) was not used. To review again, post a new comment starting with \`@claude review this PR\` instead of re-running an older run."
+              # Read the gate as it stands now, not this write's own result
+              # (upsert accepts a newer stamp as holding): when a deep run
+              # that started later owns the deep result, it cancelled this one,
+              # so this verdict does not count and must not move Claude
+              # On-Demand either; the later run moves it. It does so only after
+              # its own gate write's read-back, seconds after that write.
+              NOW=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs?check_name=Review%20gate&per_page=100" \
+                --jq '[.check_runs[] | select(.name == "Review gate")] | max_by(.id) | .external_id // ""')
+              if [ "${NOW##*;deep_by=}" != "$ORDER" ]; then
+                echo "::error::A deep run that started later took over on $HEAD_SHA, so this run's verdict ($DEEP) was not used"
                 exit 1
               fi
             else
