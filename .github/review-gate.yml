@@ -50,8 +50,10 @@ prescreen:
 # (comma separated, any case; `*` crosses folders, a trailing `/` covers a
 # folder), and a Python regex matched against the lines a PR adds (no `#`,
 # which starts a comment here; one pair of outer quotes is dropped, so wrap a
-# regex that starts and ends with the same quote in another pair).
-# Empty: none.
+# regex that starts and ends with the same quote in another pair). They
+# apply to PRs the gate reviews: a PR of only skippable files (Markdown,
+# images, fonts outside the always-reviewed paths) passes without a review,
+# so a trigger on such a file never fires. Empty: none.
 escalate:
   paths:
   patterns:

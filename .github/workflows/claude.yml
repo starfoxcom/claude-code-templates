@@ -237,6 +237,12 @@ jobs:
           # or brackets inside, and Read, Grep, Glob.
           tools=$(printf '%s\n' "$out" | sed -n 's/^reviewer_allowed_tools=//p')
           echo "tools_suffix=${tools:+,$tools}" >> "$GITHUB_OUTPUT"
+          # A base branch whose script predates the per-tier backups (a
+          # cascade into a branch that lags main) prints only fallback_*,
+          # which is what the deep backup follows by default anyway.
+          if ! printf '%s\n' "$out" | grep -q '^deep_fallback_model='; then
+            printf '%s\n' "$out" | sed -n 's/^fallback_\(model\|effort\)=/deep_fallback_\1=/p' >> "$GITHUB_OUTPUT"
+          fi
 
       # A deep review now counts as asked for, and its earlier result (if any)
       # no longer stands: the gate waits on this run's verdict. With
@@ -700,8 +706,8 @@ jobs:
             echo "::error::No deep review attempt ran to the end"
           elif [ -z "$FLOOR" ]; then
             echo "::error::The review's start time is unknown — refusing to evaluate the verdict without a stale-comment floor"
-          elif gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/comments.json; then
-            if READ=$(python3 -I "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json); then
+          elif gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/deep-comments.json"; then
+            if READ=$(python3 -I "$GATE" verdict --since "$FLOOR" --tier deep < "$RUNNER_TEMP/deep-comments.json"); then
               DEEP=$(printf '%s' "$READ" | jq -r .verdict) || DEEP=error
               RECOVERED=$(printf '%s' "$READ" | jq -r '.recovered // empty') || RECOVERED=""
               if [ -n "$RECOVERED" ]; then
