@@ -68,6 +68,10 @@ jobs:
       # The project's own paths, for the pre-screen's file categories.
       always_review: ${{ steps.settings.outputs.triage_always_review }}
       escalate_paths: ${{ steps.settings.outputs.escalate_paths }}
+      # The on/off switches (escalate.auto, prescreen.attribution); empty, from
+      # a base script that predates them, counts as on.
+      escalate_auto: ${{ steps.settings.outputs.escalate_auto }}
+      prescreen_attribution: ${{ steps.settings.outputs.prescreen_attribution }}
       # Extra reviewer tools as a ready ",tool,tool" suffix for --allowedTools,
       # or empty. The script admits only Bash(...) without quotes, `$`,
       # backslashes or brackets inside, and Read, Grep, Glob.
@@ -411,7 +415,8 @@ jobs:
         - **Pre-screen violations** — mechanical rule-breakage already detected (AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
         - **Pre-screen warnings** — likely issues you should judge (files the diff shows as binary, changed git attributes, etc.).
         - **Project pre-screen** — the project's own checks (`prescreen.dir` in the gate settings): a check that exited non-zero is a violation, likely 🔴 unless you can refute it; a line marked WARNING is for you to judge.
-        - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory.
+        - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory. A project can turn automatic escalation off; the context then says so in place of this section.
+        - **Project switches** — a section saying the project turned its AI-attribution check off, when it did.
         - **Categorized file lists** — architecture-critical files to READ first (including `.claude/` rules and skills, any `CLAUDE.md`, and the project's always-reviewed paths), then docs (scan only), then other code.
         - **Project review guide** — the project's own part of this prompt, from the base branch (absent when the project has none).
 
@@ -425,7 +430,7 @@ jobs:
 
         Read ONLY the files most likely to contain risk. Then expand outward if the architecture review surfaces a concern.
 
-        **Project invariants:** verify the ones the review guide lists, in its order. Always verify, guide or not: no AI-attribution markers (`Co-Authored-By` lines naming an AI model, "Generated with" footers naming an AI tool, AI-vendor links) in added lines, commit messages or the PR body.
+        **Project invariants:** verify the ones the review guide lists, in its order. Always verify, guide or not, unless the review context says the project turned this check off: no AI-attribution markers (`Co-Authored-By` lines naming an AI model, "Generated with" footers naming an AI tool, AI-vendor links) in added lines, commit messages or the PR body.
 
         ## Step 2.5 — Decide whether to escalate (do not post yet)
 
@@ -443,6 +448,8 @@ jobs:
         **Always mark, too, when the pre-screen report says a deep review is owed** (the PR already carries `needs-deep-review` from an earlier push). The deep check waits on every new head until a deep pass runs on it, so skipping Step 4 here leaves the PR blocked with nothing coming, and the workflow fails this run.
 
         **Do NOT mark for escalation:** docs, comments, formatting, naming nits, "consider extracting", pure refactors with no behavior change.
+
+        **When the review context says automatic escalation is off for this project**, do not mark at all (the judgment and guide rules above do not apply): a person asks for every deep review. A deep review the context says is owed still stands.
 
         ## Step 3 — Post the verdict comment FIRST
 
@@ -600,6 +607,8 @@ jobs:
           ALWAYS_REVIEW: ${{ needs.init-gate.outputs.always_review }}
           ESCALATE_PATHS: ${{ needs.init-gate.outputs.escalate_paths }}
           PRESCREEN_DIR: ${{ needs.init-gate.outputs.prescreen_dir }}
+          ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
+          PRESCREEN_ATTRIBUTION: ${{ needs.init-gate.outputs.prescreen_attribution }}
         run: |
           PR=${{ github.event.pull_request.number }}
           REPO=${{ github.repository }}
@@ -749,12 +758,14 @@ jobs:
           # (kept structural — readers consult ai_pats, not this comment,
           # to avoid the comment itself re-tripping the scanner on future
           # edits to this workflow file).
+          # A project with prescreen.attribution off skips it.
+          attribution = os.environ.get('PRESCREEN_ATTRIBUTION') != 'off'
           ai_pats = [
               re.compile(r'Co-Authored-By:\s*Claude', re.IGNORECASE),
               re.compile(r'Generated\s+with\s+\[?Claude\s+Code', re.IGNORECASE),
               re.compile(r'claude\.(?:com|ai)\b', re.IGNORECASE),
               re.compile(r'🤖\s*Generated', re.IGNORECASE),
-          ]
+          ] if attribution else []
           for fname, lines in per_file_added.items():
               for line in lines:
                   for pat in ai_pats:
@@ -816,14 +827,17 @@ jobs:
           DEEP_PREFIXES = ('.github/scripts/', '.github/workflows/claude') + CHECKS_PREFIX  # claude.yml + claude-code-review.yml
           DEEP_FILES    = {'.github/review-gate.yml', '.github/review-guide.md'}
           # Matched in any case, like triage: a case-insensitive checkout puts
-          # ".GitHub/Scripts/" in .github/scripts/.
+          # ".GitHub/Scripts/" in .github/scripts/. With escalate.auto off the
+          # routine review starts no deep review (the project's triggers then
+          # match nothing either); a deep review already owed still stands.
+          auto_escalate = os.environ.get('ESCALATE_AUTO') != 'off'
           deep_paths = [
               f for f in changed
               if f.casefold().startswith(DEEP_PREFIXES) or f.casefold() in DEEP_FILES
-          ]
+          ] if auto_escalate else []
           # The Repair step applies the label itself when these paths changed,
           # so the deep review is owed whatever the reviewer does.
-          project_deep = os.environ.get('PROJECT_ESCALATE') == 'true'
+          project_deep = auto_escalate and os.environ.get('PROJECT_ESCALATE') == 'true'
           project_context = os.environ.get('PROJECT_CONTEXT', '')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as gh_out:
               gh_out.write(f"deep_paths={'true' if deep_paths or project_deep else 'false'}\n")
@@ -860,8 +874,14 @@ jobs:
                       if project_deep:
                           out.write("- the project's own triggers, listed in the next section\n")
                   out.write('\n')
+              elif not auto_escalate:
+                  out.write('## Deep-review escalation: off for this project (Step 2.5 and Step 4 skipped)\n\n'
+                            'Do not mark this PR for escalation: in this project a person asks for every deep review.\n\n')
               else:
                   out.write('## Deep-review trigger surface: none (Step 4 skipped)\n\n')
+              if not attribution:
+                  out.write('## AI-attribution check: off for this project\n\n'
+                            'Skip the always-verify attribution invariant.\n\n')
               # The project's report comes first-hand from the Project triggers
               # and Project pre-screen jobs, which format every PR-derived line
               # as indented code.
