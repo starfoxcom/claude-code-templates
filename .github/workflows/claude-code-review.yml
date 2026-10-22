@@ -229,27 +229,41 @@ jobs:
           if git cat-file -e "$BASE_SHA:.github/review-gate.yml" 2>/dev/null; then
             git show "$BASE_SHA:.github/review-gate.yml" > "$gate/review-gate.yml"
           fi
-          # The same diff and name list the pre-screen in Auto review reads.
+          # The same diff the pre-screen in Auto review reads. One name per
+          # line: a carriage return or newline in a name becomes a space, so
+          # "src/<LF>x.sql" can't split into names no glob matches, and bytes
+          # that are not UTF-8 become \xNN escapes, so the script, which
+          # decodes names strictly, never fails on a name.
           git -c core.quotePath=false diff --text --no-ext-diff --no-textconv \
             --ignore-submodules=none "origin/$BASE...HEAD" > "$gate/pr.diff"
-          git diff -z --no-renames --name-only --ignore-submodules=none \
-            "origin/$BASE...HEAD" | tr '\0' '\n' > "$gate/files.txt"
+          git diff -z --no-renames --name-only --ignore-submodules=none "origin/$BASE...HEAD" \
+            | python3 -I -c 'import sys; sys.stdout.buffer.write(b"".join(n.decode("utf-8", "backslashreplace").replace("\r", " ").replace("\n", " ").encode() + b"\n" for n in sys.stdin.buffer.read().split(b"\0") if n))' \
+            > "$gate/files.txt"
           python3 -I "$gate/review_gate.py" escalate "$gate/files.txt" "$gate/pr.diff" \
             --file "$gate/review-gate.yml" > "$gate/escalate.json"
           python3 -I - "$gate/escalate.json" <<'PYEOF'
           import json, os, sys
           esc = json.load(open(sys.argv[1], encoding='utf-8'))
+          def cut(text, limit=300):
+              return text if len(text) <= limit else text[:limit] + ' … (cut)'
           def code(text):
               # Indented code, so nothing in a PR line reads as markup.
               return ''.join('    ' + ln + '\n' for ln in text.splitlines()) or '    (no output)\n'
           parts = []
           if esc['escalate']:
+              # The PR picks the paths and lines, so each is capped and so is
+              # the list, to keep the listing short and its end visible.
               parts.append('Project deep-review triggers met (escalate.* in the gate settings):\n\n')
-              parts += [f'- path: {p!r}\n' for p in esc['paths']]
+              parts += [f'- path: {cut(repr(p))}\n' for p in esc['paths'][:30]]
+              if len(esc['paths']) > 30:
+                  parts.append(f"- and {len(esc['paths']) - 30} more paths\n")
               if esc['lines']:
-                  parts.append('- added lines matching the pattern:\n\n' + code('\n'.join(esc['lines'])))
+                  shown = '\n'.join(cut(ln) for ln in esc['lines'])
+                  parts.append('- added lines matching the pattern:\n\n' + code(shown))
               parts.append('\n')
-          context = ''.join(parts)[:10000]
+          context = ''.join(parts)
+          if len(context) > 20000:
+              context = context[:20000] + '\n(listing cut)\n'
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               delim = 'EOF_' + os.urandom(16).hex()
               fh.write(f"escalate={'true' if esc['escalate'] else 'false'}\n")
@@ -264,10 +278,14 @@ jobs:
     # The project's own pre-screen checks (prescreen.dir in the gate
     # settings). The checks come from the base branch, and they run here, in
     # a job with no secrets and a read-only token, under an empty
-    # environment: a check that runs the PR's code reaches no review token
-    # and cannot set variables for the review job's steps, though it can
-    # still rewrite this job's own report. A failure here, a folder the base
-    # branch does not have included, skips the review, which fails the gate.
+    # environment with a home folder of its own: a check that runs the PR's
+    # code reaches no review token and cannot set variables for the review
+    # job's steps, though it can still rewrite this job's own report. On a
+    # self-hosted runner that is not wiped between jobs, such a check can
+    # also leave files or processes behind for the jobs that run there next,
+    # the review included; keep checks that run the PR's code on hosted or
+    # one-job runners. A failure here, a folder the base branch does not have
+    # included, skips the review, which fails the gate.
     permissions:
       contents: read
     outputs:
@@ -298,11 +316,12 @@ jobs:
           set -euo pipefail
           gate="$RUNNER_TEMP/gate-checks"
           mkdir -p "$gate/checks" "$gate/out"
-          # The same diff and name list the pre-screen in Auto review reads.
+          # The diff and name list Project triggers reads.
           git -c core.quotePath=false diff --text --no-ext-diff --no-textconv \
             --ignore-submodules=none "origin/$BASE...HEAD" > "$gate/pr.diff"
-          git diff -z --no-renames --name-only --ignore-submodules=none \
-            "origin/$BASE...HEAD" | tr '\0' '\n' > "$gate/files.txt"
+          git diff -z --no-renames --name-only --ignore-submodules=none "origin/$BASE...HEAD" \
+            | python3 -I -c 'import sys; sys.stdout.buffer.write(b"".join(n.decode("utf-8", "backslashreplace").replace("\r", " ").replace("\n", " ").encode() + b"\n" for n in sys.stdin.buffer.read().split(b"\0") if n))' \
+            > "$gate/files.txt"
           : > "$gate/checks.txt"
           git archive "$BASE_SHA" -- "$PRESCREEN_DIR" | tar -x -C "$gate/checks"
           find "$gate/checks/$PRESCREEN_DIR" -maxdepth 1 -type f \( -name '*.py' -o -name '*.sh' \) \
@@ -310,7 +329,9 @@ jobs:
           while IFS= read -r -d '' check; do
             case "$check" in *.py) run=(python3 -I "$check") ;; *) run=(bash "$check") ;; esac
             status=0
-            env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 \
+            # RUNNER_TRACKING_ID lets the runner end what a check leaves
+            # running when the job ends.
+            env -i PATH="$PATH" HOME="$(mktemp -d "$RUNNER_TEMP/home.XXXXXX")" LANG=C.UTF-8 RUNNER_TRACKING_ID="${RUNNER_TRACKING_ID:-}" \
               timeout 300 "${run[@]}" "$gate/files.txt" "$gate/pr.diff" > "$gate/out/run" 2>&1 || status=$?
             printf '%s\t%s\n' "$status" "${check##*/}" >> "$gate/checks.txt"
             head -c 4000 "$gate/out/run" > "$gate/out/${check##*/}"
@@ -325,13 +346,21 @@ jobs:
           rows = [ln.split('\t', 1) for ln in open(os.path.join(gate, 'checks.txt'), encoding='utf-8').read().splitlines()]
           failed = [name for status, name in rows if status != '0']
           if rows:
-              head = (f'## Project pre-screen violations ({len(failed)}) — likely 🔴 unless you can refute each'
+              # The failed names lead, so a cut report still shows them.
+              head = (f"## Project pre-screen violations ({len(failed)}: {', '.join(failed)}) — likely 🔴 unless you can refute each"
                       if failed else '## Project pre-screen checks: all passed')
               parts.append(head + '\n\n')
               for status, name in rows:
                   out = open(os.path.join(gate, 'out', name), encoding='utf-8', errors='replace').read()
-                  parts.append(f'### {name}: exit {status}\n\n' + code(out) + '\n')
-          context = ''.join(parts)[:20000]
+                  # Indenting can grow output that is mostly line breaks, so
+                  # each check's block is capped too.
+                  block = code(out)
+                  if len(block) > 5000:
+                      block = block[:5000].rsplit('\n', 1)[0] + '\n    (output cut)\n'
+                  parts.append(f'### {name}: exit {status}\n\n' + block + '\n')
+          context = ''.join(parts)
+          if len(context) > 20000:
+              context = context[:20000] + '\n(report cut)\n'
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
               delim = 'EOF_' + os.urandom(16).hex()
               fh.write(f'context<<{delim}\n{context}\n{delim}\n')
