@@ -78,12 +78,13 @@ def pack(out):
     # Mods are copied whole into ~/.claude/mods/, so the pack carries them as they ship.
     mods = list(_files_under("_core/global-template/mods"))
     global_files += mods
-    for rel in core + licenses + global_files:
+    # VERSION too: the engine records it in the pristine render it writes.
+    for rel in core + licenses + global_files + ["VERSION"]:
         _copy(rel, out)
     _stamp_version(out)
     with open(os.path.join(out, MARKER), "w", encoding="utf-8") as fh:
         fh.write("Built by tools/pack_plugin.py; safe to delete.\n")
-    return len(files) + len(ENGINE_FILES) + len(core) + len(licenses) + len(global_files) + 1
+    return len(files) + len(ENGINE_FILES) + len(core) + len(licenses) + len(global_files) + 2
 
 
 def _stamp_version(out):

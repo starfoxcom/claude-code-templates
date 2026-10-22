@@ -16,6 +16,7 @@ This skill writes the files the code describes into the repo, then fits them to 
 - If the code above is empty or does not start with `bw1-`, ask the user to copy the setup code from the last step of the Bindwright page and run `/bindwright:setup <code>` again. Stop.
 - Find the repo root with `git rev-parse --show-toplevel`. If this is not a git repo, ask whether to run `git init` here or stop.
 - If `git status --porcelain` shows uncommitted changes, say so and ask whether to continue. The setup is easier to review on a clean tree.
+- If `.bindwright/pristine.json` already exists, this repo was set up before, with the answers in `.bindwright/project.json`. Say so and ask whether to start over from this code (delete both files first, so the new ones are written) or stop.
 - If `.bindwright/incoming/` or `.bindwright/global/` already exists, an earlier setup stopped before it finished. Ask whether to finish its merges first (steps 3 and 6 on those files) or delete both folders and start fresh.
 
 ## 2. Write the files
@@ -53,7 +54,7 @@ For each one:
   - `CLAUDE.md`: keep the repo's project-specific sections, and put the new rules where they read naturally rather than appending a second copy of a section.
 - Delete the staged copy once its file is settled.
 
-Remove `.bindwright/incoming/` when it is empty, and `.bindwright/` if nothing else is in it. Mention any `skipped` paths: their staged copies came from an earlier run, and the user decides whether to merge or delete them.
+Remove `.bindwright/incoming/` when it is empty. Mention any `skipped` paths: their staged copies came from an earlier run, and the user decides whether to merge or delete them.
 
 ## 4. Fill what the page could not know
 
@@ -94,7 +95,7 @@ The hooks need a system Python: run `home.py find-python` once. On an error, ski
 
 After a hook install, check it works: pipe `{"tool_name": "Bash", "tool_input": {"command": "git push -qf origin main"}}` into the registered command and arguments on standard input, writing no file (`home.py` printed the settings path; the entry is the last one under `hooks.PreToolUse`). The push guard must exit 2.
 
-Delete `.bindwright/global/`, then `.bindwright/` if it is empty.
+Delete `.bindwright/global/`.
 
 ## 7. Finish
 
@@ -103,6 +104,7 @@ Tell the user, in plain words:
 - What was written, merged and left out, grouped by kind (rules, skills, hooks, workflows, docs), not file by file.
 - Which extras went into `~/.claude` and which were declined, and that `~/.claude/settings.json.bak` holds the settings from before the last change.
 - What still needs them: for a repo with AI review workflows, the repository secret and branch rules those workflows describe.
+- That `.bindwright/project.json` (their answers) and `.bindwright/pristine.json` (the files as generated, before any merge or fill) belong in the commit and are not edited by hand: later updates merge against them, so the repo's own edits survive.
 - That nothing is committed yet: they can read the changes with `git diff` and `git status`, and commit when happy.
 
 Do not commit or push. Outside the repo, change only what the user said yes to in step 6.

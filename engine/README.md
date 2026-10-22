@@ -6,7 +6,7 @@ A Python twin (`model.py`, `render.py`, `bind.py`, standard library only, Python
 
 - `--code bw1-...` reads the answers from a setup code instead of stdin.
 - `--write DIR` writes the files into `DIR` and prints `{"written", "staged", "skipped"}` instead. `/bindwright:setup` runs this.
-- `--year N` sets the copyright year. `bind.py --batch` (Python only) binds a list of `{"answers", "year"}` jobs for the golden test.
+- `--year N` sets the copyright year. `bind.py --batch` (Python only) binds a list of `{"answers", "year", "version"}` jobs for the golden test.
 
 | File | Job |
 |---|---|
@@ -29,6 +29,7 @@ A Python twin (`model.py`, `render.py`, `bind.py`, standard library only, Python
 - Every placeholder must get a value in `valuesFor`, or be listed in `DEFERRED` for the tailoring step that reads the user's repo.
 - `CODE_RESEARCH_TOOLS` owns each code-research tool's name, homepage, bypass marker and adherence pattern. How setup installs each one (commands, MCP entry, index, hook) lives in `_core/global-template/hooks/code-research-profiles.json`, keyed the same; `test/profiles.test.js` fails when the two lists differ. `custom` takes its name and URL from `codeResearchCustom` and derives the rest.
 - Files a repo usually already has (`CLAUDE.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `LICENSE`, `.gitattributes`, `.claude/settings.json`) land in `.bindwright/incoming/` so they are merged, never overwritten.
+- Every bind adds setup's state, which the repo keeps for `/bindwright:update`: `.bindwright/project.json`, the answers exactly as given, and `.bindwright/pristine.json`, `{"version", "year", "files"}` with every repo file as rendered, under the path it belongs at (staged files without the `.bindwright/incoming/` prefix; the `~/.claude` files left out). An update merges three ways against it, so hand edits are never overwritten silently. The commands record the `VERSION` file beside the engine folder without its `v` (the pack carries a copy); `bind()` takes it as `version`, `null` when not given. Both files are JSON with a two-space indent and a final newline, the same bytes from both twins. One file each, never a folder of copies: a copy of `.claude/` or `CLAUDE.md` inside the repo would load as rules and skills.
 - Files for the user's `~/.claude` land in `.bindwright/global/` under their path there: the global `CLAUDE.md` additions, the memory index, the push guard, the attribution guard when `hookLocation` is `home`, and the research hook for a tool whose profile says `"source": "bindwright"`. Setup offers each one; `test/global.test.js` checks which choices ship which files.
 - Guard hooks under `.claude/hooks/` are copied byte for byte, never rendered. `hookLocation` (`repo` or `home`) decides whether they ship; `attributionGuard` (on by default) adds the attribution guard, the `attribution` settings, the git rule and the review's attribution scan.
 - The deny list ships in the committed `.claude/settings.json`, never in `settings.local.json`. `denyProfile` picks it: `standard` (the default) blocks force pushes (`--force-with-lease` stays allowed), direct pushes to the main and development branches, interactive rebase and admin merges; `strict` also blocks `git reset --hard`, `git clean -f`, deleting the main or development branch, `gh repo delete` and `gh api` DELETE calls.
