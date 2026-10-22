@@ -2,7 +2,7 @@
 // output and exit status as bind.py's command (without --batch):
 //   node engine/cli.js [--year N] < answers.json     -> {"files": [[dest, text], ...]}
 //   node engine/cli.js --code bw1-...                -> the answers come from a setup code
-//   node engine/cli.js --code bw1-... --write DIR    -> {"written": [...], "skipped": [...]}
+//   node engine/cli.js --code bw1-... --write DIR    -> {"written": [...], "staged": [...], "skipped": [...]}
 // A failure gives {"error": message} and exit status 1.
 
 import { readFileSync } from "node:fs";
@@ -28,7 +28,8 @@ async function run(argv) {
   const answers = code === undefined ? JSON.parse(readFileSync(0, "utf8")) : decodeSetupCode(code);
   const coreFiles = JSON.parse(readFileSync(join(root, "engine", "core-files.json"), "utf8"));
   const readFile = async (p) => readFileSync(join(root, p), "utf8");
-  const files = [...(await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year) })).entries()];
+  const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year) });
+  const files = [...bound.entries()];
   return folder === undefined ? { files } : applyFiles(files, folder);
 }
 
@@ -39,6 +40,6 @@ try {
   result = { error: err.message };
 }
 // ASCII output, as bind.py writes it, so no console code page can mangle it.
-const ascii = JSON.stringify(result).replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
-process.stdout.write(ascii);
+const escape = (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+process.stdout.write(JSON.stringify(result).replace(/[^\x00-\x7f]/g, escape));
 process.exitCode = "error" in result ? 1 : 0;

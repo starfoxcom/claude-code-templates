@@ -35,14 +35,16 @@ const DEEP = "Invalid setup code: it nests too deeply";
 const OBJECT = "Invalid setup code: the answers must be an object";
 const BAD = [
   [123, START], [null, START], ["", START], ["bw2-e30", START], ["BW1-e30", START],
-  ["bw1-", B64], ["bw1-e30=", B64], ["bw1-e3+", B64], ["bw1-e3/", B64], ["bw1-e 30", B64], ["bw1-A", B64], ["bw1-AAAAA", B64],
+  ["bw1-", B64], ["bw1-e30=", B64], ["bw1-e3+", B64], ["bw1-e3/", B64], ["bw1-e 30", B64],
+  ["bw1-A", B64], ["bw1-AAAAA", B64],
   [PREFIX + "A".repeat(20001), LONG], [PREFIX + "A".repeat(20000), JSON_], ["bw1-AB", JSON_],
-  [codeOf(Buffer.from([0xff])), JSON_], [codeOf(Buffer.from([0xed, 0xa0, 0x80])), JSON_], [codeOf(Buffer.from([0xc0, 0xaf])), JSON_],
-  [codeOf("\ufeff\ufeff{}"), JSON_], [codeOf('{"a":NaN}'), JSON_], [codeOf("Infinity"), JSON_], [codeOf('{"a":1,}'), JSON_],
-  [codeOf("{'a':1}"), JSON_], [codeOf('{"a":"\t"}'), JSON_], [codeOf("{}\u00a0"), JSON_],
+  [codeOf(Buffer.from([0xff])), JSON_], [codeOf(Buffer.from([0xed, 0xa0, 0x80])), JSON_],
+  [codeOf(Buffer.from([0xc0, 0xaf])), JSON_],
+  [codeOf("\ufeff\ufeff{}"), JSON_], [codeOf('{"a":NaN}'), JSON_], [codeOf("Infinity"), JSON_],
+  [codeOf('{"a":1,}'), JSON_], [codeOf("{'a':1}"), JSON_], [codeOf('{"a":"\t"}'), JSON_], [codeOf("{}\u00a0"), JSON_],
   [codeOf("[".repeat(65) + "]".repeat(65)), DEEP], [codeOf('{"a":'.repeat(65) + "1" + "}".repeat(65)), DEEP],
-  [codeOf("[]"), OBJECT], [codeOf("null"), OBJECT], [codeOf("1"), OBJECT], [codeOf('"x"'), OBJECT], [codeOf("true"), OBJECT],
-  [codeOf("[".repeat(64) + "]".repeat(64)), OBJECT],
+  [codeOf("[]"), OBJECT], [codeOf("null"), OBJECT], [codeOf("1"), OBJECT], [codeOf('"x"'), OBJECT],
+  [codeOf("true"), OBJECT], [codeOf("[".repeat(64) + "]".repeat(64)), OBJECT],
 ];
 // Codes both decoders accept that the page would never make.
 const ODD = [
@@ -189,7 +191,10 @@ test("both commands bind a setup code to the same output", { skip: noPython }, a
   const files = [...(await bind(named(), { readFile, coreFiles, year: 2026 })).entries()];
   assert.deepEqual(JSON.parse(js.stdout), { files });
 
-  for (const args of [["--code", "bad"], ["--code"], ["--code", code, "--year", "1_0"], ["--code", codeOf('{"team":"yes"}')]]) {
+  const refusals = [
+    ["--code", "bad"], ["--code"], ["--code", code, "--year", "1_0"], ["--code", codeOf('{"team":"yes"}')],
+  ];
+  for (const args of refusals) {
     const [jsBad, pyBad] = commands(args);
     assert.equal(jsBad.status, 1, args.join(" "));
     assert.equal(pyBad.status, 1, args.join(" "));
@@ -216,7 +221,8 @@ test("both commands write the same files and never overwrite", { skip: noPython 
     // third finds everything staged already.
     const mine = join(root, "js", "CLAUDE.md");
     writeFileSync(mine, "mine");
-    const again = () => JSON.parse(run(process.execPath, [join(engine, "cli.js"), "--code", code, "--write", join(root, "js")]).stdout);
+    const write = [join(engine, "cli.js"), "--code", code, "--write", join(root, "js")];
+    const again = () => JSON.parse(run(process.execPath, write).stdout);
     const inPlace = result.written.filter((p) => !p.startsWith(STAGING));
     const staged = result.written.filter((p) => p.startsWith(STAGING));
     assert.deepEqual(again(), { written: [], staged: inPlace, skipped: staged });

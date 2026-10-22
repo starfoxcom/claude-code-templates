@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 export const python = spawnSync(process.execPath, ["-e", `
   const { spawnSync } = require("node:child_process");
   for (const cmd of ["python", "python3"]) {
-    const r = spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8); print(sys.executable)"], { encoding: "utf8" });
+    const check = "import sys; assert sys.version_info >= (3, 8); print(sys.executable)";
+    const r = spawnSync(cmd, ["-c", check], { encoding: "utf8" });
     if (r.status === 0 && r.stdout.trim()) { process.stdout.write(r.stdout.trim()); break; }
   }`], { encoding: "utf8" }).stdout || undefined;
