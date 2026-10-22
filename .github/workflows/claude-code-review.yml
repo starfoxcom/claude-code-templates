@@ -754,7 +754,7 @@ jobs:
             exit 1
           fi
           verdict=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.body | test("Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
+            | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("^[\\s#*_]*Code Review[^a-zA-Z]+claude-code-templates")) | select(.created_at >= $ts)] | last | .body // ""' \
             | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
             echo "::warning::The credits run posted no verdict: the review runs on the subscription"
@@ -1123,19 +1123,17 @@ jobs:
           # Title-tolerant marker: the reviewer does not reliably reproduce the
           # exact `## Code Review — claude-code-templates` heading (observed
           # `**Code Review - …**` and a heading-less `Code Review — …`), so it
-          # matches the stable phrase with any separator. The script reads only
-          # claude[bot]'s comments that carry it, never a deep-review comment;
+          # matches the stable phrase with any separator, but only where the
+          # comment starts: the deep-review request and a deep run's tracking
+          # comment can name the heading further down and quote both verdict
+          # formats, and both are posted after the verdict. The script reads
+          # only claude[bot]'s comments that match, never a deep-review comment;
           # the last line holding 🔴 or 🟢 decides, so a recap of an older 🔴
           # cannot false-block a 🟢 (details in the script).
-          # The deep-review request and the review action's tracking comments
-          # are dropped first: they can name the routine heading and quote both
-          # verdict formats, and the request is posted after the verdict.
           gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/all-comments.json
-          jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)
-            | select((.body // "") | test("^(@claude review this PR|\\*\\*Claude |Claude Code is working)") | not)]' \
-            /tmp/all-comments.json > /tmp/comments.json
+          jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)]' /tmp/all-comments.json > /tmp/comments.json
           VERDICT=$(python3 .github/scripts/review_gate.py verdict --since "$FLOOR" --tier routine \
-            --marker 'Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
+            --marker '^[\s#*_]*Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
           echo "$VERDICT"
           ROUTINE=$(printf '%s' "$VERDICT" | jq -r .verdict)
           RECOVERED=$(printf '%s' "$VERDICT" | jq -r '.recovered // empty')
