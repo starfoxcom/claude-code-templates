@@ -51,8 +51,9 @@ import time
 # review workflow differs from the default branch's, so a workflow-only PR has
 # to pass as non-reviewable. Only that one workflow: claude.yml (the deep tier
 # runs the default branch's copy), any other workflow, and a script or action
-# kept under .github/workflows/ are reviewed like any other file.
-NEVER = re.compile(r"^\.github/workflows/claude-code-review\.ya?ml$")
+# kept under .github/workflows/ are reviewed like any other file. A .yaml twin
+# would run as a separate workflow, so it is reviewed too.
+NEVER = re.compile(r"^\.github/workflows/claude-code-review\.yml$")
 # Skipped only when every other path is Markdown, an image or a font that is
 # not always reviewed. Always reviewed, whatever the file type: _core/, which
 # lands verbatim in users' repos; bundles/, whose toggles drive what a bind
