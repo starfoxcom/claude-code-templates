@@ -51,9 +51,12 @@ import time
 # review workflow differs from the default branch's, so a workflow-only PR has
 # to pass as non-reviewable. Excluded by path on purpose, never by extension.
 NEVER = re.compile(r"^\.github/workflows/")
-# Source, data and contract files, plus everything under _core/, which lands
-# verbatim in users' repos (and CLAUDE.md.additions in their ~/.claude).
-REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^_core/|\.additions$|/bundle\.toggles\.md$")
+# Source, data and contract files, plus every file of any type in the
+# deep-review folders: _core/, which lands verbatim in users' repos (and
+# CLAUDE.md.additions in their ~/.claude), redesign/, and .github/scripts/,
+# where a file Python loads before the standard library could run in the gate.
+REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^(_core|redesign|\.github/scripts)/"
+                        r"|\.additions$|/bundle\.toggles\.md$")
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
 

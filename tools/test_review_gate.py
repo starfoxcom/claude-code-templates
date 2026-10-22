@@ -31,6 +31,13 @@ class Triage(unittest.TestCase):
         self.assertFalse(gate.triage([".github/workflows/claude-code-review.yml", "CHANGELOG.md"]))
         self.assertTrue(gate.triage([".github/workflows/x.yml", ".github/scripts/review_gate.py"]))
 
+    def test_deep_review_folders_count_whatever_the_file_type(self):
+        for path in (".github/scripts/json.pyc", ".github/scripts/run.sh", "redesign/notes.md",
+                     "_core/project-template/README.md", ".github/review-gate.yml"):
+            with self.subTest(path=path):
+                self.assertTrue(gate.triage([path]))
+        self.assertFalse(gate.triage([".github/notes.md", "docs/redesign/x.md"]))
+
     def test_an_incomplete_listing_is_reviewed(self):
         self.assertTrue(gate.triage(["README.md"], incomplete=True))
         self.assertTrue(gate.triage(["docs/%d.md" % i for i in range(gate.LISTING_CAP)]))
