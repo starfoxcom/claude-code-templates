@@ -37,6 +37,14 @@ STAGING = ".bindwright/incoming/"
 GLOBAL = ".bindwright/global/"
 GLOBAL_CORE = "_core/global-template/"
 
+# Setup's own state, which the repo keeps for /bindwright:update: the answers
+# as given, and the render they produced (the base of a three-way merge, so
+# an update never overwrites hand edits silently) with the template version
+# and the year it used. One file each, never a mirror folder: a copy of
+# .claude/ or CLAUDE.md inside the repo would load as rules and skills.
+ANSWERS = ".bindwright/project.json"
+PRISTINE = ".bindwright/pristine.json"
+
 # Guard hooks and the review gate's scripts ship byte for byte: they are
 # code, not templates, and the render step's blank-line folding would still
 # change them.
@@ -154,8 +162,29 @@ def _global_files(a, ctx, read_file):
     return [[GLOBAL + dest, text] for dest, text in out]
 
 
-def bind(answers, read_file, core_files, year=None):
-    """Returns a dict of dest path -> rendered text, in the JS engine's order."""
+def _state_json(value):
+    # The bytes of bind.js's stateJson: JSON.stringify(value, null, 2) plus a newline.
+    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+
+
+def _state_files(answers, files, version, year):
+    """The state files for a bind's repo files: each under the path it belongs
+    at, staged or not. The ~/.claude files are not the repo's."""
+    pristine = [
+        (dest[len(STAGING):] if dest.startswith(STAGING) else dest, text)
+        for dest, text in files
+        if not dest.startswith(GLOBAL)
+    ]
+    pristine.sort(key=lambda f: _code_units(f[0]))
+    return [
+        (ANSWERS, _state_json(answers)),
+        (PRISTINE, _state_json({"version": version, "year": year, "files": dict(pristine)})),
+    ]
+
+
+def bind(answers, read_file, core_files, year=None, version=None):
+    """Returns a dict of dest path -> rendered text, in the JS engine's order.
+    `version` is the template version recorded in the pristine render."""
     a = validate(answers)
     adv = a["advanced"]
     precommit_profiles = json.loads(read_file(CORE + "precommit/precommit-profiles.json"))
@@ -176,7 +205,13 @@ def bind(answers, read_file, core_files, year=None):
     if SHIPPED_TEXT_RULE in out and adv["shippedTextPaths"]:
         out[SHIPPED_TEXT_RULE] = _with_paths(out[SHIPPED_TEXT_RULE], adv["shippedTextPaths"], SHIPPED_TEXT_RULE)
     files = list(out.items()) + [tuple(f) for f in _global_files(a, ctx, read_file)]
+    files += _state_files(answers, files, version, values["YEAR"])
     return dict(sorted(files, key=lambda f: _code_units(f[0])))
+
+
+# A command bind records the version in the VERSION file beside the engine
+# folder (the repo's, or the pack's copy); a --batch job names its own.
+_FROM_FILE = object()
 
 
 def _stdin_json():
@@ -227,14 +262,16 @@ def _main(argv):
 
     core_files = json.loads(read_file("engine/core-files.json"))
 
-    def run(answers, year):
+    def run(answers, year, version=_FROM_FILE):
         try:
-            return {"files": [[k, v] for k, v in bind(answers, read_file, core_files, year).items()]}
+            if version is _FROM_FILE:
+                version = read_file("VERSION").strip(JS_WHITESPACE).lstrip("v")
+            return {"files": [[k, v] for k, v in bind(answers, read_file, core_files, year, version).items()]}
         except Exception as e:  # every failure is reported, as the JS engine throws it
             return {"error": str(e)}
 
     if "--batch" in argv:
-        result = [run(j["answers"], j.get("year")) for j in _stdin_json()]
+        result = [run(j["answers"], j.get("year"), j.get("version")) for j in _stdin_json()]
     else:
         result = _single(argv, run)
     # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.

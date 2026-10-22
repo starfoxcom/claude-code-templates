@@ -28,7 +28,9 @@ async function run(argv) {
   const answers = code === undefined ? JSON.parse(readFileSync(0, "utf8")) : decodeSetupCode(code);
   const coreFiles = JSON.parse(readFileSync(join(root, "engine", "core-files.json"), "utf8"));
   const readFile = async (p) => readFileSync(join(root, p), "utf8");
-  const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year) });
+  // The template version the pristine render records: VERSION without its "v".
+  const version = (await readFile("VERSION")).trim().replace(/^v+/, "");
+  const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year), version });
   const files = [...bound.entries()];
   return folder === undefined ? { files } : applyFiles(files, folder);
 }

@@ -189,7 +189,9 @@ test("both commands bind a setup code to the same output", { skip: noPython }, a
   assert.equal(py.stdout, js.stdout);
   const readFile = async (p) => readFileSync(join(repo, p), "utf8");
   const coreFiles = JSON.parse(readFileSync(join(engine, "core-files.json"), "utf8"));
-  const files = [...(await bind(named(), { readFile, coreFiles, year: 2026 })).entries()];
+  // The commands record the repo's VERSION, without its "v", in the pristine render.
+  const version = readFileSync(join(repo, "VERSION"), "utf8").trim().replace(/^v/, "");
+  const files = [...(await bind(named(), { readFile, coreFiles, year: 2026, version })).entries()];
   assert.deepEqual(JSON.parse(js.stdout), { files });
 
   const refusals = [

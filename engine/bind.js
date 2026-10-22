@@ -19,6 +19,14 @@ export const STAGING = ".bindwright/incoming/";
 export const GLOBAL = ".bindwright/global/";
 const GLOBAL_CORE = "_core/global-template/";
 
+// Setup's own state, which the repo keeps for /bindwright:update: the answers
+// as given, and the render they produced (the base of a three-way merge, so
+// an update never overwrites hand edits silently) with the template version
+// and the year it used. One file each, never a mirror folder: a copy of
+// .claude/ or CLAUDE.md inside the repo would load as rules and skills.
+export const ANSWERS = ".bindwright/project.json";
+export const PRISTINE = ".bindwright/pristine.json";
+
 // Guard hooks and the review gate's scripts ship byte for byte: they are
 // code, not templates, and the render step's blank-line folding would still
 // change them.
@@ -128,8 +136,25 @@ async function globalFiles(a, ctx, readFile) {
 
 const byDest = ([x], [y]) => (x < y ? -1 : x > y ? 1 : 0);
 
+// Two-space JSON with a final newline; bind.py's _state_json writes the same bytes.
+const stateJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
+
+// The state files for a bind's repo files: each under the path it belongs
+// at, staged or not. The ~/.claude files are not the repo's.
+function stateFiles(answers, files, version, year) {
+  const pristine = files
+    .filter(([dest]) => !dest.startsWith(GLOBAL))
+    .map(([dest, text]) => [dest.startsWith(STAGING) ? dest.slice(STAGING.length) : dest, text])
+    .sort(byDest);
+  return [
+    [ANSWERS, stateJson(answers)],
+    [PRISTINE, stateJson({ version, year, files: Object.fromEntries(pristine) })],
+  ];
+}
+
 // Returns a Map of dest path -> rendered text, in plain code-unit order.
-export async function bind(answers, { readFile, coreFiles, year }) {
+// `version` is the template version recorded in the pristine render.
+export async function bind(answers, { readFile, coreFiles, year, version = null }) {
   const a = validate(answers);
   const precommitProfiles = JSON.parse(await readFile(`${CORE}precommit/precommit-profiles.json`));
   const values = valuesFor(a, { year });
@@ -150,5 +175,6 @@ export async function bind(answers, { readFile, coreFiles, year }) {
   if (out.has(SHIPPED_TEXT_RULE) && a.advanced.shippedTextPaths) {
     out.set(SHIPPED_TEXT_RULE, withPaths(out.get(SHIPPED_TEXT_RULE), a.advanced.shippedTextPaths, SHIPPED_TEXT_RULE));
   }
-  return new Map([...out, ...(await globalFiles(a, ctx, readFile))].sort(byDest));
+  const files = [...out, ...(await globalFiles(a, ctx, readFile))];
+  return new Map([...files, ...stateFiles(answers, files, version, values.YEAR)].sort(byDest));
 }

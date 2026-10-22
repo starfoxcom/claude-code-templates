@@ -68,7 +68,7 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 - [x] Canonical templates follow the prototype: a bound project gets the live review gate unchanged (both workflows, the gate script and its setup script), the bundle's choices land in `.github/review-gate.yml` (models, automatic escalation, the attribution check), and the project's part of the review prompt in `.github/review-guide.md`. A test binds this repo's own choices and requires the live files byte for byte.
 
 ### Phase 2b: plugin lifecycle
-- [ ] `.bindwright/` state: saved answers, template version, pristine render for three-way merges.
+- [x] `.bindwright/` state: saved answers, template version, pristine render for three-way merges. Every bind writes `.bindwright/project.json` (the answers as given, the file `HANDOFF.md` calls the project layer) and `.bindwright/pristine.json` (`version`, `year` and every repo file as rendered, under the path it belongs at). One JSON file each rather than a folder of copies, since a copy of `.claude/` or `CLAUDE.md` inside the repo would load as rules and skills; the saved answers, year and version reproduce the render byte for byte (#415).
 - [ ] Adopt mode, the project-owned manifest and keep markers.
 - [ ] Add-ons: GitHub Project board tracking in place of `ROADMAP.md`; a code-size checker with a baseline ratchet that fails CI on any new breach.
 - [ ] `/bindwright:update` and the daily SessionStart notice.

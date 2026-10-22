@@ -58,6 +58,11 @@ function oneAtATime() {
       // U+0085 passes JavaScript's trim() but not Python's strip().
       named.advanced.shippedTextPaths = ["**/*.gd", "i18n/$&-$1.json", "docs/#public/**", "notes\u0085"];
       cases.push(named);
+      // The saved answers in .bindwright/project.json: both engines escape
+      // quotes, backslashes and control characters alike, and nothing else.
+      const escaped = clone(base);
+      escaped.project = { ...escaped.project, licenseHolder: 'A "B" \\ C\u0007\u001f\u007f ' };
+      cases.push(escaped);
     }
   }
   return cases;
@@ -157,7 +162,7 @@ function firstDifference(js, py) {
 test("the Python engine binds exactly what the JS engine binds", { skip: !python && "needs Python 3.8+" }, async () => {
   const cases = [...oneAtATime(), ...seeded(40), ...refused()];
   const out = spawnSync(python, [join(engine, "bind.py"), "--batch"], {
-    input: JSON.stringify(cases.map((answers) => ({ answers, year: 2026 }))), encoding: "utf8", maxBuffer: 1 << 30,
+    input: JSON.stringify(cases.map((answers) => ({ answers, year: 2026, version: "2.0.0" }))), encoding: "utf8", maxBuffer: 1 << 30,
   });
   assert.equal(out.status, 0, out.stderr);
   const results = JSON.parse(out.stdout);
@@ -168,7 +173,7 @@ test("the Python engine binds exactly what the JS engine binds", { skip: !python
     const label = `case ${i}: ${JSON.stringify(answers)}`;
     let js;
     try {
-      js = { files: [...(await bind(clone(answers), { readFile, coreFiles, year: 2026 })).entries()] };
+      js = { files: [...(await bind(clone(answers), { readFile, coreFiles, year: 2026, version: "2.0.0" })).entries()] };
     } catch (err) {
       js = { error: err.message };
     }
