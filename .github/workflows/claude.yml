@@ -1,8 +1,9 @@
 # On-demand deep review
 # Filters on body SIGNATURE (`@claude review this PR`), not author. Mirrors
 # GameProject's proven shape: the routine review's structured trigger comment
-# (claude-code-review.yml Step 4.B) is posted by GITHUB_TOKEN — author =
-# `claude[bot]`. So is the action's own progress comment. Body content
+# (claude-code-review.yml Step 4.B) is posted with the review app's
+# installation token, not GITHUB_TOKEN (whose comments start no workflow) —
+# author = `claude[bot]`. So is the action's own progress comment. Body content
 # distinguishes the two cleanly:
 #   • Trigger comment body STARTS with `@claude review this PR — depth pass`.
 #   • Progress comment body is `Claude Code is working…` and contains
@@ -511,6 +512,20 @@ jobs:
               exit 1 ;;
           esac
 
+      # The review action fetches the PR branch from origin before it writes
+      # its own token, and the checkout above left no login, so on a private
+      # repo that fetch fails and every attempt below with it. The credits
+      # reviewer has finished by now, so the workflow token can go into the
+      # local git config for the attempts; the last step takes it out again.
+      - name: Give the review action a git login on a private repo
+        if: github.event.repository.private && steps.pr-head.outputs.head_sha != '' && steps.claude_credits.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
+
       - name: Run Claude
         id: claude_attempt_1
         if: steps.pr-head.outputs.head_sha != '' && steps.claude_credits.outcome != 'success'
@@ -682,6 +697,12 @@ jobs:
           additional_permissions: |
             actions: read
           allowed_bots: "claude"
+
+      # Takes the login from the step before the attempts out again, whatever
+      # happened: a self-hosted runner keeps the workspace for later jobs.
+      - name: Remove the review action's git login
+        if: always() && github.event.repository.private
+        run: git config --local --unset-all http.https://github.com/.extraheader || true
 
       - name: Evaluate deep-tier verdict
         # Reads this run's deep verdict and writes it into the Review gate on
