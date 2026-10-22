@@ -406,7 +406,10 @@ jobs:
 
           # surrogateescape keeps names that are not UTF-8 byte for byte, so
           # the diff's names equal the list's and open() still finds them.
-          with open('/tmp/pr_diff.txt', encoding='utf-8', errors='surrogateescape') as f:
+          # newline='': only git's own \n ends a diff line. Text mode would turn
+          # a lone \r inside an added line into a break, and the text after it
+          # would lose its "+" and skip every scan.
+          with open('/tmp/pr_diff.txt', encoding='utf-8', errors='surrogateescape', newline='') as f:
               diff = f.read()
           with open('/tmp/changed_files.txt', 'rb') as f:
               changed = [p.decode('utf-8', 'surrogateescape') for p in f.read().split(b'\0') if p]
@@ -454,7 +457,7 @@ jobs:
               if fname is None:
                   fname = f'<unread diff header {n}>'
                   warnings.append(f'UNREAD_DIFF_HEADER: {first[:120]}')
-              added = [l[1:] for l in sec.splitlines() if l.startswith('+') and not l.startswith('+++')]
+              added = [l[1:] for l in sec.split('\n') if l.startswith('+') and not l.startswith('+++')]
               per_file_added[fname] = added
 
           # ── Check 1: Toggle marker balance ───────────────────────────────────
