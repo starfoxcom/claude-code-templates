@@ -1,6 +1,6 @@
 # Settings for the review gate (.github/scripts/review_gate.py). Every value
-# here is the default but triage.always_review, which lists this repo's own
-# paths; delete a line to keep the default.
+# here is the default but this repo's own: prescreen.dir, escalate.paths and
+# triage.always_review. Delete a line to keep the default.
 # Unknown keys and bad values fail the gate instead of being ignored.
 # The workflows read this file from the PR's base branch, so a PR cannot
 # change the settings its own review runs under.
@@ -46,9 +46,9 @@ fallback:
 # A check that runs the PR's code can fake its own report, and on a
 # self-hosted runner that is not wiped between jobs it can leave files or
 # processes behind for the review; keep such checks on hosted or one-job
-# runners. Empty: none.
+# runners. Empty: none. This repo: its template and page checks.
 prescreen:
-  dir:
+  dir: .github/review-checks
 
 # The project's own deep-review triggers, on top of the gate's: path globs
 # (comma separated, any case; `*` crosses folders, a trailing `/` covers a
@@ -57,9 +57,11 @@ prescreen:
 # regex that starts and ends with the same quote in another pair). They
 # apply to PRs the gate reviews: a PR of only skippable files (Markdown,
 # images, fonts outside the always-reviewed paths) passes without a review,
-# so a trigger on such a file never fires. Empty: none.
+# so a trigger on such a file never fires; list its path under
+# triage.always_review too. Empty: none. This repo: the templates every bind
+# ships, the page and its source.
 escalate:
-  paths:
+  paths: _core/, redesign/, index.html
   patterns:
 
 # Paths that always get a review, whatever their file type, on top of the
