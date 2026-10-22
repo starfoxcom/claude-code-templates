@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind } from "../bind.js";
+import { python } from "./python.js";
 import {
   defaults, LICENSES, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES, MERGE_STYLES, HOOK_LOCATIONS, DENY_PROFILES,
 } from "../model.js";
@@ -21,17 +22,6 @@ const readFile = async (p) => {
   return cache.get(p);
 };
 const coreFiles = JSON.parse(readFileSync(join(engine, "core-files.json"), "utf8"));
-
-// The interpreter's full path, found by a throwaway Node process. On Windows
-// `python` is often an App Execution Alias, and once a process has started one,
-// Node 20 aborts on its next start of an interpreter by full path
-// (AssignProcessToJobObject: (87)). This process starts interpreters by full path only.
-const python = spawnSync(process.execPath, ["-e", `
-  const { spawnSync } = require("node:child_process");
-  for (const cmd of ["python", "python3"]) {
-    const r = spawnSync(cmd, ["-c", "import sys; assert sys.version_info >= (3, 8); print(sys.executable)"], { encoding: "utf8" });
-    if (r.status === 0 && r.stdout.trim()) { process.stdout.write(r.stdout.trim()); break; }
-  }`], { encoding: "utf8" }).stdout || undefined;
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
