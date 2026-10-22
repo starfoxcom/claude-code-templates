@@ -1,7 +1,8 @@
 # Python twin of apply.js. Writes a bind's files into a repo, never over an
 # existing file. When the repo already has a file, the new text goes to
-# STAGING under the same path instead, for setup to merge; when that copy
-# exists too, the file is skipped. Standard library only.
+# STAGING under the same path instead, for setup to merge. A file whose staged
+# copy exists too, or one in .bindwright/ (setup's own working files), is
+# skipped. Standard library only.
 
 import os
 import re
@@ -43,7 +44,7 @@ def apply_files(files, root):
         if not os.path.lexists(at(path)):
             _write(at(path), text)
             result["written"].append(path)
-        elif not path.startswith(STAGING) and not os.path.lexists(at(STAGING + path)):
+        elif not path.startswith(".bindwright/") and not os.path.lexists(at(STAGING + path)):
             _write(at(STAGING + path), text)
             result["staged"].append(path)
         else:
