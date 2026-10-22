@@ -260,6 +260,7 @@ jobs:
         - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
         - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule below forces 🔴)
         - Any verdict line followed by trailing prose (`🟢 LGTM, ship it!` — must be the FINAL line, nothing after)
+        - A 🟢 review with any line that opens with 🔴 or the word `Blocking` (`### Blocking issues`, `**Blocking:** none`, `1. 🔴 …`): the gate blocks on that line. A clean review starts no line with either
 
         **Self-check immediately before invoking `gh pr comment`:** Look at the literal last line of your draft body. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure on this repo is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
 
@@ -324,6 +325,7 @@ jobs:
         - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
         - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
         - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+        - A 🟢 review with any line that opens with 🔴 or the word `Blocking` (`### Blocking issues`, `**Blocking:** none`, `1. 🔴 …`): the gate blocks on that line. A clean review starts no line with either
 
         **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
 

@@ -390,7 +390,7 @@ jobs:
 
           You work alone and this is a one-shot session: the moment you end your turn it is over and nothing else runs. Never delegate to helper agents, never schedule a wake-up, never wait for anything. Read the diff file by file in this turn and post the review before you stop.
 
-          Then post exactly one comment with \`gh pr comment $PR_NUMBER --body \"<your review>\"\`. Its first line is exactly \`## Deep review\`. Its last line is the verdict alone: \`🟢 LGTM\` only when the review is fully clean (no caveats, no nits, no non-blocking findings), otherwise \`🔴 Blocking — <one-line reason>\`. Post nothing else and change nothing."
+          Then post exactly one comment with \`gh pr comment $PR_NUMBER --body \"<your review>\"\`. Its first line is exactly \`## Deep review\`. Its last line is the verdict alone: \`🟢 LGTM\` only when the review is fully clean (no caveats, no nits, no non-blocking findings), otherwise \`🔴 Blocking — <one-line reason>\`. In a clean review no line opens with 🔴 or the word Blocking, since the gate blocks on such a line. Post nothing else and change nothing."
 
           out="$RUNNER_TEMP/claude-credits-output.json"
           status=0
