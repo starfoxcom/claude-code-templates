@@ -366,7 +366,8 @@ jobs:
               echo "::warning::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           cli="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$cli" ]; then
@@ -554,7 +555,8 @@ jobs:
               echo "::error::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           src="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$src" ]; then
@@ -648,7 +650,13 @@ jobs:
           elif [ -z "$FLOOR" ]; then
             echo "::error::The review's start time is unknown — refusing to evaluate the verdict without a stale-comment floor"
           elif gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/comments.json; then
-            DEEP=$(python3 "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json | jq -r .verdict) || DEEP=error
+            if READ=$(python3 "$GATE" verdict --since "$FLOOR" --tier deep < /tmp/comments.json); then
+              DEEP=$(printf '%s' "$READ" | jq -r .verdict) || DEEP=error
+              RECOVERED=$(printf '%s' "$READ" | jq -r '.recovered // empty') || RECOVERED=""
+              if [ -n "$RECOVERED" ]; then
+                echo "::warning::Deep verdict read from a malformed comment: $RECOVERED"
+              fi
+            fi
           fi
           echo "Deep verdict: $DEEP (reviewer: $REVIEWER; $ATTEMPTS)"
 
