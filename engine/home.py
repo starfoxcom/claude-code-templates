@@ -125,15 +125,30 @@ def _save(path, data):
     _atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
 
-def _mentions(entry, name):
-    """True when a PreToolUse entry runs a file called `name`."""
-    for hook in entry.get("hooks") or [] if isinstance(entry, dict) else []:
-        if not isinstance(hook, dict):
+def _runs(hook, name):
+    """True when one hook runs a file called `name`, in the exec or the shell form."""
+    if not isinstance(hook, dict):
+        return False
+    words = [hook.get("command") or ""] + [a for a in hook.get("args") or [] if isinstance(a, str)]
+    return any(isinstance(w, str) and w.replace("\\", "/").rstrip("\"'").endswith("/" + name) for w in words)
+
+
+def _drop(entries, name):
+    """Removes every hook that runs `name`, keeping the other hooks of its
+    entry; an entry left with no hooks goes too. Returns the hooks removed."""
+    removed, kept = 0, []
+    for entry in entries:
+        hooks = entry.get("hooks") if isinstance(entry, dict) else None
+        if not isinstance(hooks, list):
+            kept.append(entry)
             continue
-        words = [hook.get("command") or ""] + [a for a in hook.get("args") or [] if isinstance(a, str)]
-        if any(w.replace("\\", "/").rstrip("\"'").endswith("/" + name) for w in words):
-            return True
-    return False
+        rest = [h for h in hooks if not _runs(h, name)]
+        removed += len(hooks) - len(rest)
+        if rest or not hooks:
+            entry["hooks"] = rest
+            kept.append(entry)
+    entries[:] = kept
+    return removed
 
 
 def _pre_tool_use(data, path):
@@ -146,10 +161,12 @@ def install_hook(home, file, python, matcher):
         raise HomeError("A hook is a .py file: " + file)
     path, data = _load(home)
     entries = _pre_tool_use(data, path)
-    target = os.path.join(_claude(home), "hooks", name)
+    target = os.path.normpath(os.path.join(_claude(home), "hooks", name))
     with open(file, encoding="utf-8") as fh:
         _atomic_write(target, fh.read())
-    entries[:] = [e for e in entries if not _mentions(e, name)]
+    _drop(entries, name)
+    # The exec form of the CLI's hooks reference: with `args`, `command` is
+    # started directly with them, no shell, so paths with spaces need no quoting.
     entries.append({"matcher": matcher, "hooks": [{
         "type": "command", "command": python,
         "args": ["-I", "-c", LAUNCHER, target.replace("\\", "/")], "timeout": 10,
@@ -161,16 +178,14 @@ def install_hook(home, file, python, matcher):
 def remove_hook(home, name):
     path, data = _load(home)
     entries = _pre_tool_use(data, path)
-    kept = [e for e in entries if not _mentions(e, name)]
-    removed = len(entries) - len(kept)
+    removed = _drop(entries, name)
     if removed:
-        entries[:] = kept
         _save(path, data)
     target = os.path.join(_claude(home), "hooks", name)
     deleted = os.path.isfile(target)
     if deleted:
         os.remove(target)
-    return {"removed_entries": removed, "deleted_file": deleted}
+    return {"removed_hooks": removed, "deleted_file": deleted}
 
 
 def list_hooks(home):

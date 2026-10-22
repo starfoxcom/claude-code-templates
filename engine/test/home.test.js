@@ -78,6 +78,26 @@ test("the installed push guard runs through its launcher and blocks a force push
   });
 });
 
+test("only the named hook leaves an entry it shares with other hooks", { skip }, () => {
+  withHome((dir) => {
+    const mine = { type: "command", command: "my-check" };
+    const guard = (name) => ({ type: "command", command: `python "C:\\Users\\me\\.claude\\hooks\\${name}"` });
+    writeSettings(dir, { hooks: { PreToolUse: [
+      { matcher: "Bash|PowerShell", hooks: [mine, guard("push-guard.py"), guard("no-ai-attribution.py")] },
+    ] } });
+    const file = hookFile(dir, "push-guard.py");
+    assert.equal(home(dir, "install-hook", file, "--python", "/usr/bin/python3", "--matcher", "Bash").status, 0);
+    let entries = settings(dir).hooks.PreToolUse;
+    assert.deepEqual(entries[0].hooks, [mine, guard("no-ai-attribution.py")]);
+    assert.equal(entries.length, 2);
+    assert.deepEqual(home(dir, "remove-hook", "no-ai-attribution.py").out, { removed_hooks: 1, deleted_file: false });
+    entries = settings(dir).hooks.PreToolUse;
+    assert.deepEqual(entries[0].hooks, [mine]);
+    assert.deepEqual(home(dir, "remove-hook", "push-guard.py").out, { removed_hooks: 1, deleted_file: true });
+    assert.deepEqual(settings(dir).hooks.PreToolUse, [{ matcher: "Bash|PowerShell", hooks: [mine] }]);
+  });
+});
+
 test("an old research hook is listed and removed with its file", { skip }, () => {
   withHome((dir) => {
     const command = `py "${dir}/.claude/hooks/ctags-first.py"`;
@@ -86,7 +106,7 @@ test("an old research hook is listed and removed with its file", { skip }, () =>
     mkdirSync(join(dir, ".claude", "hooks"));
     writeFileSync(join(dir, ".claude", "hooks", "ctags-first.py"), "x");
     assert.deepEqual(home(dir, "list-hooks").out, { hooks: ["ctags-first.py"] });
-    assert.deepEqual(home(dir, "remove-hook", "ctags-first.py").out, { removed_entries: 1, deleted_file: true });
+    assert.deepEqual(home(dir, "remove-hook", "ctags-first.py").out, { removed_hooks: 1, deleted_file: true });
     assert.deepEqual(settings(dir).hooks.PreToolUse, []);
     assert.ok(!existsSync(join(dir, ".claude", "hooks", "ctags-first.py")));
   });
