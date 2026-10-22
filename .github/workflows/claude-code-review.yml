@@ -701,7 +701,8 @@ jobs:
               echo "::warning::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           cli="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$cli" ]; then
@@ -836,7 +837,8 @@ jobs:
               echo "::error::Claude Code $CLI_VERSION install failed three times"
               exit 1
             fi
-            sleep 5
+            # The install host answers bursts with HTTP 429: back off longer.
+            sleep $((attempt * 20))
           done
           src="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$src" ]; then
@@ -1122,15 +1124,24 @@ jobs:
           # exact `## Code Review — claude-code-templates` heading (observed
           # `**Code Review - …**` and a heading-less `Code Review — …`), so it
           # matches the stable phrase with any separator. The script reads only
-          # claude[bot]'s comments, never a deep-review comment, and takes the
-          # LAST line holding 🔴 or 🟢, so a recap of an older 🔴 cannot
-          # false-block a 🟢.
+          # claude[bot]'s comments that carry it, never a deep-review comment;
+          # the last line holding 🔴 or 🟢 decides, so a recap of an older 🔴
+          # cannot false-block a 🟢 (details in the script).
+          # The deep-review request and the review action's tracking comments
+          # are dropped first: they can name the routine heading and quote both
+          # verdict formats, and the request is posted after the verdict.
           gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > /tmp/all-comments.json
-          jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)]' /tmp/all-comments.json > /tmp/comments.json
+          jq -s --arg end "$DONE" '[.[][] | select(.created_at <= $end)
+            | select((.body // "") | test("^(@claude review this PR|\\*\\*Claude |Claude Code is working)") | not)]' \
+            /tmp/all-comments.json > /tmp/comments.json
           VERDICT=$(python3 .github/scripts/review_gate.py verdict --since "$FLOOR" --tier routine \
             --marker 'Code Review[^a-zA-Z]+claude-code-templates' < /tmp/comments.json)
           echo "$VERDICT"
           ROUTINE=$(printf '%s' "$VERDICT" | jq -r .verdict)
+          RECOVERED=$(printf '%s' "$VERDICT" | jq -r '.recovered // empty')
+          if [ -n "$RECOVERED" ]; then
+            echo "::warning::Routine verdict read from a malformed comment: $RECOVERED"
+          fi
           LABELS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           # The verdict is written last, so it never stands without the label
           # read that tells whether a deep review was asked for.
