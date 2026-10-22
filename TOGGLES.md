@@ -20,9 +20,9 @@ Legend: ✅ on by default · ❌ off by default · ⚙️ asked during interview
 
 | Toggle | What it controls | Solo | OSS | Cli-Solo | Cli-Team |
 |---|---|---|---|---|---|
-| `github_actions_routine_review` | `.github/workflows/claude-code-review.yml` | ✅ | ✅ | ⚙️ | ✅ |
+| `github_actions_routine_review` | `.github/workflows/claude-code-review.yml`, plus the gate's `.github/scripts/`, `.github/review-gate.yml` and `.github/review-guide.md` (with either review tier) | ✅ | ✅ | ⚙️ | ✅ |
 | `github_actions_deep_review` | `.github/workflows/claude.yml` | ✅ | ✅ | ⚙️ | ✅ |
-| `github_actions_deep_review_auto_fire` | Section in `review-tiers.md` + workflow Step 2.5 | ❌ | ✅ | ❌ | ✅ |
+| `github_actions_deep_review_auto_fire` | `escalate.auto` in `.github/review-gate.yml`, plus sections in `review-tiers.md` and `review-guide.md` | ❌ | ✅ | ❌ | ✅ |
 | `github_actions_paths_ignore_auto_merge` | Section in `token-efficiency.md` + `git.md` | ✅ | ❌ | ❌ | ❌ |
 | `binary_verdict_rule` | Section in `review-tiers.md` + `git.md` | ✅ | ✅ | ✅ | ✅ |
 | `definition_of_done_verification` | Section in `CLAUDE.md` + `session-close.md` skill | ✅ | ✅ | ✅ | ✅ |
