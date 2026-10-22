@@ -4,7 +4,7 @@ runner's `gh`, Python 3.8+. The workflows run the copy from the base branch.
 
     review_gate.py triage FILES [--incomplete]      -> {"review": true|false}
     review_gate.py verdict --since TS (--tier routine --marker RE | --tier deep)
-        -> {"verdict": "pass"|"block"|"missing", "line": ...}
+        -> {"verdict": "pass"|"block"|"missing", "line": ...[, "recovered": ...]}
         (reads the PR's comments as `gh api --paginate` prints them, on stdin)
     review_gate.py gate --state STATE [--triage T] [--routine R] [--escalated] [--deep D] [--order O]
         -> {"status", "conclusion", "title", "summary", "state"} for the "Review gate" check
@@ -62,6 +62,13 @@ BOT = "claude[bot]"
 # A deep verdict comment: the review action's finished tracking comment, or
 # the comment the CLI run on the API credits posts under this heading.
 DEEP_MARKER = re.compile(r"\A(\*\*Claude finished|## Deep review)")
+# Bot comments that are never a routine verdict: the deep-review request and
+# the review action's tracking comments, whose glyphs belong to other runs.
+NOT_ROUTINE = re.compile(r"\A(@claude review this PR|\*\*Claude )")
+GLYPHS = re.compile("🔴|🟢")
+PHRASE = re.compile(r"🔴[\s*_]*Blocking|🟢[\s*_]*LGTM")
+# A verdict word opening a line, as written when the glyph is dropped.
+WORD = re.compile(r"^[\s*_#]*(Blocking|LGTM)\b", re.M)
 VERDICTS = ("pass", "block", "missing", "error")
 STATE_VALUES = {
     "triage": ("reviewable", "skip"),
@@ -119,26 +126,56 @@ def _comments(text):
         out.extend(page)
 
 
-def _is_tier(body, tier, marker):
-    if DEEP_MARKER.search(body):
-        return tier == "deep"
-    return tier == "routine" and marker.search(body) is not None
+def _bot_bodies(text, since):
+    return [c.get("body") or "" for c in _comments(text)
+            if isinstance(c, dict) and (c.get("user") or {}).get("login") == BOT
+            and (c.get("created_at") or "") >= since]
+
+
+def _pick(bodies, tier, marker):
+    """The newest comment of `tier`, and what told it apart. A routine comment
+    is found by `marker` first; when the reviewer dropped its heading, by a
+    verdict glyph, then by a verdict word. It is never a deep comment, even
+    one quoting the routine review, nor a request or tracking comment."""
+    if tier == "deep":
+        found = [b for b in bodies if DEEP_MARKER.search(b)]
+        return (found[-1], "marker") if found else (None, "")
+    routine = [b for b in bodies if not DEEP_MARKER.search(b) and not NOT_ROUTINE.search(b)]
+    for how, test in (("marker", marker.search), ("glyph", GLYPHS.search), ("word", WORD.search)):
+        found = [b for b in routine if test(b)]
+        if found:
+            return found[-1], how
+    return None, ""
+
+
+def _line(body):
+    """The verdict line: the last stating the verdict phrase, else the last
+    holding a glyph, else one opening with a verdict word, Blocking first so
+    an unclear comment blocks."""
+    lines = body.splitlines()
+    for how, test in (("phrase", PHRASE.search), ("glyph", GLYPHS.search)):
+        found = [l for l in lines if test(l)]
+        if found:
+            return ("block" if "🔴" in found[-1] else "pass"), found[-1].strip(), how
+    for word, result in (("Blocking", "block"), ("LGTM", "pass")):
+        found = [l for l in lines if WORD.match(l) and WORD.match(l).group(1) == word]
+        if found:
+            return result, found[0].strip(), "word"
+    return "missing", "", ""
 
 
 def verdict(text, since, tier, marker=None):
     """The verdict in the bot's newest comment of `tier` posted at or after
-    `since`: the last line holding 🔴 or 🟢. A routine comment matches
-    `marker` and is never a deep one, even when a deep review quotes it."""
-    pattern = re.compile(marker) if marker else None
-    bodies = [c.get("body") or "" for c in _comments(text)
-              if isinstance(c, dict) and (c.get("user") or {}).get("login") == BOT
-              and (c.get("created_at") or "") >= since and _is_tier(c.get("body") or "", tier, pattern)]
-    if not bodies:
+    `since`. A comment or line found only by a looser tier adds `recovered`,
+    naming what found it."""
+    body, found_by = _pick(_bot_bodies(text, since), tier, re.compile(marker) if marker else None)
+    if body is None:
         return {"verdict": "missing", "line": ""}
-    lines = [l for l in bodies[-1].splitlines() if "🔴" in l or "🟢" in l]
-    if not lines:
-        return {"verdict": "missing", "line": ""}
-    return {"verdict": "block" if "🔴" in lines[-1] else "pass", "line": lines[-1].strip()}
+    result, line, how = _line(body)
+    out = {"verdict": result, "line": line}
+    if result != "missing" and (found_by != "marker" or how == "word"):
+        out["recovered"] = "comment by " + found_by + ", line by " + how
+    return out
 
 
 def _check(status, conclusion, title, summary):

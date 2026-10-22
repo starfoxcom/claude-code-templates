@@ -54,9 +54,49 @@ class Verdict(unittest.TestCase):
     def test_older_than_the_run_or_without_a_verdict_is_missing(self):
         old = self.pages([comment("## Code Review — claude-code-templates\n🟢 LGTM", "2026-10-21T08:00:00Z")])
         self.assertEqual(gate.verdict(old, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
-        bare = self.pages([comment("## Code Review — claude-code-templates\nLGTM")])
-        self.assertEqual(gate.verdict(bare, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+        none = self.pages([comment("## Code Review — claude-code-templates\nLooks fine overall.")])
+        self.assertEqual(gate.verdict(none, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
         self.assertEqual(gate.verdict("", "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+
+    def test_a_dropped_heading_or_glyph_is_recovered(self):
+        cases = [
+            # (routine comment body, verdict, line, recovered)
+            ("## Code Review — claude-code-templates\nLGTM", "pass", "LGTM", "comment by marker, line by word"),
+            ("**Code Review - claude-code-templates**\n**LGTM!** — no blocking issues", "pass",
+             "**LGTM!** — no blocking issues", "comment by marker, line by word"),
+            ("Review done.\n🟢 LGTM", "pass", "🟢 LGTM", "comment by glyph, line by phrase"),
+            ("Review done.\n**Blocking** — race in the writer\nLGTM otherwise", "block",
+             "**Blocking** — race in the writer", "comment by word, line by word"),
+            ("## Code Review — claude-code-templates\nThe 🔴 from the last pass is fixed.\n🟢 LGTM\nNext: 🟢 ship", "pass",
+             "🟢 LGTM", None),
+            ("## Code Review — claude-code-templates\nno blocking issues found, LGTM overall", "missing", "", None),
+            ("## Code Review — claude-code-templates\nPost a binary 🔴/🟢 verdict", "block",
+             "Post a binary 🔴/🟢 verdict", None),
+        ]
+        for body, result, line, recovered in cases:
+            with self.subTest(body=body):
+                got = gate.verdict(self.pages([comment(body)]), "2026-10-21T09:00:00Z", "routine", MARK)
+                want = {"verdict": result, "line": line}
+                if recovered:
+                    want["recovered"] = recovered
+                self.assertEqual(got, want)
+
+    def test_requests_and_tracking_comments_are_never_the_routine_verdict(self):
+        text = self.pages([
+            comment("## Code Review — claude-code-templates\n🟢 LGTM", "2026-10-21T09:10:00Z"),
+            comment("@claude review this PR — depth pass on the Code Review — claude-code-templates gate.\n"
+                    "🔴 Blocking when ANY real finding exists", "2026-10-21T09:11:00Z"),
+            comment("**Claude Code is working…**\n🔴 Blocking", "2026-10-21T09:12:00Z"),
+        ])
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "routine", MARK),
+                         {"verdict": "pass", "line": "🟢 LGTM"})
+        only_request = self.pages([comment("@claude review this PR\n🟢 LGTM")])
+        self.assertEqual(gate.verdict(only_request, "2026-10-21T09:00:00Z", "routine", MARK)["verdict"], "missing")
+
+    def test_a_deep_verdict_word_is_recovered_too(self):
+        text = self.pages([comment("## Deep review\nAll clear.\nLGTM")])
+        self.assertEqual(gate.verdict(text, "2026-10-21T09:00:00Z", "deep"),
+                         {"verdict": "pass", "line": "LGTM", "recovered": "comment by marker, line by word"})
 
     def test_the_tiers_never_read_each_others_comments(self):
         text = self.pages([
