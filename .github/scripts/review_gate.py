@@ -51,12 +51,16 @@ import time
 # review workflow differs from the default branch's, so a workflow-only PR has
 # to pass as non-reviewable. Excluded by path on purpose, never by extension.
 NEVER = re.compile(r"^\.github/workflows/")
-# Source, data and contract files, plus every file of any type in the
-# deep-review folders: _core/, which lands verbatim in users' repos (and
-# CLAUDE.md.additions in their ~/.claude), redesign/, and .github/scripts/,
-# where a file Python loads before the standard library could run in the gate.
-REVIEWABLE = re.compile(r"\.(html|jsx|js|json|yml|yaml|py|template)$|^(_core|redesign|\.github/scripts)/"
-                        r"|\.additions$|/bundle\.toggles\.md$")
+# Skipped only when every other path is Markdown, an image or a font outside
+# the deep-review folders: _core/, which lands verbatim in users' repos (and
+# CLAUDE.md.additions in their ~/.claude), bundles/, whose toggles drive what
+# a bind writes, redesign/, and .github/scripts/,
+# where a file Python loads before the standard library could run in the
+# gate. Anything else gets a review: scripts, config, lockfiles, an SVG,
+# which can carry script, and a .gitattributes or .lfsconfig.
+SKIPPABLE = re.compile(r"\.(md|png|jpe?g|gif|webp|ico|ttf|otf|woff2?)$", re.I)
+DEEP_FOLDERS = re.compile(r"^(_core|bundles|redesign|\.github/scripts)/|\.additions$")
+
 # The files API stops at 3,000 entries: a listing that long may be cut short.
 LISTING_CAP = 3000
 
@@ -134,7 +138,7 @@ def triage(paths, incomplete=False):
     """Whether a diff with these changed paths gets an AI review."""
     if incomplete or len(paths) >= LISTING_CAP:
         return True
-    return any(REVIEWABLE.search(p) and not NEVER.search(p) for p in paths)
+    return any(not NEVER.search(p) and (DEEP_FOLDERS.search(p) or not SKIPPABLE.search(p)) for p in paths)
 
 
 def _comments(text):
