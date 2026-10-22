@@ -66,8 +66,9 @@ prescreen:
 # ships, the page and its source.
 # auto: on lets the routine review ask for the deep review by itself: on
 # these triggers, on the gate's own files, and when it judges one needed.
-# off leaves every deep review to a person's `@claude review this PR`
-# comment, and the triggers are not used.
+# off: it starts none by itself and the triggers are not used; once a
+# person asks for one on a PR (`@claude review this PR`), each later push
+# to that PR gets one too.
 escalate:
   auto: on
   paths: _core/, redesign/, index.html
