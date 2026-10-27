@@ -665,14 +665,19 @@ jobs:
           # per-PR focus, invariants and the binary verdict rule, and the
           # system prompt points to the project's review guide, if any.
 
+      # Whether an attempt counts is what the gate reads, not how it exited.
       # An attempt that posted its verdict and then failed (a crash, or its
       # time limit) has decided this run: a later attempt would post a second
       # verdict, and Evaluate reads the newest one, so a 🟢 could bury a 🔴 and
-      # a second request could cancel the deep run. Later attempts run only
-      # when no verdict from this run is on the PR; unknown counts as posted.
+      # a second request could cancel the deep run. One that left no verdict,
+      # even one that exited cleanly (a release that ends without posting),
+      # hands over to the next attempt. Unknown counts as posted: no later
+      # attempt; Evaluate reads the comments itself after a clean exit and
+      # fails closed after a failed one. The retry gets the same check, the
+      # same script.
       - name: Check whether the first attempt posted its verdict
         id: posted-1
-        if: steps.claude_attempt_1.outcome == 'failure'
+        if: steps.claude_attempt_1.outcome == 'failure' || steps.claude_attempt_1.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -680,6 +685,8 @@ jobs:
           PR_NUMBER: ${{ steps.pr-head.outputs.pr_number }}
           GATE: ${{ steps.gate.outputs.script }}
           FLOOR: ${{ steps.floor.outputs.at }}
+          WHO: first attempt
+          OUTCOME: ${{ steps.claude_attempt_1.outcome }}
         run: |
           set -o pipefail
           # Evaluate's own reader, so "posted" here is what the gate reads.
@@ -694,15 +701,17 @@ jobs:
             esac
           fi
           case "$posted" in
-            yes) echo "::warning::The first attempt posted its verdict and then failed: the verdict stands and no further attempt runs" ;;
-            unknown) echo "::error::Whether the first attempt posted is unknown (the comments or the gate script could not be read): no further attempt, to never post a second verdict" ;;
+            yes) if [ "$OUTCOME" = failure ]; then echo "::warning::The $WHO posted its verdict and then failed: the verdict stands and no further attempt runs"; fi ;;
+            no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read: the next attempt runs"; fi ;;
+            unknown) echo "::error::Whether the $WHO posted is unknown (the comments or the gate script could not be read): no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
 
       # ── Usage-limit exhaustion vs transient failure ──────────────────────
       # On a usage limit: skip the same-model retry and use the fallback model.
-      # On any other failure: retry the same model first, then use the
-      # fallback model only if the retry also fails.
+      # Otherwise, when the first attempt left no verdict (a failure or a clean
+      # exit): retry the same model first, then use the fallback model only if
+      # the retry also left none.
       - name: Detect failure class
         id: failure_class
         if: steps.claude_attempt_1.outcome == 'failure'
@@ -730,24 +739,25 @@ jobs:
           fi
 
       - name: Back off before attempt 2
-        if: steps.claude_attempt_1.outcome == 'failure' && steps.posted-1.outputs.posted == 'no'
+        if: steps.posted-1.outputs.posted == 'no'
         run: sleep 90
 
       # The attempt before left its revoked token in the origin URL and the
       # PR branch checked out. Same for the next attempt below.
       - name: Serve the PR branch locally again
-        if: steps.claude_attempt_1.outcome == 'failure' && steps.pr-origin.outcome == 'success'
+        if: steps.posted-1.outputs.posted == 'no' && steps.pr-origin.outcome == 'success'
         env:
           ORIGIN: ${{ steps.pr-origin.outputs.url }}
         run: |
           git remote set-url origin "$ORIGIN"
           git checkout --quiet --detach
 
-      # Attempt 2a: same-model retry, for transient failures only.
+      # Attempt 2a: same-model retry, when the first attempt left no verdict
+      # and hit no usage limit.
       - name: Run Claude (retry, same model)
         id: claude_retry
         timeout-minutes: 30
-        if: steps.claude_attempt_1.outcome == 'failure' && steps.posted-1.outputs.posted == 'no' && steps.failure_class.outputs.usage_limit != 'true'
+        if: steps.posted-1.outputs.posted == 'no' && steps.failure_class.outputs.usage_limit != 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
         env:
@@ -764,17 +774,9 @@ jobs:
             actions: read
           allowed_bots: "claude"
 
-      - name: Serve the PR branch locally for the fallback
-        if: steps.claude_retry.outcome == 'failure' && steps.pr-origin.outcome == 'success'
-        env:
-          ORIGIN: ${{ steps.pr-origin.outputs.url }}
-        run: |
-          git remote set-url origin "$ORIGIN"
-          git checkout --quiet --detach
-
       - name: Check whether the retry posted its verdict
         id: posted-2
-        if: steps.claude_retry.outcome == 'failure'
+        if: steps.claude_retry.outcome == 'failure' || steps.claude_retry.outcome == 'success'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -782,6 +784,8 @@ jobs:
           PR_NUMBER: ${{ steps.pr-head.outputs.pr_number }}
           GATE: ${{ steps.gate.outputs.script }}
           FLOOR: ${{ steps.floor.outputs.at }}
+          WHO: retry
+          OUTCOME: ${{ steps.claude_retry.outcome }}
         run: |
           set -o pipefail
           # Evaluate's own reader, so "posted" here is what the gate reads.
@@ -796,10 +800,20 @@ jobs:
             esac
           fi
           case "$posted" in
-            yes) echo "::warning::The retry posted its verdict and then failed: the verdict stands and no further attempt runs" ;;
-            unknown) echo "::error::Whether the retry posted is unknown (the comments or the gate script could not be read): no further attempt, to never post a second verdict" ;;
+            yes) if [ "$OUTCOME" = failure ]; then echo "::warning::The $WHO posted its verdict and then failed: the verdict stands and no further attempt runs"; fi ;;
+            no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read: the next attempt runs"; fi ;;
+            unknown) echo "::error::Whether the $WHO posted is unknown (the comments or the gate script could not be read): no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
+
+      # After the retry's check, which decides whether the fallback runs.
+      - name: Serve the PR branch locally for the fallback
+        if: steps.posted-2.outputs.posted == 'no' && steps.pr-origin.outcome == 'success'
+        env:
+          ORIGIN: ${{ steps.pr-origin.outputs.url }}
+        run: |
+          git remote set-url origin "$ORIGIN"
+          git checkout --quiet --detach
 
       # The fallback's CLI: the stable channel's release, one that has had time
       # in the field, so a newest release that installs but then breaks does
@@ -811,9 +825,9 @@ jobs:
         id: claude-cli-stable
         timeout-minutes: 30
         if: |
-          steps.posted-1.outputs.posted == 'no' && steps.posted-2.outputs.posted != 'yes' && steps.posted-2.outputs.posted != 'unknown' && (
+          steps.posted-1.outputs.posted == 'no' && (
           (steps.failure_class.outputs.usage_limit == 'true') ||
-          (steps.claude_retry.outcome == 'failure'))
+          (steps.posted-2.outputs.posted == 'no'))
         continue-on-error: true
         shell: bash
         env:
@@ -880,7 +894,7 @@ jobs:
           echo "version=$installed" >> "$GITHUB_OUTPUT"
 
       # Attempt 2b: the fallback model from the settings. Fires on a usage limit,
-      # or when the same-model retry also failed. The CLI the pinned action
+      # or when the same-model retry also left no verdict. The CLI the pinned action
       # bundles is refused for the default fallback (Opus 5.5), so this runs
       # only on the copy the step above picked. The Evaluate step below owns the
       # outcome, so every attempt continues on error.
@@ -888,10 +902,7 @@ jobs:
         id: claude_fallback
         # The fallback model at high effort runs longest: a wider limit.
         timeout-minutes: 45
-        if: |
-          steps.claude-cli-stable.outcome == 'success' && (
-          (steps.failure_class.outputs.usage_limit == 'true') ||
-          (steps.claude_retry.outcome == 'failure'))
+        if: steps.claude-cli-stable.outcome == 'success'
         continue-on-error: true
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
         env:
@@ -943,7 +954,7 @@ jobs:
           # The model whose attempt completed, for the check summaries: the job
           # name and a green first step cannot tell (every attempt continues on
           # error).
-          REVIEWER: ${{ steps.claude_credits.outcome == 'success' && format('{0} {1} (API credits)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || (steps.claude_attempt_1.outcome == 'success' || steps.posted-1.outputs.posted == 'yes') && format('{0} {1}', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || (steps.claude_retry.outcome == 'success' || steps.posted-2.outputs.posted == 'yes') && format('{0} {1} (retry)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_fallback.outcome == 'success' && format('{0} {1} (fallback)', steps.gate.outputs.deep_fallback_model, steps.gate.outputs.deep_fallback_effort) || 'none' }}
+          REVIEWER: ${{ steps.claude_credits.outcome == 'success' && format('{0} {1} (API credits)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || (steps.posted-1.outputs.posted == 'yes' || steps.claude_attempt_1.outcome == 'success' && steps.posted-1.outputs.posted != 'no') && format('{0} {1}', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || (steps.posted-2.outputs.posted == 'yes' || steps.claude_retry.outcome == 'success' && steps.posted-2.outputs.posted != 'no') && format('{0} {1} (retry)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || (steps.claude_fallback.outcome == 'success' || steps.claude_fallback.outcome == 'failure') && format('{0} {1} (fallback)', steps.gate.outputs.deep_fallback_model, steps.gate.outputs.deep_fallback_effort) || 'none' }}
           ATTEMPTS: "API credits: ${{ steps.claude_credits.outcome || 'skipped' }}, first: ${{ steps.claude_attempt_1.outcome || 'skipped' }}, usage limit: ${{ steps.failure_class.outputs.usage_limit || 'no' }}, retry: ${{ steps.claude_retry.outcome || 'skipped' }}, fallback: ${{ steps.claude_fallback.outcome || 'skipped' }}, newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, fallback CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }}"
         run: |
           set -o pipefail
