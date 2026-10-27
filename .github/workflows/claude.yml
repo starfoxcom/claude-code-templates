@@ -709,8 +709,9 @@ jobs:
 
       # ── Usage-limit exhaustion vs transient failure ──────────────────────
       # On a usage limit: skip the same-model retry and use the fallback model.
-      # On any other failure: retry the same model first, then use the
-      # fallback model only if the retry also fails.
+      # Otherwise, when the first attempt left no verdict (a failure or a clean
+      # exit): retry the same model first, then use the fallback model only if
+      # the retry also left none.
       - name: Detect failure class
         id: failure_class
         if: steps.claude_attempt_1.outcome == 'failure'
@@ -751,7 +752,8 @@ jobs:
           git remote set-url origin "$ORIGIN"
           git checkout --quiet --detach
 
-      # Attempt 2a: same-model retry, for transient failures only.
+      # Attempt 2a: same-model retry, when the first attempt left no verdict
+      # and hit no usage limit.
       - name: Run Claude (retry, same model)
         id: claude_retry
         timeout-minutes: 30
@@ -892,7 +894,7 @@ jobs:
           echo "version=$installed" >> "$GITHUB_OUTPUT"
 
       # Attempt 2b: the fallback model from the settings. Fires on a usage limit,
-      # or when the same-model retry also failed. The CLI the pinned action
+      # or when the same-model retry also left no verdict. The CLI the pinned action
       # bundles is refused for the default fallback (Opus 5.5), so this runs
       # only on the copy the step above picked. The Evaluate step below owns the
       # outcome, so every attempt continues on error.
