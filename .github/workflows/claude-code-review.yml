@@ -1264,7 +1264,7 @@ jobs:
           # verdict that asked for a deep review gets the label here too, so
           # the repair step's backstop fails the job loudly unless the request
           # went out. A label already on is a no-op.
-          if [ "$clean" = true ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" \
+          if [ "$clean" = true ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[[:space:]>]*[#*_].*needs-deep-review requested' <<< "$verdict_body" \
             && ! GH_TOKEN="$bot_token" gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
             echo "halt=true" >> "$GITHUB_OUTPUT"
             echo "::error::The credits run's verdict asked for a deep review, and applying needs-deep-review failed: apply the label and request the deep review, or re-run the job"
@@ -1289,7 +1289,7 @@ jobs:
               owed=yes
             fi
             # A here-string, so a long verdict cannot end grep's read early.
-            if [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body"; then
+            if [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[[:space:]>]*[#*_].*needs-deep-review requested' <<< "$verdict_body"; then
               owed=yes
             fi
             if [ "$owed" = yes ] && ! GH_TOKEN="$bot_token" gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
@@ -1415,16 +1415,43 @@ jobs:
 
       # A step past its time limit loses only its top process: the action's
       # runtime and the CLI under it keep running until the job ends, and
-      # could post a verdict after the check below read none, next to the
-      # backup's. So whatever a failed attempt left running is stopped first.
+      # could post a verdict (or a second deep-review request) after the
+      # check below read none, next to the backup's. So whatever a failed
+      # attempt left running is stopped first.
       - name: Stop what the main review left running
         if: steps.claude-review.outcome == 'failure'
         continue-on-error: true
-        env:
-          CLI: ${{ steps.claude-cli.outputs.path }}
         run: |
-          pkill -KILL -f -- "/[_]actions/anthropics/claude-code-action/" || true
-          if [ -n "$CLI" ]; then pkill -KILL -f -- "$CLI" || true; fi
+          # The runner gives every process it starts for this job the job's
+          # RUNNER_TRACKING_ID (its own end-of-job cleanup uses it), so only
+          # this job's leftovers match, wherever the action put the CLI, and
+          # never another job's on a shared self-hosted host.
+          if [ -z "${RUNNER_TRACKING_ID:-}" ] || [ ! -d /proc ]; then
+            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped, and the check after the backup still fails a second verdict"
+            exit 0
+          fi
+          # This shell and its ancestors are never stopped, even when the
+          # runner's folder names claude.
+          keep=" $$ "
+          p=$$
+          while p=$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null) && [ -n "$p" ] && [ "$p" != 0 ]; do
+            keep="$keep$p "
+          done
+          stopped=0
+          for dir in /proc/[0-9]*; do
+            pid=${dir#/proc/}
+            case "$keep" in *" $pid "*) continue ;; esac
+            envs=$(tr '\0' '\n' < "$dir/environ" 2>/dev/null) || continue
+            case $'\n'"$envs"$'\n' in
+              *$'\n'"RUNNER_TRACKING_ID=$RUNNER_TRACKING_ID"$'\n'*) ;;
+              *) continue ;;
+            esac
+            cmd=$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null) || continue
+            case "$cmd" in
+              *[Cc]laude*) kill -KILL "$pid" 2>/dev/null && stopped=$((stopped + 1)) ;;
+            esac
+          done
+          echo "::notice::Stopped $stopped leftover process(es) of this job"
           sleep 5
 
       # Whether an attempt counts is what the gate reads, not how it exited.
@@ -1473,13 +1500,14 @@ jobs:
                 pass|block)
                   # The newest headed comment, the one the gate reads (jq's \s
                   # lacks Python's U+001C-U+001F, so the class names them).
-                  # After the backup it must be the only one: the main review
-                  # left none, so another is a late post from it (a run past
-                  # its time limit that kept going), and the gate would read
-                  # whichever is newer.
+                  # It must be the only one: before this attempt the PR held
+                  # none (the credits step, or the main review's check, found
+                  # none), so another is a late post from an earlier run (one
+                  # past its time limit that kept going), and the gate would
+                  # read whichever is newer.
                   if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
                     && headed=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length' "$comments_file"); then
-                    if [ "$STAGE" = backup ] && [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
+                    if [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
@@ -1500,7 +1528,7 @@ jobs:
           # dropped. A label already on is a no-op. Only the verdict is
           # searched, as in the credits step; the here-string keeps a long one
           # from ending grep's read early.
-          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[[:space:]>]*[#*_].*needs-deep-review requested' <<< "$verdict_body" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
@@ -1508,7 +1536,7 @@ jobs:
             no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
             label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
             stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
-            multiple) echo "::error::This run left $headed routine verdicts (the main review posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
+            multiple) echo "::error::This run left $headed routine verdicts (an earlier attempt posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
@@ -1616,11 +1644,37 @@ jobs:
       - name: Stop what the backup left running
         if: steps.claude-review-backup.outcome == 'failure'
         continue-on-error: true
-        env:
-          CLI: ${{ steps.claude-cli-stable.outputs.path }}
         run: |
-          pkill -KILL -f -- "/[_]actions/anthropics/claude-code-action/" || true
-          if [ -n "$CLI" ]; then pkill -KILL -f -- "$CLI" || true; fi
+          # The runner gives every process it starts for this job the job's
+          # RUNNER_TRACKING_ID (its own end-of-job cleanup uses it), so only
+          # this job's leftovers match, wherever the action put the CLI, and
+          # never another job's on a shared self-hosted host.
+          if [ -z "${RUNNER_TRACKING_ID:-}" ] || [ ! -d /proc ]; then
+            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped, and the check after the backup still fails a second verdict"
+            exit 0
+          fi
+          # This shell and its ancestors are never stopped, even when the
+          # runner's folder names claude.
+          keep=" $$ "
+          p=$$
+          while p=$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null) && [ -n "$p" ] && [ "$p" != 0 ]; do
+            keep="$keep$p "
+          done
+          stopped=0
+          for dir in /proc/[0-9]*; do
+            pid=${dir#/proc/}
+            case "$keep" in *" $pid "*) continue ;; esac
+            envs=$(tr '\0' '\n' < "$dir/environ" 2>/dev/null) || continue
+            case $'\n'"$envs"$'\n' in
+              *$'\n'"RUNNER_TRACKING_ID=$RUNNER_TRACKING_ID"$'\n'*) ;;
+              *) continue ;;
+            esac
+            cmd=$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null) || continue
+            case "$cmd" in
+              *[Cc]laude*) kill -KILL "$pid" 2>/dev/null && stopped=$((stopped + 1)) ;;
+            esac
+          done
+          echo "::notice::Stopped $stopped leftover process(es) of this job"
           sleep 5
 
       # The main review's check after the backup, the same script: a backup
@@ -1659,13 +1713,14 @@ jobs:
                 pass|block)
                   # The newest headed comment, the one the gate reads (jq's \s
                   # lacks Python's U+001C-U+001F, so the class names them).
-                  # After the backup it must be the only one: the main review
-                  # left none, so another is a late post from it (a run past
-                  # its time limit that kept going), and the gate would read
-                  # whichever is newer.
+                  # It must be the only one: before this attempt the PR held
+                  # none (the credits step, or the main review's check, found
+                  # none), so another is a late post from an earlier run (one
+                  # past its time limit that kept going), and the gate would
+                  # read whichever is newer.
                   if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
                     && headed=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length' "$comments_file"); then
-                    if [ "$STAGE" = backup ] && [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
+                    if [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
@@ -1686,7 +1741,7 @@ jobs:
           # dropped. A label already on is a no-op. Only the verdict is
           # searched, as in the credits step; the here-string keeps a long one
           # from ending grep's read early.
-          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[[:space:]>]*[#*_].*needs-deep-review requested' <<< "$verdict_body" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
@@ -1694,7 +1749,7 @@ jobs:
             no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
             label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
             stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
-            multiple) echo "::error::This run left $headed routine verdicts (the main review posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
+            multiple) echo "::error::This run left $headed routine verdicts (an earlier attempt posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
