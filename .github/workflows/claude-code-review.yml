@@ -1388,10 +1388,10 @@ jobs:
       # time limit hit while it escalated) has decided this run: a backup would
       # post a second verdict, and the gate reads the newest one, so a 🟢 could
       # bury a 🔴. The backup runs only when no verdict from this run is on the
-      # PR (the credits step found none, or the job would not be here). Owed
-      # escalation still settles in the repair step below, which applies the
-      # label and fails loudly when no deep review was requested. Unreadable
-      # comments count as posted: no backup, and the job fails.
+      # PR (the credits step found none, or the job would not be here). A
+      # verdict that asked for a deep review gets the label here; the repair
+      # step then fails loudly when no request went out. Unreadable comments
+      # count as unknown: no backup, and the job fails.
       - name: Check whether the main review posted its verdict
         id: main-posted
         if: steps.claude-review.outcome == 'failure'
@@ -1402,9 +1402,11 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           FLOOR: ${{ steps.pre-screen.outputs.floor }}
+          ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
         run: |
           set -euo pipefail
           posted=unknown
+          body=""
           if comments=$(timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments"); then
             # The credits step's selector: a headed bot comment since the floor.
             marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
@@ -1412,6 +1414,20 @@ jobs:
               | jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length'); then
               if [ "$count" = 0 ]; then posted=no; else posted=yes; fi
             fi
+            # Like the credits step, any other bot comment since the floor
+            # (outside requests and the deep run's) counts as posted too.
+            if [ "$posted" = no ] && stray=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\A(@claude review this pr|\*\*claude (finished|encountered)|claude code is working|[#*_\s]*deep review)"; "i") | not)] | length') && [ "$stray" != 0 ]; then
+              posted=yes
+            fi
+            body=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts)] | map(.body // "") | join("
+")') || body=""
+          fi
+          # A verdict that asked for a deep review before the run broke gets
+          # the label, so the repair step's backstop fails the job loudly
+          # unless the request went out too; the escalation is never dropped.
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && printf '%s' "$body" | grep -qi "needs-deep-review requested" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+            echo "::error::The main review's verdict asked for a deep review, and applying needs-deep-review failed"
+            posted=unknown
           fi
           case "$posted" in
             yes) echo "::warning::The main review posted its verdict and then failed: the verdict stands and no backup runs" ;;
