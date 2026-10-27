@@ -442,7 +442,7 @@ jobs:
       # and a verdict from this run stands even when the run then broke, since
       # a deep review's only output is its verdict comment. No verdict (no key,
       # credits spent, exchange refused, an API error) hands the review to the
-      # subscription steps below.
+      # subscription steps below; a verdict check that cannot finish does not.
       - name: Run the deep review on the API credits
         id: claude_credits
         if: steps.pr-head.outputs.head_sha != ''
@@ -555,11 +555,16 @@ jobs:
           print(f"::notice::Deep review on the API credits: ${r.get('total_cost_usd')} over {r.get('num_turns')} turns")
           PYEOF
 
-          if ! GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/deep-comments.json"; then
-            echo "::warning::Could not read the PR comments: the deep review runs on the subscription"
-            exit 1
+          # The run may have posted a verdict by now, so a check that cannot
+          # finish ends the step as a success: no subscription attempt runs to
+          # post a second verdict, and Evaluate reads the comments itself,
+          # failing closed when it finds none.
+          if ! GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/deep-comments.json" \
+            || ! found=$(python3 -I "$GATE" verdict --since "$since" --tier deep < "$RUNNER_TEMP/deep-comments.json") \
+            || ! verdict=$(printf '%s' "$found" | jq -r .verdict); then
+            echo "::error::Could not check whether the credits run posted a verdict: no subscription attempt runs, to never post a second verdict; Evaluate reads the comments"
+            exit 0
           fi
-          verdict=$(python3 -I "$GATE" verdict --since "$since" --tier deep < "$RUNNER_TEMP/deep-comments.json" | jq -r .verdict)
           case "$verdict" in
             pass|block)
               if [ "$clean" != true ]; then
@@ -679,15 +684,18 @@ jobs:
           set -o pipefail
           # Evaluate's own reader, so "posted" here is what the gate reads.
           posted=unknown
-          if [ -n "$GATE" ] && [ -n "$FLOOR" ]               && timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/deep-posted.json"               && read=$(python3 -I "$GATE" verdict --since "$FLOOR" --tier deep < "$RUNNER_TEMP/deep-posted.json"); then
-            case "$(printf '%s' "$read" | jq -r .verdict)" in
+          if [ -n "$GATE" ] && [ -n "$FLOOR" ] \
+            && timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/deep-posted.json" \
+            && found=$(python3 -I "$GATE" verdict --since "$FLOOR" --tier deep < "$RUNNER_TEMP/deep-posted.json") \
+            && verdict=$(printf '%s' "$found" | jq -r .verdict); then
+            case "$verdict" in
               pass|block) posted=yes ;;
               *) posted=no ;;
             esac
           fi
           case "$posted" in
             yes) echo "::warning::The first attempt posted its verdict and then failed: the verdict stands and no further attempt runs" ;;
-            unknown) echo "::error::Whether The first attempt posted is unknown (comments or the gate script unreadable): no further attempt, to never post a second verdict" ;;
+            unknown) echo "::error::Whether the first attempt posted is unknown (the comments or the gate script could not be read): no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
 
@@ -778,15 +786,18 @@ jobs:
           set -o pipefail
           # Evaluate's own reader, so "posted" here is what the gate reads.
           posted=unknown
-          if [ -n "$GATE" ] && [ -n "$FLOOR" ]               && timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/deep-posted.json"               && read=$(python3 -I "$GATE" verdict --since "$FLOOR" --tier deep < "$RUNNER_TEMP/deep-posted.json"); then
-            case "$(printf '%s' "$read" | jq -r .verdict)" in
+          if [ -n "$GATE" ] && [ -n "$FLOOR" ] \
+            && timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$RUNNER_TEMP/deep-posted.json" \
+            && found=$(python3 -I "$GATE" verdict --since "$FLOOR" --tier deep < "$RUNNER_TEMP/deep-posted.json") \
+            && verdict=$(printf '%s' "$found" | jq -r .verdict); then
+            case "$verdict" in
               pass|block) posted=yes ;;
               *) posted=no ;;
             esac
           fi
           case "$posted" in
             yes) echo "::warning::The retry posted its verdict and then failed: the verdict stands and no further attempt runs" ;;
-            unknown) echo "::error::Whether The retry posted is unknown (comments or the gate script unreadable): no further attempt, to never post a second verdict" ;;
+            unknown) echo "::error::Whether the retry posted is unknown (the comments or the gate script could not be read): no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
 
