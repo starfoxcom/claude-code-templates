@@ -139,13 +139,6 @@ jobs:
       # both at job start (in_progress) and after the deep review completes
       # (success/failure based on verdict).
       checks: write
-    env:
-      # The CLI version every review attempt runs: the credits run, the
-      # action's attempt, its retry and the fallback. One pin for the job,
-      # installed once by "Install Claude Code"; the weekly pin check says when
-      # it is behind. Bump it here AND in `.github/workflows/claude-code-review.yml`:
-      # both tiers carry the same pin.
-      CLI_VERSION: "2.1.300"
     steps:
       # A self-hosted runner shares one workspace between jobs and workflows,
       # where a sparse or partial clone can sit (left by an older routine
@@ -372,10 +365,12 @@ jobs:
             fi
           fi
 
-      # One job-private copy of the pinned CLI for every review attempt below,
-      # so they all run the same version. When the install fails, the credits
-      # run and the fallback are skipped and the action's attempts fall back to
-      # the CLI it bundles.
+      # One job-private copy of the newest CLI release for every review attempt
+      # below, so they all run the same version. The version is read when the
+      # job runs, from the channel the official installer reads, and then
+      # installed exactly (see the routine workflow). When the lookup or the
+      # install fails, the credits run and the fallback are skipped and the
+      # action's attempts fall back to the CLI it bundles.
       - name: Install Claude Code
         id: claude-cli
         if: steps.pr-head.outputs.head_sha != ''
@@ -385,6 +380,23 @@ jobs:
           DISABLE_AUTOUPDATER: "1"
         run: |
           set -euo pipefail
+          CLI_VERSION=""
+          for attempt in 1 2 3; do
+            if CLI_VERSION=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest); then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::warning::Could not look up the newest Claude Code release: the deep review runs on the action's own CLI, with no fallback model"
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
+          CLI_VERSION=$(printf '%s' "$CLI_VERSION" | tr -d '[:space:]')
+          if [[ ! "$CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::The release channel returned no version: the deep review runs on the action's own CLI, with no fallback model"
+            exit 1
+          fi
+          echo "Newest Claude Code release: $CLI_VERSION"
           for attempt in 1 2 3; do
             if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
               break
@@ -409,7 +421,7 @@ jobs:
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the deep review runs on the action's own CLI, with no fallback model"
             exit 1
           fi
-          echo "Claude Code $installed at $dest"
+          echo "::notice::Every review attempt runs Claude Code $installed"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
 
       # ── First attempt: the plan's monthly API credits ─────────────────────
@@ -613,7 +625,7 @@ jobs:
           # reviewer starts; this tells it where the PR's own copies are.
           APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules. ${{ steps.gate.outputs.guide_note }}"
         with:
-          # The job's pinned CLI from "Install Claude Code". Empty when that
+          # The job's CLI from "Install Claude Code". Empty when that
           # install failed, and then the action installs the CLI it bundles.
           # The retry and the fallback pass the same path.
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
@@ -706,7 +718,7 @@ jobs:
       # Attempt 2b: the fallback model from the settings. Fires on a usage limit,
       # or when the same-model retry also failed. The CLI the pinned action
       # bundles is refused for the default fallback (Opus 5.5), so this runs
-      # only on the job's pinned CLI. The Evaluate step below owns the
+      # only on the job's own CLI. The Evaluate step below owns the
       # outcome, so every attempt continues on error.
       - name: Run Claude (fallback model)
         id: claude_fallback
