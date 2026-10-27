@@ -374,6 +374,9 @@ jobs:
       # release (see below).
       - name: Install Claude Code
         id: claude-cli
+        # Each download has its own limit too, so a stalled host ends in the
+        # warnings below rather than at the step's limit.
+        timeout-minutes: 30
         if: steps.pr-head.outputs.head_sha != ''
         continue-on-error: true
         shell: bash
@@ -383,7 +386,7 @@ jobs:
           set -euo pipefail
           CLI_VERSION=""
           for attempt in 1 2 3; do
-            if CLI_VERSION=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest); then
+            if CLI_VERSION=$(curl -fsSL --connect-timeout 20 --max-time 60 https://downloads.claude.ai/claude-code-releases/latest); then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -399,7 +402,7 @@ jobs:
           fi
           echo "Newest Claude Code release: $CLI_VERSION"
           for attempt in 1 2 3; do
-            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
+            if curl -fsSL --connect-timeout 20 --max-time 60 https://claude.ai/install.sh | timeout 300 bash -s -- "$CLI_VERSION"; then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -521,7 +524,10 @@ jobs:
           out="$RUNNER_TEMP/claude-credits-output.json"
           status=0
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          (cd "$wt" && GH_TOKEN="$bot_token" "$CLI" -p "$prompt" \
+          # A time limit, so a release that hangs ends as a broken run (see the
+          # routine workflow): a verdict it posted still stands, otherwise the
+          # subscription steps take over. The step itself has none.
+          (cd "$wt" && GH_TOKEN="$bot_token" timeout --kill-after=1m 30m "$CLI" -p "$prompt" \
             --setting-sources user --strict-mcp-config --permission-mode default \
             --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
             --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" \
@@ -594,6 +600,8 @@ jobs:
 
       - name: Run Claude
         id: claude_attempt_1
+        # A hang counts as a failure, so the retry and the fallback still run.
+        timeout-minutes: 30
         if: steps.pr-head.outputs.head_sha != '' && steps.claude_credits.outcome != 'success'
         continue-on-error: true
         # Pinned to the v1 tag's resolved SHA (v1.0.213). The bare `@v1` floats.
@@ -695,6 +703,7 @@ jobs:
       # Attempt 2a: same-model retry, for transient failures only.
       - name: Run Claude (retry, same model)
         id: claude_retry
+        timeout-minutes: 30
         if: steps.claude_attempt_1.outcome == 'failure' && steps.failure_class.outputs.usage_limit != 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
@@ -728,6 +737,7 @@ jobs:
       # costs the fallback its run.
       - name: Install the stable Claude Code for the fallback
         id: claude-cli-stable
+        timeout-minutes: 30
         if: |
           (steps.failure_class.outputs.usage_limit == 'true') ||
           (steps.claude_retry.outcome == 'failure')
@@ -753,7 +763,7 @@ jobs:
           }
           STABLE=""
           for attempt in 1 2 3; do
-            if STABLE=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable); then
+            if STABLE=$(curl -fsSL --connect-timeout 20 --max-time 60 https://downloads.claude.ai/claude-code-releases/stable); then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -772,7 +782,7 @@ jobs:
             exit 0
           fi
           for attempt in 1 2 3; do
-            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$STABLE"; then
+            if curl -fsSL --connect-timeout 20 --max-time 60 https://claude.ai/install.sh | timeout 300 bash -s -- "$STABLE"; then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -803,6 +813,8 @@ jobs:
       # outcome, so every attempt continues on error.
       - name: Run Claude (fallback model)
         id: claude_fallback
+        # The fallback model at high effort runs longest: a wider limit.
+        timeout-minutes: 45
         if: |
           steps.claude-cli-stable.outcome == 'success' && (
           (steps.failure_class.outputs.usage_limit == 'true') ||
