@@ -1095,9 +1095,18 @@ jobs:
       - name: Read the run's start
         id: run-start
         continue-on-error: true
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: echo "at=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.run_started_at')" >> "$GITHUB_OUTPUT"
+        run: |
+          # gh prints an HTTP error's JSON body on stdout, so only a timestamp
+          # counts as read.
+          at=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.run_started_at' || true)
+          if [[ ! "$at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo "::warning::Could not read this run's start: deep-review requests count from the pre-screen's floor"
+            at=""
+          fi
+          echo "at=$at" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
@@ -1229,8 +1238,9 @@ jobs:
             # It is owed when the diff is on the trigger list, the PR already
             # carries the label (or the label read fails), or the verdict holds
             # the escalation section (the heading the prompt's Step 3 gives).
-            # The label follows in the repair step below, which applies it
-            # whenever a request is on the PR.
+            # The label follows in the repair step below, which applies it for
+            # a claude[bot] request from this run or a diff on the trigger
+            # list; a maintainer's request gets it from the deep run.
             labels=$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")') || labels="needs-deep-review"
             owed=no
             if [ "$DEEP_PATHS" = true ] || printf '%s' "$labels" | grep -q "needs-deep-review" \
