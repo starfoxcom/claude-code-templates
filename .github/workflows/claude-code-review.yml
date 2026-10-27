@@ -1199,9 +1199,11 @@ jobs:
           request="$RUNNER_TEMP/$STAGE-deep-request.md"
           as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
           gate="$RUNNER_TEMP/$STAGE-gate.py"
-          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" <<'PYEOF'
-          import json, os, sys
-          src, review_path, request_path, comment_path = sys.argv[1:5]
+          marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
+          marker="^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name"
+          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" "$marker" <<'PYEOF'
+          import json, os, re, sys
+          src, review_path, request_path, comment_path, marker = sys.argv[1:6]
           try:
               with open(src, encoding='utf-8') as f:
                   data = json.load(f)
@@ -1226,10 +1228,13 @@ jobs:
           if len(request) > 20000:
               request = '(the reviewer asked for a deep review; its request was too long to post)'
           # The body exactly as "Post the review" sends it: this run attempt's
-          # mark under the first line, so a retried post finds its own.
+          # mark at the end of the line where the gate's heading match ends (the
+          # first line when it has none), so a retried post finds its own.
           mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
-          first, sep, rest = answer['review'].lstrip().partition('\n')
-          body = first + '\n' + mark + ('\n' + rest if sep else '')
+          review = answer['review'].lstrip()
+          heading = re.match(marker, review)
+          cut = review.find('\n', heading.end() if heading else 0)
+          body = review + '\n' + mark if cut < 0 else review[:cut] + '\n' + mark + review[cut:]
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
               f.write(body)
           with open(request_path, 'w', encoding='utf-8', newline='') as f:
@@ -1240,10 +1245,9 @@ jobs:
               json.dump(comment, f)
           PYEOF
           then
-            marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
             if git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate" \
               && found=$(python3 -I "$gate" verdict --since 1970-01-01T00:00:00Z --tier routine \
-                --marker "^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name" < "$as_comment") \
+                --marker "$marker" < "$as_comment") \
               && verdict=$(printf '%s' "$found" | jq -r .verdict); then
               case "$verdict" in
                 pass|block) ok=yes ;;
@@ -1327,9 +1331,11 @@ jobs:
           request="$RUNNER_TEMP/$STAGE-deep-request.md"
           as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
           gate="$RUNNER_TEMP/$STAGE-gate.py"
-          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" <<'PYEOF'
-          import json, os, sys
-          src, review_path, request_path, comment_path = sys.argv[1:5]
+          marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
+          marker="^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name"
+          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" "$marker" <<'PYEOF'
+          import json, os, re, sys
+          src, review_path, request_path, comment_path, marker = sys.argv[1:6]
           try:
               with open(src, encoding='utf-8') as f:
                   data = json.load(f)
@@ -1354,10 +1360,13 @@ jobs:
           if len(request) > 20000:
               request = '(the reviewer asked for a deep review; its request was too long to post)'
           # The body exactly as "Post the review" sends it: this run attempt's
-          # mark under the first line, so a retried post finds its own.
+          # mark at the end of the line where the gate's heading match ends (the
+          # first line when it has none), so a retried post finds its own.
           mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
-          first, sep, rest = answer['review'].lstrip().partition('\n')
-          body = first + '\n' + mark + ('\n' + rest if sep else '')
+          review = answer['review'].lstrip()
+          heading = re.match(marker, review)
+          cut = review.find('\n', heading.end() if heading else 0)
+          body = review + '\n' + mark if cut < 0 else review[:cut] + '\n' + mark + review[cut:]
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
               f.write(body)
           with open(request_path, 'w', encoding='utf-8', newline='') as f:
@@ -1368,10 +1377,9 @@ jobs:
               json.dump(comment, f)
           PYEOF
           then
-            marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
             if git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate" \
               && found=$(python3 -I "$gate" verdict --since 1970-01-01T00:00:00Z --tier routine \
-                --marker "^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name" < "$as_comment") \
+                --marker "$marker" < "$as_comment") \
               && verdict=$(printf '%s' "$found" | jq -r .verdict); then
               case "$verdict" in
                 pass|block) ok=yes ;;
@@ -1505,9 +1513,11 @@ jobs:
           request="$RUNNER_TEMP/$STAGE-deep-request.md"
           as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
           gate="$RUNNER_TEMP/$STAGE-gate.py"
-          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" <<'PYEOF'
-          import json, os, sys
-          src, review_path, request_path, comment_path = sys.argv[1:5]
+          marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
+          marker="^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name"
+          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" "$marker" <<'PYEOF'
+          import json, os, re, sys
+          src, review_path, request_path, comment_path, marker = sys.argv[1:6]
           try:
               with open(src, encoding='utf-8') as f:
                   data = json.load(f)
@@ -1532,10 +1542,13 @@ jobs:
           if len(request) > 20000:
               request = '(the reviewer asked for a deep review; its request was too long to post)'
           # The body exactly as "Post the review" sends it: this run attempt's
-          # mark under the first line, so a retried post finds its own.
+          # mark at the end of the line where the gate's heading match ends (the
+          # first line when it has none), so a retried post finds its own.
           mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
-          first, sep, rest = answer['review'].lstrip().partition('\n')
-          body = first + '\n' + mark + ('\n' + rest if sep else '')
+          review = answer['review'].lstrip()
+          heading = re.match(marker, review)
+          cut = review.find('\n', heading.end() if heading else 0)
+          body = review + '\n' + mark if cut < 0 else review[:cut] + '\n' + mark + review[cut:]
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
               f.write(body)
           with open(request_path, 'w', encoding='utf-8', newline='') as f:
@@ -1546,10 +1559,9 @@ jobs:
               json.dump(comment, f)
           PYEOF
           then
-            marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
             if git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate" \
               && found=$(python3 -I "$gate" verdict --since 1970-01-01T00:00:00Z --tier routine \
-                --marker "^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name" < "$as_comment") \
+                --marker "$marker" < "$as_comment") \
               && verdict=$(printf '%s' "$found" | jq -r .verdict); then
               case "$verdict" in
                 pass|block) ok=yes ;;
