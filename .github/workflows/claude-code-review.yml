@@ -471,7 +471,7 @@ jobs:
     outputs:
       floor: ${{ steps.pre-screen.outputs.floor }}
       done: ${{ steps.repair.outputs.done }}
-      reviewer: ${{ steps.claude-review-credits.outcome == 'success' && format('{0} {1} (API credits)', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || (steps.claude-review.outcome == 'success' || steps.main-posted.outputs.posted == 'yes') && format('{0} {1}', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review-backup.outcome == 'success' && format('{0} {1} (backup)', needs.init-gate.outputs.routine_fallback_model, needs.init-gate.outputs.routine_fallback_effort) || 'none' }}
+      reviewer: ${{ steps.claude-review-credits.outcome == 'success' && format('{0} {1} (API credits)', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.main-posted.outputs.posted == 'yes' && format('{0} {1}', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.backup-posted.outputs.posted == 'yes' && format('{0} {1} (backup)', needs.init-gate.outputs.routine_fallback_model, needs.init-gate.outputs.routine_fallback_effort) || 'none' }}
     env:
       ROUTINE_REVIEW_PROMPT: |
         Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }}. What the project is, the invariants to verify and its extra escalation cases are in the project's review guide, under "Project review guide" at the end of the review context file (taken from the base branch, or from the default branch when the base predates the review gate, so the PR cannot change it). No such section means the project has no guide: review against the general rules below.
@@ -1403,18 +1403,22 @@ jobs:
 
             ${{ env.ROUTINE_REVIEW_PROMPT }}
 
-      # A main review that posted its verdict and then failed (a crash, or its
-      # time limit hit while it escalated) has decided this run: a backup would
-      # post a second verdict, and the gate reads the newest one, so a 🟢 could
-      # bury a 🔴. The backup runs only when no verdict from this run is on the
-      # PR (the credits step found none, or the job would not be here). A
-      # verdict that asked for a deep review gets the label here; the repair
-      # step then fails loudly when no request went out. A bot comment that is
-      # not a verdict, unreadable comments, a check over them that fails, or a
-      # label that cannot be applied: no backup, and the job fails.
+      # Whether an attempt counts is what the gate reads, not how it exited.
+      # After the main review runs, this step reads the PR with Evaluate's own
+      # reader. A verdict stands even when the run then failed (a crash, or
+      # its time limit hit while it escalated): a backup would post a second
+      # verdict, and the gate reads the newest one, so a 🟢 could bury a 🔴.
+      # No verdict at all runs the backup, even after a run that exited
+      # cleanly (a release that ends without posting). The credits step found
+      # none, or the job would not be here. A verdict from a run that failed
+      # and asked for a deep review gets the label here; the repair step then
+      # fails loudly when no request went out. A bot comment that is not a
+      # verdict, unreadable comments, a check over them that fails, or a label
+      # that cannot be applied: no backup, and the job fails. The backup gets
+      # the same check, the same script, after it runs.
       - name: Check whether the main review posted its verdict
         id: main-posted
-        if: steps.claude-review.outcome == 'failure'
+        if: steps.claude-review.outcome == 'failure' || steps.claude-review.outcome == 'success'
         continue-on-error: true
         shell: bash
         env:
@@ -1424,12 +1428,15 @@ jobs:
           FLOOR: ${{ steps.pre-screen.outputs.floor }}
           ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
           GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
+          STAGE: main
+          WHO: main review
+          OUTCOME: ${{ steps.claude-review.outcome }}
         run: |
           set -euo pipefail
           posted=unknown
           verdict_body=""
-          comments_file="$RUNNER_TEMP/main-posted-comments.json"
-          gate="$RUNNER_TEMP/main-posted-gate.py"
+          comments_file="$RUNNER_TEMP/$STAGE-posted-comments.json"
+          gate="$RUNNER_TEMP/$STAGE-posted-gate.py"
           # Evaluate's own reader, from the gate's commit as Evaluate runs it,
           # so a verdict counts here only when the gate can read it.
           if timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$comments_file" \
@@ -1448,8 +1455,8 @@ jobs:
                   # No verdict the gate can read. Like the credits step, any
                   # bot comment since the floor (outside requests and the deep
                   # run's, an unreadable headed one included) is a stray: no
-                  # backup, since it would bury it, and the job fails. A check
-                  # that fails counts as unknown, never as no.
+                  # further attempt, since it would bury it, and the job
+                  # fails. A check that fails counts as unknown, never as no.
                   if stray=$(jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length' "$comments_file"); then
                     if [ "$stray" = 0 ]; then posted=no; else posted=stray; fi
                   fi ;;
@@ -1461,27 +1468,28 @@ jobs:
           # unless the request went out too; the escalation is never dropped.
           # Only the verdict is searched, as in the credits step; the
           # here-string keeps a long one from ending grep's read early.
-          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+          if [ "$posted" = yes ] && [ "$OUTCOME" = failure ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
-            yes) echo "::warning::The main review posted its verdict and then failed: the verdict stands and no backup runs" ;;
-            label-failed) echo "::error::The main review's verdict asked for a deep review, and applying needs-deep-review failed: no backup, and the job fails" ;;
-            stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a backup would bury it: no backup, and the job fails; read it, then re-run the job" ;;
-            unknown) echo "::error::Could not read or check the PR comments, so whether the main review posted is unknown: no backup, to never post a second verdict" ;;
+            yes) if [ "$OUTCOME" = failure ]; then echo "::warning::The $WHO posted its verdict and then failed: the verdict stands, and no further attempt runs"; fi ;;
+            no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
+            label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
+            stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
+            unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
 
       # The backup's CLI: the stable channel's release, one that has had time
       # in the field, so a newest release that installs but then breaks does
-      # not take out the backup too. Installed only once the main review has
-      # failed without posting its verdict. When the stable release is the newest one, the job's copy is
-      # reused: no older release is known to be good. So is it when the stable
+      # not take out the backup too. Installed only when the main review left
+      # no verdict. When the stable release is the newest one, the job's copy
+      # is reused: no older release is known to be good. So is it when the stable
       # lookup or install fails, so this step never costs the backup its run.
       - name: Install the stable Claude Code for the backup
         id: claude-cli-stable
         timeout-minutes: 30
-        if: steps.claude-review.outcome == 'failure' && steps.main-posted.outputs.posted == 'no'
+        if: steps.main-posted.outputs.posted == 'no'
         continue-on-error: true
         shell: bash
         env:
@@ -1547,8 +1555,9 @@ jobs:
           echo "path=$dest" >> "$GITHUB_OUTPUT"
           echo "version=$installed" >> "$GITHUB_OUTPUT"
 
-      # Backup: a primary failure (usage limit or otherwise) that left no
-      # verdict on the PR retries once on the fallback model from the gate
+      # Backup: a main review that left no verdict on the PR (a failure, usage
+      # limit or otherwise, or a run that ended without one) retries once on
+      # the fallback model from the gate
       # settings with the same prompt, so a spent allowance on the main model
       # never blocks every PR. The CLI the
       # pinned action bundles is refused for the default fallback (Opus 5.5),
@@ -1556,7 +1565,7 @@ jobs:
       - name: Run Claude Code Review (backup model)
         id: claude-review-backup
         timeout-minutes: 30
-        if: steps.claude-review.outcome == 'failure' && steps.claude-cli-stable.outcome == 'success'
+        if: steps.main-posted.outputs.posted == 'no' && steps.claude-cli-stable.outcome == 'success'
         continue-on-error: true
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
         with:
@@ -1569,10 +1578,77 @@ jobs:
 
             ${{ env.ROUTINE_REVIEW_PROMPT }}
 
-      - name: Fail when both review attempts failed
-        if: steps.claude-review.outcome == 'failure' && steps.claude-review-backup.outcome != 'success' && steps.main-posted.outputs.posted != 'yes'
+      # The main review's check after the backup, the same script: a backup
+      # that ended without a verdict the gate can read fails the job here,
+      # not in Evaluate, so re-running the failed job retries the review.
+      - name: Check whether the backup posted its verdict
+        id: backup-posted
+        if: steps.claude-review-backup.outcome == 'failure' || steps.claude-review-backup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          FLOOR: ${{ steps.pre-screen.outputs.floor }}
+          ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
+          STAGE: backup
+          WHO: backup
+          OUTCOME: ${{ steps.claude-review-backup.outcome }}
         run: |
-          echo "::error::The routine review failed on ${{ needs.init-gate.outputs.routine_model }} (main verdict posted: ${{ steps.main-posted.outputs.posted || 'unknown' }}), and no ${{ needs.init-gate.outputs.routine_fallback_model }} backup verdict stands (backup: ${{ steps.claude-review-backup.outcome || 'skipped' }}; newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }})"
+          set -euo pipefail
+          posted=unknown
+          verdict_body=""
+          comments_file="$RUNNER_TEMP/$STAGE-posted-comments.json"
+          gate="$RUNNER_TEMP/$STAGE-posted-gate.py"
+          # Evaluate's own reader, from the gate's commit as Evaluate runs it,
+          # so a verdict counts here only when the gate can read it.
+          if timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$comments_file" \
+            && git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate"; then
+            marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
+            if found=$(python3 -I "$gate" verdict --since "$FLOOR" --tier routine \
+                --marker "^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name" < "$comments_file") \
+              && verdict=$(printf '%s' "$found" | jq -r .verdict); then
+              case "$verdict" in
+                pass|block)
+                  # The newest headed comment, the one the gate reads.
+                  if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file"); then
+                    posted=yes
+                  fi ;;
+                *)
+                  # No verdict the gate can read. Like the credits step, any
+                  # bot comment since the floor (outside requests and the deep
+                  # run's, an unreadable headed one included) is a stray: no
+                  # further attempt, since it would bury it, and the job
+                  # fails. A check that fails counts as unknown, never as no.
+                  if stray=$(jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length' "$comments_file"); then
+                    if [ "$stray" = 0 ]; then posted=no; else posted=stray; fi
+                  fi ;;
+              esac
+            fi
+          fi
+          # A verdict that asked for a deep review before the run broke gets
+          # the label, so the repair step's backstop fails the job loudly
+          # unless the request went out too; the escalation is never dropped.
+          # Only the verdict is searched, as in the credits step; the
+          # here-string keeps a long one from ending grep's read early.
+          if [ "$posted" = yes ] && [ "$OUTCOME" = failure ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+            posted=label-failed
+          fi
+          case "$posted" in
+            yes) if [ "$OUTCOME" = failure ]; then echo "::warning::The $WHO posted its verdict and then failed: the verdict stands, and no further attempt runs"; fi ;;
+            no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
+            label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
+            stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
+            unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
+          esac
+          echo "posted=$posted" >> "$GITHUB_OUTPUT"
+
+      - name: Fail when no review attempt left a verdict
+        if: (steps.claude-review.outcome == 'failure' || steps.claude-review.outcome == 'success') && steps.main-posted.outputs.posted != 'yes' && steps.backup-posted.outputs.posted != 'yes'
+        run: |
+          echo "::error::No routine verdict the gate can read stands. Main review on ${{ needs.init-gate.outputs.routine_model }}: ${{ steps.claude-review.outcome }}, verdict posted: ${{ steps.main-posted.outputs.posted || 'unknown' }}. Backup on ${{ needs.init-gate.outputs.routine_fallback_model }}: ${{ steps.claude-review-backup.outcome || 'skipped' }}, verdict posted: ${{ steps.backup-posted.outputs.posted || 'not checked' }}. Newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }}."
           exit 1
 
       # ── Escalation: repair the label, resolve Claude On-Demand ───────────
