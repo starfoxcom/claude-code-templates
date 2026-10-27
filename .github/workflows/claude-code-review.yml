@@ -1025,14 +1025,14 @@ jobs:
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Could not look up the newest Claude Code release: the review runs on the action's own CLI; the backup runs on the stable release"
+              echo "::warning::Could not look up the newest Claude Code release: the review runs on the action's own CLI; the backup tries the stable release"
               exit 1
             fi
             sleep $((attempt * 20))
           done
           CLI_VERSION=$(printf '%s' "$CLI_VERSION" | tr -d '[:space:]')
           if [[ ! "$CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::warning::The release channel returned no version: the review runs on the action's own CLI; the backup runs on the stable release"
+            echo "::warning::The release channel returned no version: the review runs on the action's own CLI; the backup tries the stable release"
             exit 1
           fi
           echo "Newest Claude Code release: $CLI_VERSION"
@@ -1041,7 +1041,7 @@ jobs:
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Claude Code $CLI_VERSION install failed three times: the review runs on the action's own CLI; the backup runs on the stable release"
+              echo "::warning::Claude Code $CLI_VERSION install failed three times: the review runs on the action's own CLI; the backup tries the stable release"
               exit 1
             fi
             # The install host answers bursts with HTTP 429: back off longer.
@@ -1057,7 +1057,7 @@ jobs:
           chmod +x "$dest"
           installed="$("$dest" --version | awk '{print $1}')"
           if [ "$installed" != "$CLI_VERSION" ]; then
-            echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup runs on the stable release"
+            echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup tries the stable release"
             exit 1
           fi
           echo "::notice::The credits run and the main review run Claude Code $installed"
@@ -1284,6 +1284,7 @@ jobs:
             if [ -n "$NEWEST_PATH" ]; then
               echo "::warning::$1: the backup runs on the job's newest copy"
               echo "path=$NEWEST_PATH" >> "$GITHUB_OUTPUT"
+              echo "version=$NEWEST" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             echo "::warning::$1, and the newest release did not install either: no backup review"
@@ -1306,6 +1307,7 @@ jobs:
           if [ "$STABLE" = "$NEWEST" ] && [ -n "$NEWEST_PATH" ]; then
             echo "::notice::The stable release is the newest one ($STABLE): the backup reuses the job's copy"
             echo "path=$NEWEST_PATH" >> "$GITHUB_OUTPUT"
+            echo "version=$STABLE" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           for attempt in 1 2 3; do
@@ -1331,6 +1333,7 @@ jobs:
           fi
           echo "::notice::The backup runs the stable Claude Code release $installed"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
+          echo "version=$installed" >> "$GITHUB_OUTPUT"
 
       # Backup: any primary failure (usage limit or otherwise) retries once on
       # the fallback model from the gate settings with the same prompt, so a
@@ -1355,7 +1358,7 @@ jobs:
       - name: Fail when both review attempts failed
         if: steps.claude-review.outcome == 'failure' && steps.claude-review-backup.outcome != 'success'
         run: |
-          echo "::error::The routine review failed on ${{ needs.init-gate.outputs.routine_model }} and on the ${{ needs.init-gate.outputs.routine_fallback_model }} backup (newest CLI install: ${{ steps.claude-cli.outcome }}, stable CLI install: ${{ steps.claude-cli-stable.outcome }})"
+          echo "::error::The routine review failed on ${{ needs.init-gate.outputs.routine_model }} and on the ${{ needs.init-gate.outputs.routine_fallback_model }} backup (newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }})"
           exit 1
 
       # ── Escalation: repair the label, resolve Claude On-Demand ───────────
