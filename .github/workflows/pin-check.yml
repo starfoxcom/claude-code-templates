@@ -1,7 +1,7 @@
-# Weekly pin check. The review workflows pin the CLI version their credits and
-# backup steps install and the review action's commit, and a project's test
-# workflow can pin a CLI version too (PINNED_VERSION), so a new release never
-# changes a PR's result. This run says
+# Weekly pin check. The review workflows pin the review action's commit (they
+# install the newest CLI release on every run), and a project's test workflow
+# can pin a CLI version (PINNED_VERSION), so a new release never changes a
+# PR's result. This run says
 # when those pins fall behind: it looks up the newest CLI release and the
 # commit the action's v1 tag points to, and keeps one issue listing every pin
 # that is behind, closed again once all are current. It can also be started by
