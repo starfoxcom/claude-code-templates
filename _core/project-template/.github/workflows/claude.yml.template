@@ -365,12 +365,13 @@ jobs:
             fi
           fi
 
-      # One job-private copy of the newest CLI release for every review attempt
-      # below, so they all run the same version. The version is read when the
-      # job runs, from the channel the official installer reads, and then
-      # installed exactly (see the routine workflow). When the lookup or the
-      # install fails, the credits run and the fallback are skipped and the
-      # action's attempts fall back to the CLI it bundles.
+      # One job-private copy of the newest CLI release, so the credits run, the
+      # first attempt and the retry run the same version. The version is read
+      # when the job runs, from the channel the official installer reads, and
+      # then installed exactly (see the routine workflow). When the lookup or
+      # the install fails, the credits run is skipped and the action's attempts
+      # fall back to the CLI it bundles. The fallback model runs on the stable
+      # release (see below).
       - name: Install Claude Code
         id: claude-cli
         if: steps.pr-head.outputs.head_sha != ''
@@ -386,14 +387,14 @@ jobs:
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Could not look up the newest Claude Code release: the deep review runs on the action's own CLI, with no fallback model"
+              echo "::warning::Could not look up the newest Claude Code release: the deep review runs on the action's own CLI; the fallback model tries the stable release"
               exit 1
             fi
             sleep $((attempt * 20))
           done
           CLI_VERSION=$(printf '%s' "$CLI_VERSION" | tr -d '[:space:]')
           if [[ ! "$CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::warning::The release channel returned no version: the deep review runs on the action's own CLI, with no fallback model"
+            echo "::warning::The release channel returned no version: the deep review runs on the action's own CLI; the fallback model tries the stable release"
             exit 1
           fi
           echo "Newest Claude Code release: $CLI_VERSION"
@@ -402,7 +403,7 @@ jobs:
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Claude Code $CLI_VERSION install failed three times: the deep review runs on the action's own CLI, with no fallback model"
+              echo "::warning::Claude Code $CLI_VERSION install failed three times: the deep review runs on the action's own CLI; the fallback model tries the stable release"
               exit 1
             fi
             # The install host answers bursts with HTTP 429: back off longer.
@@ -418,11 +419,12 @@ jobs:
           chmod +x "$dest"
           installed="$("$dest" --version | awk '{print $1}')"
           if [ "$installed" != "$CLI_VERSION" ]; then
-            echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the deep review runs on the action's own CLI, with no fallback model"
+            echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the deep review runs on the action's own CLI; the fallback model tries the stable release"
             exit 1
           fi
-          echo "::notice::Every review attempt runs Claude Code $installed"
+          echo "::notice::The credits run, the first attempt and the retry run Claude Code $installed"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
+          echo "version=$installed" >> "$GITHUB_OUTPUT"
 
       # ── First attempt: the plan's monthly API credits ─────────────────────
       # The routine tier's credits path (see its step in claude-code-review.yml
@@ -715,15 +717,91 @@ jobs:
           git remote set-url origin "$ORIGIN"
           git checkout --quiet --detach
 
+      # The fallback's CLI: the stable channel's release, one that has had time
+      # in the field, so a newest release that installs but then breaks does
+      # not take out the fallback too (see the routine workflow's backup).
+      # When the stable release is the newest one, the job's copy is reused.
+      # So is it when the stable lookup or install fails, so this step never
+      # costs the fallback its run.
+      - name: Install the stable Claude Code for the fallback
+        id: claude-cli-stable
+        if: |
+          (steps.failure_class.outputs.usage_limit == 'true') ||
+          (steps.claude_retry.outcome == 'failure')
+        continue-on-error: true
+        shell: bash
+        env:
+          DISABLE_AUTOUPDATER: "1"
+          NEWEST: ${{ steps.claude-cli.outputs.version }}
+          NEWEST_PATH: ${{ steps.claude-cli.outputs.path }}
+        run: |
+          set -euo pipefail
+          # No stable copy: the fallback uses the job's newest copy, and is
+          # skipped only when there is none either.
+          no_stable() {
+            if [ -n "$NEWEST_PATH" ]; then
+              echo "::warning::$1: the fallback runs on the job's newest copy"
+              echo "path=$NEWEST_PATH" >> "$GITHUB_OUTPUT"
+              echo "version=$NEWEST" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::$1, and the newest release did not install either: no fallback model"
+            exit 1
+          }
+          STABLE=""
+          for attempt in 1 2 3; do
+            if STABLE=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable); then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              no_stable "Could not look up the stable Claude Code release"
+            fi
+            sleep $((attempt * 20))
+          done
+          STABLE=$(printf '%s' "$STABLE" | tr -d '[:space:]')
+          if [[ ! "$STABLE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            no_stable "The stable channel returned no version"
+          fi
+          if [ "$STABLE" = "$NEWEST" ] && [ -n "$NEWEST_PATH" ]; then
+            echo "::notice::The stable release is the newest one ($STABLE): the fallback reuses the job's copy"
+            echo "path=$NEWEST_PATH" >> "$GITHUB_OUTPUT"
+            echo "version=$STABLE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for attempt in 1 2 3; do
+            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$STABLE"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              no_stable "Claude Code $STABLE install failed three times"
+            fi
+            sleep $((attempt * 20))
+          done
+          src="$HOME/.local/share/claude/versions/$STABLE"
+          if [ ! -x "$src" ]; then
+            src="$(readlink -f "$HOME/.local/bin/claude" || true)"
+          fi
+          dest="$RUNNER_TEMP/claude-cli-stable/claude"
+          mkdir -p "$(dirname "$dest")"
+          cp "$src" "$dest" || no_stable "Claude Code $STABLE left no binary to copy"
+          chmod +x "$dest"
+          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
+          if [ "$installed" != "$STABLE" ]; then
+            no_stable "expected Claude Code $STABLE, got '$installed'"
+          fi
+          echo "::notice::The fallback runs the stable Claude Code release $installed"
+          echo "path=$dest" >> "$GITHUB_OUTPUT"
+          echo "version=$installed" >> "$GITHUB_OUTPUT"
+
       # Attempt 2b: the fallback model from the settings. Fires on a usage limit,
       # or when the same-model retry also failed. The CLI the pinned action
       # bundles is refused for the default fallback (Opus 5.5), so this runs
-      # only on the job's own CLI. The Evaluate step below owns the
+      # only on the copy the step above picked. The Evaluate step below owns the
       # outcome, so every attempt continues on error.
       - name: Run Claude (fallback model)
         id: claude_fallback
         if: |
-          steps.claude-cli.outcome == 'success' && (
+          steps.claude-cli-stable.outcome == 'success' && (
           (steps.failure_class.outputs.usage_limit == 'true') ||
           (steps.claude_retry.outcome == 'failure'))
         continue-on-error: true
@@ -734,7 +812,7 @@ jobs:
           # reviewer starts; this tells it where the PR's own copies are.
           APPEND_SYSTEM_PROMPT: "In this checkout the top-level .claude/, CLAUDE.md, CLAUDE.local.md, .mcp.json, .claude.json, .gitmodules, .ripgreprc and .husky/ hold the base branch's copies, put there before you start: read the PR's version of any of them with `git show HEAD:<path>`, never with Read, also when the diff shows one as binary. CLAUDE.md and .claude/rules/ are read from the base on purpose: they hold the rules. ${{ steps.gate.outputs.guide_note }}"
         with:
-          path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
+          path_to_claude_code_executable: ${{ steps.claude-cli-stable.outputs.path }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.issue.number || github.event.pull_request.number }} *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ steps.gate.outputs.tools_suffix }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ steps.gate.outputs.deep_max_turns }} --model ${{ steps.gate.outputs.deep_fallback_model }} --effort ${{ steps.gate.outputs.deep_fallback_effort }}'
           show_full_output: false
@@ -778,7 +856,7 @@ jobs:
           # name and a green first step cannot tell (every attempt continues on
           # error).
           REVIEWER: ${{ steps.claude_credits.outcome == 'success' && format('{0} {1} (API credits)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_attempt_1.outcome == 'success' && format('{0} {1}', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_retry.outcome == 'success' && format('{0} {1} (retry)', steps.gate.outputs.deep_model, steps.gate.outputs.deep_effort) || steps.claude_fallback.outcome == 'success' && format('{0} {1} (fallback)', steps.gate.outputs.deep_fallback_model, steps.gate.outputs.deep_fallback_effort) || 'none' }}
-          ATTEMPTS: "API credits: ${{ steps.claude_credits.outcome || 'skipped' }}, first: ${{ steps.claude_attempt_1.outcome || 'skipped' }}, usage limit: ${{ steps.failure_class.outputs.usage_limit || 'no' }}, retry: ${{ steps.claude_retry.outcome || 'skipped' }}, fallback: ${{ steps.claude_fallback.outcome || 'skipped' }}"
+          ATTEMPTS: "API credits: ${{ steps.claude_credits.outcome || 'skipped' }}, first: ${{ steps.claude_attempt_1.outcome || 'skipped' }}, usage limit: ${{ steps.failure_class.outputs.usage_limit || 'no' }}, retry: ${{ steps.claude_retry.outcome || 'skipped' }}, fallback: ${{ steps.claude_fallback.outcome || 'skipped' }}, newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, fallback CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }}"
         run: |
           set -o pipefail
           REPO="${{ github.repository }}"
