@@ -1004,14 +1004,13 @@ jobs:
           echo "--- review_context.md ---"
           cat "$RUNNER_TEMP/review_context.md"
 
-      # One job-private copy of the newest CLI release for every review step
-      # below, so the credits run, the action's review and its backup all run
-      # the same version. The version is read when the job runs, from the
-      # channel the official installer reads, and then installed exactly, so
-      # every step and the log name one version. When the lookup or the
-      # install fails, the credits run is skipped and the action's review
-      # falls back to the CLI it bundles. The backup runs on the stable
-      # release instead (see below).
+      # One job-private copy of the newest CLI release, so the credits run and
+      # the action's review run the same version. The version is read when the
+      # job runs, from the channel the official installer reads, and then
+      # installed exactly, so those steps and the log name one version. When
+      # the lookup or the install fails, the credits run is skipped and the
+      # action's review falls back to the CLI it bundles. The backup runs on
+      # the stable release (see below).
       - name: Install Claude Code
         id: claude-cli
         continue-on-error: true
@@ -1061,7 +1060,7 @@ jobs:
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup runs on the stable release"
             exit 1
           fi
-          echo "::notice::Every review step runs Claude Code $installed"
+          echo "::notice::The credits run and the main review run Claude Code $installed"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
           echo "version=$installed" >> "$GITHUB_OUTPUT"
 
