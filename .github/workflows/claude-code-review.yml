@@ -1061,7 +1061,7 @@ jobs:
             exit 1
           fi
           chmod +x "$dest"
-          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
+          installed="$(timeout 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$CLI_VERSION" ]; then
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup tries the stable release"
             exit 1
@@ -1113,6 +1113,8 @@ jobs:
 
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
+        # A backstop only: the CLI run below has its own, shorter limit.
+        timeout-minutes: 50
         continue-on-error: true
         shell: bash
         env:
@@ -1162,11 +1164,11 @@ jobs:
             git -C "$wt" checkout "origin/$BASE_REF" -- "$p" 2>/dev/null || true
           done
 
-          oidc=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          oidc=$(curl -fsS --connect-timeout 20 --max-time 60 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
             | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])')
           echo "::add-mask::$oidc"
-          bot_token=$(curl -fsS -X POST -H "Authorization: Bearer $oidc" \
+          bot_token=$(curl -fsS --connect-timeout 20 --max-time 60 -X POST -H "Authorization: Bearer $oidc" \
             https://api.anthropic.com/api/github/github-app-token-exchange \
             | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")')
           if [ -z "$bot_token" ]; then
@@ -1181,7 +1183,8 @@ jobs:
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # A time limit, so a release that hangs ends as a broken run: a verdict
           # it posted still stands, otherwise the action steps take over. The
-          # step itself has none, since a step limit would skip that check.
+          # step's own limit sits well past this one, since reaching it skips
+          # that check: it only stops a stalled API call after the run.
           (cd "$wt" && GH_TOKEN="$bot_token" timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
             --setting-sources user --strict-mcp-config --permission-mode default \
             --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh pr edit $PR_NUMBER --repo $REPO --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
@@ -1448,7 +1451,7 @@ jobs:
           mkdir -p "$(dirname "$dest")"
           cp "$src" "$dest" || no_stable "Claude Code $STABLE left no binary to copy"
           chmod +x "$dest"
-          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
+          installed="$(timeout 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$STABLE" ]; then
             no_stable "expected Claude Code $STABLE, got '$installed'"
           fi
