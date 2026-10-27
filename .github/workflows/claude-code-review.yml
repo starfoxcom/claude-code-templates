@@ -1078,7 +1078,6 @@ jobs:
         shell: bash
         env:
           CLI: ${{ steps.claude-cli.outputs.path }}
-          CLI_VERSION: ${{ steps.claude-cli.outputs.version }}
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -1142,7 +1141,11 @@ jobs:
           status=0
           # A time limit, so a release that hangs ends as a broken run, and the
           # action steps take over.
-          (cd "$wt" && GH_TOKEN="$bot_token" timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
+          # Without the job's OIDC request values, as the action's reviewer
+          # runs: with them, anything the reviewer starts could mint its own
+          # bot token and post.
+          (cd "$wt" && GH_TOKEN="$bot_token" env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
             --setting-sources user --strict-mcp-config --permission-mode default \
             --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
             --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" \
@@ -1266,7 +1269,7 @@ jobs:
           # Model, effort and turn cap from the gate settings (routine.*).
           # `--disallowedTools Agent,...`: a reviewer that hands a large diff to
           # a subagent and "waits" for it ends its one-shot session with no
-          # verdict posted. The backup invocation carries the same ban.
+          # review returned. The backup invocation carries the same ban.
           # `--setting-sources user,project`: the action loads every settings
           # file by default, and `.claude/settings.local.json` holds the
           # maintainer's own allow list (commits, pushes, merges). The reviewer
