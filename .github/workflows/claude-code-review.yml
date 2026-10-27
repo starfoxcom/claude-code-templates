@@ -525,7 +525,7 @@ jobs:
 
         ## Step 3 — Return the review
 
-        You do not post anything. End the session by returning your answer as structured output: `review` holds the full comment body (at most 60,000 characters), which the workflow posts on the PR exactly as you wrote it, and `deep_request` holds the Step 4 request, or an empty string when you did not escalate. The workflow posts the review first, then the request, so PR readers see the decision first.
+        You do not post anything. End the session by returning your answer as structured output: `review` holds the full comment body (at most 60,000 characters), which the workflow posts on the PR as you wrote it (with a hidden line it adds under the first), and `deep_request` holds the Step 4 request, or an empty string when you did not escalate. The workflow posts the review first, then the request, so PR readers see the decision first.
 
         **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
 
@@ -1200,7 +1200,7 @@ jobs:
           as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
           gate="$RUNNER_TEMP/$STAGE-gate.py"
           if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" <<'PYEOF'
-          import json, sys
+          import json, os, sys
           src, review_path, request_path, comment_path = sys.argv[1:5]
           try:
               with open(src, encoding='utf-8') as f:
@@ -1221,12 +1221,21 @@ jobs:
               sys.exit(1)
           request = answer.get('deep_request')
           request = request.strip() if isinstance(request, str) else ''
+          # A request too long to post is replaced by the fixed brief (the
+          # post step still owes the deep review: the file is not empty).
+          if len(request) > 20000:
+              request = '(the reviewer asked for a deep review; its request was too long to post)'
+          # The body exactly as "Post the review" sends it: this run attempt's
+          # mark under the first line, so a retried post finds its own.
+          mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
+          first, sep, rest = answer['review'].partition('\n')
+          body = first + '\n' + mark + ('\n' + rest if sep else '')
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
-              f.write(answer['review'])
+              f.write(body)
           with open(request_path, 'w', encoding='utf-8', newline='') as f:
               f.write(request)
           # As Evaluate will read it once posted.
-          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': answer['review']}]
+          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': body}]
           with open(comment_path, 'w', encoding='utf-8') as f:
               json.dump(comment, f)
           PYEOF
@@ -1319,7 +1328,7 @@ jobs:
           as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
           gate="$RUNNER_TEMP/$STAGE-gate.py"
           if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" <<'PYEOF'
-          import json, sys
+          import json, os, sys
           src, review_path, request_path, comment_path = sys.argv[1:5]
           try:
               with open(src, encoding='utf-8') as f:
@@ -1340,12 +1349,21 @@ jobs:
               sys.exit(1)
           request = answer.get('deep_request')
           request = request.strip() if isinstance(request, str) else ''
+          # A request too long to post is replaced by the fixed brief (the
+          # post step still owes the deep review: the file is not empty).
+          if len(request) > 20000:
+              request = '(the reviewer asked for a deep review; its request was too long to post)'
+          # The body exactly as "Post the review" sends it: this run attempt's
+          # mark under the first line, so a retried post finds its own.
+          mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
+          first, sep, rest = answer['review'].partition('\n')
+          body = first + '\n' + mark + ('\n' + rest if sep else '')
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
-              f.write(answer['review'])
+              f.write(body)
           with open(request_path, 'w', encoding='utf-8', newline='') as f:
               f.write(request)
           # As Evaluate will read it once posted.
-          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': answer['review']}]
+          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': body}]
           with open(comment_path, 'w', encoding='utf-8') as f:
               json.dump(comment, f)
           PYEOF
@@ -1488,7 +1506,7 @@ jobs:
           as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
           gate="$RUNNER_TEMP/$STAGE-gate.py"
           if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" <<'PYEOF'
-          import json, sys
+          import json, os, sys
           src, review_path, request_path, comment_path = sys.argv[1:5]
           try:
               with open(src, encoding='utf-8') as f:
@@ -1509,12 +1527,21 @@ jobs:
               sys.exit(1)
           request = answer.get('deep_request')
           request = request.strip() if isinstance(request, str) else ''
+          # A request too long to post is replaced by the fixed brief (the
+          # post step still owes the deep review: the file is not empty).
+          if len(request) > 20000:
+              request = '(the reviewer asked for a deep review; its request was too long to post)'
+          # The body exactly as "Post the review" sends it: this run attempt's
+          # mark under the first line, so a retried post finds its own.
+          mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
+          first, sep, rest = answer['review'].partition('\n')
+          body = first + '\n' + mark + ('\n' + rest if sep else '')
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
-              f.write(answer['review'])
+              f.write(body)
           with open(request_path, 'w', encoding='utf-8', newline='') as f:
               f.write(request)
           # As Evaluate will read it once posted.
-          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': answer['review']}]
+          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': body}]
           with open(comment_path, 'w', encoding='utf-8') as f:
               json.dump(comment, f)
           PYEOF
@@ -1576,14 +1603,18 @@ jobs:
           review="$RUNNER_TEMP/$STAGE-review.md"
           request="$RUNNER_TEMP/$STAGE-deep-request.md"
           # This run attempt's mark, hidden in each comment under its first
-          # line: a try whose post landed but whose answer was lost is found by
-          # it, so a retry never posts a second copy.
+          # line (the check step put it in the review, the body it checked):
+          # a try whose post landed but whose answer was lost is found by it,
+          # so a retry never posts a second copy.
           mark="<!-- review-run: $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT -->"
           # Posts a comment once: the created_at of the marked comment, found
           # or new. $1 is the file, $2 the comment kind for the mark.
           post_once() {
-            local body="$RUNNER_TEMP/post-$2.md" at
-            { head -n 1 "$1"; printf '%s %s -->\n' "${mark% -->}" "$2"; tail -n +2 "$1"; } > "$body"
+            local body="$1" at
+            if [ "$2" != review ]; then
+              body="$RUNNER_TEMP/post-$2.md"
+              { head -n 1 "$1"; printf '\n%s %s -->\n' "${mark% -->}" "$2"; tail -n +2 "$1"; } > "$body"
+            fi
             at=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
               | jq -rs --arg m "${mark% -->} $2 -->" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | contains($m))] | first | .created_at // ""') || return 1
             if [ -z "$at" ]; then
