@@ -1087,10 +1087,9 @@ jobs:
       # post of that request sets `halt`. When no verdict is found, any other
       # bot comment posted since the run started (outside the request and
       # the deep run's comments) sets `halt` and fails the job instead, as
-      # does a failed read of the comments: a second review would post a
-      # second verdict, and Evaluate reads the newest one; so does a check of
-      # the comments that cannot finish. Bot comments next
-      # to a found verdict are not checked.
+      # does a failed read or check of the comments: a second review would
+      # post a second verdict, and Evaluate reads the newest one. Bot comments
+      # next to a found verdict are not checked.
       #
       # The run's start: the floor the repair step counts deep-review requests
       # from, so the credits step counts them from the same moment. Read with
@@ -1348,7 +1347,8 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        # A hang counts as a failure, so the backup still runs.
+        # A hang counts as a failure, so the backup still runs unless the
+        # verdict was posted before it (see the next step).
         timeout-minutes: 30
         if: steps.claude-review-credits.outcome != 'success' && steps.claude-review-credits.outputs.halt != 'true'
         # Pinned to the v1 tag's resolved SHA (v1.0.213). The bare `@v1` floats.
@@ -1401,9 +1401,9 @@ jobs:
       # bury a 🔴. The backup runs only when no verdict from this run is on the
       # PR (the credits step found none, or the job would not be here). A
       # verdict that asked for a deep review gets the label here; the repair
-      # step then fails loudly when no request went out. Unreadable comments,
-      # a check over them that fails, or a label that cannot be applied: no
-      # backup, and the job fails.
+      # step then fails loudly when no request went out. A bot comment that is
+      # not a verdict, unreadable comments, a check over them that fails, or a
+      # label that cannot be applied: no backup, and the job fails.
       - name: Check whether the main review posted its verdict
         id: main-posted
         if: steps.claude-review.outcome == 'failure'
@@ -1420,20 +1420,19 @@ jobs:
           posted=unknown
           body=""
           if comments=$(timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments"); then
-            # The credits step's selector: a headed bot comment since the floor.
+            # The credits step's rule: the newest headed bot comment since the
+            # floor is a verdict when it holds a 🔴/🟢 line. Without one, any
+            # other bot comment since the floor (outside requests and the deep
+            # run's, a glyph-less headed one included) is a stray: no backup,
+            # since it would bury it, and the job fails. A check that fails
+            # counts as unknown, never as no.
             marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
-            if count=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length'); then
-              if [ "$count" = 0 ]; then posted=no; else posted=yes; fi
-            fi
-            # Like the credits step, any other bot comment since the floor
-            # (outside requests and the deep run's) counts as posted too. A
-            # check that fails counts as unknown, never as no.
-            if [ "$posted" = no ]; then
-              if stray=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length'); then
-                if [ "$stray" != 0 ]; then posted=yes; fi
-              else
-                posted=unknown
+            if verdict_body=$(printf '%s' "$comments" \
+              | jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""'); then
+              if grep -qE "🔴|🟢" <<< "$verdict_body"; then
+                posted=yes
+              elif stray=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length'); then
+                if [ "$stray" = 0 ]; then posted=no; else posted=stray; fi
               fi
             fi
             if [ "$posted" = yes ] && ! body=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts)] | map(.body // "") | join("\n")'); then
@@ -1450,6 +1449,7 @@ jobs:
           case "$posted" in
             yes) echo "::warning::The main review posted its verdict and then failed: the verdict stands and no backup runs" ;;
             label-failed) echo "::error::The main review's verdict asked for a deep review, and applying needs-deep-review failed: no backup, and the job fails" ;;
+            stray) echo "::error::A bot comment posted since this run started is not a verdict this step can take (no heading, or no 🔴/🟢 line), and a backup would bury it: no backup, and the job fails; read it, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the main review posted is unknown: no backup, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
@@ -1457,7 +1457,7 @@ jobs:
       # The backup's CLI: the stable channel's release, one that has had time
       # in the field, so a newest release that installs but then breaks does
       # not take out the backup too. Installed only once the main review has
-      # failed. When the stable release is the newest one, the job's copy is
+      # failed without posting its verdict. When the stable release is the newest one, the job's copy is
       # reused: no older release is known to be good. So is it when the stable
       # lookup or install fails, so this step never costs the backup its run.
       - name: Install the stable Claude Code for the backup
@@ -1529,9 +1529,10 @@ jobs:
           echo "path=$dest" >> "$GITHUB_OUTPUT"
           echo "version=$installed" >> "$GITHUB_OUTPUT"
 
-      # Backup: any primary failure (usage limit or otherwise) retries once on
-      # the fallback model from the gate settings with the same prompt, so a
-      # spent allowance on the main model never blocks every PR. The CLI the
+      # Backup: a primary failure (usage limit or otherwise) that left no
+      # verdict on the PR retries once on the fallback model from the gate
+      # settings with the same prompt, so a spent allowance on the main model
+      # never blocks every PR. The CLI the
       # pinned action bundles is refused for the default fallback (Opus 5.5),
       # so the backup runs only on the copy the step above picked.
       - name: Run Claude Code Review (backup model)
