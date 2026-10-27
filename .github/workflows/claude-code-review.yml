@@ -525,7 +525,7 @@ jobs:
 
         ## Step 3 — Return the review
 
-        You do not post anything. End the session by returning your answer as structured output: `review` holds the full comment body, which the workflow posts on the PR exactly as you wrote it, and `deep_request` holds the Step 4 request, or an empty string when you did not escalate. The workflow posts the review first, then the request, so PR readers see the decision first.
+        You do not post anything. End the session by returning your answer as structured output: `review` holds the full comment body (at most 60,000 characters), which the workflow posts on the PR exactly as you wrote it, and `deep_request` holds the Step 4 request, or an empty string when you did not escalate. The workflow posts the review first, then the request, so PR readers see the decision first.
 
         **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
 
@@ -1212,6 +1212,10 @@ jobs:
           answer = data.get('structured_output')
           if not isinstance(answer, dict) or not isinstance(answer.get('review'), str) or not answer['review'].strip():
               sys.exit(1)
+          # GitHub refuses a comment past 65,536 characters; the mark adds a line.
+          if len(answer['review']) > 60000:
+              print('::warning::The review is too long to post (over 60,000 characters)')
+              sys.exit(1)
           request = answer.get('deep_request')
           request = request.strip() if isinstance(request, str) else ''
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
@@ -1326,6 +1330,10 @@ jobs:
               sys.exit(1)
           answer = data.get('structured_output')
           if not isinstance(answer, dict) or not isinstance(answer.get('review'), str) or not answer['review'].strip():
+              sys.exit(1)
+          # GitHub refuses a comment past 65,536 characters; the mark adds a line.
+          if len(answer['review']) > 60000:
+              print('::warning::The review is too long to post (over 60,000 characters)')
               sys.exit(1)
           request = answer.get('deep_request')
           request = request.strip() if isinstance(request, str) else ''
@@ -1492,6 +1500,10 @@ jobs:
           answer = data.get('structured_output')
           if not isinstance(answer, dict) or not isinstance(answer.get('review'), str) or not answer['review'].strip():
               sys.exit(1)
+          # GitHub refuses a comment past 65,536 characters; the mark adds a line.
+          if len(answer['review']) > 60000:
+              print('::warning::The review is too long to post (over 60,000 characters)')
+              sys.exit(1)
           request = answer.get('deep_request')
           request = request.strip() if isinstance(request, str) else ''
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
@@ -1548,20 +1560,51 @@ jobs:
           # Every GitHub call gets a limit, so a stalled one fails the step
           # instead of holding the job.
           gh() { timeout -k 10 120 gh "$@"; }
+          # Three tries, 10 s and 20 s apart: one network blip must not throw
+          # away a finished review.
+          retry() {
+            local n
+            for n in 1 2 3; do
+              if "$@"; then return 0; fi
+              [ "$n" = 3 ] || sleep $((n * 10))
+            done
+            return 1
+          }
           review="$RUNNER_TEMP/$STAGE-review.md"
           request="$RUNNER_TEMP/$STAGE-deep-request.md"
-          oidc=$(curl -fsS --connect-timeout 20 --max-time 60 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
-            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])') || oidc=""
-          echo "::add-mask::$oidc"
-          bot_token=""
-          if [ -n "$oidc" ]; then
+          # This run attempt's mark, hidden in each comment under its first
+          # line: a try whose post landed but whose answer was lost is found by
+          # it, so a retry never posts a second copy.
+          mark="<!-- review-run: $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT -->"
+          # Posts a comment once: the created_at of the marked comment, found
+          # or new. $1 is the file, $2 the comment kind for the mark.
+          post_once() {
+            local body="$RUNNER_TEMP/post-$2.md" at
+            { head -n 1 "$1"; printf '%s %s -->\n' "${mark% -->}" "$2"; tail -n +2 "$1"; } > "$body"
+            at=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+              | jq -rs --arg m "${mark% -->} $2 -->" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | contains($m))] | first | .created_at // ""') || return 1
+            if [ -z "$at" ]; then
+              at=$(GH_TOKEN="$bot_token" gh api "repos/$REPO/issues/$PR_NUMBER/comments" -F "body=@$body" --jq .created_at) || return 1
+            fi
+            printf '%s' "$at"
+          }
+          # Sets bot_token: run in this shell, never in a $(...), so its mask
+          # lines reach the runner and not the token.
+          token_once() {
+            local oidc
+            bot_token=""
+            oidc=$(curl -fsS --connect-timeout 20 --max-time 60 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
+              | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])') || return 1
+            echo "::add-mask::$oidc"
             bot_token=$(curl -fsS --connect-timeout 20 --max-time 60 -X POST -H "Authorization: Bearer $oidc" \
               https://api.anthropic.com/api/github/github-app-token-exchange \
               | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")') || bot_token=""
-          fi
-          if [ -z "$bot_token" ]; then
-            echo "::error::The bot token exchange failed, so the review cannot be posted; re-run this job"
+            [ -n "$bot_token" ]
+          }
+          bot_token=""
+          if ! retry token_once; then
+            echo "::error::The bot token exchange failed three times, so the review cannot be posted; re-run this job"
             exit 1
           fi
           echo "::add-mask::$bot_token"
@@ -1569,7 +1612,7 @@ jobs:
           # GitHub's own time for the comment: the repair step's `done`, the
           # end of the window Evaluate reads, is never before it, whatever the
           # runner's clock says.
-          posted_at=$(GH_TOKEN="$bot_token" gh api "repos/$REPO/issues/$PR_NUMBER/comments" -F "body=@$review" --jq .created_at)
+          posted_at=$(retry post_once "$review" review)
           echo "posted_at=$posted_at" >> "$GITHUB_OUTPUT"
           echo "::notice::Posted the $STAGE review"
 
@@ -1593,7 +1636,7 @@ jobs:
           if [ "$owed" != yes ]; then
             exit 0
           fi
-          gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null
+          retry gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null
           # The deep tier's action path has no prompt of its own: the request
           # is its brief. With none from the reviewer, or one that does not
           # start the deep workflow, the fixed brief goes first.
@@ -1616,6 +1659,14 @@ jobs:
 
           **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically — the SAME strict contract as the routine gate: your last line must open with 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` after markup, or holds `Blocking` in any case right after a short label (`**Verdict:** blocking`), blocks first, wherever it sits. A comment whose last line opens with neither glyph blocks when the last line holding a glyph holds a 🔴, and is otherwise a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
 
+          **WRONG formats — never post any of these** (the deep gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
+          - `LGTM` (missing 🟢 prefix — the most common mistake)
+          - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
+          - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
+          - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
+          - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+          - A 🟢 review that writes 🔴 or the word `Blocking` outside inline backticks (`### Blocking issues`, `**Blocking:** none`, `**🔴 …**`, `1. 🔴 Blocking …`): the gate blocks on lines like these wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. A clean review writes neither except inside inline backticks on the same line; a line inside a fenced code block counts like any other
+
           **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
 
           **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose.
@@ -1625,7 +1676,7 @@ jobs:
               cat "$request" >> "$brief"
             fi
           fi
-          GH_TOKEN="$bot_token" gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$brief" >/dev/null
+          retry post_once "$brief" request >/dev/null
           echo "::notice::Applied needs-deep-review and posted the deep-review request"
 
       # ── Escalation: repair the label, resolve Claude On-Demand ───────────
