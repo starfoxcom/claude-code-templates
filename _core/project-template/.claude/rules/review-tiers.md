@@ -44,6 +44,16 @@ Skip escalation for docs, CI or settings tweaks, version bumps, mechanical refac
 
 Fix on the same PR branch and push; the review re-runs. Then search the codebase for the same mistake elsewhere and fix every copy in that commit, because the reviewer only sees the diff.
 
+## What a finding blocks on
+
+A finding belongs to the PR when the PR causes it: a regression from the base branch, or a break of what the PR says it does. A gap the base branch already has, or one the comparable community tool shares (for a workflow, the official action it pins), is not the PR's finding. It goes into a follow-up issue instead of the verdict. The review still covers the whole diff; this only decides what blocks.
+
+- Write this bar into every reviewer prompt from the first round, local or CI, before any finding arrives.
+- When a review reports, sort each finding against the bar before touching code. Fix only what passes it, with the smallest change, and add no features while fixing.
+- After 6 red rounds in a row, stop patching: look up how others solved the same problem, simplify the design, then continue. Do the same at every 6th red round.
+
+Without the bar, each fix adds surface for the next round to find, and the rounds never converge.
+
 ## PRs that edit the review workflow
 
 The review action refuses to run when the PR's copy of `claude-code-review.yml` differs from the default branch's copy, so the review must never start on them. Triage never reviews `claude-code-review.yml`, which it skips by name, so a PR whose only other files are skippable (Markdown, images and fonts outside the always-reviewed paths) is non-reviewable: the `Review gate` check passes without a review. That makes two rules:
