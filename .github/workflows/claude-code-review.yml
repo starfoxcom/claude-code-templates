@@ -1087,6 +1087,18 @@ jobs:
       # does a failed read of the comments: a second review would post a
       # second verdict, and Evaluate reads the newest one. Bot comments next
       # to a found verdict are not checked.
+      #
+      # The run's start: the floor the repair step counts deep-review requests
+      # from, so the credits step counts them from the same moment. Read with
+      # the job's token here, which the credits step never holds; a failed
+      # read falls back to the pre-screen's floor.
+      - name: Read the run's start
+        id: run-start
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "at=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.run_started_at')" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
         continue-on-error: true
@@ -1095,6 +1107,7 @@ jobs:
           CLI: ${{ steps.claude-cli.outputs.path }}
           CLI_VERSION: ${{ steps.claude-cli.outputs.version }}
           DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
+          REQUESTS_SINCE: ${{ steps.run-start.outputs.at || steps.pre-screen.outputs.floor }}
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO: ${{ github.repository }}
@@ -1225,13 +1238,14 @@ jobs:
               owed=yes
             fi
             # Any request the deep workflow acts on counts, with the repair
-            # step's rule: the reviewer's, or one from someone with write
-            # access. A maintainer's focused request is never replaced (a new
-            # request would cancel the deep run it started).
+            # step's rule: posted since the run started, by the reviewer or by
+            # someone with write access. A maintainer's focused request is
+            # never replaced (a new request would cancel the deep run it
+            # started).
             reviews=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews") || reviews='[]'
             review_comments=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/comments") || review_comments='[]'
             askers=$(printf '%s\n%s\n%s' "$comments" "$reviews" "$review_comments" \
-              | jq -rs --arg ts "$since" '[.[][] | select((.created_at // .submitted_at // "") >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr")) | .user.login] | unique | .[]') || askers=""
+              | jq -rs --arg ts "${REQUESTS_SINCE:-$since}" '[.[][] | select((.created_at // .submitted_at // "") >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr")) | .user.login] | unique | .[]') || askers=""
             requested=no
             while IFS= read -r asker; do
               [ -n "$asker" ] || continue
