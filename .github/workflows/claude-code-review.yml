@@ -1390,8 +1390,9 @@ jobs:
       # bury a 🔴. The backup runs only when no verdict from this run is on the
       # PR (the credits step found none, or the job would not be here). A
       # verdict that asked for a deep review gets the label here; the repair
-      # step then fails loudly when no request went out. Unreadable comments
-      # count as unknown: no backup, and the job fails.
+      # step then fails loudly when no request went out. Unreadable comments,
+      # a check over them that fails, or a label that cannot be applied: no
+      # backup, and the job fails.
       - name: Check whether the main review posted its verdict
         id: main-posted
         if: steps.claude-review.outcome == 'failure'
@@ -1415,23 +1416,30 @@ jobs:
               if [ "$count" = 0 ]; then posted=no; else posted=yes; fi
             fi
             # Like the credits step, any other bot comment since the floor
-            # (outside requests and the deep run's) counts as posted too.
-            if [ "$posted" = no ] && stray=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\A(@claude review this pr|\*\*claude (finished|encountered)|claude code is working|[#*_\s]*deep review)"; "i") | not)] | length') && [ "$stray" != 0 ]; then
-              posted=yes
+            # (outside requests and the deep run's) counts as posted too. A
+            # check that fails counts as unknown, never as no.
+            if [ "$posted" = no ]; then
+              if stray=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length'); then
+                if [ "$stray" != 0 ]; then posted=yes; fi
+              else
+                posted=unknown
+              fi
             fi
-            body=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts)] | map(.body // "") | join("
-")') || body=""
+            if [ "$posted" = yes ] && ! body=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts)] | map(.body // "") | join("\n")'); then
+              posted=unknown
+            fi
           fi
           # A verdict that asked for a deep review before the run broke gets
           # the label, so the repair step's backstop fails the job loudly
           # unless the request went out too; the escalation is never dropped.
-          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && printf '%s' "$body" | grep -qi "needs-deep-review requested" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
-            echo "::error::The main review's verdict asked for a deep review, and applying needs-deep-review failed"
-            posted=unknown
+          # The here-string keeps a long body from ending grep's read early.
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+            posted=label-failed
           fi
           case "$posted" in
             yes) echo "::warning::The main review posted its verdict and then failed: the verdict stands and no backup runs" ;;
-            unknown) echo "::error::Could not read the PR comments, so whether the main review posted is unknown: no backup, to never post a second verdict" ;;
+            label-failed) echo "::error::The main review's verdict asked for a deep review, and applying needs-deep-review failed: no backup, and the job fails" ;;
+            unknown) echo "::error::Could not read or check the PR comments, so whether the main review posted is unknown: no backup, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
 
@@ -1534,7 +1542,7 @@ jobs:
       - name: Fail when both review attempts failed
         if: steps.claude-review.outcome == 'failure' && steps.claude-review-backup.outcome != 'success' && steps.main-posted.outputs.posted != 'yes'
         run: |
-          echo "::error::The routine review failed on ${{ needs.init-gate.outputs.routine_model }} and on the ${{ needs.init-gate.outputs.routine_fallback_model }} backup (newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }}, main verdict posted: ${{ steps.main-posted.outputs.posted || 'unknown' }})"
+          echo "::error::The routine review failed on ${{ needs.init-gate.outputs.routine_model }} (main verdict posted: ${{ steps.main-posted.outputs.posted || 'unknown' }}), and no ${{ needs.init-gate.outputs.routine_fallback_model }} backup verdict stands (backup: ${{ steps.claude-review-backup.outcome || 'skipped' }}; newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }})"
           exit 1
 
       # ── Escalation: repair the label, resolve Claude On-Demand ───────────
