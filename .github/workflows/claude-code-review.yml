@@ -1362,6 +1362,13 @@ jobs:
           echo "::error::The credits run stopped in a state this job cannot settle (see its step). Read the PR's comments, then re-run this job; a second review here would post a second verdict."
           exit 1
 
+      # When the main review starts: its check counts a verdict posted
+      # before this moment as an earlier attempt's late post.
+      - name: Note when the main review starts
+        id: main-start
+        if: steps.claude-review-credits.outcome != 'success' && steps.claude-review-credits.outputs.halt != 'true'
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Code Review
         id: claude-review
         # A hang counts as a failure, so the backup still runs unless the
@@ -1422,15 +1429,17 @@ jobs:
         continue-on-error: true
         run: |
           # The runner gives every process it starts for this job the job's
-          # RUNNER_TRACKING_ID (its own end-of-job cleanup uses it), so only
-          # this job's leftovers match, wherever the action put the CLI, and
-          # never another job's on a shared self-hosted host.
+          # RUNNER_TRACKING_ID (its own end-of-job cleanup stops them all by
+          # it), so only this job's leftovers match, wherever the action put
+          # the CLI, and never another job's on a shared self-hosted host.
           if [ -z "${RUNNER_TRACKING_ID:-}" ] || [ ! -d /proc ]; then
-            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped, and the check after the backup still fails a second verdict"
+            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped"
             exit 0
           fi
-          # This shell and its ancestors are never stopped, even when the
-          # runner's folder names claude.
+          # Nothing of the job but this step should be running now, so all of
+          # it is stopped, as the runner's cleanup would at the end: a child
+          # that does not name claude (a verdict post in flight) too. This
+          # shell and its ancestors are kept.
           keep=" $$ "
           p=$$
           while p=$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null) && [ -n "$p" ] && [ "$p" != 0 ]; do
@@ -1440,15 +1449,12 @@ jobs:
           for dir in /proc/[0-9]*; do
             pid=${dir#/proc/}
             case "$keep" in *" $pid "*) continue ;; esac
-            envs=$(tr '\0' '\n' < "$dir/environ" 2>/dev/null) || continue
+            envs=$(tr '\0' '\n' 2>/dev/null < "$dir/environ") || continue
             case $'\n'"$envs"$'\n' in
               *$'\n'"RUNNER_TRACKING_ID=$RUNNER_TRACKING_ID"$'\n'*) ;;
               *) continue ;;
             esac
-            cmd=$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null) || continue
-            case "$cmd" in
-              *[Cc]laude*) kill -KILL "$pid" 2>/dev/null && stopped=$((stopped + 1)) ;;
-            esac
+            kill -KILL "$pid" 2>/dev/null && stopped=$((stopped + 1))
           done
           echo "::notice::Stopped $stopped leftover process(es) of this job"
           sleep 5
@@ -1479,6 +1485,7 @@ jobs:
           ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
           GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           STAGE: main
+          STARTED: ${{ steps.main-start.outputs.at }}
           WHO: main review
           OUTCOME: ${{ steps.claude-review.outcome }}
         run: |
@@ -1499,14 +1506,16 @@ jobs:
                 pass|block)
                   # The newest headed comment, the one the gate reads (jq's \s
                   # lacks Python's U+001C-U+001F, so the class names them).
-                  # It must be the only one: before this attempt the PR held
-                  # none (the credits step, or the main review's check, found
-                  # none), so another is a late post from an earlier run (one
-                  # past its time limit that kept going), and the gate would
-                  # read whichever is newer.
+                  # The earlier check (the credits step's, or the main
+                  # review's) found none, so one posted before this attempt
+                  # started is an earlier attempt's late post, and the gate
+                  # would read whichever is newer. Several from this attempt
+                  # are one review correcting its own verdict (a dropped
+                  # glyph), and the newest stands, as in the credits step.
                   if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
-                    && headed=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length' "$comments_file"); then
-                    if [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
+                    && [ -n "$STARTED" ] \
+                    && earlier=$(jq -rs --arg ts "$FLOOR" --arg start "$STARTED" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts and .created_at < $start)] | length' "$comments_file"); then
+                    if [ "$earlier" != 0 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
@@ -1539,7 +1548,7 @@ jobs:
             no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
             label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
             stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
-            multiple) echo "::error::This run left $headed routine verdicts (an earlier attempt posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
+            multiple) echo "::error::$earlier routine verdict(s) posted before the $WHO started, after the check before it read none (an earlier attempt's late post), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
@@ -1619,6 +1628,12 @@ jobs:
           echo "path=$dest" >> "$GITHUB_OUTPUT"
           echo "version=$installed" >> "$GITHUB_OUTPUT"
 
+      # When the backup starts, for its check (see the main review's).
+      - name: Note when the backup starts
+        id: backup-start
+        if: steps.main-posted.outputs.posted == 'no' && steps.claude-cli-stable.outcome == 'success'
+        run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # Backup: a main review that left no verdict on the PR (a failure, usage
       # limit or otherwise, or a run that ended without one) retries once on
       # the fallback model from the gate
@@ -1649,15 +1664,17 @@ jobs:
         continue-on-error: true
         run: |
           # The runner gives every process it starts for this job the job's
-          # RUNNER_TRACKING_ID (its own end-of-job cleanup uses it), so only
-          # this job's leftovers match, wherever the action put the CLI, and
-          # never another job's on a shared self-hosted host.
+          # RUNNER_TRACKING_ID (its own end-of-job cleanup stops them all by
+          # it), so only this job's leftovers match, wherever the action put
+          # the CLI, and never another job's on a shared self-hosted host.
           if [ -z "${RUNNER_TRACKING_ID:-}" ] || [ ! -d /proc ]; then
-            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped, and the check after the backup still fails a second verdict"
+            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped"
             exit 0
           fi
-          # This shell and its ancestors are never stopped, even when the
-          # runner's folder names claude.
+          # Nothing of the job but this step should be running now, so all of
+          # it is stopped, as the runner's cleanup would at the end: a child
+          # that does not name claude (a verdict post in flight) too. This
+          # shell and its ancestors are kept.
           keep=" $$ "
           p=$$
           while p=$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null) && [ -n "$p" ] && [ "$p" != 0 ]; do
@@ -1667,15 +1684,12 @@ jobs:
           for dir in /proc/[0-9]*; do
             pid=${dir#/proc/}
             case "$keep" in *" $pid "*) continue ;; esac
-            envs=$(tr '\0' '\n' < "$dir/environ" 2>/dev/null) || continue
+            envs=$(tr '\0' '\n' 2>/dev/null < "$dir/environ") || continue
             case $'\n'"$envs"$'\n' in
               *$'\n'"RUNNER_TRACKING_ID=$RUNNER_TRACKING_ID"$'\n'*) ;;
               *) continue ;;
             esac
-            cmd=$(tr '\0' ' ' < "$dir/cmdline" 2>/dev/null) || continue
-            case "$cmd" in
-              *[Cc]laude*) kill -KILL "$pid" 2>/dev/null && stopped=$((stopped + 1)) ;;
-            esac
+            kill -KILL "$pid" 2>/dev/null && stopped=$((stopped + 1))
           done
           echo "::notice::Stopped $stopped leftover process(es) of this job"
           sleep 5
@@ -1696,6 +1710,7 @@ jobs:
           ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
           GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           STAGE: backup
+          STARTED: ${{ steps.backup-start.outputs.at }}
           WHO: backup
           OUTCOME: ${{ steps.claude-review-backup.outcome }}
         run: |
@@ -1716,14 +1731,16 @@ jobs:
                 pass|block)
                   # The newest headed comment, the one the gate reads (jq's \s
                   # lacks Python's U+001C-U+001F, so the class names them).
-                  # It must be the only one: before this attempt the PR held
-                  # none (the credits step, or the main review's check, found
-                  # none), so another is a late post from an earlier run (one
-                  # past its time limit that kept going), and the gate would
-                  # read whichever is newer.
+                  # The earlier check (the credits step's, or the main
+                  # review's) found none, so one posted before this attempt
+                  # started is an earlier attempt's late post, and the gate
+                  # would read whichever is newer. Several from this attempt
+                  # are one review correcting its own verdict (a dropped
+                  # glyph), and the newest stands, as in the credits step.
                   if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
-                    && headed=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length' "$comments_file"); then
-                    if [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
+                    && [ -n "$STARTED" ] \
+                    && earlier=$(jq -rs --arg ts "$FLOOR" --arg start "$STARTED" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts and .created_at < $start)] | length' "$comments_file"); then
+                    if [ "$earlier" != 0 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
@@ -1756,7 +1773,7 @@ jobs:
             no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
             label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
             stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
-            multiple) echo "::error::This run left $headed routine verdicts (an earlier attempt posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
+            multiple) echo "::error::$earlier routine verdict(s) posted before the $WHO started, after the check before it read none (an earlier attempt's late post), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
