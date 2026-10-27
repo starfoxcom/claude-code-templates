@@ -672,8 +672,9 @@ jobs:
       # a second request could cancel the deep run. One that left no verdict,
       # even one that exited cleanly (a release that ends without posting),
       # hands over to the next attempt. Unknown counts as posted: no later
-      # attempt, and Evaluate reads the comments itself. The retry gets the
-      # same check, the same script.
+      # attempt; Evaluate reads the comments itself after a clean exit and
+      # fails closed after a failed one. The retry gets the same check, the
+      # same script.
       - name: Check whether the first attempt posted its verdict
         id: posted-1
         if: steps.claude_attempt_1.outcome == 'failure' || steps.claude_attempt_1.outcome == 'success'
@@ -771,14 +772,6 @@ jobs:
             actions: read
           allowed_bots: "claude"
 
-      - name: Serve the PR branch locally for the fallback
-        if: steps.posted-2.outputs.posted == 'no' && steps.pr-origin.outcome == 'success'
-        env:
-          ORIGIN: ${{ steps.pr-origin.outputs.url }}
-        run: |
-          git remote set-url origin "$ORIGIN"
-          git checkout --quiet --detach
-
       - name: Check whether the retry posted its verdict
         id: posted-2
         if: steps.claude_retry.outcome == 'failure' || steps.claude_retry.outcome == 'success'
@@ -810,6 +803,15 @@ jobs:
             unknown) echo "::error::Whether the $WHO posted is unknown (the comments or the gate script could not be read): no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
+
+      # After the retry's check, which decides whether the fallback runs.
+      - name: Serve the PR branch locally for the fallback
+        if: steps.posted-2.outputs.posted == 'no' && steps.pr-origin.outcome == 'success'
+        env:
+          ORIGIN: ${{ steps.pr-origin.outputs.url }}
+        run: |
+          git remote set-url origin "$ORIGIN"
+          git checkout --quiet --detach
 
       # The fallback's CLI: the stable channel's release, one that has had time
       # in the field, so a newest release that installs but then breaks does
