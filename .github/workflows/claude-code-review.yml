@@ -1260,6 +1260,16 @@ jobs:
             echo "::warning::The credits run posted no verdict: the review runs on the subscription"
             exit 1
           fi
+          # A clean run did its own Step 4, unless it ended before it: a
+          # verdict that asked for a deep review gets the label here too, so
+          # the repair step's backstop fails the job loudly unless the request
+          # went out. A label already on is a no-op.
+          if [ "$clean" = true ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" \
+            && ! GH_TOKEN="$bot_token" gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+            echo "halt=true" >> "$GITHUB_OUTPUT"
+            echo "::error::The credits run's verdict asked for a deep review, and applying needs-deep-review failed: apply the label and request the deep review, or re-run the job"
+            exit 1
+          fi
           if [ "$clean" != true ]; then
             # The verdict stands; only the escalation steps (Step 4) can be
             # missing. A deep review is owed when the diff is on the trigger
@@ -1463,12 +1473,14 @@ jobs:
               esac
             fi
           fi
-          # A verdict that asked for a deep review before the run broke gets
-          # the label, so the repair step's backstop fails the job loudly
-          # unless the request went out too; the escalation is never dropped.
-          # Only the verdict is searched, as in the credits step; the
-          # here-string keeps a long one from ending grep's read early.
-          if [ "$posted" = yes ] && [ "$OUTCOME" = failure ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+          # A verdict that asked for a deep review gets the label, whether the
+          # run then broke or exited cleanly (one that ended before Step 4
+          # applied nothing), so the repair step's backstop fails the job
+          # loudly unless the request went out too; the escalation is never
+          # dropped. A label already on is a no-op. Only the verdict is
+          # searched, as in the credits step; the here-string keeps a long one
+          # from ending grep's read early.
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
@@ -1628,12 +1640,14 @@ jobs:
               esac
             fi
           fi
-          # A verdict that asked for a deep review before the run broke gets
-          # the label, so the repair step's backstop fails the job loudly
-          # unless the request went out too; the escalation is never dropped.
-          # Only the verdict is searched, as in the credits step; the
-          # here-string keeps a long one from ending grep's read early.
-          if [ "$posted" = yes ] && [ "$OUTCOME" = failure ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+          # A verdict that asked for a deep review gets the label, whether the
+          # run then broke or exited cleanly (one that ended before Step 4
+          # applied nothing), so the repair step's backstop fails the job
+          # loudly unless the request went out too; the escalation is never
+          # dropped. A label already on is a no-op. Only the verdict is
+          # searched, as in the credits step; the here-string keeps a long one
+          # from ending grep's read early.
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
@@ -1645,10 +1659,18 @@ jobs:
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
 
-      - name: Fail when no review attempt left a verdict
+      - name: Fail when no review attempt's verdict stands
         if: (steps.claude-review.outcome == 'failure' || steps.claude-review.outcome == 'success') && steps.main-posted.outputs.posted != 'yes' && steps.backup-posted.outputs.posted != 'yes'
+        env:
+          MAIN_POSTED: ${{ steps.main-posted.outputs.posted || 'unknown' }}
+          BACKUP_POSTED: ${{ steps.backup-posted.outputs.posted || 'not checked' }}
+          ATTEMPTS: "Main review on ${{ needs.init-gate.outputs.routine_model }}: ${{ steps.claude-review.outcome }}, verdict posted: ${{ steps.main-posted.outputs.posted || 'unknown' }}. Backup on ${{ needs.init-gate.outputs.routine_fallback_model }}: ${{ steps.claude-review-backup.outcome || 'skipped' }}, verdict posted: ${{ steps.backup-posted.outputs.posted || 'not checked' }}. Newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }}."
         run: |
-          echo "::error::No routine verdict the gate can read stands. Main review on ${{ needs.init-gate.outputs.routine_model }}: ${{ steps.claude-review.outcome }}, verdict posted: ${{ steps.main-posted.outputs.posted || 'unknown' }}. Backup on ${{ needs.init-gate.outputs.routine_fallback_model }}: ${{ steps.claude-review-backup.outcome || 'skipped' }}, verdict posted: ${{ steps.backup-posted.outputs.posted || 'not checked' }}. Newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }}."
+          if [ "$MAIN_POSTED" = label-failed ] || [ "$BACKUP_POSTED" = label-failed ]; then
+            echo "::error::A routine verdict stands, but it asked for a deep review and needs-deep-review could not be applied: apply the label and request the deep review, or re-run the job. $ATTEMPTS"
+          else
+            echo "::error::No routine verdict the gate can read stands. $ATTEMPTS"
+          fi
           exit 1
 
       # ── Escalation: repair the label, resolve Claude On-Demand ───────────
