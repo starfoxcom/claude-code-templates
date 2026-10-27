@@ -1026,14 +1026,14 @@ jobs:
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Could not look up the newest Claude Code release: the review runs on the action's own CLI, with no backup"
+              echo "::warning::Could not look up the newest Claude Code release: the review runs on the action's own CLI; the backup runs on the stable release"
               exit 1
             fi
             sleep $((attempt * 20))
           done
           CLI_VERSION=$(printf '%s' "$CLI_VERSION" | tr -d '[:space:]')
           if [[ ! "$CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::warning::The release channel returned no version: the review runs on the action's own CLI, with no backup"
+            echo "::warning::The release channel returned no version: the review runs on the action's own CLI; the backup runs on the stable release"
             exit 1
           fi
           echo "Newest Claude Code release: $CLI_VERSION"
@@ -1042,7 +1042,7 @@ jobs:
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Claude Code $CLI_VERSION install failed three times: the review runs on the action's own CLI, with no backup"
+              echo "::warning::Claude Code $CLI_VERSION install failed three times: the review runs on the action's own CLI; the backup runs on the stable release"
               exit 1
             fi
             # The install host answers bursts with HTTP 429: back off longer.
@@ -1058,7 +1058,7 @@ jobs:
           chmod +x "$dest"
           installed="$("$dest" --version | awk '{print $1}')"
           if [ "$installed" != "$CLI_VERSION" ]; then
-            echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI, with no backup"
+            echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup runs on the stable release"
             exit 1
           fi
           echo "::notice::Every review step runs Claude Code $installed"
@@ -1266,7 +1266,8 @@ jobs:
       # in the field, so a newest release that installs but then breaks does
       # not take out the backup too. Installed only once the main review has
       # failed. When the stable release is the newest one, the job's copy is
-      # reused: no older release is known to be good.
+      # reused: no older release is known to be good. So is it when the stable
+      # lookup or install fails, so this step never costs the backup its run.
       - name: Install the stable Claude Code for the backup
         id: claude-cli-stable
         if: steps.claude-review.outcome == 'failure'
@@ -1278,21 +1279,30 @@ jobs:
           NEWEST_PATH: ${{ steps.claude-cli.outputs.path }}
         run: |
           set -euo pipefail
+          # No stable copy: the backup falls back to the job's newest copy,
+          # and is skipped only when there is none either.
+          no_stable() {
+            if [ -n "$NEWEST_PATH" ]; then
+              echo "::warning::$1: the backup runs on the job's newest copy"
+              echo "path=$NEWEST_PATH" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::$1, and the newest release did not install either: no backup review"
+            exit 1
+          }
           STABLE=""
           for attempt in 1 2 3; do
             if STABLE=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable); then
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Could not look up the stable Claude Code release: no backup review"
-              exit 1
+              no_stable "Could not look up the stable Claude Code release"
             fi
             sleep $((attempt * 20))
           done
           STABLE=$(printf '%s' "$STABLE" | tr -d '[:space:]')
           if [[ ! "$STABLE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::warning::The stable channel returned no version: no backup review"
-            exit 1
+            no_stable "The stable channel returned no version"
           fi
           if [ "$STABLE" = "$NEWEST" ] && [ -n "$NEWEST_PATH" ]; then
             echo "::notice::The stable release is the newest one ($STABLE): the backup reuses the job's copy"
@@ -1304,23 +1314,21 @@ jobs:
               break
             fi
             if [ "$attempt" = 3 ]; then
-              echo "::warning::Claude Code $STABLE install failed three times: no backup review"
-              exit 1
+              no_stable "Claude Code $STABLE install failed three times"
             fi
             sleep $((attempt * 20))
           done
           src="$HOME/.local/share/claude/versions/$STABLE"
           if [ ! -x "$src" ]; then
-            src="$(readlink -f "$HOME/.local/bin/claude")"
+            src="$(readlink -f "$HOME/.local/bin/claude" || true)"
           fi
           dest="$RUNNER_TEMP/claude-cli-stable/claude"
           mkdir -p "$(dirname "$dest")"
-          cp "$src" "$dest"
+          cp "$src" "$dest" || no_stable "Claude Code $STABLE left no binary to copy"
           chmod +x "$dest"
-          installed="$("$dest" --version | awk '{print $1}')"
+          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$STABLE" ]; then
-            echo "::warning::expected Claude Code $STABLE, got '$installed': no backup review"
-            exit 1
+            no_stable "expected Claude Code $STABLE, got '$installed'"
           fi
           echo "::notice::The backup runs the stable Claude Code release $installed"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
@@ -1329,7 +1337,7 @@ jobs:
       # the fallback model from the gate settings with the same prompt, so a
       # spent allowance on the main model never blocks every PR. The CLI the
       # pinned action bundles is refused for the default fallback (Opus 5.5),
-      # so the backup runs only on the stable install above.
+      # so the backup runs only on the copy the step above picked.
       - name: Run Claude Code Review (backup model)
         id: claude-review-backup
         if: steps.claude-review.outcome == 'failure' && steps.claude-cli-stable.outcome == 'success'
