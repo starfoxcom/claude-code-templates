@@ -473,12 +473,6 @@ jobs:
       done: ${{ steps.repair.outputs.done }}
       reviewer: ${{ steps.claude-review-credits.outcome == 'success' && format('{0} {1} (API credits)', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review.outcome == 'success' && format('{0} {1}', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review-backup.outcome == 'success' && format('{0} {1} (backup)', needs.init-gate.outputs.routine_fallback_model, needs.init-gate.outputs.routine_fallback_effort) || 'none' }}
     env:
-      # The Claude Code version every review step runs: the credits run, the
-      # action's review and its backup. One pin for the job, installed once
-      # by "Install Claude Code"; the weekly pin check says when it is behind.
-      # Bump it here AND in `.github/workflows/claude.yml`: both tiers carry
-      # the same pin.
-      CLI_VERSION: "2.1.300"
       ROUTINE_REVIEW_PROMPT: |
         Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }}. What the project is, the invariants to verify and its extra escalation cases are in the project's review guide, under "Project review guide" at the end of the review context file (taken from the base branch, or from the default branch when the base predates the review gate, so the PR cannot change it). No such section means the project has no guide: review against the general rules below.
 
@@ -1010,10 +1004,13 @@ jobs:
           echo "--- review_context.md ---"
           cat "$RUNNER_TEMP/review_context.md"
 
-      # One job-private copy of the pinned CLI for every review step below, so
-      # the credits run, the action's review and its backup all run the same
-      # version. When the install fails, the credits run and the backup are
-      # skipped and the action's review falls back to the CLI it bundles.
+      # One job-private copy of the newest CLI release for every review step
+      # below, so the credits run, the action's review and its backup all run
+      # the same version. The version is read when the job runs, from the
+      # channel the official installer reads, and then installed exactly, so
+      # every step and the log name one version. When the lookup or the
+      # install fails, the credits run and the backup are skipped and the
+      # action's review falls back to the CLI it bundles.
       - name: Install Claude Code
         id: claude-cli
         continue-on-error: true
@@ -1022,6 +1019,23 @@ jobs:
           DISABLE_AUTOUPDATER: "1"
         run: |
           set -euo pipefail
+          CLI_VERSION=""
+          for attempt in 1 2 3; do
+            if CLI_VERSION=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest); then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "::warning::Could not look up the newest Claude Code release: the review runs on the action's own CLI, with no backup"
+              exit 1
+            fi
+            sleep $((attempt * 20))
+          done
+          CLI_VERSION=$(printf '%s' "$CLI_VERSION" | tr -d '[:space:]')
+          if [[ ! "$CLI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::The release channel returned no version: the review runs on the action's own CLI, with no backup"
+            exit 1
+          fi
+          echo "Newest Claude Code release: $CLI_VERSION"
           for attempt in 1 2 3; do
             if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
               break
@@ -1046,7 +1060,7 @@ jobs:
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI, with no backup"
             exit 1
           fi
-          echo "Claude Code $installed at $dest"
+          echo "::notice::Every review step runs Claude Code $installed"
           echo "path=$dest" >> "$GITHUB_OUTPUT"
 
       # ── First attempt: the plan's monthly API credits ─────────────────────
@@ -1212,7 +1226,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
-          # The job's pinned CLI from "Install Claude Code". Empty when that
+          # The job's CLI from "Install Claude Code". Empty when that
           # install failed, and then the action installs the CLI it bundles.
           path_to_claude_code_executable: ${{ steps.claude-cli.outputs.path }}
           # Model, effort and turn cap from the gate settings (routine.*).
@@ -1250,7 +1264,7 @@ jobs:
       # the fallback model from the gate settings with the same prompt, so a
       # spent allowance on the main model never blocks every PR. The CLI the
       # pinned action bundles is refused for the default fallback (Opus 5.5),
-      # so the backup runs only on the job's pinned CLI.
+      # so the backup runs only on the job's own CLI.
       - name: Run Claude Code Review (backup model)
         id: claude-review-backup
         if: steps.claude-review.outcome == 'failure' && steps.claude-cli.outcome == 'success'
