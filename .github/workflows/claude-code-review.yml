@@ -1246,8 +1246,7 @@ jobs:
             # cannot read (a bare "LGTM" under it). A second review would
             # bury it under a fresh verdict. Only the deep-review request, the
             # deep run's tracking comments and deep reviews are skipped.
-            if ! stray=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length'); then
+            if ! stray=$(python3 -I -c 'import importlib.util as u, sys; s = u.spec_from_file_location("review_gate", sys.argv[1]); g = u.module_from_spec(s); s.loader.exec_module(g); b = g._bot_bodies(sys.stdin.read(), sys.argv[2]); print(sum(1 for x in b if not g.DEEP_MARKER.search(x) and not g.NOT_ROUTINE.search(x)))' "$gate" "$since" <<< "$comments"); then
               echo "halt=true" >> "$GITHUB_OUTPUT"
               echo "::error::Could not check the PR comments for other bot comments from the credits run"
               exit 1
@@ -1511,11 +1510,12 @@ jobs:
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
-                  # bot comment since the floor (outside requests and the deep
-                  # run's, an unreadable headed one included) is a stray: no
+                  # bot comment since the floor that the gate's own lists do
+                  # not name as a request, tracking comment or deep review (an
+                  # unreadable headed one included) is a stray: no
                   # further attempt, since it would bury it, and the job
                   # fails. A check that fails counts as unknown, never as no.
-                  if stray=$(jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length' "$comments_file"); then
+                  if stray=$(python3 -I -c 'import importlib.util as u, sys; s = u.spec_from_file_location("review_gate", sys.argv[1]); g = u.module_from_spec(s); s.loader.exec_module(g); b = g._bot_bodies(sys.stdin.read(), sys.argv[2]); print(sum(1 for x in b if not g.DEEP_MARKER.search(x) and not g.NOT_ROUTINE.search(x)))' "$gate" "$FLOOR" < "$comments_file"); then
                     if [ "$stray" = 0 ]; then posted=no; else posted=stray; fi
                   fi ;;
               esac
@@ -1727,11 +1727,12 @@ jobs:
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
-                  # bot comment since the floor (outside requests and the deep
-                  # run's, an unreadable headed one included) is a stray: no
+                  # bot comment since the floor that the gate's own lists do
+                  # not name as a request, tracking comment or deep review (an
+                  # unreadable headed one included) is a stray: no
                   # further attempt, since it would bury it, and the job
                   # fails. A check that fails counts as unknown, never as no.
-                  if stray=$(jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length' "$comments_file"); then
+                  if stray=$(python3 -I -c 'import importlib.util as u, sys; s = u.spec_from_file_location("review_gate", sys.argv[1]); g = u.module_from_spec(s); s.loader.exec_module(g); b = g._bot_bodies(sys.stdin.read(), sys.argv[2]); print(sum(1 for x in b if not g.DEEP_MARKER.search(x) and not g.NOT_ROUTINE.search(x)))' "$gate" "$FLOOR" < "$comments_file"); then
                     if [ "$stray" = 0 ]; then posted=no; else posted=stray; fi
                   fi ;;
               esac
