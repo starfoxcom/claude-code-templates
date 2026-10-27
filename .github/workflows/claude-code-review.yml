@@ -1121,6 +1121,7 @@ jobs:
           DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
           ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
           REQUESTS_SINCE: ${{ steps.run-start.outputs.at || steps.pre-screen.outputs.floor }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO: ${{ github.repository }}
@@ -1224,18 +1225,25 @@ jobs:
           # The heading names the repository (the prompt's title rule); a dot
           # in the name is escaped so it matches only itself.
           marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
-          # A check that fails sets `halt` too, as an unread verdict would.
-          if ! verdict_body=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""'); then
+          # A verdict counts only when Evaluate's own reader, from the gate's
+          # commit as Evaluate runs it, reads it as 🟢 or 🔴; verdict_body is
+          # that comment, the newest headed one. A check that fails sets
+          # `halt` too, as an unread verdict would.
+          gate="$RUNNER_TEMP/credits-gate.py"
+          if ! git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate" \
+            || ! found=$(python3 -I "$gate" verdict --since "$since" --tier routine \
+              --marker "^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name" <<< "$comments") \
+            || ! verdict=$(printf '%s' "$found" | jq -r .verdict) \
+            || ! verdict_body=$(printf '%s' "$comments" \
+              | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""'); then
             echo "halt=true" >> "$GITHUB_OUTPUT"
             echo "::error::Could not check the PR comments for a verdict from the credits run"
             exit 1
           fi
-          verdict=$(printf '%s' "$verdict_body" | grep -E "🔴|🟢" | tail -n 1 || true)
-          if [ -z "$verdict" ]; then
+          if [ "$verdict" != pass ] && [ "$verdict" != block ]; then
             # Anything else the bot posted since this run started counts as
-            # posted: a verdict without its heading, or a headed one whose
-            # glyph was dropped ("Blocking — must fix"). A second review would
+            # posted: a verdict without its heading, or a headed one the gate
+            # cannot read (a bare "LGTM" under it). A second review would
             # bury it under a fresh verdict. Only the deep-review request, the
             # deep run's tracking comments and deep reviews are skipped.
             if ! stray=$(printf '%s' "$comments" \
@@ -1246,7 +1254,7 @@ jobs:
             fi
             if [ "$stray" != 0 ]; then
               echo "halt=true" >> "$GITHUB_OUTPUT"
-              echo "::error::A bot comment posted since this run started is not a verdict this step can take (no heading, or no 🔴/🟢 line), and a second review would bury it; read it, then re-run the job"
+              echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a second review would bury it; read it, then re-run the job"
               exit 1
             fi
             echo "::warning::The credits run posted no verdict: the review runs on the subscription"
@@ -1415,41 +1423,51 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           FLOOR: ${{ steps.pre-screen.outputs.floor }}
           ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           posted=unknown
-          body=""
-          if comments=$(timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments"); then
-            # The credits step's rule: the newest headed bot comment since the
-            # floor is a verdict when it holds a 🔴/🟢 line. Without one, any
-            # other bot comment since the floor (outside requests and the deep
-            # run's, a glyph-less headed one included) is a stray: no backup,
-            # since it would bury it, and the job fails. A check that fails
-            # counts as unknown, never as no.
+          verdict_body=""
+          comments_file="$RUNNER_TEMP/main-posted-comments.json"
+          gate="$RUNNER_TEMP/main-posted-gate.py"
+          # Evaluate's own reader, from the gate's commit as Evaluate runs it,
+          # so a verdict counts here only when the gate can read it.
+          if timeout -k 10 120 gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" > "$comments_file" \
+            && git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate"; then
             marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
-            if verdict_body=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""'); then
-              if grep -qE "🔴|🟢" <<< "$verdict_body"; then
-                posted=yes
-              elif stray=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length'); then
-                if [ "$stray" = 0 ]; then posted=no; else posted=stray; fi
-              fi
-            fi
-            if [ "$posted" = yes ] && ! body=$(printf '%s' "$comments" | jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts)] | map(.body // "") | join("\n")'); then
-              posted=unknown
+            if found=$(python3 -I "$gate" verdict --since "$FLOOR" --tier routine \
+                --marker "^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name" < "$comments_file") \
+              && verdict=$(printf '%s' "$found" | jq -r .verdict); then
+              case "$verdict" in
+                pass|block)
+                  # The newest headed comment, the one the gate reads.
+                  if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file"); then
+                    posted=yes
+                  fi ;;
+                *)
+                  # No verdict the gate can read. Like the credits step, any
+                  # bot comment since the floor (outside requests and the deep
+                  # run's, an unreadable headed one included) is a stray: no
+                  # backup, since it would bury it, and the job fails. A check
+                  # that fails counts as unknown, never as no.
+                  if stray=$(jq -rs --arg ts "$FLOOR" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length' "$comments_file"); then
+                    if [ "$stray" = 0 ]; then posted=no; else posted=stray; fi
+                  fi ;;
+              esac
             fi
           fi
           # A verdict that asked for a deep review before the run broke gets
           # the label, so the repair step's backstop fails the job loudly
           # unless the request went out too; the escalation is never dropped.
-          # The here-string keeps a long body from ending grep's read early.
-          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+          # Only the verdict is searched, as in the credits step; the
+          # here-string keeps a long one from ending grep's read early.
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body" && ! timeout -k 10 120 gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
             yes) echo "::warning::The main review posted its verdict and then failed: the verdict stands and no backup runs" ;;
             label-failed) echo "::error::The main review's verdict asked for a deep review, and applying needs-deep-review failed: no backup, and the job fails" ;;
-            stray) echo "::error::A bot comment posted since this run started is not a verdict this step can take (no heading, or no 🔴/🟢 line), and a backup would bury it: no backup, and the job fails; read it, then re-run the job" ;;
+            stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a backup would bury it: no backup, and the job fails; read it, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the main review posted is unknown: no backup, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
