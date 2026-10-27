@@ -2,10 +2,9 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Watch } from '../types'
-import { isPush, isPushOrPr, mergedNumber, pushesBranch, targetFolder } from './command'
+import { isPushOrPr, mergedNumber, targetFolder } from './command'
 import { actionsIncident, incidentText, STATUS_EVERY_MS, STATUS_SCRIPT, STUCK_MS } from './incident'
-import { FILE_WRITERS, namesRounds, recordRound, redStreak, refusalText, ROUND_LIMIT, ROUNDS_FILE } from './rounds'
-import { ROUNDS_OWN, writesRounds } from './rounds'
+import { isResearchDue, recordRound, redStreak, researchText, RESEARCH_EVERY, ROUNDS_FILE } from './rounds'
 import type { PrRounds } from './rounds'
 import { applyFile, register as settings, SETTINGS_PANE } from './settings'
 import { FAILED, isSameRun, PENDING, reconcile, settle } from './settle'
@@ -28,8 +27,7 @@ export const HELP = [
   '  /ci-watch set       change a setting: set <name> <value>; alone, list them',
   '  /ci-watch phone     the same as text, for phone chats',
   `  /ci-watch rounds    the fix rounds in a row without green checks on this branch's PR (or rounds <pr>,`,
-  `                      a number or owner/name#N); pushes are refused at ${ROUND_LIMIT}, until you type:`,
-  '                      rounds reset <pr>',
+  `                      a number or owner/name#N); every ${RESEARCH_EVERY}, the red wake asks for a step back`,
   '  /ci-watch help      this list',
 ].join('\n')
 
@@ -56,8 +54,10 @@ function finishedAgo(watch: Watch, now?: number): string {
   return minutes === 0 ? ' Checks finished just now.' : ` Checks finished ${minutes} min ago.`
 }
 
-export function wakeText(watch: Watch, now?: number): string {
-  return `${outcomeText(watch, now)}${finishedAgo(watch, now)}`
+export function wakeText(watch: Watch, now?: number, red = 0): string {
+  const pr = `${watch.repo}#${watch.number}`
+  const research = watch.outcome === 'failed' && isResearchDue(red) ? researchText(pr, red) : ''
+  return `${outcomeText(watch, now)}${research}${finishedAgo(watch, now)}`
 }
 
 function outcomeText(watch: Watch, now?: number): string {
@@ -275,7 +275,7 @@ async function headOf($: EngineInterface, repo: string, number: number): Promise
   }
 }
 
-// The fix-round limit (rounds.ts). Each PR's rounds live beside the session files, shared by every session.
+// The fix-round count (rounds.ts). Each PR's rounds live beside the session files, shared by every session.
 async function roundsPath($: EngineInterface): Promise<string> {
   const path = await statePath($)
   return `${path.slice(0, path.lastIndexOf('/'))}/${ROUNDS_FILE}`
@@ -287,7 +287,7 @@ async function readRounds($: EngineInterface): Promise<Record<string, PrRounds>>
 }
 
 // The PR's rounds changed by `change`, applied to the file as read right before the write, with nothing
-// awaited between the two: a reset another session wrote meanwhile is the state the change starts from.
+// awaited between the two: a round another session wrote meanwhile is the state the change starts from.
 async function updateRounds($: EngineInterface, key: string, change: (pr?: PrRounds) => PrRounds) {
   const path = await roundsPath($)
   await ensureDir($, path.slice(0, path.lastIndexOf('/')))
@@ -308,16 +308,6 @@ async function recordRounds($: EngineInterface, settled: readonly Watch[]): Prom
 
 const redRoundsOf = async ($: EngineInterface, pr: { repo: string; number: number }) =>
   redStreak((await readRounds($))[`${pr.repo}#${pr.number}`])
-
-// A push to a PR past the limit: why it is refused. Only the open PR of the folder the push runs in, and
-// only a push that updates that PR's branch; a PR GitHub cannot be asked about is not refused.
-async function roundRefusal($: EngineInterface, command: string, isPowerShell: boolean) {
-  const folder = targetFolder(command, (await $.env.get('OS')) === 'Windows_NT', isPowerShell)
-  const pr = await prOfBranch($, folder)
-  if (!pr || pr.state !== 'OPEN' || !pr.branch || !pushesBranch(command, pr.branch, isPowerShell)) return undefined
-  const red = await redRoundsOf($, pr)
-  return red >= ROUND_LIMIT ? `BLOCKED (ci-watch): ${refusalText(`${pr.repo}#${pr.number}`, red)}` : undefined
-}
 
 // After a `gh pr merge` (`merged`: its PR number, 0 for the branch's PR, so every finished watch is a
 // candidate). A watch is dropped only once GitHub says its PR is merged or closed: `--auto` only queues the
@@ -346,25 +336,18 @@ async function watchPushed($: EngineInterface, command: string, isPowerShell: bo
   if (pr) await startWatch($, pr.repo, pr.number, pr.headSha)
 }
 
-// `/ci-watch rounds [reset] [<pr>]`, the PR as a number in this folder's repo or as `owner/name#N` in any
-// (the key a refusal names: a push into another folder may be another repo's PR). A reset counts only when
-// the user typed it (at the prompt or from the phone): a command a plugin or the session runs never clears
-// the limit.
-async function roundsCommand($: EngineInterface, args: string, origin: { kind: string }): Promise<string> {
-  const match = /^rounds(\s+reset)?(?:\s+(?:([\w.-]+\/[\w.-]+)#|#)?(\d+))?\s*$/.exec(args)
+// `/ci-watch rounds [<pr>]`, the PR as a number in this folder's repo or as `owner/name#N` in any.
+async function roundsCommand($: EngineInterface, args: string): Promise<string> {
+  const match = /^rounds(?:\s+(?:([\w.-]+\/[\w.-]+)#|#)?(\d+))?\s*$/.exec(args)
   if (!match) return HELP
-  const [, reset, repo, number] = match
+  const [, repo, number] = match
   const pr = await prOfBranch($, undefined, number, repo)
   if (!pr && number) return repo ? `No PR ${repo}#${number}.` : `No PR #${number} in this folder's repo.`
   if (!pr) return "This folder's branch has no PR."
-  const key = `${pr.repo}#${pr.number}`
-  if (!reset) {
-    const red = await redRoundsOf($, pr)
-    return `${key}: ${red} fix round(s) in a row without every check green; pushes are refused at ${ROUND_LIMIT}.`
-  }
-  if (origin.kind !== 'composer' && origin.kind !== 'bridge') return 'Only the user resets the fix-round count.'
-  await updateRounds($, key, () => ({ rounds: [] }))
-  return `Reset the fix-round count of ${key}: the next round counts from zero.`
+  const red = await redRoundsOf($, pr)
+  const next = RESEARCH_EVERY - (red % RESEARCH_EVERY)
+  const count = `${red} fix round(s) in a row without every check green`
+  return `${pr.repo}#${pr.number}: ${count}; the next step back is due in ${next}.`
 }
 
 // A push that moves no commit (tags, "Everything up-to-date") keeps the watch on that head, settled or
@@ -568,7 +551,7 @@ async function sendHeld($: EngineInterface): Promise<void> {
     if (await isClosed($, watch.repo, watch.number)) continue
     const head = await headOf($, watch.repo, watch.number)
     if (head && head !== watch.headSha) continue
-    const text = wakeText(watch, await $.clock.now())
+    const text = wakeText(watch, await $.clock.now(), await redRoundsOf($, watch))
     // A refused wake (a hook drops the prompt, or the call fails) is marked pending again for the next poll.
     void $.prompt
       .submit({ text })
@@ -620,7 +603,8 @@ async function takeNotes($: EngineInterface): Promise<string[]> {
   live.generation++
   await save($)
   const now = await $.clock.now()
-  return due.map(w => wakeText(w, now))
+  const rounds = await readRounds($)
+  return due.map(w => wakeText(w, now, redStreak(rounds[`${w.repo}#${w.number}`])))
 }
 
 // A hot reload starts the module over without a new session.start: the next
@@ -725,8 +709,7 @@ export const register: Register = (on, options) => {
   })
 
   // The other common tools carry a finished watch into the running turn too.
-  on('tool.call', { tool: ['Read', 'Grep', 'Glob', ...FILE_WRITERS] }, async ($, e, next) => {
-    if (writesRounds(e)) return { deny: ROUNDS_OWN }
+  on('tool.call', { tool: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'NotebookEdit'] }, async ($, e, next) => {
     await startPolling($)
     if (await isRetired($)) return next(e)
     const result = await next(e)
@@ -738,14 +721,8 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
     const command = String((e as { command?: unknown }).command ?? '')
     const isPowerShell = (e as { tool?: unknown }).tool === 'PowerShell'
-    // Held by every instance, retired or not: no instance lets the count's file be written.
-    if (namesRounds(command)) return { deny: ROUNDS_OWN }
     await startPolling($)
     if (await isRetired($)) return next(e)
-    // Only the live instance judges a push, with the newest code: an older one left by a hot reload never
-    // refuses what the update fixed. With no owner on record, no instance is retired and each one judges.
-    const refusal = isPush(command, isPowerShell) ? await roundRefusal($, command, isPowerShell) : undefined
-    if (refusal) return { deny: refusal }
     const answered = await next(e)
     // A finished watch rides on this result; a subagent's call or a refused one carries none.
     const notes = e.agentId !== undefined || 'deny' in answered ? [] : await takeNotes($)
@@ -776,7 +753,7 @@ export const register: Register = (on, options) => {
     // Typed with no word over Remote Control (the phone, the web, Desktop viewing a CLI session), where no
     // row draws: the bare command answers with the phone text.
     const verb = e.args.trim() || (e.origin?.kind === 'bridge' ? 'phone' : '')
-    if (/^rounds\b/.test(verb)) return { text: await roundsCommand($, verb, e.origin ?? { kind: 'unclassified' }) }
+    if (/^rounds\b/.test(verb)) return { text: await roundsCommand($, verb) }
     if (!['', 'settings', 'stop', 'phone'].includes(verb)) return { text: HELP }
     if (verb === 'settings') {
       await $.ui.open({ id: SETTINGS_PANE, title: 'CI watch settings', focus: true })
