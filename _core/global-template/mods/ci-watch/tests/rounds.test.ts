@@ -16,7 +16,7 @@ function seed(seen: Seen, results: string[]) {
   seen.files.set(path, JSON.stringify({ 'o/r#7': { rounds } }))
 }
 
-// Newest first, back to the last round that passed; the user's reset empties the list.
+// Newest first, back to the last round that passed.
 test('red rounds count back to a green round', () => {
   const of = (results: boolean[]) =>
     results.reduce<PrRounds>((pr, red, i) => recordRound(pr, `c${i}`, red), { rounds: [] })
@@ -127,8 +127,8 @@ test("a silent watch of someone else's head adds no round", async ($, on) => {
   expect(rounds).toEqual([{ sha: 'a1', red: false }])
 })
 
-// A reset another session writes while a round is being added is the state the round adds to: the file
-// is read once, right before the write, with nothing in between that could let a reset land unseen.
+// A round another session writes while this one is being added is the state it adds to: the file is read
+// once, right before the write, with nothing in between that could let that round land unseen.
 test("a round adds to the count file as read right before its write", async ($, on) => {
   const { seen, clock } = world(on)
   seen.isReadable = true

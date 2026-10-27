@@ -47,10 +47,6 @@ export type Seen = {
   commands: { name: string; argumentHint?: string }[]
   /** Every gh call's words. */
   ghCalls: string[]
-  /** A folder where `gh pr view` finds no PR (the PR's branch is `feature/x`). */
-  noPrIn?: string
-  /** Folders whose PR is in another repo than `o/r` (folder to owner/name); `--repo` names one too. */
-  repoIn?: Record<string, string>
 }
 
 export function world(on: On) {
@@ -106,10 +102,6 @@ export function world(on: On) {
       return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     if (e.argv[0] === 'gh') seen.ghCalls.push(args)
-    if (args.includes('pr view') && seen.noPrIn !== undefined && e.init?.cwd === seen.noPrIn) {
-      const stderr = 'no pull requests found'
-      return { value: { exitCode: 1, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } }
-    }
     if (args.includes('pr checks')) seen.checksRead++
     if (args.includes('pr checks')) await seen.duringChecks?.()
     if (args.includes('pr checks') && seen.isChecksDown) {
@@ -124,7 +116,7 @@ export function world(on: On) {
       }
     }
     const named = /--repo (\S+)/.exec(args)?.[1]
-    const repo = named ?? seen.repoIn?.[e.init?.cwd ?? ''] ?? 'o/r'
+    const repo = named ?? 'o/r'
     const stdout = args.includes('pr checks')
       ? JSON.stringify([{ name: 'build', bucket: seen.bucket }, ...seen.rows])
       : prView(seen, repo, Number(/pr view (\d+)/.exec(args)?.[1] ?? seen.branchPr ?? 7))
