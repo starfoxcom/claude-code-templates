@@ -471,12 +471,15 @@ jobs:
     outputs:
       floor: ${{ steps.pre-screen.outputs.floor }}
       done: ${{ steps.repair.outputs.done }}
-      reviewer: ${{ steps.claude-review-credits.outcome == 'success' && format('{0} {1} (API credits)', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review.outcome == 'success' && format('{0} {1}', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.claude-review-backup.outcome == 'success' && format('{0} {1} (backup)', needs.init-gate.outputs.routine_fallback_model, needs.init-gate.outputs.routine_fallback_effort) || 'none' }}
+      reviewer: ${{ steps.credits-answer.outputs.ok == 'yes' && format('{0} {1} (API credits)', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.main-answer.outputs.ok == 'yes' && format('{0} {1}', needs.init-gate.outputs.routine_model, needs.init-gate.outputs.routine_effort) || steps.backup-answer.outputs.ok == 'yes' && format('{0} {1} (backup)', needs.init-gate.outputs.routine_fallback_model, needs.init-gate.outputs.routine_fallback_effort) || 'none' }}
     env:
+      # What every review attempt returns (Step 3): the comment to post, and
+      # the deep-review request ("" when it did not escalate).
+      REVIEW_SCHEMA: '{"type":"object","properties":{"review":{"type":"string"},"deep_request":{"type":"string"}},"required":["review","deep_request"],"additionalProperties":false}'
       ROUTINE_REVIEW_PROMPT: |
         Review PR ${{ github.event.pull_request.number }} in ${{ github.repository }}. What the project is, the invariants to verify and its extra escalation cases are in the project's review guide, under "Project review guide" at the end of the review context file (taken from the base branch, or from the default branch when the base predates the review gate, so the PR cannot change it). No such section means the project has no guide: review against the general rules below.
 
-        **You work alone and this is a one-shot session: the moment you end your turn the session is over and nothing else runs.** Never delegate to helper agents or subagents, never schedule a wake-up, never "wait for" anything — a large diff is read file by file, in this turn, and the verdict comment is posted before you stop. A session that ends without the verdict comment fails the PR's required check.
+        **You work alone and this is a one-shot session: the moment you end your turn the session is over and nothing else runs.** Never delegate to helper agents or subagents, never schedule a wake-up, never "wait for" anything — a large diff is read file by file, in this turn, and your review is returned (Step 3) before you stop. A session that ends without it fails the PR's required check.
 
         ## Step 1 — Read the pre-screen report
 
@@ -484,7 +487,7 @@ jobs:
         - **Pre-screen violations** — mechanical rule-breakage already detected (AI-attribution markers in added lines). Each violation is likely 🔴 unless you can refute it from the diff.
         - **Pre-screen warnings** — likely issues you should judge (files the diff shows as binary, changed git attributes, etc.).
         - **Project pre-screen** — the project's own checks (`prescreen.dir` in the gate settings): a check that exited non-zero is a violation, likely 🔴 unless you can refute it; a line marked WARNING is for you to judge.
-        - **Deep-review trigger surface** — if non-empty, Step 4 (label + `@claude` trigger) is mandatory. A project can turn automatic escalation off; the context then says so in place of this section.
+        - **Deep-review trigger surface** — if non-empty, Step 4 (the deep-review request) is mandatory. A project can turn automatic escalation off; the context then says so in place of this section.
         - **Project switches** — a section saying the project turned its AI-attribution check off, when it did.
         - **Categorized file lists** — architecture-critical files to READ first (including `.claude/` rules and skills, any `CLAUDE.md`, and the project's always-reviewed paths), then docs (scan only), then other code.
         - **Project review guide** — the project's own part of this prompt, from the base branch or, when the base predates the review gate, the default branch (absent when the project has none).
@@ -493,7 +496,7 @@ jobs:
 
         Then read the PR diff once for the full context with local git: `git diff origin/${{ github.event.pull_request.base.ref }}...HEAD` (add `-- <path>` for one file). Not `gh pr diff`: it fails with HTTP 406 on PRs past 300 files, and the checkout you are in already has the full history. If the diff shows a file as binary (the pre-screen's `BINARY_IN_DIFF` names them), Read that file in full (for the base-config paths above, `git show HEAD:<path>` instead): a single NUL byte makes git hide a code file that way.
 
-        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (the AI-attribution scan and the project's own checks). Read architecture-critical files in full (with `git show HEAD:<path>` for the base-config paths above); use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks`, `gh pr comment` on this PR, the exact `gh pr edit … --add-label needs-deep-review` command from Step 4, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied.
+        **Trust the pre-screen.** Do NOT re-run the mechanical checks it already ran (the AI-attribution scan and the project's own checks). Read architecture-critical files in full (with `git show HEAD:<path>` for the base-config paths above); use `git diff` once for the diff; spend remaining turns on judgment work — architectural invariants, semantic regressions, contract drift. The allowlist is `gh pr view/diff/checks`, `gh issue view`, `gh run view/list`, `git diff`, `git log`, `git show` and Read, sized for this contract — `cat`, `grep`, `wc`, `head` and `gh api` will be denied. You post nothing and apply no label: the workflow posts what you return.
 
         ## Step 2 — Architectural review
 
@@ -501,7 +504,7 @@ jobs:
 
         **Project invariants:** verify the ones the review guide lists, in its order. Always verify, guide or not, unless the review context says the project turned this check off: no AI-attribution markers (`Co-Authored-By` lines naming an AI model, "Generated with" footers naming an AI tool, AI-vendor links) in added lines, commit messages or the PR body.
 
-        ## Step 2.5 — Decide whether to escalate (do not post yet)
+        ## Step 2.5 — Decide whether to escalate
 
         Escalation is *orthogonal* to the verdict — it's "deeper look requested," not a blocker. The verdict in Step 3 stays binary regardless.
 
@@ -510,33 +513,31 @@ jobs:
         2. You can articulate a *specific* reason a deep-tier reviewer would catch what you cannot.
         3. You would not stake the merge on your own verdict for that concern.
 
-        **Always mark when the pre-screen lists trigger paths** (the gate's own files, and the project's trigger paths from its gate settings). Escalation is not your call then: the workflow applies the label itself and fails this run if your trigger comment is missing.
+        **Always mark when the pre-screen lists trigger paths** (the gate's own files, and the project's trigger paths from its gate settings). Escalation is not your call then: write the Step 4 request.
 
         **Always mark, too, when the diff includes anything the review guide lists under "Also escalate when the diff includes".**
 
-        **Always mark, too, when the pre-screen report says a deep review is owed** (the PR already carries `needs-deep-review` from an earlier push). The deep check waits on every new head until a deep pass runs on it, so skipping Step 4 here leaves the PR blocked with nothing coming, and the workflow fails this run.
+        **Always mark, too, when the pre-screen report says a deep review is owed** (the PR already carries `needs-deep-review` from an earlier push). The deep check waits on every new head until a deep pass runs on it, so write the Step 4 request here too.
 
         **Do NOT mark for escalation:** docs, comments, formatting, naming nits, "consider extracting", pure refactors with no behavior change.
 
         **When the review context says automatic escalation is off for this project**, do not mark at all (the judgment and guide rules above do not apply): a person asks for every deep review. A deep review the context says is owed still stands.
 
-        ## Step 3 — Post the verdict comment FIRST
+        ## Step 3 — Return the review
 
-        Command: `gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "BODY"`
-
-        The verdict lands BEFORE the escalation comment so PR readers see the decision first.
+        You do not post anything. End the session by returning your answer as structured output: `review` holds the full comment body (at most 60,000 characters), which the workflow posts on the PR as you wrote it (with a hidden line it adds under the first), and `deep_request` holds the Step 4 request, or an empty string when you did not escalate. The workflow posts the review first, then the request, so PR readers see the decision first.
 
         **Verdict is BINARY** — only 🔴 (Blocking) or 🟢 (LGTM). No middle ground.
 
-        **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting:** The gate reads the verdict from your comment mechanically: your last line must open with 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` after markup, or holds `Blocking` in any case right after a short label (`**Verdict:** blocking`), blocks first, wherever it sits. A comment whose last line opens with neither glyph blocks when the last line holding a glyph holds a 🔴, and is otherwise a MISSING verdict and the gate FAILS CLOSED. Do not count on any recovery from a different format. The emoji line is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
+        **⚠️ FAIL-CLOSED ENFORCEMENT — read before returning:** The gate reads the verdict from your review mechanically: your last line must open with 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` after markup, or holds `Blocking` in any case right after a short label (`**Verdict:** blocking`), blocks first, wherever it sits. A comment whose last line opens with neither glyph blocks when the last line holding a glyph holds a 🔴, and is otherwise a MISSING verdict and the gate FAILS CLOSED. Do not count on any recovery from a different format. The emoji line is the contract. PRs with a bare `LGTM` line are not mergeable — the substance does not matter; the gate cannot tell.
 
-        Body MUST:
+        The review MUST:
         - Be titled `## Code Review — ${{ github.event.repository.name }}`
         - End with EXACTLY one of these as the FINAL line of the comment (no trailing prose after):
           - `🟢 LGTM`
           - `🔴 Blocking — must fix`
 
-        **WRONG formats — never post any of these** (the gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
+        **WRONG formats — never return any of these** (the gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
         - `LGTM` (missing 🟢 prefix — the most common mistake; do not do this)
         - `LGTM ✅` / `✅ LGTM` (wrong emoji — parser matches 🟢 only, not ✅)
         - `Blocking` or `Blocking — must fix` (missing 🔴 prefix)
@@ -544,7 +545,7 @@ jobs:
         - Any verdict line followed by trailing prose (`🟢 LGTM, ship it!` — must be the FINAL line, nothing after)
         - A 🟢 review that writes 🔴 or the word `Blocking` outside inline backticks (`### Blocking issues`, `**Blocking:** none`, `**🔴 …**`, `1. 🔴 Blocking …`): the gate blocks on lines like these wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. A clean review writes neither except inside inline backticks on the same line; a line inside a fenced code block counts like any other
 
-        **Self-check immediately before invoking `gh pr comment`:** Look at the literal last line of your draft body. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure on this repo is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
+        **Self-check immediately before returning:** Look at the literal last line of your draft review. Does it start with `🟢` or `🔴`? If not — STOP, fix the line, re-check. The single most common review-quality failure on this repo is posting `LGTM` without the emoji, which blocks otherwise-clean PRs from merging.
 
         **BINARY VERDICT RULE:**
         - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits, zero "with caveats" headings.
@@ -552,7 +553,7 @@ jobs:
         - DROP style preferences, micro-optimisations, future-proofing for hypothetical changes, "consider extracting" suggestions. Don't list them as non-blocking; just drop them.
         - "All clear on X" is allowed AS A SECTION HEADING. NEVER as the verdict line when other sections have findings.
 
-        **MANDATORY when you marked the PR for escalation in Step 2.5 (auto-escalate OR uncertainty-based):** before the final verdict line, append a `### 🟡 Uncertainty surfaced — needs-deep-review requested` section. PR readers must see *what specifically* the deep pass is being asked to verify, not just *that* a deep pass was triggered. A `@claude review this PR` trigger comment without a 🟡 section in the verdict above it is unmotivated and degrades the deep tier's signal quality — readers see only the trigger, not the rationale.
+        **MANDATORY when you marked the PR for escalation in Step 2.5 (auto-escalate OR uncertainty-based):** before the final verdict line, append a `### 🟡 Uncertainty surfaced — needs-deep-review requested` section. PR readers must see *what specifically* the deep pass is being asked to verify, not just *that* a deep pass was triggered. A deep-review request without a 🟡 section in the verdict above it is unmotivated and degrades the deep tier's signal quality — readers see only the trigger, not the rationale.
 
         Format (this block goes BEFORE the final verdict line; verdict stays binary 🟢/🔴):
 
@@ -567,24 +568,16 @@ jobs:
         A depth-pass request follows in the next comment.
         ```
 
-        For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the trigger comment in Step 4 already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4. Two exceptions, where Step 4 is never skipped: an owed deep review (name what changed since the last deep pass, and ask the deep tier to confirm the new head), and paths the pre-screen lists on the trigger surface (the workflow applies the label itself and fails this run without your trigger comment; name what a deep pass should rule out on those paths).
+        For auto-escalated paths with no genuine uncertainty in your own read: still enumerate at least one concrete concern about THIS PR's changes on those paths — what regression a deep pass should mechanically rule out, what invariant could silently break. "Path is on the auto-escalate list" alone is NOT a sufficient 🟡 entry; the Step 4 request already says that. If you truly have nothing concrete to surface, that is signal that escalation is wrong for this PR — reconsider Step 2.5 and skip Step 4. Two exceptions, where Step 4 is never skipped: an owed deep review (name what changed since the last deep pass, and ask the deep tier to confirm the new head), and paths the pre-screen lists on the trigger surface (name what a deep pass should rule out on those paths).
 
         🟡 is NEVER the verdict line. A 🟢 verdict CAN carry a 🟡 section (genuinely-clean PR where the deep tier should still verify a specific concern). A 🔴 verdict CAN ALSO carry a 🟡 section (blocking findings plus uncertain ones for the deep tier). Binary verdict + optional 🟡 section are independent dimensions.
 
-        ## Step 4 — IF you escalated in Step 2.5: apply label + post @claude trigger
+        ## Step 4 — IF you escalated in Step 2.5: write the deep-review request
 
-        Only run Step 4 if Step 2.5 marked the PR for escalation. Skip otherwise.
+        Only when Step 2.5 marked the PR for escalation; otherwise `deep_request` is an empty string. On every escalating run the workflow applies the `needs-deep-review` label and posts your request as a fresh comment, which starts the deep review. It MUST start with the literal words `@claude review this PR` (not in backticks, not under a heading) and follow this shape:
 
-        Do BOTH of the following on every escalating run — the label and the comment have different lifecycles:
-
-        **A. Apply the label (idempotent — safe to re-apply if already present):**
         ```
-        gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review
-        ```
-
-        **B. Post a fresh `@claude` comment EVERY escalating run, no exceptions:**
-        ```
-        gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "@claude review this PR — depth pass on <focus>.
+        @claude review this PR — depth pass on <focus>.
 
         <One-paragraph context: what the PR ships and why the risk surface is bigger than the diff suggests.>
 
@@ -613,10 +606,10 @@ jobs:
 
         **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
 
-        **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose."
+        **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose.
         ```
 
-        **CRITICAL — do not skip step B because a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation must repost a fresh comment, and the comment body MUST start with the literal `@claude` token (not in backticks, not in a markdown header) so both the workflow's `if: startsWith(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true. If the only `@claude` in your comment is inside backticks or a code block, the deep tier silently skips.
+        **CRITICAL — write the request even when a prior `@claude` comment exists on this PR.** The `claude.yml` deep-review workflow only fires on the `issue_comment` event for the CURRENT comment — it does not re-evaluate older comments when a new push lands. Every escalation posts a fresh comment, and it starts with the literal `@claude` token so both the workflow's `if: startsWith(body, '@claude review this PR')` condition AND the action's internal trigger detector evaluate true.
     permissions:
       contents: read
       pull-requests: write
@@ -666,8 +659,8 @@ jobs:
       # ── Pre-screen: deterministic Python checks over the diff ────────────────
       # Catches mechanical rule violations before the reviewer sees them. The reviewer then
       # trusts the report and spends turns on judgment work — NOT re-discovering
-      # grep-able patterns. This is what makes the allowlist (a few `gh pr` read,
-      # comment and label commands, `git diff`, `git log`, `git show` and Read)
+      # grep-able patterns. This is what makes the allowlist (a few `gh pr` read
+      # commands, `git diff`, `git log`, `git show` and Read)
       # the right size: the reviewer doesn't need
       # `cat`/`grep`/`wc` because the pre-
       # screen already did that work.
@@ -946,9 +939,9 @@ jobs:
               if deep_paths or deep_owed or project_deep:
                   out.write('## Deep-review trigger surface — auto-escalation REQUIRED (Step 4)\n\n')
                   if deep_owed:
-                      out.write('This PR already carries `needs-deep-review` from an earlier push, so a deep review is owed on this head too: the deep check waits until one runs. You MUST post the structured `@claude review this PR` comment in Step 4, no exceptions; name in it what changed since the last deep pass.\n\n')
+                      out.write('This PR already carries `needs-deep-review` from an earlier push, so a deep review is owed on this head too: the deep check waits until one runs. You MUST write the Step 4 request (`deep_request`), no exceptions; name in it what changed since the last deep pass.\n\n')
                   if deep_paths or project_deep:
-                      out.write('These paths are on the deep-review trigger list, so escalation is decided already, not by your judgment. The workflow applies `needs-deep-review` itself and fails this run if your structured `@claude review this PR` comment is missing. Run Step 4 in full (label AND comment), no exceptions:\n\n')
+                      out.write('These paths are on the deep-review trigger list, so escalation is decided already, not by your judgment. The workflow applies `needs-deep-review` itself and posts your Step 4 request (`deep_request`), so write it in full, no exceptions, naming what a deep pass should rule out on these paths:\n\n')
                       for p in deep_paths:
                           out.write(f'- `{shown(p)}`\n')
                       if project_deep:
@@ -1073,58 +1066,20 @@ jobs:
       # ── First attempt: the plan's monthly API credits ─────────────────────
       # The org API key pays for a plain `claude -p` run from its monthly
       # credits; a run made through the review action is refused them
-      # ("Credit balance is too low"). The run still posts as `claude[bot]`:
-      # it gets the bot's token the way the action does (an OIDC token
-      # exchanged at Anthropic's GitHub app endpoint), because comments posted
-      # with the job's own token would not start the deep-review workflow.
-      # The step succeeds only when a verdict comment from this run is on the
-      # PR. Nothing posted (no key, credits or the workspace cap spent, the
-      # exchange refused, an API error) leaves the review to the action steps
-      # below, which run on the subscription exactly as before. A verdict from
-      # a run that then broke stands: when that review owed a deep review and
-      # no request was posted, this step posts the request itself, so a CLI
-      # release that breaks after posting never fails every PR; only a failed
-      # post of that request sets `halt`. When no verdict is found, any other
-      # bot comment posted since the run started (outside the request and
-      # the deep run's comments) sets `halt` and fails the job instead, as
-      # does a failed read of the comments: a second review would post a
-      # second verdict, and Evaluate reads the newest one. Bot comments next
-      # to a found verdict are not checked.
-      #
-      # The run's start: the floor the repair step counts deep-review requests
-      # from, so the credits step counts them from the same moment. Read with
-      # the job's token here, which the credits step never holds; a failed
-      # read falls back to the pre-screen's floor.
-      - name: Read the run's start
-        id: run-start
-        continue-on-error: true
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # gh prints an HTTP error's JSON body on stdout, so only a timestamp
-          # counts as read.
-          at=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.run_started_at' || true)
-          if [[ ! "$at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-            echo "::warning::Could not read this run's start: deep-review requests count from the pre-screen's floor"
-            at=""
-          fi
-          echo "at=$at" >> "$GITHUB_OUTPUT"
-
+      # ("Credit balance is too low"). Like every attempt, it posts nothing:
+      # it returns its review as structured output, which the check below
+      # reads and "Post the review" posts. No answer the gate can read (no
+      # key, credits or the workspace cap spent, an API error, a broken run)
+      # leaves the review to the action steps below, which run on the
+      # subscription.
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
         continue-on-error: true
         shell: bash
         env:
           CLI: ${{ steps.claude-cli.outputs.path }}
-          CLI_VERSION: ${{ steps.claude-cli.outputs.version }}
-          DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
-          ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
-          REQUESTS_SINCE: ${{ steps.run-start.outputs.at || steps.pre-screen.outputs.floor }}
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           MODEL: ${{ needs.init-gate.outputs.routine_model }}
           EFFORT: ${{ needs.init-gate.outputs.routine_effort }}
@@ -1132,10 +1087,6 @@ jobs:
           EXTRA_TOOLS: ${{ needs.init-gate.outputs.allowed_tools }}
         run: |
           set -euo pipefail
-          # Every GitHub call in this step gets a limit, so a stalled one fails
-          # into the handling below instead of holding the job. The step has
-          # none: reaching it would skip the verdict check.
-          gh() { timeout -k 10 120 gh "$@"; }
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::notice::No ANTHROPIC_API_KEY secret: the review runs on the subscription"
             exit 1
@@ -1155,7 +1106,7 @@ jobs:
           bot_token=""
           cleanup() {
             if [ -n "$bot_token" ]; then
-              GH_TOKEN="$bot_token" gh api -X DELETE /installation/token >/dev/null 2>&1 || true
+              GH_TOKEN="$bot_token" timeout -k 10 120 gh api -X DELETE /installation/token >/dev/null 2>&1 || true
             fi
             git worktree remove --force "$wt" >/dev/null 2>&1 || true
           }
@@ -1166,36 +1117,44 @@ jobs:
             git -C "$wt" checkout "origin/$BASE_REF" -- "$p" 2>/dev/null || true
           done
 
+          # The reviewer reads the PR with the review app's token, as the
+          # action's reviewer does, never with the job's token (that one can
+          # write checks). It is handed back when the step ends.
           oidc=$(curl -fsS --connect-timeout 20 --max-time 60 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
-            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])')
+            | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])') || oidc=""
           echo "::add-mask::$oidc"
-          bot_token=$(curl -fsS --connect-timeout 20 --max-time 60 -X POST -H "Authorization: Bearer $oidc" \
-            https://api.anthropic.com/api/github/github-app-token-exchange \
-            | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")')
+          if [ -n "$oidc" ]; then
+            bot_token=$(curl -fsS --connect-timeout 20 --max-time 60 -X POST -H "Authorization: Bearer $oidc" \
+              https://api.anthropic.com/api/github/github-app-token-exchange \
+              | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")') || bot_token=""
+          fi
           if [ -z "$bot_token" ]; then
             echo "::warning::The bot token exchange returned no token: the review runs on the subscription"
             exit 1
           fi
           echo "::add-mask::$bot_token"
-          # The token lives for an hour; cleanup hands it back when the step ends.
 
-          out="$RUNNER_TEMP/claude-credits-output.json"
+          # The answer the check below reads: the CLI's result, with the review
+          # as structured output. The reviewer can post nothing itself.
+          out="$RUNNER_TEMP/credits-answer.json"
           status=0
-          since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          # A time limit, so a release that hangs ends as a broken run: a verdict
-          # it posted still stands, otherwise the action steps take over.
-          (cd "$wt" && GH_TOKEN="$bot_token" timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
+          # A time limit, so a release that hangs ends as a broken run, and the
+          # action steps take over.
+          # Without the job's OIDC request values, as the action's reviewer
+          # runs: with them, anything the reviewer starts could mint its own
+          # bot token and post.
+          (cd "$wt" && GH_TOKEN="$bot_token" env -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
             --setting-sources user --strict-mcp-config --permission-mode default \
-            --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh pr edit $PR_NUMBER --repo $REPO --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
+            --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
             --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" \
             --max-turns "$MAX_TURNS" --model "$MODEL" --effort "$EFFORT" \
-            --output-format json) > "$out" || status=$?
+            --json-schema "$REVIEW_SCHEMA" --output-format json) > "$out" || status=$?
           # Only fields the CLI writes are printed: the error flag, the API's
           # status, the cost and the turn count. On an error the result text is
           # the API's message, never the model's words.
-          clean=true
-          python3 -I - "$out" "$status" <<'PYEOF' || clean=false
+          python3 -I - "$out" "$status" <<'PYEOF'
           import json, sys
           path, status = sys.argv[1], int(sys.argv[2])
           try:
@@ -1214,132 +1173,99 @@ jobs:
           print(f'::notice::Reviewed on the API credits: ${cost} over {turns} turns')
           PYEOF
 
-          # Same selector as Evaluate, floored at this run's start. `jq -s add`
-          # joins the pages `--paginate` prints as separate arrays.
-          if ! comments=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments"); then
-            echo "halt=true" >> "$GITHUB_OUTPUT"
-            echo "::error::Could not read the PR comments to see whether the credits run posted a verdict"
-            exit 1
-          fi
-          # The heading names the repository (the prompt's title rule); a dot
-          # in the name is escaped so it matches only itself.
-          marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
-          verdict_body=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""')
-          verdict=$(printf '%s' "$verdict_body" | grep -E "🔴|🟢" | tail -n 1 || true)
-          if [ -z "$verdict" ]; then
-            # Anything else the bot posted since this run started counts as
-            # posted: a verdict without its heading, or a headed one whose
-            # glyph was dropped ("Blocking — must fix"). A second review would
-            # bury it under a fresh verdict. Only the deep-review request, the
-            # deep run's tracking comments and deep reviews are skipped.
-            stray=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
-            if [ "$stray" != 0 ]; then
-              echo "halt=true" >> "$GITHUB_OUTPUT"
-              echo "::error::A bot comment posted since this run started is not a verdict this step can take (no heading, or no 🔴/🟢 line), and a second review would bury it; read it, then re-run the job"
-              exit 1
-            fi
-            echo "::warning::The credits run posted no verdict: the review runs on the subscription"
-            exit 1
-          fi
-          if [ "$clean" != true ]; then
-            # The verdict stands; only the escalation steps (Step 4) can be
-            # missing. A deep review is owed when the diff is on the trigger
-            # list, the PR already carries the label, or, unless escalation is
-            # off, the verdict holds the Step 3 escalation heading or the label
-            # read fails. Owed means the label goes on here, as Step 4.A would
-            # have done, so later pushes still owe the deep review.
-            owed=no
-            if [ "$DEEP_PATHS" = true ]; then
-              owed=yes
-            fi
-            if labels=$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")'); then
-              if printf '%s' "$labels" | grep -q "needs-deep-review"; then
-                owed=yes
-              fi
-            elif [ "$ESCALATE_AUTO" != off ]; then
-              owed=yes
-            fi
-            if [ "$ESCALATE_AUTO" != off ] && printf '%s' "$verdict_body" | grep -qi "needs-deep-review requested"; then
-              owed=yes
-            fi
-            if [ "$owed" = yes ] && ! GH_TOKEN="$bot_token" gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
-              echo "::warning::Could not apply needs-deep-review after the credits run broke; the repair step applies it when the request below is on the PR"
-            fi
-            # Any request the deep workflow acts on counts, with the repair
-            # step's rule: posted since the run started, by the reviewer or by
-            # someone with write access. A maintainer's focused request is
-            # never replaced (a new request would cancel the deep run it
-            # started).
-            reviews=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews") || reviews='[]'
-            review_comments=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/comments") || review_comments='[]'
-            askers=$(printf '%s\n%s\n%s' "$comments" "$reviews" "$review_comments" \
-              | jq -rs --arg ts "${REQUESTS_SINCE:-$since}" '[.[][] | select((.created_at // .submitted_at // "") >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr")) | .user.login] | unique | .[]') || askers=""
-            requested=no
-            while IFS= read -r asker; do
-              [ -n "$asker" ] || continue
-              if [ "$asker" = "claude[bot]" ]; then
-                requested=yes
-                break
-              fi
-              perm=$(GH_TOKEN="$bot_token" gh api "repos/$REPO/collaborators/$asker/permission" --jq .permission) || perm=none
-              case "$perm" in
-                admin|maintain|write) requested=yes; break ;;
-              esac
-            done <<< "$askers"
-            if [ "$owed" = yes ] && [ "$requested" = no ]; then
-              # The deep tier's action path has no prompt of its own: this
-              # comment is its brief, so it carries Step 4.B's fixed rules.
-              request="$RUNNER_TEMP/credits-deep-request.md"
-              cat > "$request" <<'BRIEF'
-          @claude review this PR — depth pass on the whole diff.
-
-          The routine review on the API credits posted its verdict above and then stopped before it posted this request, so the workflow posts it. The verdict's `needs-deep-review requested` section, when it has one, lists the concerns to verify; either way, review the whole diff adversarially.
-
-          If the diff shows a file as binary, Read that file in full in the working folder (for the base-config paths below, `git show HEAD:<path>` instead): a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way. The review runs on the base branch's config, so in your working folder the top-level `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc` and `.husky/` hold the base branch's copies: read the PR's version of any of those with `git show HEAD:<path>`, never with Read.
-
-          **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
-          - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
-          - 🔴 Blocking when ANY real finding exists, regardless of framing.
-          - DROP style preferences and micro-optimisations entirely.
-
-          **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically — the SAME strict contract as the routine gate: your last line must open with 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` after markup, or holds `Blocking` in any case right after a short label (`**Verdict:** blocking`), blocks first, wherever it sits. A comment whose last line opens with neither glyph blocks when the last line holding a glyph holds a 🔴, and is otherwise a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
-
-          **WRONG formats — never post any of these** (the deep gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
-          - `LGTM` (missing 🟢 prefix — the most common mistake)
-          - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
-          - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
-          - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
-          - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
-          - A 🟢 review that writes 🔴 or the word `Blocking` outside inline backticks (`### Blocking issues`, `**Blocking:** none`, `**🔴 …**`, `1. 🔴 Blocking …`): the gate blocks on lines like these wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. A clean review writes neither except inside inline backticks on the same line; a line inside a fenced code block counts like any other
-
-          **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
-
-          **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose.
-          BRIEF
-              if ! GH_TOKEN="$bot_token" gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$request"; then
-                echo "halt=true" >> "$GITHUB_OUTPUT"
-                echo "::error::The credits run posted a verdict but stopped before requesting the deep review it owed, and posting that request failed"
-                exit 1
-              fi
-              echo "::warning::The credits run on Claude Code ${CLI_VERSION:-unknown} posted its verdict but did not finish; the verdict stands and the workflow posted the deep-review request"
-            else
-              echo "::warning::The credits run on Claude Code ${CLI_VERSION:-unknown} posted its verdict but did not finish; the verdict stands"
-            fi
-          fi
-
-      - name: Fail when the credits run stopped after posting
-        if: steps.claude-review-credits.outputs.halt == 'true'
+      # Whether an attempt counts is what the gate reads in its answer. The
+      # reviewer posts nothing, so a failed attempt left nothing on the PR and
+      # the next one runs; the one review is posted by "Post the review".
+      - name: Check the credits run's review
+        id: credits-answer
+        if: steps.claude-review-credits.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
+          STAGE: credits
+          WHO: credits run
+          ANSWER_FROM: ${{ runner.temp }}/credits-answer.json
         run: |
-          echo "::error::The credits run stopped in a state this job cannot settle (see its step). Read the PR's comments, then re-run this job; a second review here would post a second verdict."
-          exit 1
+          set -euo pipefail
+          # The attempt's answer, from the CLI's result or the action's
+          # execution file (its last result message). Only an answer whose
+          # review Evaluate's own reader (review_gate.py from the gate's
+          # commit) reads as 🟢 or 🔴 counts; otherwise the next attempt runs,
+          # since nothing was posted.
+          ok=no
+          review="$RUNNER_TEMP/$STAGE-review.md"
+          request="$RUNNER_TEMP/$STAGE-deep-request.md"
+          as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
+          gate="$RUNNER_TEMP/$STAGE-gate.py"
+          marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
+          marker="^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name"
+          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" "$marker" <<'PYEOF'
+          import json, os, re, sys
+          src, review_path, request_path, comment_path, marker = sys.argv[1:6]
+          try:
+              with open(src, encoding='utf-8') as f:
+                  data = json.load(f)
+          except (OSError, ValueError):
+              sys.exit(1)
+          if isinstance(data, list):
+              results = [m for m in data if isinstance(m, dict) and m.get('type') == 'result']
+              data = results[-1] if results else {}
+          if not isinstance(data, dict) or data.get('is_error'):
+              sys.exit(1)
+          answer = data.get('structured_output')
+          if not isinstance(answer, dict) or not isinstance(answer.get('review'), str) or not answer['review'].strip():
+              sys.exit(1)
+          # GitHub refuses a comment past 65,536 characters; the mark adds a line.
+          if len(answer['review']) > 60000:
+              print('::warning::The review is too long to post (over 60,000 characters)')
+              sys.exit(1)
+          request = answer.get('deep_request')
+          request = request.strip() if isinstance(request, str) else ''
+          # A request too long to post is replaced by the fixed brief (the
+          # post step still owes the deep review: the file is not empty).
+          if len(request) > 20000:
+              request = '(the reviewer asked for a deep review; its request was too long to post)'
+          # The body exactly as "Post the review" sends it: this run attempt's
+          # mark at the end of the line where the gate's heading match ends (the
+          # first line when it has none), so a retried post finds its own.
+          mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
+          review = answer['review'].lstrip()
+          heading = re.match(marker, review)
+          cut = review.find('\n', heading.end() if heading else 0)
+          body = review + '\n' + mark if cut < 0 else review[:cut] + '\n' + mark + review[cut:]
+          with open(review_path, 'w', encoding='utf-8', newline='') as f:
+              f.write(body)
+          with open(request_path, 'w', encoding='utf-8', newline='') as f:
+              f.write(request)
+          # As Evaluate will read it once posted.
+          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': body}]
+          with open(comment_path, 'w', encoding='utf-8') as f:
+              json.dump(comment, f)
+          PYEOF
+          then
+            if git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate" \
+              && found=$(python3 -I "$gate" verdict --since 1970-01-01T00:00:00Z --tier routine \
+                --marker "$marker" < "$as_comment") \
+              && verdict=$(printf '%s' "$found" | jq -r .verdict); then
+              case "$verdict" in
+                pass|block) ok=yes ;;
+                *) echo "::warning::The $WHO returned a review the gate cannot read (no heading, or no verdict line): the next attempt runs" ;;
+              esac
+            else
+              echo "::warning::Could not check the $WHO's review with the gate's reader: the next attempt runs"
+            fi
+          else
+            echo "::warning::The $WHO returned no review: the next attempt runs"
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code Review
         id: claude-review
         # A hang counts as a failure, so the backup still runs.
         timeout-minutes: 30
-        if: steps.claude-review-credits.outcome != 'success' && steps.claude-review-credits.outputs.halt != 'true'
+        if: steps.credits-answer.outputs.ok != 'yes'
         # Pinned to the v1 tag's resolved SHA (v1.0.213). The bare `@v1` floats.
         # Update via
         #   curl -s "https://api.github.com/repos/anthropics/claude-code-action/git/refs/tags/v1" | jq -r '.object.sha'
@@ -1356,17 +1282,17 @@ jobs:
           # Model, effort and turn cap from the gate settings (routine.*).
           # `--disallowedTools Agent,...`: a reviewer that hands a large diff to
           # a subagent and "waits" for it ends its one-shot session with no
-          # verdict posted. The backup invocation carries the same ban.
+          # review returned. The backup invocation carries the same ban.
           # `--setting-sources user,project`: the action loads every settings
           # file by default, and `.claude/settings.local.json` holds the
           # maintainer's own allow list (commits, pushes, merges). The reviewer
           # keeps the project's rules, hooks and deny list but not those allows.
           # Every action review step in both workflows passes the same sources.
-          # The tool lists let a reviewer read the PR and comment on it, nothing
-          # more: its bot token can write repo contents, and `main`/`develop`
-          # are the only protected refs. So no `gh api`, no `gh pr merge` or
-          # `gh release`, comments only on this PR, only the exact label
-          # command Step 4 gives, and no file edits or git writes. Git reads have
+          # The tool lists let a reviewer read the PR, nothing more: its bot
+          # token can write repo contents, and `main`/`develop` are the only
+          # protected refs. So no `gh api`, no comments or labels (it returns
+          # its review as structured output, `--json-schema`, and "Post the
+          # review" posts it), and no file edits or git writes. Git reads have
           # no allow rule on purpose: the CLI's built-in read-only check passes
           # plain `git diff`, `git log` and `git show` and refuses the options
           # that run a command or write a file, quoted or not. A `git diff *`
@@ -1375,25 +1301,108 @@ jobs:
           # which covers the push wrapper the action allows in tag mode.
           # `--permission-mode default` refuses anything not on the allow list
           # (tag mode's `acceptEdits` would approve file changes; see the deep
-          # workflow). Every review step in both workflows carries the same
-          # lists (the deep tier has no label command; Resolve below applies a
-          # missed label).
-          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ needs.init-gate.outputs.allowed_tools }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ needs.init-gate.outputs.routine_max_turns }} --model ${{ needs.init-gate.outputs.routine_model }} --effort ${{ needs.init-gate.outputs.routine_effort }}'
+          # workflow).
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ needs.init-gate.outputs.allowed_tools }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ needs.init-gate.outputs.routine_max_turns }} --model ${{ needs.init-gate.outputs.routine_model }} --effort ${{ needs.init-gate.outputs.routine_effort }} --json-schema ''${{ env.REVIEW_SCHEMA }}'''
           prompt: |
             Review context file: ${{ runner.temp }}/review_context.md
 
             ${{ env.ROUTINE_REVIEW_PROMPT }}
 
+      - name: Check the main review's review
+        id: main-answer
+        if: steps.claude-review.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
+          STAGE: main
+          WHO: main review
+          ANSWER_FROM: ${{ steps.claude-review.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          # The attempt's answer, from the CLI's result or the action's
+          # execution file (its last result message). Only an answer whose
+          # review Evaluate's own reader (review_gate.py from the gate's
+          # commit) reads as 🟢 or 🔴 counts; otherwise the next attempt runs,
+          # since nothing was posted.
+          ok=no
+          review="$RUNNER_TEMP/$STAGE-review.md"
+          request="$RUNNER_TEMP/$STAGE-deep-request.md"
+          as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
+          gate="$RUNNER_TEMP/$STAGE-gate.py"
+          marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
+          marker="^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name"
+          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" "$marker" <<'PYEOF'
+          import json, os, re, sys
+          src, review_path, request_path, comment_path, marker = sys.argv[1:6]
+          try:
+              with open(src, encoding='utf-8') as f:
+                  data = json.load(f)
+          except (OSError, ValueError):
+              sys.exit(1)
+          if isinstance(data, list):
+              results = [m for m in data if isinstance(m, dict) and m.get('type') == 'result']
+              data = results[-1] if results else {}
+          if not isinstance(data, dict) or data.get('is_error'):
+              sys.exit(1)
+          answer = data.get('structured_output')
+          if not isinstance(answer, dict) or not isinstance(answer.get('review'), str) or not answer['review'].strip():
+              sys.exit(1)
+          # GitHub refuses a comment past 65,536 characters; the mark adds a line.
+          if len(answer['review']) > 60000:
+              print('::warning::The review is too long to post (over 60,000 characters)')
+              sys.exit(1)
+          request = answer.get('deep_request')
+          request = request.strip() if isinstance(request, str) else ''
+          # A request too long to post is replaced by the fixed brief (the
+          # post step still owes the deep review: the file is not empty).
+          if len(request) > 20000:
+              request = '(the reviewer asked for a deep review; its request was too long to post)'
+          # The body exactly as "Post the review" sends it: this run attempt's
+          # mark at the end of the line where the gate's heading match ends (the
+          # first line when it has none), so a retried post finds its own.
+          mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
+          review = answer['review'].lstrip()
+          heading = re.match(marker, review)
+          cut = review.find('\n', heading.end() if heading else 0)
+          body = review + '\n' + mark if cut < 0 else review[:cut] + '\n' + mark + review[cut:]
+          with open(review_path, 'w', encoding='utf-8', newline='') as f:
+              f.write(body)
+          with open(request_path, 'w', encoding='utf-8', newline='') as f:
+              f.write(request)
+          # As Evaluate will read it once posted.
+          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': body}]
+          with open(comment_path, 'w', encoding='utf-8') as f:
+              json.dump(comment, f)
+          PYEOF
+          then
+            if git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate" \
+              && found=$(python3 -I "$gate" verdict --since 1970-01-01T00:00:00Z --tier routine \
+                --marker "$marker" < "$as_comment") \
+              && verdict=$(printf '%s' "$found" | jq -r .verdict); then
+              case "$verdict" in
+                pass|block) ok=yes ;;
+                *) echo "::warning::The $WHO returned a review the gate cannot read (no heading, or no verdict line): the next attempt runs" ;;
+              esac
+            else
+              echo "::warning::Could not check the $WHO's review with the gate's reader: the next attempt runs"
+            fi
+          else
+            echo "::warning::The $WHO returned no review: the next attempt runs"
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
       # The backup's CLI: the stable channel's release, one that has had time
       # in the field, so a newest release that installs but then breaks does
-      # not take out the backup too. Installed only once the main review has
-      # failed. When the stable release is the newest one, the job's copy is
+      # not take out the backup too. Installed only once the main review ran
+      # and returned no review the gate can read. When the stable release is the newest one, the job's copy is
       # reused: no older release is known to be good. So is it when the stable
       # lookup or install fails, so this step never costs the backup its run.
       - name: Install the stable Claude Code for the backup
         id: claude-cli-stable
         timeout-minutes: 30
-        if: steps.claude-review.outcome == 'failure'
+        if: steps.claude-review.outcome != 'skipped' && steps.main-answer.outputs.ok != 'yes'
         continue-on-error: true
         shell: bash
         env:
@@ -1459,7 +1468,8 @@ jobs:
           echo "path=$dest" >> "$GITHUB_OUTPUT"
           echo "version=$installed" >> "$GITHUB_OUTPUT"
 
-      # Backup: any primary failure (usage limit or otherwise) retries once on
+      # Backup: a main review that returned no readable review (a failure,
+      # usage limit or otherwise, or a run that ended without one) retries once on
       # the fallback model from the gate settings with the same prompt, so a
       # spent allowance on the main model never blocks every PR. The CLI the
       # pinned action bundles is refused for the default fallback (Opus 5.5),
@@ -1467,31 +1477,268 @@ jobs:
       - name: Run Claude Code Review (backup model)
         id: claude-review-backup
         timeout-minutes: 30
-        if: steps.claude-review.outcome == 'failure' && steps.claude-cli-stable.outcome == 'success'
+        if: steps.claude-review.outcome != 'skipped' && steps.main-answer.outputs.ok != 'yes' && steps.claude-cli-stable.outcome == 'success'
         continue-on-error: true
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: false
           path_to_claude_code_executable: ${{ steps.claude-cli-stable.outputs.path }}
-          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment ${{ github.event.pull_request.number }} *),Bash(gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ needs.init-gate.outputs.allowed_tools }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ needs.init-gate.outputs.routine_max_turns }} --model ${{ needs.init-gate.outputs.routine_fallback_model }} --effort ${{ needs.init-gate.outputs.routine_fallback_effort }}'
+          claude_args: '--setting-sources user,project --permission-mode default --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read${{ needs.init-gate.outputs.allowed_tools }}" --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" --max-turns ${{ needs.init-gate.outputs.routine_max_turns }} --model ${{ needs.init-gate.outputs.routine_fallback_model }} --effort ${{ needs.init-gate.outputs.routine_fallback_effort }} --json-schema ''${{ env.REVIEW_SCHEMA }}'''
           prompt: |
             Review context file: ${{ runner.temp }}/review_context.md
 
             ${{ env.ROUTINE_REVIEW_PROMPT }}
 
-      - name: Fail when both review attempts failed
-        if: steps.claude-review.outcome == 'failure' && steps.claude-review-backup.outcome != 'success'
+      - name: Check the backup's review
+        id: backup-answer
+        if: steps.claude-review-backup.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          GATE_SHA: ${{ needs.init-gate.outputs.gate_sha || github.event.pull_request.base.sha }}
+          STAGE: backup
+          WHO: backup
+          ANSWER_FROM: ${{ steps.claude-review-backup.outputs.execution_file }}
         run: |
-          echo "::error::The routine review failed on ${{ needs.init-gate.outputs.routine_model }} and on the ${{ needs.init-gate.outputs.routine_fallback_model }} backup (newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }})"
+          set -euo pipefail
+          # The attempt's answer, from the CLI's result or the action's
+          # execution file (its last result message). Only an answer whose
+          # review Evaluate's own reader (review_gate.py from the gate's
+          # commit) reads as 🟢 or 🔴 counts; otherwise the next attempt runs,
+          # since nothing was posted.
+          ok=no
+          review="$RUNNER_TEMP/$STAGE-review.md"
+          request="$RUNNER_TEMP/$STAGE-deep-request.md"
+          as_comment="$RUNNER_TEMP/$STAGE-as-comment.json"
+          gate="$RUNNER_TEMP/$STAGE-gate.py"
+          marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
+          marker="^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name"
+          if [ -n "$ANSWER_FROM" ] && python3 -I - "$ANSWER_FROM" "$review" "$request" "$as_comment" "$marker" <<'PYEOF'
+          import json, os, re, sys
+          src, review_path, request_path, comment_path, marker = sys.argv[1:6]
+          try:
+              with open(src, encoding='utf-8') as f:
+                  data = json.load(f)
+          except (OSError, ValueError):
+              sys.exit(1)
+          if isinstance(data, list):
+              results = [m for m in data if isinstance(m, dict) and m.get('type') == 'result']
+              data = results[-1] if results else {}
+          if not isinstance(data, dict) or data.get('is_error'):
+              sys.exit(1)
+          answer = data.get('structured_output')
+          if not isinstance(answer, dict) or not isinstance(answer.get('review'), str) or not answer['review'].strip():
+              sys.exit(1)
+          # GitHub refuses a comment past 65,536 characters; the mark adds a line.
+          if len(answer['review']) > 60000:
+              print('::warning::The review is too long to post (over 60,000 characters)')
+              sys.exit(1)
+          request = answer.get('deep_request')
+          request = request.strip() if isinstance(request, str) else ''
+          # A request too long to post is replaced by the fixed brief (the
+          # post step still owes the deep review: the file is not empty).
+          if len(request) > 20000:
+              request = '(the reviewer asked for a deep review; its request was too long to post)'
+          # The body exactly as "Post the review" sends it: this run attempt's
+          # mark at the end of the line where the gate's heading match ends (the
+          # first line when it has none), so a retried post finds its own.
+          mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
+          review = answer['review'].lstrip()
+          heading = re.match(marker, review)
+          cut = review.find('\n', heading.end() if heading else 0)
+          body = review + '\n' + mark if cut < 0 else review[:cut] + '\n' + mark + review[cut:]
+          with open(review_path, 'w', encoding='utf-8', newline='') as f:
+              f.write(body)
+          with open(request_path, 'w', encoding='utf-8', newline='') as f:
+              f.write(request)
+          # As Evaluate will read it once posted.
+          comment = [{'user': {'login': 'claude[bot]'}, 'created_at': '2999-01-01T00:00:00Z', 'body': body}]
+          with open(comment_path, 'w', encoding='utf-8') as f:
+              json.dump(comment, f)
+          PYEOF
+          then
+            if git show "$GATE_SHA:.github/scripts/review_gate.py" > "$gate" \
+              && found=$(python3 -I "$gate" verdict --since 1970-01-01T00:00:00Z --tier routine \
+                --marker "$marker" < "$as_comment") \
+              && verdict=$(printf '%s' "$found" | jq -r .verdict); then
+              case "$verdict" in
+                pass|block) ok=yes ;;
+                *) echo "::warning::The $WHO returned a review the gate cannot read (no heading, or no verdict line): the next attempt runs" ;;
+              esac
+            else
+              echo "::warning::Could not check the $WHO's review with the gate's reader: the next attempt runs"
+            fi
+          else
+            echo "::warning::The $WHO returned no review: the next attempt runs"
+          fi
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+
+      - name: Fail when no review attempt returned a review
+        if: steps.credits-answer.outputs.ok != 'yes' && steps.main-answer.outputs.ok != 'yes' && steps.backup-answer.outputs.ok != 'yes'
+        run: |
+          echo "::error::No review attempt returned a review the gate can read, on ${{ needs.init-gate.outputs.routine_model }} and on the ${{ needs.init-gate.outputs.routine_fallback_model }} backup (newest CLI: ${{ steps.claude-cli.outputs.version || 'not installed' }}, backup CLI: ${{ steps.claude-cli-stable.outputs.version || 'none' }})"
           exit 1
+
+      # The one writer: the review of the first attempt that returned one the
+      # gate can read, then (when a deep review is owed) the label and the
+      # deep-review request. No attempt can post, so a crashed, hung or
+      # re-posting attempt never leaves a second verdict; the gate reads this
+      # comment. Posted as the review app (claude[bot]), as Evaluate expects.
+      - name: Post the review
+        id: post
+        if: steps.credits-answer.outputs.ok == 'yes' || steps.main-answer.outputs.ok == 'yes' || steps.backup-answer.outputs.ok == 'yes'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
+          ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
+          FLOOR: ${{ steps.pre-screen.outputs.floor }}
+          STAGE: ${{ steps.credits-answer.outputs.ok == 'yes' && 'credits' || steps.main-answer.outputs.ok == 'yes' && 'main' || 'backup' }}
+        run: |
+          set -euo pipefail
+          # Every GitHub call gets a limit, so a stalled one fails the step
+          # instead of holding the job.
+          gh() { timeout -k 10 120 gh "$@"; }
+          # Three tries, 10 s and 20 s apart: one network blip must not throw
+          # away a finished review.
+          retry() {
+            local n
+            for n in 1 2 3; do
+              if "$@"; then return 0; fi
+              [ "$n" = 3 ] || sleep $((n * 10))
+            done
+            return 1
+          }
+          review="$RUNNER_TEMP/$STAGE-review.md"
+          request="$RUNNER_TEMP/$STAGE-deep-request.md"
+          # This run attempt's mark, hidden in each comment under its first
+          # line (the check step put it in the review, the body it checked):
+          # a try whose post landed but whose answer was lost is found by it,
+          # so a retry never posts a second copy.
+          mark="<!-- review-run: $GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT -->"
+          # Posts a comment once: the created_at of the marked comment, found
+          # or new. $1 is the file, $2 the comment kind for the mark.
+          post_once() {
+            local body="$1" at
+            if [ "$2" != review ]; then
+              body="$RUNNER_TEMP/post-$2.md"
+              { head -n 1 "$1"; printf '\n%s %s -->\n' "${mark% -->}" "$2"; tail -n +2 "$1"; } > "$body"
+            fi
+            at=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+              | jq -rs --arg m "${mark% -->} $2 -->" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | contains($m))] | first | .created_at // ""') || return 1
+            if [ -z "$at" ]; then
+              at=$(GH_TOKEN="$bot_token" gh api "repos/$REPO/issues/$PR_NUMBER/comments" -F "body=@$body" --jq .created_at) || return 1
+            fi
+            printf '%s' "$at"
+          }
+          # Sets bot_token: run in this shell, never in a $(...), so its mask
+          # lines reach the runner and not the token.
+          token_once() {
+            local oidc
+            bot_token=""
+            oidc=$(curl -fsS --connect-timeout 20 --max-time 60 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
+              | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])') || return 1
+            echo "::add-mask::$oidc"
+            bot_token=$(curl -fsS --connect-timeout 20 --max-time 60 -X POST -H "Authorization: Bearer $oidc" \
+              https://api.anthropic.com/api/github/github-app-token-exchange \
+              | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")') || bot_token=""
+            [ -n "$bot_token" ]
+          }
+          bot_token=""
+          if ! retry token_once; then
+            echo "::error::The bot token exchange failed three times, so the review cannot be posted; re-run this job"
+            exit 1
+          fi
+          echo "::add-mask::$bot_token"
+          trap 'GH_TOKEN="$bot_token" gh api -X DELETE /installation/token >/dev/null 2>&1 || true' EXIT
+          # GitHub's own time for the comment: the repair step's `done`, the
+          # end of the window Evaluate reads, is never before it, whatever the
+          # runner's clock says.
+          posted_at=$(retry post_once "$review" review)
+          echo "posted_at=$posted_at" >> "$GITHUB_OUTPUT"
+          echo "::notice::Posted the $STAGE review"
+          # The floor, the start of Evaluate's window, is the runner's time:
+          # a runner clock ahead of GitHub's would put the review before it,
+          # and Evaluate would read no verdict. Fail loudly instead.
+          if [[ "$posted_at" < "$FLOOR" ]]; then
+            echo "::error::GitHub dates the review ($posted_at) before this run's floor ($FLOOR): the runner's clock is ahead of GitHub's, so Evaluate cannot see it. Fix the runner's clock, then re-run all jobs."
+            exit 1
+          fi
+
+          # A deep review is owed when the reviewer asked for one (a request,
+          # or, with escalation on, the Step 3 escalation heading's words
+          # anywhere in the review: a loud label beats a dropped request), the
+          # diff is on the trigger list, or the PR already carries the label
+          # (or, with escalation on, the label read fails).
+          owed=no
+          if [ -s "$request" ] || [ "$DEEP_PATHS" = true ]; then
+            owed=yes
+          fi
+          if [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" "$review"; then
+            owed=yes
+          fi
+          if labels=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")'); then
+            case ",$labels," in *",needs-deep-review,"*) owed=yes ;; esac
+          elif [ "$ESCALATE_AUTO" != off ]; then
+            owed=yes
+          fi
+          if [ "$owed" != yes ]; then
+            exit 0
+          fi
+          retry gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null
+          # The deep tier's action path has no prompt of its own: the request
+          # is its brief. With none from the reviewer, or one that does not
+          # start the deep workflow, the fixed brief goes first.
+          brief="$RUNNER_TEMP/deep-request.md"
+          start=$(head -c 200 "$request" | tr '[:upper:]' '[:lower:]')
+          if [[ "$start" == "@claude review this pr"* ]]; then
+            cp "$request" "$brief"
+          else
+            cat > "$brief" <<'BRIEF'
+          @claude review this PR — depth pass on the whole diff.
+
+          A deep review is owed on this head (the reviewer asked for one, the diff is on the trigger list, or the PR already carries needs-deep-review). The review above lists its concerns in its `needs-deep-review requested` section when it has one; either way, review the whole diff adversarially.
+
+          If the diff shows a file as binary, Read that file in full in the working folder (for the base-config paths below, `git show HEAD:<path>` instead): a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way. The review runs on the base branch's config, so in your working folder the top-level `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc` and `.husky/` hold the base branch's copies: read the PR's version of any of those with `git show HEAD:<path>`, never with Read.
+
+          **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
+          - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
+          - 🔴 Blocking when ANY real finding exists, regardless of framing.
+          - DROP style preferences and micro-optimisations entirely.
+
+          **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically — the SAME strict contract as the routine gate: your last line must open with 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` after markup, or holds `Blocking` in any case right after a short label (`**Verdict:** blocking`), blocks first, wherever it sits. A comment whose last line opens with neither glyph blocks when the last line holding a glyph holds a 🔴, and is otherwise a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
+
+          **WRONG formats — never post any of these** (the deep gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
+          - `LGTM` (missing 🟢 prefix — the most common mistake)
+          - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
+          - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
+          - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
+          - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+          - A 🟢 review that writes 🔴 or the word `Blocking` outside inline backticks (`### Blocking issues`, `**Blocking:** none`, `**🔴 …**`, `1. 🔴 Blocking …`): the gate blocks on lines like these wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. A clean review writes neither except inside inline backticks on the same line; a line inside a fenced code block counts like any other
+
+          **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
+
+          **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose.
+          BRIEF
+            if [ -s "$request" ]; then
+              printf '\n\n**The reviewer added:**\n\n' >> "$brief"
+              cat "$request" >> "$brief"
+            fi
+          fi
+          retry post_once "$brief" request >/dev/null
+          echo "::notice::Applied needs-deep-review and posted the deep-review request"
 
       # ── Escalation: repair the label, resolve Claude On-Demand ───────────
       # Runs AFTER the review steps so it sees the label they applied. The
       # Evaluate job reads that label as "a deep review was asked for".
-      # A trigger comment from this run counts as escalation even when the
-      # reviewer's label command was refused: the step applies the label. So
-      # does a diff on the trigger list, whatever the reviewer posted.
+      # A trigger comment from this run counts as escalation even when its
+      # label is missing: the step applies the label. So does a diff on the
+      # trigger list, whatever the reviewer returned.
       # With `checks: two`, the older Claude On-Demand check (created at
       # in_progress by init-gate) then moves to one of two states:
       #   • No needs-deep-review label → conclusion=skipped (passes branch
@@ -1506,19 +1753,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CHECKS: ${{ needs.init-gate.outputs.checks }}
           DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
+          POSTED_AT: ${{ steps.post.outputs.posted_at }}
         run: |
           PR="${{ github.event.pull_request.number }}"
           REPO="${{ github.repository }}"
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
           # Every review attempt has ended: Evaluate reads the routine verdict
           # only from comments posted between the floor and this moment, so a
-          # re-run of Evaluate alone cannot pick up a later comment.
-          echo "done=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          # re-run of Evaluate alone cannot pick up a later comment. Never
+          # before GitHub's time for the posted review, so a runner clock
+          # behind GitHub's still keeps it in the window.
+          DONE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          if [[ "$POSTED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "$POSTED_AT" > "$DONE" ]]; then
+            DONE="$POSTED_AT"
+          fi
+          echo "done=$DONE" >> "$GITHUB_OUTPUT"
 
-          # The reviewer may run only one exact spelling of the label command.
-          # If it posted the deep-review trigger this run but the label is
-          # missing, apply the label here, so a refused label command can
-          # never mark the deep check skipped while the deep review runs.
+          # "Post the review" applies the label with the request. If a
+          # deep-review trigger was posted this run but the label is
+          # missing, apply the label here, so a failed label call can never
+          # mark the deep check skipped while the deep review runs.
           RUN_STARTED_AT=$(gh api "repos/$REPO/actions/runs/${{ github.run_id }}" --jq '.run_started_at')
           if [ -z "$RUN_STARTED_AT" ]; then
             echo "::error::Could not resolve this run's run_started_at, so whether the reviewer escalated is unknown"
@@ -1533,7 +1787,7 @@ jobs:
           LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')
           if [ "$TRIGGERS" -gt 0 ] && ! echo "$LABELS" | grep -q "needs-deep-review"; then
             gh api "repos/$REPO/issues/$PR/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null
-            echo "::warning::The reviewer posted the deep-review trigger without the label; applied needs-deep-review"
+            echo "::warning::A deep-review trigger was posted this run without the label; applied needs-deep-review"
             LABELS="$LABELS,needs-deep-review"
           fi
           # Trigger-list paths make the deep review owed by rule, not by the
