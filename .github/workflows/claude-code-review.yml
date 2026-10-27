@@ -1088,7 +1088,8 @@ jobs:
       # bot comment posted since the run started (outside the request and
       # the deep run's comments) sets `halt` and fails the job instead, as
       # does a failed read of the comments: a second review would post a
-      # second verdict, and Evaluate reads the newest one. Bot comments next
+      # second verdict, and Evaluate reads the newest one; so does a check of
+      # the comments that cannot finish. Bot comments next
       # to a found verdict are not checked.
       #
       # The run's start: the floor the repair step counts deep-review requests
@@ -1224,8 +1225,13 @@ jobs:
           # The heading names the repository (the prompt's title rule); a dot
           # in the name is escaped so it matches only itself.
           marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
-          verdict_body=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""')
+          # A check that fails sets `halt` too, as an unread verdict would.
+          if ! verdict_body=$(printf '%s' "$comments" \
+            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""'); then
+            echo "halt=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Could not check the PR comments for a verdict from the credits run"
+            exit 1
+          fi
           verdict=$(printf '%s' "$verdict_body" | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
             # Anything else the bot posted since this run started counts as
@@ -1233,8 +1239,12 @@ jobs:
             # glyph was dropped ("Blocking — must fix"). A second review would
             # bury it under a fresh verdict. Only the deep-review request, the
             # deep run's tracking comments and deep reviews are skipped.
-            stray=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length')
+            if ! stray=$(printf '%s' "$comments" \
+              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | (.body // "") | select(test("\\A(@claude review this pr|\\*\\*claude (finished|encountered)|claude code is working|[#*_\\s]*deep review)"; "i") | not)] | length'); then
+              echo "halt=true" >> "$GITHUB_OUTPUT"
+              echo "::error::Could not check the PR comments for other bot comments from the credits run"
+              exit 1
+            fi
             if [ "$stray" != 0 ]; then
               echo "halt=true" >> "$GITHUB_OUTPUT"
               echo "::error::A bot comment posted since this run started is not a verdict this step can take (no heading, or no 🔴/🟢 line), and a second review would bury it; read it, then re-run the job"
@@ -1261,7 +1271,8 @@ jobs:
             elif [ "$ESCALATE_AUTO" != off ]; then
               owed=yes
             fi
-            if [ "$ESCALATE_AUTO" != off ] && printf '%s' "$verdict_body" | grep -qi "needs-deep-review requested"; then
+            # A here-string, so a long verdict cannot end grep's read early.
+            if [ "$ESCALATE_AUTO" != off ] && grep -qi "needs-deep-review requested" <<< "$verdict_body"; then
               owed=yes
             fi
             if [ "$owed" = yes ] && ! GH_TOKEN="$bot_token" gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
