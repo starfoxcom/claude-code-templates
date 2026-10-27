@@ -1184,6 +1184,8 @@ jobs:
           out="$RUNNER_TEMP/claude-credits-output.json"
           status=0
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Its leftovers are stopped after a failed run (the step below).
+          echo "cli_ran=true" >> "$GITHUB_OUTPUT"
           # A time limit, so a release that hangs ends as a broken run: a verdict
           # it posted still stands, otherwise the action steps take over.
           (cd "$wt" && GH_TOKEN="$bot_token" timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
@@ -1362,6 +1364,43 @@ jobs:
           echo "::error::The credits run stopped in a state this job cannot settle (see its step). Read the PR's comments, then re-run this job; a second review here would post a second verdict."
           exit 1
 
+      # A credits run that failed can leave a child too (its verdict post in
+      # flight; the time limit stops its group only when it fires), so it is
+      # stopped, as after the attempts below, before the main review starts.
+      - name: Stop what the credits run left running
+        if: steps.claude-review-credits.outputs.cli_ran == 'true' && steps.claude-review-credits.outcome == 'failure' && steps.claude-review-credits.outputs.halt != 'true'
+        run: |
+          # The runner gives every process it starts for this job the job's
+          # RUNNER_TRACKING_ID (its own end-of-job cleanup stops them all by
+          # it), so only this job's leftovers match, wherever the action put
+          # the CLI, and never another job's on a shared self-hosted host.
+          if [ -z "${RUNNER_TRACKING_ID:-}" ] || [ ! -d /proc ]; then
+            echo "::error::This runner gives no way to tell this job's processes apart, so what the failed attempt left running cannot be stopped and could post later: no further attempt, and the job fails"
+            exit 1
+          fi
+          # Nothing of the job but this step should be running now, so all of
+          # it is stopped, as the runner's cleanup would at the end: a child
+          # that does not name claude (a verdict post in flight) too. This
+          # shell and its ancestors are kept.
+          keep=" $$ "
+          p=$$
+          while p=$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null) && [ -n "$p" ] && [ "$p" != 0 ]; do
+            keep="$keep$p "
+          done
+          stopped=0
+          for dir in /proc/[0-9]*; do
+            pid=${dir#/proc/}
+            case "$keep" in *" $pid "*) continue ;; esac
+            envs=$(tr '\0' '\n' 2>/dev/null < "$dir/environ") || continue
+            case $'\n'"$envs"$'\n' in
+              *$'\n'"RUNNER_TRACKING_ID=$RUNNER_TRACKING_ID"$'\n'*) ;;
+              *) continue ;;
+            esac
+            kill -KILL "$pid" 2>/dev/null && stopped=$((stopped + 1))
+          done
+          echo "::notice::Stopped $stopped leftover process(es) of this job"
+          sleep 5
+
       # When the main review starts: its check counts a verdict posted
       # before this moment as an earlier attempt's late post.
       - name: Note when the main review starts
@@ -1423,18 +1462,18 @@ jobs:
       # runtime and the CLI under it keep running until the job ends, and
       # could post a verdict (or a second deep-review request) after the
       # check below read none, next to the backup's. So whatever a failed
-      # attempt left running is stopped first.
+      # attempt left running is stopped first, and a runner where that
+      # cannot be done fails the job instead.
       - name: Stop what the main review left running
         if: steps.claude-review.outcome == 'failure'
-        continue-on-error: true
         run: |
           # The runner gives every process it starts for this job the job's
           # RUNNER_TRACKING_ID (its own end-of-job cleanup stops them all by
           # it), so only this job's leftovers match, wherever the action put
           # the CLI, and never another job's on a shared self-hosted host.
           if [ -z "${RUNNER_TRACKING_ID:-}" ] || [ ! -d /proc ]; then
-            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped"
-            exit 0
+            echo "::error::This runner gives no way to tell this job's processes apart, so what the failed attempt left running cannot be stopped and could post later: no further attempt, and the job fails"
+            exit 1
           fi
           # Nothing of the job but this step should be running now, so all of
           # it is stopped, as the runner's cleanup would at the end: a child
@@ -1511,13 +1550,14 @@ jobs:
                   # lacks Python's U+001C-U+001F, so the class names them).
                   # The earlier check (the credits step's, or the main
                   # review's) found none, so one posted before this attempt
-                  # started is an earlier attempt's late post, and the gate
+                  # started (in its first second too: no attempt posts that
+                  # soon) is an earlier attempt's late post, and the gate
                   # would read whichever is newer. Several from this attempt
                   # are one review correcting its own verdict (a dropped
                   # glyph), and the newest stands, as in the credits step.
                   if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
                     && [ -n "$STARTED" ] \
-                    && earlier=$(jq -rs --arg ts "$FLOOR" --arg start "$STARTED" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts and .created_at < $start)] | length' "$comments_file"); then
+                    && earlier=$(jq -rs --arg ts "$FLOOR" --arg start "$STARTED" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts and .created_at <= $start)] | length' "$comments_file"); then
                     if [ "$earlier" != 0 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
@@ -1664,15 +1704,14 @@ jobs:
       # before its check, so it cannot post after it.
       - name: Stop what the backup left running
         if: steps.claude-review-backup.outcome == 'failure'
-        continue-on-error: true
         run: |
           # The runner gives every process it starts for this job the job's
           # RUNNER_TRACKING_ID (its own end-of-job cleanup stops them all by
           # it), so only this job's leftovers match, wherever the action put
           # the CLI, and never another job's on a shared self-hosted host.
           if [ -z "${RUNNER_TRACKING_ID:-}" ] || [ ! -d /proc ]; then
-            echo "::warning::This runner gives no way to tell this job's processes apart: none are stopped"
-            exit 0
+            echo "::error::This runner gives no way to tell this job's processes apart, so what the failed attempt left running cannot be stopped and could post later: no further attempt, and the job fails"
+            exit 1
           fi
           # Nothing of the job but this step should be running now, so all of
           # it is stopped, as the runner's cleanup would at the end: a child
@@ -1739,13 +1778,14 @@ jobs:
                   # lacks Python's U+001C-U+001F, so the class names them).
                   # The earlier check (the credits step's, or the main
                   # review's) found none, so one posted before this attempt
-                  # started is an earlier attempt's late post, and the gate
+                  # started (in its first second too: no attempt posts that
+                  # soon) is an earlier attempt's late post, and the gate
                   # would read whichever is newer. Several from this attempt
                   # are one review correcting its own verdict (a dropped
                   # glyph), and the newest stands, as in the credits step.
                   if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
                     && [ -n "$STARTED" ] \
-                    && earlier=$(jq -rs --arg ts "$FLOOR" --arg start "$STARTED" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts and .created_at < $start)] | length' "$comments_file"); then
+                    && earlier=$(jq -rs --arg ts "$FLOOR" --arg start "$STARTED" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts and .created_at <= $start)] | length' "$comments_file"); then
                     if [ "$earlier" != 0 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
