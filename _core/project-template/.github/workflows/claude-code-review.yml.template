@@ -1049,13 +1049,16 @@ jobs:
           done
           src="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$src" ]; then
-            src="$(readlink -f "$HOME/.local/bin/claude")"
+            src="$(readlink -f "$HOME/.local/bin/claude" || true)"
           fi
           dest="$RUNNER_TEMP/claude-cli/claude"
           mkdir -p "$(dirname "$dest")"
-          cp "$src" "$dest"
+          if ! cp "$src" "$dest"; then
+            echo "::warning::Claude Code $CLI_VERSION left no binary to copy: the review runs on the action's own CLI; the backup tries the stable release"
+            exit 1
+          fi
           chmod +x "$dest"
-          installed="$("$dest" --version | awk '{print $1}')"
+          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$CLI_VERSION" ]; then
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup tries the stable release"
             exit 1
@@ -1075,17 +1078,46 @@ jobs:
       # PR. Nothing posted (no key, credits or the workspace cap spent, the
       # exchange refused, an API error) leaves the review to the action steps
       # below, which run on the subscription exactly as before. A verdict from
-      # a run that then broke sets `halt` and fails the job instead, and so,
-      # when no verdict is found, does any other bot comment posted since the
-      # run started (outside the request and the deep run's comments): a
-      # second review would post a second verdict, and Evaluate reads the
-      # newest one. Bot comments next to a found verdict are not checked.
+      # a run that then broke stands: when that review owed a deep review and
+      # no request was posted, this step posts the request itself, so a CLI
+      # release that breaks after posting never fails every PR; only a failed
+      # post of that request sets `halt`. When no verdict is found, any other
+      # bot comment posted since the run started (outside the request and
+      # the deep run's comments) sets `halt` and fails the job instead, as
+      # does a failed read of the comments: a second review would post a
+      # second verdict, and Evaluate reads the newest one. Bot comments next
+      # to a found verdict are not checked.
+      #
+      # The run's start: the floor the repair step counts deep-review requests
+      # from, so the credits step counts them from the same moment. Read with
+      # the job's token here, which the credits step never holds; a failed
+      # read falls back to the pre-screen's floor.
+      - name: Read the run's start
+        id: run-start
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # gh prints an HTTP error's JSON body on stdout, so only a timestamp
+          # counts as read.
+          at=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}" --jq '.run_started_at' || true)
+          if [[ ! "$at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+            echo "::warning::Could not read this run's start: deep-review requests count from the pre-screen's floor"
+            at=""
+          fi
+          echo "at=$at" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
         continue-on-error: true
         shell: bash
         env:
           CLI: ${{ steps.claude-cli.outputs.path }}
+          CLI_VERSION: ${{ steps.claude-cli.outputs.version }}
+          DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
+          ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
+          REQUESTS_SINCE: ${{ steps.run-start.outputs.at || steps.pre-screen.outputs.floor }}
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO: ${{ github.repository }}
@@ -1183,9 +1215,9 @@ jobs:
           # The heading names the repository (the prompt's title rule); a dot
           # in the name is escaped so it matches only itself.
           marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
-          verdict=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' \
-            | grep -E "🔴|🟢" | tail -n 1 || true)
+          verdict_body=$(printf '%s' "$comments" \
+            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""')
+          verdict=$(printf '%s' "$verdict_body" | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
             # Anything else the bot posted since this run started counts as
             # posted: a verdict without its heading, or a headed one whose
@@ -1203,15 +1235,95 @@ jobs:
             exit 1
           fi
           if [ "$clean" != true ]; then
-            echo "halt=true" >> "$GITHUB_OUTPUT"
-            echo "::error::The credits run posted a verdict but did not finish, so the deep-review label and request may be missing"
-            exit 1
+            # The verdict stands; only the escalation steps (Step 4) can be
+            # missing. A deep review is owed when the diff is on the trigger
+            # list, the PR already carries the label, or, unless escalation is
+            # off, the verdict holds the Step 3 escalation heading or the label
+            # read fails. Owed means the label goes on here, as Step 4.A would
+            # have done, so later pushes still owe the deep review.
+            owed=no
+            if [ "$DEEP_PATHS" = true ]; then
+              owed=yes
+            fi
+            if labels=$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")'); then
+              if printf '%s' "$labels" | grep -q "needs-deep-review"; then
+                owed=yes
+              fi
+            elif [ "$ESCALATE_AUTO" != off ]; then
+              owed=yes
+            fi
+            if [ "$ESCALATE_AUTO" != off ] && printf '%s' "$verdict_body" | grep -qi "needs-deep-review requested"; then
+              owed=yes
+            fi
+            if [ "$owed" = yes ] && ! GH_TOKEN="$bot_token" gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+              echo "::warning::Could not apply needs-deep-review after the credits run broke; the repair step applies it when the request below is on the PR"
+            fi
+            # Any request the deep workflow acts on counts, with the repair
+            # step's rule: posted since the run started, by the reviewer or by
+            # someone with write access. A maintainer's focused request is
+            # never replaced (a new request would cancel the deep run it
+            # started).
+            reviews=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews") || reviews='[]'
+            review_comments=$(GH_TOKEN="$bot_token" gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/comments") || review_comments='[]'
+            askers=$(printf '%s\n%s\n%s' "$comments" "$reviews" "$review_comments" \
+              | jq -rs --arg ts "${REQUESTS_SINCE:-$since}" '[.[][] | select((.created_at // .submitted_at // "") >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr")) | .user.login] | unique | .[]') || askers=""
+            requested=no
+            while IFS= read -r asker; do
+              [ -n "$asker" ] || continue
+              if [ "$asker" = "claude[bot]" ]; then
+                requested=yes
+                break
+              fi
+              perm=$(GH_TOKEN="$bot_token" gh api "repos/$REPO/collaborators/$asker/permission" --jq .permission) || perm=none
+              case "$perm" in
+                admin|maintain|write) requested=yes; break ;;
+              esac
+            done <<< "$askers"
+            if [ "$owed" = yes ] && [ "$requested" = no ]; then
+              # The deep tier's action path has no prompt of its own: this
+              # comment is its brief, so it carries Step 4.B's fixed rules.
+              request="$RUNNER_TEMP/credits-deep-request.md"
+              cat > "$request" <<'BRIEF'
+          @claude review this PR — depth pass on the whole diff.
+
+          The routine review on the API credits posted its verdict above and then stopped before it posted this request, so the workflow posts it. The verdict's `needs-deep-review requested` section, when it has one, lists the concerns to verify; either way, review the whole diff adversarially.
+
+          If the diff shows a file as binary, Read that file in full in the working folder (for the base-config paths below, `git show HEAD:<path>` instead): a NUL byte or the PR's own .gitattributes can make a diff hide a code file that way. The review runs on the base branch's config, so in your working folder the top-level `.claude/`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`, `.claude.json`, `.gitmodules`, `.ripgreprc` and `.husky/` hold the base branch's copies: read the PR's version of any of those with `git show HEAD:<path>`, never with Read.
+
+          **Verdict format — BINARY, no in-between.** Same rule as the routine tier:
+          - 🟢 LGTM ONLY when fully clean — zero caveats, zero minors, zero nits.
+          - 🔴 Blocking when ANY real finding exists, regardless of framing.
+          - DROP style preferences and micro-optimisations entirely.
+
+          **⚠️ FAIL-CLOSED ENFORCEMENT — read before posting your verdict.** The deep tier's `Evaluate deep-tier verdict` step (in `claude.yml`) reads your completion comment mechanically — the SAME strict contract as the routine gate: your last line must open with 🔴 or 🟢 (any 🔴 on it blocks), unless a line that opens with 🔴 or `Blocking` after markup, or holds `Blocking` in any case right after a short label (`**Verdict:** blocking`), blocks first, wherever it sits. A comment whose last line opens with neither glyph blocks when the last line holding a glyph holds a 🔴, and is otherwise a MISSING verdict and fails the deep tier closed, blocking merge. Do not count on any recovery from a different format. The emoji line is the contract.
+
+          **WRONG formats — never post any of these** (the deep gate reads some as a block or a missing verdict; the rest break the binary rule or the final-line format):
+          - `LGTM` (missing 🟢 prefix — the most common mistake)
+          - `LGTM ✅` / `✅ LGTM` (wrong emoji — the parser matches 🟢 only, not ✅)
+          - `Blocking` / `Blocking — must fix` (missing 🔴 prefix)
+          - `🟢 LGTM with caveats` / `🟢 LGTM — minor nit` (caveats forbidden; the binary rule forces 🔴)
+          - Any verdict line followed by trailing prose (must be the FINAL line, nothing after)
+          - A 🟢 review that writes 🔴 or the word `Blocking` outside inline backticks (`### Blocking issues`, `**Blocking:** none`, `**🔴 …**`, `1. 🔴 Blocking …`): the gate blocks on lines like these wherever they sit, and on any 🔴 on the last line, backticks or not, so a 🟢 verdict line holds no 🔴 at all. A clean review writes neither except inside inline backticks on the same line; a line inside a fenced code block counts like any other
+
+          **Self-check before you finish:** look at the literal last line of your review. Does it start with 🟢 or 🔴? If not — STOP, fix it, re-check. A missing-emoji verdict fails the deep gate closed and blocks an otherwise-clean PR.
+
+          **Output spec:** bullet-point findings ranked by severity with file:line citations. The verdict line is the FINAL line of the comment — `🟢 LGTM` or `🔴 Blocking — must fix`, no trailing prose.
+          BRIEF
+              if ! GH_TOKEN="$bot_token" gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$request"; then
+                echo "halt=true" >> "$GITHUB_OUTPUT"
+                echo "::error::The credits run posted a verdict but stopped before requesting the deep review it owed, and posting that request failed"
+                exit 1
+              fi
+              echo "::warning::The credits run on Claude Code ${CLI_VERSION:-unknown} posted its verdict but did not finish; the verdict stands and the workflow posted the deep-review request"
+            else
+              echo "::warning::The credits run on Claude Code ${CLI_VERSION:-unknown} posted its verdict but did not finish; the verdict stands"
+            fi
           fi
 
       - name: Fail when the credits run stopped after posting
         if: steps.claude-review-credits.outputs.halt == 'true'
         run: |
-          echo "::error::The credits run stopped after posting (see its step). Re-run this job; a second review here would post a second verdict."
+          echo "::error::The credits run stopped in a state this job cannot settle (see its step). Read the PR's comments, then re-run this job; a second review here would post a second verdict."
           exit 1
 
       - name: Run Claude Code Review
