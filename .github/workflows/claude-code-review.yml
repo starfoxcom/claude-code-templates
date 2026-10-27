@@ -1235,7 +1235,7 @@ jobs:
               --marker "^[\\s#*_]*Code Review[^a-zA-Z]+$marker_name" <<< "$comments") \
             || ! verdict=$(printf '%s' "$found" | jq -r .verdict) \
             || ! verdict_body=$(printf '%s' "$comments" \
-              | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""'); then
+              | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""'); then
             echo "halt=true" >> "$GITHUB_OUTPUT"
             echo "::error::Could not check the PR comments for a verdict from the credits run"
             exit 1
@@ -1413,6 +1413,20 @@ jobs:
 
             ${{ env.ROUTINE_REVIEW_PROMPT }}
 
+      # A step past its time limit loses only its top process: the action's
+      # runtime and the CLI under it keep running until the job ends, and
+      # could post a verdict after the check below read none, next to the
+      # backup's. So whatever a failed attempt left running is stopped first.
+      - name: Stop what the main review left running
+        if: steps.claude-review.outcome == 'failure'
+        continue-on-error: true
+        env:
+          CLI: ${{ steps.claude-cli.outputs.path }}
+        run: |
+          pkill -KILL -f -- "/[_]actions/anthropics/claude-code-action/" || true
+          if [ -n "$CLI" ]; then pkill -KILL -f -- "$CLI" || true; fi
+          sleep 5
+
       # Whether an attempt counts is what the gate reads, not how it exited.
       # After the main review runs, this step reads the PR with Evaluate's own
       # reader. A verdict stands even when the run then failed (a crash, or
@@ -1420,9 +1434,9 @@ jobs:
       # verdict, and the gate reads the newest one, so a 🟢 could bury a 🔴.
       # No verdict at all runs the backup, even after a run that exited
       # cleanly (a release that ends without posting). The credits step found
-      # none, or the job would not be here. A verdict from a run that failed
-      # and asked for a deep review gets the label here; the repair step then
-      # fails loudly when no request went out. A bot comment that is not a
+      # none, or the job would not be here. A verdict that asked for a deep
+      # review gets the label here, whether its run failed or exited cleanly;
+      # the repair step then fails loudly when no request went out. A bot comment that is not a
       # verdict, unreadable comments, a check over them that fails, or a label
       # that cannot be applied: no backup, and the job fails. The backup gets
       # the same check, the same script, after it runs.
@@ -1457,9 +1471,15 @@ jobs:
               && verdict=$(printf '%s' "$found" | jq -r .verdict); then
               case "$verdict" in
                 pass|block)
-                  # The newest headed comment, the one the gate reads.
-                  if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file"); then
-                    posted=yes
+                  # The newest headed comment, the one the gate reads (jq's \s
+                  # lacks Python's U+001C-U+001F, so the class names them).
+                  # After the backup it must be the only one: the main review
+                  # left none, so another is a late post from it (a run past
+                  # its time limit that kept going), and the gate would read
+                  # whichever is newer.
+                  if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
+                    && headed=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length' "$comments_file"); then
+                    if [ "$STAGE" = backup ] && [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
@@ -1488,6 +1508,7 @@ jobs:
             no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
             label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
             stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
+            multiple) echo "::error::This run left $headed routine verdicts (the main review posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
@@ -1590,6 +1611,18 @@ jobs:
 
             ${{ env.ROUTINE_REVIEW_PROMPT }}
 
+      # As after the main review: a backup past its time limit is stopped
+      # before its check, so it cannot post after it.
+      - name: Stop what the backup left running
+        if: steps.claude-review-backup.outcome == 'failure'
+        continue-on-error: true
+        env:
+          CLI: ${{ steps.claude-cli-stable.outputs.path }}
+        run: |
+          pkill -KILL -f -- "/[_]actions/anthropics/claude-code-action/" || true
+          if [ -n "$CLI" ]; then pkill -KILL -f -- "$CLI" || true; fi
+          sleep 5
+
       # The main review's check after the backup, the same script: a backup
       # that ended without a verdict the gate can read fails the job here,
       # not in Evaluate, so re-running the failed job retries the review.
@@ -1624,9 +1657,15 @@ jobs:
               && verdict=$(printf '%s' "$found" | jq -r .verdict); then
               case "$verdict" in
                 pass|block)
-                  # The newest headed comment, the one the gate reads.
-                  if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file"); then
-                    posted=yes
+                  # The newest headed comment, the one the gate reads (jq's \s
+                  # lacks Python's U+001C-U+001F, so the class names them).
+                  # After the backup it must be the only one: the main review
+                  # left none, so another is a late post from it (a run past
+                  # its time limit that kept going), and the gate would read
+                  # whichever is newer.
+                  if verdict_body=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' "$comments_file") \
+                    && headed=$(jq -rs --arg ts "$FLOOR" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s\\x1c-\\x1f#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | length' "$comments_file"); then
+                    if [ "$STAGE" = backup ] && [ "$headed" != 1 ]; then posted=multiple; else posted=yes; fi
                   fi ;;
                 *)
                   # No verdict the gate can read. Like the credits step, any
@@ -1655,6 +1694,7 @@ jobs:
             no) if [ "$OUTCOME" = success ]; then echo "::warning::The $WHO ended without posting a verdict the gate can read"; fi ;;
             label-failed) echo "::error::The $WHO's verdict asked for a deep review, and applying needs-deep-review failed: no further attempt, and the job fails" ;;
             stray) echo "::error::A bot comment posted since this run started is not a verdict the gate can read (no heading, or no verdict line), and a further attempt would bury it: no further attempt, and the job fails; read it, then re-run the job" ;;
+            multiple) echo "::error::This run left $headed routine verdicts (the main review posted after its check, likely past its time limit), and the gate reads only the newest: the job fails; read them, then re-run the job" ;;
             unknown) echo "::error::Could not read or check the PR comments, so whether the $WHO posted is unknown: no further attempt, to never post a second verdict" ;;
           esac
           echo "posted=$posted" >> "$GITHUB_OUTPUT"
