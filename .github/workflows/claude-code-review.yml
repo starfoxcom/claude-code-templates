@@ -1116,6 +1116,7 @@ jobs:
           CLI: ${{ steps.claude-cli.outputs.path }}
           CLI_VERSION: ${{ steps.claude-cli.outputs.version }}
           DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
+          ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
           REQUESTS_SINCE: ${{ steps.run-start.outputs.at || steps.pre-screen.outputs.floor }}
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -1234,19 +1235,28 @@ jobs:
             exit 1
           fi
           if [ "$clean" != true ]; then
-            # The verdict stands; only the deep-review request can be missing.
-            # It is owed when the diff is on the trigger list, the PR already
-            # carries the label (or the label read fails), or the verdict holds
-            # any mention of needs-deep-review (the Step 3 escalation heading
-            # names it; a looser match only costs an extra deep review).
-            # The label follows in the repair step below, which applies it for
-            # a claude[bot] request from this run or a diff on the trigger
-            # list; a maintainer's request gets it from the deep run.
-            labels=$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")') || labels="needs-deep-review"
+            # The verdict stands; only the escalation steps (Step 4) can be
+            # missing. A deep review is owed when the diff is on the trigger
+            # list, the PR already carries the label, or, unless escalation is
+            # off, the verdict holds the Step 3 escalation heading or the label
+            # read fails. Owed means the label goes on here, as Step 4.A would
+            # have done, so later pushes still owe the deep review.
             owed=no
-            if [ "$DEEP_PATHS" = true ] || printf '%s' "$labels" | grep -q "needs-deep-review" \
-              || printf '%s' "$verdict_body" | grep -qi "needs-deep-review"; then
+            if [ "$DEEP_PATHS" = true ]; then
               owed=yes
+            fi
+            if labels=$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")'); then
+              if printf '%s' "$labels" | grep -q "needs-deep-review"; then
+                owed=yes
+              fi
+            elif [ "$ESCALATE_AUTO" != off ]; then
+              owed=yes
+            fi
+            if [ "$ESCALATE_AUTO" != off ] && printf '%s' "$verdict_body" | grep -qi "needs-deep-review requested"; then
+              owed=yes
+            fi
+            if [ "$owed" = yes ] && ! GH_TOKEN="$bot_token" gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label needs-deep-review >/dev/null; then
+              echo "::warning::Could not apply needs-deep-review after the credits run broke; the repair step applies it when the request below is on the PR"
             fi
             # Any request the deep workflow acts on counts, with the repair
             # step's rule: posted since the run started, by the reviewer or by
