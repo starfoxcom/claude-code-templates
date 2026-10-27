@@ -1061,7 +1061,7 @@ jobs:
             exit 1
           fi
           chmod +x "$dest"
-          installed="$(timeout 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
+          installed="$(timeout -k 10 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$CLI_VERSION" ]; then
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup tries the stable release"
             exit 1
@@ -1113,8 +1113,6 @@ jobs:
 
       - name: Run Claude Code Review on the API credits
         id: claude-review-credits
-        # A backstop only: the CLI run below has its own, shorter limit.
-        timeout-minutes: 50
         continue-on-error: true
         shell: bash
         env:
@@ -1134,6 +1132,10 @@ jobs:
           EXTRA_TOOLS: ${{ needs.init-gate.outputs.allowed_tools }}
         run: |
           set -euo pipefail
+          # Every GitHub call in this step gets a limit, so a stalled one fails
+          # into the handling below instead of holding the job. The step has
+          # none: reaching it would skip the verdict check.
+          gh() { timeout -k 10 120 gh "$@"; }
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::notice::No ANTHROPIC_API_KEY secret: the review runs on the subscription"
             exit 1
@@ -1182,9 +1184,7 @@ jobs:
           status=0
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # A time limit, so a release that hangs ends as a broken run: a verdict
-          # it posted still stands, otherwise the action steps take over. The
-          # step's own limit sits well past this one, since reaching it skips
-          # that check: it only stops a stalled API call after the run.
+          # it posted still stands, otherwise the action steps take over.
           (cd "$wt" && GH_TOKEN="$bot_token" timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
             --setting-sources user --strict-mcp-config --permission-mode default \
             --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh pr edit $PR_NUMBER --repo $REPO --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
@@ -1451,7 +1451,7 @@ jobs:
           mkdir -p "$(dirname "$dest")"
           cp "$src" "$dest" || no_stable "Claude Code $STABLE left no binary to copy"
           chmod +x "$dest"
-          installed="$(timeout 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
+          installed="$(timeout -k 10 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$STABLE" ]; then
             no_stable "expected Claude Code $STABLE, got '$installed'"
           fi
