@@ -1013,6 +1013,9 @@ jobs:
       # the stable release (see below).
       - name: Install Claude Code
         id: claude-cli
+        # Each download has its own limit too, so a stalled host ends in the
+        # warnings below rather than at the step's limit.
+        timeout-minutes: 30
         continue-on-error: true
         shell: bash
         env:
@@ -1021,7 +1024,7 @@ jobs:
           set -euo pipefail
           CLI_VERSION=""
           for attempt in 1 2 3; do
-            if CLI_VERSION=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest); then
+            if CLI_VERSION=$(curl -fsSL --connect-timeout 20 --max-time 60 https://downloads.claude.ai/claude-code-releases/latest); then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -1037,7 +1040,7 @@ jobs:
           fi
           echo "Newest Claude Code release: $CLI_VERSION"
           for attempt in 1 2 3; do
-            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$CLI_VERSION"; then
+            if curl -fsSL --connect-timeout 20 --max-time 60 https://claude.ai/install.sh | timeout 300 bash -s -- "$CLI_VERSION"; then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -1058,7 +1061,7 @@ jobs:
             exit 1
           fi
           chmod +x "$dest"
-          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
+          installed="$(timeout -k 10 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$CLI_VERSION" ]; then
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup tries the stable release"
             exit 1
@@ -1129,6 +1132,10 @@ jobs:
           EXTRA_TOOLS: ${{ needs.init-gate.outputs.allowed_tools }}
         run: |
           set -euo pipefail
+          # Every GitHub call in this step gets a limit, so a stalled one fails
+          # into the handling below instead of holding the job. The step has
+          # none: reaching it would skip the verdict check.
+          gh() { timeout -k 10 120 gh "$@"; }
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::notice::No ANTHROPIC_API_KEY secret: the review runs on the subscription"
             exit 1
@@ -1159,11 +1166,11 @@ jobs:
             git -C "$wt" checkout "origin/$BASE_REF" -- "$p" 2>/dev/null || true
           done
 
-          oidc=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          oidc=$(curl -fsS --connect-timeout 20 --max-time 60 -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=claude-code-github-action" \
             | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["value"])')
           echo "::add-mask::$oidc"
-          bot_token=$(curl -fsS -X POST -H "Authorization: Bearer $oidc" \
+          bot_token=$(curl -fsS --connect-timeout 20 --max-time 60 -X POST -H "Authorization: Bearer $oidc" \
             https://api.anthropic.com/api/github/github-app-token-exchange \
             | python3 -I -c 'import json, sys; d = json.load(sys.stdin); print(d.get("token") or d.get("app_token") or "")')
           if [ -z "$bot_token" ]; then
@@ -1176,7 +1183,9 @@ jobs:
           out="$RUNNER_TEMP/claude-credits-output.json"
           status=0
           since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          (cd "$wt" && GH_TOKEN="$bot_token" "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
+          # A time limit, so a release that hangs ends as a broken run: a verdict
+          # it posted still stands, otherwise the action steps take over.
+          (cd "$wt" && GH_TOKEN="$bot_token" timeout --kill-after=1m 30m "$CLI" -p "Review context file: $RUNNER_TEMP/review_context.md"$'\n\n'"$ROUTINE_REVIEW_PROMPT" \
             --setting-sources user --strict-mcp-config --permission-mode default \
             --allowedTools "Bash(gh pr view *),Bash(gh pr diff *),Bash(gh pr checks *),Bash(gh pr comment $PR_NUMBER *),Bash(gh pr edit $PR_NUMBER --repo $REPO --add-label needs-deep-review),Bash(gh issue view *),Bash(gh run view *),Bash(gh run list *),Read$EXTRA_TOOLS" \
             --disallowedTools "Agent,Task,ScheduleWakeup,SendMessage,ListAgents,Edit,Write,MultiEdit,NotebookEdit,Bash(git add*),Bash(git commit*),Bash(git push*),Bash(git rm*),Bash(/*)" \
@@ -1328,6 +1337,8 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
+        # A hang counts as a failure, so the backup still runs.
+        timeout-minutes: 30
         if: steps.claude-review-credits.outcome != 'success' && steps.claude-review-credits.outputs.halt != 'true'
         # Pinned to the v1 tag's resolved SHA (v1.0.213). The bare `@v1` floats.
         # Update via
@@ -1381,6 +1392,7 @@ jobs:
       # lookup or install fails, so this step never costs the backup its run.
       - name: Install the stable Claude Code for the backup
         id: claude-cli-stable
+        timeout-minutes: 30
         if: steps.claude-review.outcome == 'failure'
         continue-on-error: true
         shell: bash
@@ -1404,7 +1416,7 @@ jobs:
           }
           STABLE=""
           for attempt in 1 2 3; do
-            if STABLE=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable); then
+            if STABLE=$(curl -fsSL --connect-timeout 20 --max-time 60 https://downloads.claude.ai/claude-code-releases/stable); then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -1423,7 +1435,7 @@ jobs:
             exit 0
           fi
           for attempt in 1 2 3; do
-            if curl -fsSL https://claude.ai/install.sh | bash -s -- "$STABLE"; then
+            if curl -fsSL --connect-timeout 20 --max-time 60 https://claude.ai/install.sh | timeout 300 bash -s -- "$STABLE"; then
               break
             fi
             if [ "$attempt" = 3 ]; then
@@ -1439,7 +1451,7 @@ jobs:
           mkdir -p "$(dirname "$dest")"
           cp "$src" "$dest" || no_stable "Claude Code $STABLE left no binary to copy"
           chmod +x "$dest"
-          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
+          installed="$(timeout -k 10 60 "$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$STABLE" ]; then
             no_stable "expected Claude Code $STABLE, got '$installed'"
           fi
@@ -1454,6 +1466,7 @@ jobs:
       # so the backup runs only on the copy the step above picked.
       - name: Run Claude Code Review (backup model)
         id: claude-review-backup
+        timeout-minutes: 30
         if: steps.claude-review.outcome == 'failure' && steps.claude-cli-stable.outcome == 'success'
         continue-on-error: true
         uses: anthropics/claude-code-action@7ada98c10deffc4c13fe5079693edf312888ff3b  # v1 (v1.0.213)
