@@ -1049,13 +1049,16 @@ jobs:
           done
           src="$HOME/.local/share/claude/versions/$CLI_VERSION"
           if [ ! -x "$src" ]; then
-            src="$(readlink -f "$HOME/.local/bin/claude")"
+            src="$(readlink -f "$HOME/.local/bin/claude" || true)"
           fi
           dest="$RUNNER_TEMP/claude-cli/claude"
           mkdir -p "$(dirname "$dest")"
-          cp "$src" "$dest"
+          if ! cp "$src" "$dest"; then
+            echo "::warning::Claude Code $CLI_VERSION left no binary to copy: the review runs on the action's own CLI; the backup tries the stable release"
+            exit 1
+          fi
           chmod +x "$dest"
-          installed="$("$dest" --version | awk '{print $1}')"
+          installed="$("$dest" --version 2>/dev/null | awk '{print $1}' || true)"
           if [ "$installed" != "$CLI_VERSION" ]; then
             echo "::warning::expected Claude Code $CLI_VERSION, got '$installed': the review runs on the action's own CLI; the backup tries the stable release"
             exit 1
@@ -1075,9 +1078,12 @@ jobs:
       # PR. Nothing posted (no key, credits or the workspace cap spent, the
       # exchange refused, an API error) leaves the review to the action steps
       # below, which run on the subscription exactly as before. A verdict from
-      # a run that then broke sets `halt` and fails the job instead, and so,
-      # when no verdict is found, does any other bot comment posted since the
-      # run started (outside the request and the deep run's comments): a
+      # a run that then broke stands: when that review owed a deep review and
+      # no request was posted, this step posts the request itself, so a CLI
+      # release that breaks after posting never fails every PR. When no
+      # verdict is found, any other bot comment posted since the run started
+      # (outside the request and the deep run's comments) sets `halt` and
+      # fails the job instead, as does a failed read of the comments: a
       # second review would post a second verdict, and Evaluate reads the
       # newest one. Bot comments next to a found verdict are not checked.
       - name: Run Claude Code Review on the API credits
@@ -1086,6 +1092,8 @@ jobs:
         shell: bash
         env:
           CLI: ${{ steps.claude-cli.outputs.path }}
+          CLI_VERSION: ${{ steps.claude-cli.outputs.version }}
+          DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
           DISABLE_AUTOUPDATER: "1"
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           REPO: ${{ github.repository }}
@@ -1183,9 +1191,9 @@ jobs:
           # The heading names the repository (the prompt's title rule); a dot
           # in the name is escaped so it matches only itself.
           marker_name=$(printf '%s' "${REPO#*/}" | sed 's/\./\\./g')
-          verdict=$(printf '%s' "$comments" \
-            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""' \
-            | grep -E "🔴|🟢" | tail -n 1 || true)
+          verdict_body=$(printf '%s' "$comments" \
+            | jq -rs --arg ts "$since" --arg name "$marker_name" '[add[] | select(.user.login == "claude[bot]") | select((.body // "") | test("\\A[\\s#*_]*Code Review[^a-zA-Z]+" + $name)) | select(.created_at >= $ts)] | last | .body // ""')
+          verdict=$(printf '%s' "$verdict_body" | grep -E "🔴|🟢" | tail -n 1 || true)
           if [ -z "$verdict" ]; then
             # Anything else the bot posted since this run started counts as
             # posted: a verdict without its heading, or a headed one whose
@@ -1203,15 +1211,37 @@ jobs:
             exit 1
           fi
           if [ "$clean" != true ]; then
-            echo "halt=true" >> "$GITHUB_OUTPUT"
-            echo "::error::The credits run posted a verdict but did not finish, so the deep-review label and request may be missing"
-            exit 1
+            # The verdict stands; only the deep-review request can be missing.
+            # It is owed when the diff is on the trigger list, the PR already
+            # carries the label, or the verdict holds the escalation section
+            # (the prompt's Step 2.5 heading). The label follows in the repair
+            # step below, which applies it whenever a request is on the PR.
+            labels=$(GH_TOKEN="$bot_token" gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")') || labels="needs-deep-review"
+            owed=no
+            if [ "$DEEP_PATHS" = true ] || printf '%s' "$labels" | grep -q "needs-deep-review" \
+              || printf '%s' "$verdict_body" | grep -qi "needs-deep-review requested"; then
+              owed=yes
+            fi
+            requested=$(printf '%s' "$comments" \
+              | jq -rs --arg ts "$since" '[add[] | select(.user.login == "claude[bot]") | select(.created_at >= $ts) | select((.body // "") | ascii_downcase | startswith("@claude review this pr"))] | length') || requested=0
+            if [ "$owed" = yes ] && [ "$requested" = 0 ]; then
+              if ! GH_TOKEN="$bot_token" gh pr comment "$PR_NUMBER" --repo "$REPO" --body "@claude review this PR
+
+          The routine review on the API credits stopped after it posted its verdict and before it posted this request, so the workflow posts it. Review the whole diff; the routine verdict above lists any concerns it raised."; then
+                echo "halt=true" >> "$GITHUB_OUTPUT"
+                echo "::error::The credits run posted a verdict but stopped before requesting the deep review it owed, and posting that request failed"
+                exit 1
+              fi
+              echo "::warning::The credits run on Claude Code ${CLI_VERSION:-unknown} posted its verdict but did not finish; the verdict stands and the workflow posted the deep-review request"
+            else
+              echo "::warning::The credits run on Claude Code ${CLI_VERSION:-unknown} posted its verdict but did not finish; the verdict stands"
+            fi
           fi
 
       - name: Fail when the credits run stopped after posting
         if: steps.claude-review-credits.outputs.halt == 'true'
         run: |
-          echo "::error::The credits run stopped after posting (see its step). Re-run this job; a second review here would post a second verdict."
+          echo "::error::The credits run stopped in a state this job cannot settle (see its step). Read the PR's comments, then re-run this job; a second review here would post a second verdict."
           exit 1
 
       - name: Run Claude Code Review
