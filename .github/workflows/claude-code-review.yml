@@ -1372,7 +1372,7 @@ jobs:
       - name: Run Claude Code Review
         id: claude-review
         # A hang counts as a failure, so the backup still runs unless the
-        # verdict was posted before it (see the next step).
+        # verdict was posted before it (see the check below).
         timeout-minutes: 30
         if: steps.claude-review-credits.outcome != 'success' && steps.claude-review-credits.outputs.halt != 'true'
         # Pinned to the v1 tag's resolved SHA (v1.0.213). The bare `@v1` floats.
@@ -1490,6 +1490,9 @@ jobs:
           OUTCOME: ${{ steps.claude-review.outcome }}
         run: |
           set -euo pipefail
+          # A verdict posted in the run's last seconds may lag in the comment
+          # list, and a clean exit has no stop step's wait before this read.
+          if [ "$OUTCOME" = success ]; then sleep 5; fi
           posted=unknown
           verdict_body=""
           comments_file="$RUNNER_TEMP/$STAGE-posted-comments.json"
@@ -1715,6 +1718,9 @@ jobs:
           OUTCOME: ${{ steps.claude-review-backup.outcome }}
         run: |
           set -euo pipefail
+          # A verdict posted in the run's last seconds may lag in the comment
+          # list, and a clean exit has no stop step's wait before this read.
+          if [ "$OUTCOME" = success ]; then sleep 5; fi
           posted=unknown
           verdict_body=""
           comments_file="$RUNNER_TEMP/$STAGE-posted-comments.json"
