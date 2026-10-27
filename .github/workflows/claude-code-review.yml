@@ -1264,7 +1264,7 @@ jobs:
           # verdict that asked for a deep review gets the label here too, so
           # the repair step's backstop fails the job loudly unless the request
           # went out. A label already on is a no-op.
-          if [ "$clean" = true ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$verdict_body" \
+          if [ "$clean" = true ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$(sed -E 's#</?[A-Za-z][A-Za-z0-9]*[^>]*>##g' <<< "$verdict_body")" \
             && ! GH_TOKEN="$bot_token" gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
             echo "halt=true" >> "$GITHUB_OUTPUT"
             echo "::error::The credits run's verdict asked for a deep review, and applying needs-deep-review failed: apply the label and request the deep review, or re-run the job"
@@ -1289,7 +1289,7 @@ jobs:
               owed=yes
             fi
             # A here-string, so a long verdict cannot end grep's read early.
-            if [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$verdict_body"; then
+            if [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$(sed -E 's#</?[A-Za-z][A-Za-z0-9]*[^>]*>##g' <<< "$verdict_body")"; then
               owed=yes
             fi
             if [ "$owed" = yes ] && ! GH_TOKEN="$bot_token" gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
@@ -1527,11 +1527,11 @@ jobs:
           # loudly unless the request went out too; the escalation is never
           # dropped. A label already on is a no-op. Only the verdict is
           # searched, as in the credits step, for a line whose only words are
-          # the Step 3 heading, whatever markup or glyph wraps it (the model
-          # drops markup at times), so prose that names the heading does not
-          # count; the here-string keeps a long one from ending grep's read
-          # early.
-          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$verdict_body" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
+          # the Step 3 heading, whatever markup, HTML tag or glyph wraps it
+          # (the model drops markup at times and writes <h3> at others), so
+          # prose that names the heading does not count; the here-string keeps
+          # a long one from ending grep's read early.
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$(sed -E 's#</?[A-Za-z][A-Za-z0-9]*[^>]*>##g' <<< "$verdict_body")" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
@@ -1743,11 +1743,11 @@ jobs:
           # loudly unless the request went out too; the escalation is never
           # dropped. A label already on is a no-op. Only the verdict is
           # searched, as in the credits step, for a line whose only words are
-          # the Step 3 heading, whatever markup or glyph wraps it (the model
-          # drops markup at times), so prose that names the heading does not
-          # count; the here-string keeps a long one from ending grep's read
-          # early.
-          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$verdict_body" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
+          # the Step 3 heading, whatever markup, HTML tag or glyph wraps it
+          # (the model drops markup at times and writes <h3> at others), so
+          # prose that names the heading does not count; the here-string keeps
+          # a long one from ending grep's read early.
+          if [ "$posted" = yes ] && [ "$ESCALATE_AUTO" != off ] && grep -qiE '^[^[:alnum:]>]*(uncertainty surfaced[^[:alnum:]]*)?needs-deep-review requested[^[:alnum:]]*$' <<< "$(sed -E 's#</?[A-Za-z][A-Za-z0-9]*[^>]*>##g' <<< "$verdict_body")" && ! timeout -k 10 120 gh api "repos/$REPO/issues/$PR_NUMBER/labels" -X POST -f "labels[]=needs-deep-review" >/dev/null; then
             posted=label-failed
           fi
           case "$posted" in
