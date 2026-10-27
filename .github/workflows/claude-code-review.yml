@@ -1228,7 +1228,7 @@ jobs:
           # The body exactly as "Post the review" sends it: this run attempt's
           # mark under the first line, so a retried post finds its own.
           mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
-          first, sep, rest = answer['review'].partition('\n')
+          first, sep, rest = answer['review'].lstrip().partition('\n')
           body = first + '\n' + mark + ('\n' + rest if sep else '')
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
               f.write(body)
@@ -1356,7 +1356,7 @@ jobs:
           # The body exactly as "Post the review" sends it: this run attempt's
           # mark under the first line, so a retried post finds its own.
           mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
-          first, sep, rest = answer['review'].partition('\n')
+          first, sep, rest = answer['review'].lstrip().partition('\n')
           body = first + '\n' + mark + ('\n' + rest if sep else '')
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
               f.write(body)
@@ -1534,7 +1534,7 @@ jobs:
           # The body exactly as "Post the review" sends it: this run attempt's
           # mark under the first line, so a retried post finds its own.
           mark = f"<!-- review-run: {os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']} review -->"
-          first, sep, rest = answer['review'].partition('\n')
+          first, sep, rest = answer['review'].lstrip().partition('\n')
           body = first + '\n' + mark + ('\n' + rest if sep else '')
           with open(review_path, 'w', encoding='utf-8', newline='') as f:
               f.write(body)
