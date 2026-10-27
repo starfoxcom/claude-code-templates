@@ -1584,6 +1584,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DEEP_PATHS: ${{ steps.pre-screen.outputs.deep_paths }}
           ESCALATE_AUTO: ${{ needs.init-gate.outputs.escalate_auto }}
+          FLOOR: ${{ steps.pre-screen.outputs.floor }}
           STAGE: ${{ steps.credits-answer.outputs.ok == 'yes' && 'credits' || steps.main-answer.outputs.ok == 'yes' && 'main' || 'backup' }}
         run: |
           set -euo pipefail
@@ -1649,6 +1650,13 @@ jobs:
           posted_at=$(retry post_once "$review" review)
           echo "posted_at=$posted_at" >> "$GITHUB_OUTPUT"
           echo "::notice::Posted the $STAGE review"
+          # The floor, the start of Evaluate's window, is the runner's time:
+          # a runner clock ahead of GitHub's would put the review before it,
+          # and Evaluate would read no verdict. Fail loudly instead.
+          if [[ "$posted_at" < "$FLOOR" ]]; then
+            echo "::error::GitHub dates the review ($posted_at) before this run's floor ($FLOOR): the runner's clock is ahead of GitHub's, so Evaluate cannot see it. Fix the runner's clock, then re-run all jobs."
+            exit 1
+          fi
 
           # A deep review is owed when the reviewer asked for one (a request,
           # or, with escalation on, the Step 3 escalation heading's words
