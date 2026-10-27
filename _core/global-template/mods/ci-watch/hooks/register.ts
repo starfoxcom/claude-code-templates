@@ -346,7 +346,8 @@ async function roundsCommand($: EngineInterface, args: string): Promise<string> 
   if (!pr) return "This folder's branch has no PR."
   const red = await redRoundsOf($, pr)
   const next = RESEARCH_EVERY - (red % RESEARCH_EVERY)
-  return `${pr.repo}#${pr.number}: ${red} fix round(s) in a row without every check green; the next step back is due in ${next}.`
+  const count = `${red} fix round(s) in a row without every check green`
+  return `${pr.repo}#${pr.number}: ${count}; the next step back is due in ${next}.`
 }
 
 // A push that moves no commit (tags, "Everything up-to-date") keeps the watch on that head, settled or
