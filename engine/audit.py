@@ -20,8 +20,8 @@ EDITS_FOR_TASKS = 3
 COMMIT = re.compile(r"(?:^|[\n;&|(][ \t]*)git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit(?![A-Za-z0-9_-])")
 MESSAGE = re.compile(r"[ \t](?:-[A-Za-z]*m|--message)(?:[ \t]+|=)([\"'])")
 FORMAT = re.compile(r"(feat|fix|refactor|perf|test|docs|chore|data|style)(\([^() \t]+\))?!?: [^ \t]")
-WRITES = re.compile(r"(?:^|[\n;&|(][ \t]*)(?:git[ \t]+commit|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))"
-                    r"(?![A-Za-z0-9_-])")
+WRITES = re.compile(r"(?:^|[\n;&|(][ \t]*)(?:git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit"
+                    r"|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))(?![A-Za-z0-9_-])")
 ATTRIBUTION_BLOCK = "BLOCKED (no AI attribution)"
 CI = re.compile(r"(?:^|[\n;&|(][ \t]*)gh[ \t]+(?:run[ \t]+(?:watch|list|view)|pr[ \t]+checks)(?![A-Za-z0-9_-])")
 RUN_WATCH = re.compile(r"(?:^|[\n;&|(][ \t]*)gh[ \t]+run[ \t]+watch(?![A-Za-z0-9_-])")

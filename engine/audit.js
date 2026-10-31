@@ -25,8 +25,8 @@ const EDITS_FOR_TASKS = 3;
 const COMMIT = /(?:^|[\n;&|(][ \t]*)git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit(?![A-Za-z0-9_-])/;
 const MESSAGE = /[ \t](?:-[A-Za-z]*m|--message)(?:[ \t]+|=)(["'])/;
 const FORMAT = /^(feat|fix|refactor|perf|test|docs|chore|data|style)(\([^() \t]+\))?!?: [^ \t]/;
-const WRITES =
-  /(?:^|[\n;&|(][ \t]*)(?:git[ \t]+commit|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))(?![A-Za-z0-9_-])/;
+const WRITES = new RegExp(String.raw`(?:^|[\n;&|(][ \t]*)(?:git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit`
+  + String.raw`|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))(?![A-Za-z0-9_-])`);
 const ATTRIBUTION_BLOCK = "BLOCKED (no AI attribution)";
 const CI = /(?:^|[\n;&|(][ \t]*)gh[ \t]+(?:run[ \t]+(?:watch|list|view)|pr[ \t]+checks)(?![A-Za-z0-9_-])/;
 const RUN_WATCH = /(?:^|[\n;&|(][ \t]*)gh[ \t]+run[ \t]+watch(?![A-Za-z0-9_-])/;

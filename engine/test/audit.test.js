@@ -31,6 +31,8 @@ const NEWER = [
   bash("c4", "grep -rn \"a|git commit -m 'not a commit'\" src"),
   bash("w1", "gh pr create --title x --body-file f"),
   result("w1", [{ type: "text", text: "PreToolUse:Bash hook error: BLOCKED (no AI attribution): marker found" }]),
+  bash("w5", 'git -C repo commit -m "docs: c"'),
+  result("w5", [{ type: "text", text: "PreToolUse:Bash hook error: BLOCKED (no AI attribution): marker found" }]),
   bash("ci1", "gh run watch 12"),
   bash("ci2", "gh pr checks 3 --json name,bucket"),
   use("r1", "mcp__tokensave__tokensave_search", { query: "x" }),
@@ -95,8 +97,9 @@ test("each check counts where its rule applied and where it broke", needsPython,
   assert.equal(out.logs.from, "2026-10-28");
   assert.equal(out.logs.to, "2026-10-30");
   const c = byId(out);
-  assert.deepEqual(counts(c["commit-format"]), [3, 1, ["Added stuff"]]);
-  assert.deepEqual(counts(c.attribution), [4, 1, ["gh pr create --title x --body-file f"]]);
+  assert.deepEqual(counts(c["commit-format"]), [4, 1, ["Added stuff"]]);
+  const blocked = ["gh pr create --title x --body-file f", 'git -C repo commit -m "docs: c"'];
+  assert.deepEqual(counts(c.attribution), [5, 2, blocked]);
   assert.deepEqual(counts(c["ci-watch"]), [2, 1, ["gh run watch 12"]]);
   assert.deepEqual(counts(c["code-research"]), [2, 1, ["Grep foo"]]);
   assert.deepEqual(counts(c["task-tracking"]), [2, 1, ["3 edits, no task list"]]);
