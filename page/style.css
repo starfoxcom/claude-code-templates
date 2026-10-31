@@ -1,0 +1,104 @@
+/* Bindwright page. Tokens and rules: docs/v2/DESIGN.md. */
+@property --hue { syntax: "<number>"; inherits: true; initial-value: 150; }
+
+:root {
+  --hue: 150;
+  --canvas: oklch(0.20 0.006 240);
+  --panel: oklch(0.245 0.007 240);
+  --key: oklch(0.29 0.008 240);
+  --rule: oklch(0.34 0.008 240);
+  --text: oklch(0.97 0 0);
+  --text-2: oklch(0.80 0.01 240);
+  --accent: oklch(0.80 0.13 var(--hue));
+  --accent-deep: oklch(0.62 0.13 var(--hue));
+  --on-accent: oklch(0.20 0.03 var(--hue));
+  --add: oklch(0.80 0.14 150);
+  --del: oklch(0.72 0.15 25);
+  color-scheme: dark;
+  scroll-padding: 96px 0;
+  transition: --hue 380ms cubic-bezier(.2, .8, .2, 1);
+}
+
+* { box-sizing: border-box; margin: 0; }
+
+body {
+  background: var(--canvas);
+  color: var(--text);
+  font: 400 16px/1.55 "Hubot Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+
+.skip {
+  position: absolute; left: 16px; top: -64px; z-index: 10;
+  padding: 10px 14px; border-radius: 12px;
+  background: var(--accent); color: var(--on-accent); font-weight: 650; text-decoration: none;
+}
+.skip:focus { top: 16px; }
+
+header {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px;
+  max-width: 1360px; margin: 0 auto; padding: 22px 40px;
+}
+
+.mark {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; font-stretch: 112%; font-size: 20px; letter-spacing: -0.01em; text-decoration: none;
+}
+.mark::before {
+  content: ""; width: 12px; height: 18px; border-radius: 3px 3px 3px 7px; background: var(--accent);
+}
+
+header nav { display: flex; gap: 28px; font-size: 15px; color: var(--text-2); }
+header nav a { display: inline-block; padding: 4px 0; text-decoration: none; }
+header nav a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 4px; }
+
+main { max-width: 1360px; margin: 0 auto; padding: 36px 40px 64px; }
+
+h1 {
+  max-width: 14ch;
+  font-size: clamp(40px, 5.6vw, 84px); line-height: 1;
+  font-weight: 700; font-stretch: 118%; letter-spacing: -0.03em;
+}
+
+.lede { margin-top: 20px; max-width: 52ch; font-size: 19px; color: var(--text-2); }
+
+.rig {
+  display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 24px; margin-top: 44px;
+}
+
+.panel {
+  background: var(--panel); border-radius: 18px; padding: 22px;
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / .06);
+}
+.panel h2 { margin-bottom: 14px; font-size: 15px; font-weight: 600; color: var(--text-2); }
+.panel.out { min-height: 420px; box-shadow: inset 0 1px 0 oklch(1 0 0 / .06), inset 0 3px 0 var(--accent); }
+
+.empty { color: var(--text-2); }
+
+.sr-status {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+footer {
+  max-width: 1360px; margin: 0 auto; padding: 24px 40px 40px;
+  border-top: 1px solid var(--rule); font-size: 14px; color: var(--text-2);
+}
+
+@media (max-width: 900px) {
+  header { padding: 16px; }
+  header nav { gap: 20px; }
+  main { padding: 16px 16px 48px; }
+  .rig { grid-template-columns: minmax(0, 1fr); margin-top: 32px; }
+  .panel.out { min-height: 240px; }
+  footer { padding: 20px 16px 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { transition: none; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}

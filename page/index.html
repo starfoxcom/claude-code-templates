@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bindwright</title>
+<meta name="description" content="Bindwright writes the files that tell Claude Code how your project works.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 24'%3E%3Crect width='16' height='24' rx='4' fill='%2380d08f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hubot+Sans:wdth,wght@75..125,200..900&family=Fragment+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to the setup</a>
+<header>
+  <a class="mark" href="./">Bindwright</a>
+  <nav aria-label="Site">
+    <a href="https://github.com/starfoxcom/claude-code-templates">GitHub</a>
+  </nav>
+</header>
+<main id="main">
+  <h1>House rules for your coding agent.</h1>
+  <p class="lede">Bindwright writes the files that tell Claude Code how your project works.
+    Answer two questions, change what you need, then run one command in your repo.</p>
+  <div class="rig">
+    <section class="panel" aria-labelledby="answers-title">
+      <h2 id="answers-title">Start from</h2>
+      <p class="empty">The two questions go here.</p>
+    </section>
+    <section class="panel out" aria-labelledby="output-title">
+      <h2 id="output-title">Your files</h2>
+      <p class="empty">The files Bindwright writes for your repo show up here.</p>
+    </section>
+  </div>
+  <p class="sr-status" role="status" aria-live="polite"></p>
+</main>
+<footer>
+  <p>Bindwright works with Claude Code. It is not made by, endorsed by or affiliated with Anthropic.</p>
+</footer>
+</body>
+</html>
