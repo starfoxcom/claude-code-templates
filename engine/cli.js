@@ -34,7 +34,9 @@ function option(argv, name) {
 }
 
 async function run(argv) {
-  const flags = ["--code", "--year", "--write", "--update", "--settings", "--export", "--remember", "--layer", "--audit"];
+  const flags = [
+    "--code", "--year", "--write", "--update", "--settings", "--export", "--remember", "--layer", "--audit",
+  ];
   const [code, year, folder, update, settings, exported, remember, layer, audit] = flags.map((n) => option(argv, n));
   const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
   if (update !== undefined) return updateRepo(update);

@@ -25,7 +25,8 @@ const EDITS_FOR_TASKS = 3;
 const COMMIT = /(?:^|[\n;&|(][ \t]*)git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit(?![A-Za-z0-9_-])/;
 const MESSAGE = /[ \t](?:-[A-Za-z]*m|--message)(?:[ \t]+|=)(["'])/;
 const FORMAT = /^(feat|fix|refactor|perf|test|docs|chore|data|style)(\([^() \t]+\))?!?: [^ \t]/;
-const WRITES = /(?:^|[\n;&|(][ \t]*)(?:git[ \t]+commit|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))(?![A-Za-z0-9_-])/;
+const WRITES =
+  /(?:^|[\n;&|(][ \t]*)(?:git[ \t]+commit|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))(?![A-Za-z0-9_-])/;
 const ATTRIBUTION_BLOCK = "BLOCKED (no AI attribution)";
 const CI = /(?:^|[\n;&|(][ \t]*)gh[ \t]+(?:run[ \t]+(?:watch|list|view)|pr[ \t]+checks)(?![A-Za-z0-9_-])/;
 const RUN_WATCH = /(?:^|[\n;&|(][ \t]*)gh[ \t]+run[ \t]+watch(?![A-Za-z0-9_-])/;
@@ -84,7 +85,8 @@ function entries(file) {
   return out;
 }
 
-const stamp = (t) => (/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}/.test(text(t)) ? `${t.slice(0, 10)} ${t.slice(11, 16)}` : "");
+const STAMP = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}/;
+const stamp = (t) => (STAMP.test(text(t)) ? `${t.slice(0, 10)} ${t.slice(11, 16)}` : "");
 
 function resultText(content) {
   if (typeof content === "string") return content;
@@ -166,7 +168,10 @@ const PER_CALL = {
     const m = commitMessage(shell(call));
     return m === null ? null : { broke: !goodCommit(m), shown: m };
   },
-  attribution: (call) => (WRITES.test(unquote(shell(call))) ? { broke: guardBlocked(call.result), shown: shell(call) } : null),
+  attribution: (call) => {
+    const command = shell(call);
+    return WRITES.test(unquote(command)) ? { broke: guardBlocked(call.result), shown: command } : null;
+  },
   "ci-watch": (call) => {
     const plain = unquote(shell(call));
     return CI.test(plain) ? { broke: RUN_WATCH.test(plain), shown: shell(call) } : null;
@@ -246,6 +251,7 @@ function tallySession(session, calls, tallies, research) {
   const edits = calls.filter((c) => EDIT_TOOLS.includes(c.name));
   if (tallies["task-tracking"] && edits.length >= EDITS_FOR_TASKS) {
     const tracked = calls.some((c) => TASK_TOOLS.includes(c.name));
-    count(tallies["task-tracking"], !tracked, { session, when: edits[0].when, text: `${edits.length} edits, no task list` });
+    const example = { session, when: edits[0].when, text: `${edits.length} edits, no task list` };
+    count(tallies["task-tracking"], !tracked, example);
   }
 }

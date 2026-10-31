@@ -19,7 +19,8 @@ const RULES = [".claude/rules/git.md", ".claude/rules/task-tracking.md", ".claud
 
 const use = (id, name, input, at = "2026-10-30T09:15:00.000Z") =>
   ({ type: "assistant", timestamp: at, message: { content: [{ type: "tool_use", id, name, input }] } });
-const result = (id, content) => ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content }] } });
+const result = (id, content) =>
+  ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content }] } });
 const bash = (id, command) => use(id, "Bash", { command });
 const jsonl = (lines) => `${lines.map((l) => (typeof l === "string" ? l : JSON.stringify(l))).join("\n")}\n`;
 
