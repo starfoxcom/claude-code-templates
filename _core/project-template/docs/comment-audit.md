@@ -10,18 +10,17 @@ How to bring the comments of existing code in line with `.claude/rules/clean-cod
 4. Run the guard below, then the full test suite.
 5. One area per PR, so each review stays small.
 
-## The guard: the code stays byte-identical
+## The guard: the code stays the same
 
-A comment pass must not change one character of code. Check it mechanically before committing:
+A comment pass must not change what the code does. Check it before committing:
 
-- Strip the comments from each changed file, before and after, with the language's own tokenizer or compiler (a JavaScript minifier with comments off, `gcc -fpreprocessed -dD -E -P` for C and C++, which keeps `#define` lines), and compare the two results. They must match exactly.
-- Doc comments count as comments here, even where the language stores them as strings. For Python, compare `ast.dump(ast.parse(source))` before and after, with the docstring removed from the module and from every class and function first: `ast` drops `#` comments by itself.
-- Where no tokenizer is handy, check that every line `git diff -U0` adds or removes is a comment line, a docstring line or blank. A short script that fails on any other line is enough; keep it out of the repo.
+- Where the language has a parser or tokenizer at hand, strip the comments from each changed file, before and after, and compare the two results (Python's `ast.dump(ast.parse(source))` drops `#` comments; a JavaScript minifier with comments off; `gcc -fpreprocessed -dD -E -P` for C and C++). A difference means code changed.
+- Then read the whole diff yourself. No script sees everything: a docstring the program reads (help text, a grammar, a doctest), a directive that looks like a comment, a block comment that opens or closes, or a multi-line string can all hide a change.
 
-A diff that fails the guard goes back to step 3: whatever changed in the code moves to its own PR.
+A diff that changes code goes back to step 3: whatever changed in the code moves to its own PR.
 
 ## What stays
 
 - Doc comments on public surface, updated rather than removed.
 - Pointers to real files (`docs/<topic>.md`) where the full story lives.
-- Lint or tool directives that look like comments (`# noqa`, `// eslint-disable-next-line`, `#pragma`). They are code to the tools that read them.
+- Anything a program or tool reads, even when it looks like a comment or docstring: directives (`# noqa`, `// eslint-disable-next-line`, `#pragma`, `//go:embed`), doctest examples, and docstrings used as help text or grammar. They are code to whatever reads them.

@@ -8,7 +8,7 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ### Added
 
-- **A clean-code rule and a comment audit method** (#497). `clean-code.md` sets the readability bar for code files: comments say what the code does now, one line by default, with no history, planning codes or dates; names are spelled out; one job per function; no copies; match the file. The review guide blocks a breach. `docs/comment-audit.md` trims the comments of existing code area by area, with a guard that the code itself stays byte-identical.
+- **A clean-code rule and a comment audit method** (#497). `clean-code.md` sets the readability bar for code files: comments say what the code does now, one line by default, with no history, planning codes or dates; names are spelled out; one job per function; no copies; match the file. The review guide blocks a breach. `docs/comment-audit.md` trims the comments of existing code area by area, with a check that the code itself stays the same.
 
 - **A security rule and posture template** (#495). Every setup ships `.claude/rules/security.md`: nothing secret ships, every shipped artifact is assumed readable, reverse engineering included, secrets live server-side or in the platform's secret store, a leaked secret is rotated first, and downloads and plugins are parsed as untrusted input. `docs/security-posture.md` is the fill-in record it points to: threats ranked by cost, a credential inventory, account hardening, what ships in each build, export-time hardening and download trust boundaries.
 

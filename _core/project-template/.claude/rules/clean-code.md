@@ -23,7 +23,7 @@ Before committing, read the change as someone who knows the product but none of 
 ## Names
 
 - Spell names out where a full word fits: `chunk_coord`, not `cc`. Domain-standard short forms stay: `x`, `y`, `i`, `j`, `dx`, and the symbols of a formula its header defines.
-- No planning codes in code: milestone or slice tags, issue or PR numbers, dates and review-round references never appear in comments, identifiers or strings. One exception: a skipped test or a temporary workaround links the issue that tracks its removal. Name a system by what it does. Real file paths are fine; they are pointers, not tags.
+- No planning codes in code: milestone or slice tags, issue or PR numbers, dates that tag when work happened, and review-round references never appear in comments, identifiers or strings. One exception: a skipped test or a temporary workaround links the issue that tracks its removal. Name a system by what it does. Real file paths are fine; they are pointers, not tags.
 - Booleans read as questions (`is_loaded`, `has_mesh`), functions as verbs (`build_mesh`), and one concept keeps one name across files.
 
 ## Structure
