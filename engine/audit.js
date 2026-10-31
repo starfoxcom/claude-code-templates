@@ -24,7 +24,10 @@ const EDITS_FOR_TASKS = 3;
 // command counts only where it starts a line or follows ; & | or (, so a
 // search or a message that merely names it does not.
 const COMMIT = /(?:^|[\n;&|(][ \t]*)git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit(?![A-Za-z0-9_-])/;
-const MESSAGE = /[ \t](?:-[A-Za-z]*m|--message)(?:[ \t]+|=)(["'])/;
+const MESSAGE = /[ \t](?:-[A-Za-z]*m|--message)(?:[ \t]+|=)@?(["'])/;
+// A PowerShell here-string opens with @' or @" at a line's end and closes at a
+// line that starts with '@ or "@.
+const HERESTRING = /^@(['"])[ \t]*\r?$/;
 const FORMAT = /^(feat|fix|refactor|perf|test|docs|chore|data|style)(\([^() \t]+\))?!?: [^ \t]/;
 const WRITES = new RegExp(String.raw`(?:^|[\n;&|(][ \t]*)(?:git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit`
   + String.raw`|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))(?![A-Za-z0-9_-])`);
@@ -158,6 +161,11 @@ function unquoteLine(line, state) {
       continue;
     }
     if (state.quote === null && ch === "#" && wordStart(line, i)) return out + blank(line.slice(i));
+    const here = !state.bash && state.quote === null ? HERESTRING.exec(line.slice(i)) : null;
+    if (here) {
+      state.heredocs.push({ word: `${here[1]}@`, start: true });
+      return out + line.slice(i);
+    }
     const heredoc = heredocAt(line, i, state);
     if (heredoc) {
       state.heredocs.push({ word: heredoc[2] ?? heredoc[3] ?? heredoc[4], tabs: heredoc[1] === "-" });
@@ -186,8 +194,9 @@ function unquote(command, esc = "\\") {
     let out;
     if (state.heredocs.length) {
       out = blank(line);
-      const { word, tabs } = state.heredocs[0];
-      if ((tabs ? line.replace(/^\t+/, "") : line).replace(/\r$/, "") === word) state.heredocs.shift();
+      const { word, tabs, start } = state.heredocs[0];
+      const body = (tabs ? line.replace(/^\t+/, "") : line).replace(/\r$/, "");
+      if (start ? body.startsWith(word) : body === word) state.heredocs.shift();
     } else {
       out = unquoteLine(line, state);
     }
@@ -209,8 +218,9 @@ export function commitMessage(command, esc = "\\") {
   const m = MESSAGE.exec(command.slice(at, end === -1 ? command.length : at + found[0].length + end));
   if (m === null) return null;
   const start = at + m.index + m[0].length;
-  // A heredoc message, `-m "$(cat <<'EOF'`, starts on the next line.
-  if (esc === "\\" && m[1] === '"' && command.startsWith("$(cat <<", start)) {
+  // A heredoc message, `-m "$(cat <<'EOF'`, or a here-string, `-m @'`, starts on the next line.
+  const here = esc !== "\\" && command[start - 2] === "@";
+  if (here || (esc === "\\" && m[1] === '"' && command.startsWith("$(cat <<", start))) {
     return (command.slice(start).split("\n")[1] ?? "").replace(/\r$/, "");
   }
   const message = quoted(command, start, m[1], esc);

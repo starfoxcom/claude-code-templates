@@ -18,7 +18,8 @@ TASK_TOOLS = ("TaskCreate", "TodoWrite")
 EDITS_FOR_TASKS = 3
 
 COMMIT = re.compile(r"(?:^|[\n;&|(][ \t]*)git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit(?![A-Za-z0-9_-])")
-MESSAGE = re.compile(r"[ \t](?:-[A-Za-z]*m|--message)(?:[ \t]+|=)([\"'])")
+MESSAGE = re.compile(r"[ \t](?:-[A-Za-z]*m|--message)(?:[ \t]+|=)@?([\"'])")
+HERESTRING = re.compile(r"@(['\"])[ \t]*\r?")
 FORMAT = re.compile(r"(feat|fix|refactor|perf|test|docs|chore|data|style)(\([^() \t]+\))?!?: [^ \t]")
 WRITES = re.compile(r"(?:^|[\n;&|(][ \t]*)(?:git[ \t]+(?:-C[ \t]+[^ \t\r\n]+[ \t]+)?commit"
                     r"|gh[ \t]+(?:pr|issue)[ \t]+(?:create|edit|comment))(?![A-Za-z0-9_-])")
@@ -167,10 +168,14 @@ def _unquote_line(line, state):
             continue
         if state["quote"] is None and ch == "#" and _word_start(line, i):
             return "".join(out) + _blank(line[i:])
+        here = HERESTRING.fullmatch(line, i) if not state["bash"] and state["quote"] is None else None
+        if here:
+            state["heredocs"].append((here.group(1) + "@", False, True))
+            return "".join(out) + line[i:]
         heredoc = _heredoc_at(line, i, state)
         if heredoc:
             word = heredoc.group(2) or heredoc.group(3) or heredoc.group(4)
-            state["heredocs"].append((word, heredoc.group(1) == "-"))
+            state["heredocs"].append((word, heredoc.group(1) == "-", False))
             out.append(heredoc.group(0))
             i = heredoc.end()
             continue
@@ -195,9 +200,10 @@ def _unquote(command, esc="\\"):
     for k, line in enumerate(lines):
         if state["heredocs"]:
             out.append(_blank(line))
-            word, tabs = state["heredocs"][0]
+            word, tabs, start = state["heredocs"][0]
             body = line.lstrip("\t") if tabs else line
-            if (body[:-1] if body.endswith("\r") else body) == word:
+            body = body[:-1] if body.endswith("\r") else body
+            if body.startswith(word) if start else body == word:
                 state["heredocs"].pop(0)
         else:
             out.append(_unquote_line(line, state))
@@ -220,7 +226,8 @@ def commit_message(command, esc="\\"):
     if m is None:
         return None
     start = at + m.end()
-    if esc == "\\" and m.group(1) == '"' and command.startswith("$(cat <<", start):
+    here = esc != "\\" and command[start - 2:start - 1] == "@"
+    if here or (esc == "\\" and m.group(1) == '"' and command.startswith("$(cat <<", start)):
         lines = command[start:].split("\n")
         first = lines[1] if len(lines) > 1 else ""
         return first[:-1] if first.endswith("\r") else first
