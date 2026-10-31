@@ -41,10 +41,11 @@ def issue_command(args):
         if repo["next"] + 1 in state.get("fail_create", []):
             state["fail_create"].remove(repo["next"] + 1)
             raise SystemExit("gh issue create failed: network down")
-        repo["next"] += 1
+        repo["next"] = max(repo["next"], newest(args[args.index("--repo") + 1])) + 1
         n = repo["next"]
         repo["issues"][str(n)] = {"id": "pub-%d" % n, "number": n, "title": title, "body": body,
-                                  "state": "OPEN", "stateReason": None, "parent": None}
+                                  "state": "OPEN", "stateReason": None, "parent": None,
+                                  "author": {"login": "me"}}
         writes.append("create %d" % n)
         return "https://github.com/x/y/issues/%d" % n
     issue = repo["issues"][args[2]]
@@ -75,7 +76,7 @@ def graphql(args):
         writes.append("reopen %d" % issue["number"])
     elif "addSubIssue" in q:
         child, parent = find(v["c"]), find(v["p"])
-        child["parent"] = {"number": parent["number"]}
+        child["parent"] = {"number": parent["number"], "repository": {"nameWithOwner": "me/public"}}
         writes.append("link %d %d" % (child["number"], parent["number"]))
     elif "removeSubIssue" in q:
         child = find(v["c"])
@@ -85,9 +86,17 @@ def graphql(args):
         raise SystemExit("unexpected query: " + q[:60])
     return json.dumps({"data": {}})
 
+def newest(name):
+    repo = state["repos"][name]
+    return max([int(k) for k in repo["issues"]] + repo.get("prs", []) + [0])
+
 def fake_gh(args):
     if args[:2] == ["repo", "view"]:
         return "me/private\\n"
+    if args[:2] == ["api", "user"]:
+        return "me\\n"
+    if args[0] == "api" and args[1].startswith("repos/"):
+        return "%d\\n" % newest(args[1].split("/issues")[0][len("repos/"):])
     return issue_command(args) if args[0] == "issue" else graphql(args)
 
 tool.run_gh = fake_gh
@@ -104,6 +113,7 @@ sys.exit(code)
 
 const issue = (number, title, body, extra = {}) =>
   ({ id: `priv-${number}`, number, title, body, state: "OPEN", stateReason: null, parent: null, ...extra });
+const under = (number, repo = "me/private") => ({ number, repository: { nameWithOwner: repo } });
 const summary = (text) => `## What\nInternal notes.\n\n### Public summary\n${text}\n\n### Current state\nWorking.\n`;
 
 function scene(privateIssues, settings = {}) {
@@ -128,7 +138,7 @@ function scene(privateIssues, settings = {}) {
   const read = () => JSON.parse(readFileSync(join(root, "state.json"), "utf8")).repos;
   const edit = (change, failCreate = []) => {
     const repos = read();
-    change(repos["me/private"].issues);
+    change(repos["me/private"].issues, repos["me/public"]);
     writeFileSync(join(root, "state.json"), JSON.stringify({ repos, fail_create: failCreate }));
   };
   return { run, read, edit };
@@ -142,6 +152,7 @@ test("check names every contract break and leaves summary-less issues private", 
       "Uses `syncAll` from docs/sync/plan.md, see PR #12 and #2.\nTuned to 3.14 by Claude.")),
     issue(4, "Retries",
       summary("Raised MAX_RETRIES in 3f9a2c1, see https://intra.example/x and acme/app#12, ask @dana.")),
+    issue(5, "Drafts", summary("Drafted with ChatGPT, then moved into player.gd.")),
   ], { hidden: ["Falcon"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
@@ -152,7 +163,8 @@ test("check names every contract break and leaves summary-less issues private", 
     "#3 summary: AI or review wording ('Claude')", "#3 summary: points at #2, which stays private",
     "#3 summary: points at #12, which stays private", "#4 summary: link ('https://')",
     "#4 summary: commit ('3f9a2c1')", "#4 summary: identifier ('MAX_RETRIES')",
-    "#4 summary: reference ('acme/app#12')", "#4 summary: mention ('@dana')"]) {
+    "#4 summary: reference ('acme/app#12')", "#4 summary: mention ('@dana')",
+    "#5 summary: AI or review wording ('ChatGPT')", "#5 summary: path ('player.gd')"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
   assert.ok(!/#1 |#2 /.test(text.replace(/#12/g, "")), text);
@@ -172,7 +184,7 @@ test("push mirrors summaries under the same numbers, then has nothing left to do
     issue(1, "Falcon checkout", summary("One-step checkout for Falcon.")),
     issue(3, "Internal cleanup", "## What\nPrivate.\n"),
     issue(4, "Gift cards", summary("Pay with a gift card."),
-      { state: "CLOSED", stateReason: "COMPLETED", parent: { number: 1 } }),
+      { state: "CLOSED", stateReason: "COMPLETED", parent: under(1) }),
     issue(6, "Wish lists", summary("Save items for later, part of #1.")),
   ], { rename: { Falcon: "the shop" } });
   const out = s.run("push");
@@ -183,7 +195,7 @@ test("push mirrors summaries under the same numbers, then has nothing left to do
   assert.equal(pub["1"].body.trim(), "One-step checkout for the shop.");
   assert.equal(pub["4"].state, "CLOSED");
   assert.equal(pub["4"].stateReason, "COMPLETED");
-  assert.deepEqual(pub["4"].parent, { number: 1 });
+  assert.deepEqual(pub["4"].parent, under(1, "me/public"));
   for (const n of [2, 3, 5]) assert.ok(out.writes.includes(`delete pub-${n}`), out.writes.join(", "));
   assert.ok(!JSON.stringify(pub).includes("Internal"));
 
@@ -226,7 +238,7 @@ test("a summary added to an issue whose number was skipped is refused, not a cra
   const out = s.run("push");
   assert.equal(out.status, 1, out.stderr);
   assert.deepEqual(out.writes, []);
-  assert.match(out.lines.join("\n"), /#2 cannot go public: the public side skipped its number before/);
+  assert.match(out.lines.join("\n"), /#2 cannot go public: its public number is already used/);
 });
 
 test("a push that stops halfway leaves its placeholders, and the next one carries on", { skip }, () => {
@@ -248,7 +260,7 @@ test("a push that stops halfway leaves its placeholders, and the next one carrie
 test("reopened and duplicate issues settle, and an unlinked child leaves its public parent", { skip }, () => {
   const s = scene([
     issue(1, "Parent", summary("The parent.")),
-    issue(2, "Child", summary("The child."), { parent: { number: 1 } }),
+    issue(2, "Child", summary("The child."), { parent: under(1) }),
     issue(3, "Again", summary("Reopened once."), { stateReason: "REOPENED" }),
     issue(4, "Twin", summary("A duplicate."), { state: "CLOSED", stateReason: "DUPLICATE" }),
   ]);
@@ -265,4 +277,29 @@ test("reopened and duplicate issues settle, and an unlinked child leaves its pub
   });
   assert.equal(s.run("push").status, 0);
   assert.deepEqual(s.run("push").writes, []);
+});
+
+test("outside issues and pull requests on the public side are never touched, only counted", { skip }, () => {
+  const s = scene([issue(1, "A", summary("First.")), issue(3, "C", "## What\nPrivate.\n"),
+    issue(4, "D", summary("Fourth."), { parent: under(1, "acme/epics") })]);
+  assert.equal(s.run("push").status, 0);
+  // An outsider opens #5 (an issue) and #6 (a pull request) on the public repo.
+  s.edit((issues, pub) => {
+    pub.issues["5"] = { ...issue(5, "placeholder", "placeholder\n"), id: "out-5", author: { login: "someone" } };
+    pub.prs = [6];
+    issues["6"] = issue(6, "F", summary("Sixth."));
+    issues["7"] = issue(7, "G", summary("Seventh."));
+  });
+  const blocked = s.run("push");
+  assert.equal(blocked.status, 1);
+  assert.match(blocked.lines.join("\n"), /#6 cannot go public: its public number is already used/);
+  s.edit((issues) => { delete issues["6"]; });
+  const out = s.run("push");
+  assert.equal(out.status, 0, out.stderr);
+  const pub = s.read()["me/public"].issues;
+  assert.equal(pub["5"].author.login, "someone");
+  assert.equal(pub["5"].title, "placeholder");
+  assert.equal(pub["7"].title, "G");
+  // A parent in another repo is no parent here.
+  assert.equal(pub["4"].parent, null);
 });

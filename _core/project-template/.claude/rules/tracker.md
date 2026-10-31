@@ -42,6 +42,7 @@ The update's own status field matches its Health line. Root causes, file names a
 - An issue goes public only when its body has a `### Public summary` section, written for outsiders. That section becomes the public body under the same number, and the title goes with it. Every other issue stays private.
 - GitHub never reuses an issue number, and the public side skips each private number below its newest item. So give an issue its summary before a later issue goes public; afterwards `check` reports it as unable to go public.
 - The public text carries no history, code, file paths, links, commit hashes, references to other repos, @mentions, branch or pull request references, identifiers, tuning constants, links to private issues, or wording about AI models and code review. The tool refuses such text, but its patterns are a safety net, not a review: write each summary for outsiders from scratch instead of pasting internal notes.
+- Anyone can open issues and pull requests in a public repo. The tool never edits them, but each one takes a number, and `check` reports a private item whose number is taken. Turn off issues in the public repo's settings, and point people to its discussions instead.
 - Deleting an issue's public summary withdraws it: the public item is blanked and closed.
 - `.github/public-roadmap.json` holds the rest: `rename` maps internal names to public ones, `hidden` lists names that must never appear, `project` is the public board's number (or `null` for none), and `fields` names the board fields copied from the private board.
 

@@ -33,9 +33,10 @@ SUMMARY = "### Public summary"
 RATE_LIMIT_WORDS = ("rate limit", "too quickly", "abuse")
 
 UNITS = r"\s*(%|ms\b|s\b|fps\b|[KMGT]B\b|x\b|×|seconds?\b|minutes?\b|hours?\b|days?\b|times\b)"
-EXTENSIONS = r"(py|js|mjs|ts|tsx|jsx|md|json|ya?ml|toml|sh|ps1|go|rs|java|kt|cs|cpp|h|rb|php|sql)"
+EXTENSIONS = (r"(py|js|mjs|cjs|ts|tsx|jsx|md|json|ya?ml|toml|ini|cfg|xml|txt|lock|sh|ps1|go|rs|java"
+              r"|kts?|cs|c|cc|cpp|h|hpp|swift|dart|gd|lua|rb|php|sql|html|css|scss)")
 # How the work is done (AI models, code review, its plumbing) never goes public.
-AI_PROCESS = (r"\b(Claude|Fable|Opus|Sonnet|Haiku|Anthropic|OpenAI|GPT|Copilot|Gemini|LLMs?"
+AI_PROCESS = (r"\b(Claude|Fable|Opus|Sonnet|Haiku|Anthropic|OpenAI|ChatGPT|GPT(-?\d\w*)?|Copilot|Gemini|LLMs?"
               r"|language models?|AI[- ](models?|reviews?|reviewers?|tools?|assistants?|agents?"
               r"|written|generated)|code reviews?|deep[- ]reviews?|review (tiers?|gates?|bots?"
               r"|rounds?)|reviewers?)\b")
@@ -60,7 +61,8 @@ CONTRACT = [
 ISSUES = """query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) { issues(first: 50, after: $cursor) {
     pageInfo { hasNextPage endCursor }
-    nodes { id number title body state stateReason parent { number } } } } }"""
+    nodes { id number title body state stateReason author { login }
+      parent { number repository { nameWithOwner } } } } } }"""
 ITEMS = """query($owner: String!, $number: Int!, $cursor: String) {
   repositoryOwner(login: $owner) { ... on ProjectV2Owner { projectV2(number: $number) {
     id items(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor }
@@ -110,8 +112,13 @@ def paginate(query: str, path: tuple[str, ...], **variables) -> tuple[list[dict]
 
 
 def fetch_issues(repo: str) -> dict[int, dict]:
+    """A repo's issues by number; a parent in another repo counts as no parent."""
     owner, name = repo.split("/")
     nodes, _ = paginate(ISSUES, ("repository", "issues"), owner=owner, name=name)
+    for node in nodes:
+        parent = node.get("parent") or {}
+        if (parent.get("repository") or {}).get("nameWithOwner") != repo:
+            node["parent"] = None
     return {node["number"]: node for node in nodes}
 
 
@@ -210,22 +217,36 @@ class PublicSync:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.repo = run_gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).strip()
+        self.me = run_gh(["api", "user", "-q", ".login"]).strip()
         self.private = fetch_issues(self.repo)
-        self.public = fetch_issues(settings.public_repo)
+        self.read_public()
         self.wanted: dict[int, tuple[str, str]] = {}
         for number, issue in sorted(self.private.items()):
             summary = summary_of(issue["body"])
             if summary is not None:
                 text = settings.public_text
                 self.wanted[number] = (text(issue["title"]), text(summary) + "\n")
-        # GitHub never reuses a number, so a summary added to an issue whose
-        # number the public side already skipped can never go public.
-        highest = max([*self.public, 0])
-        self.lost = sorted(n for n in self.wanted if n < highest and n not in self.public)
+        # GitHub never reuses a number, so an issue whose public number is already
+        # used (skipped before, or taken by an outside issue or pull request) can
+        # never go public.
+        self.lost = sorted(n for n in self.wanted if n <= self.highest and n not in self.public)
+
+    def read_public(self) -> None:
+        """The public items this tool wrote, and the newest number used there by anyone.
+
+        Anyone can open issues and pull requests in a public repo. The tool never
+        touches those; they only take up numbers.
+        """
+        repo = self.settings.public_repo
+        issues = fetch_issues(repo)
+        self.public = {n: i for n, i in issues.items() if (i.get("author") or {}).get("login") == self.me}
+        newest = run_gh(["api", f"repos/{repo}/issues?state=all&per_page=1", "-q", ".[0].number // 0"])
+        self.highest = max([*issues, int(newest.strip() or 0)])
 
     def problems(self) -> list[str]:
-        lines = [f"#{n} cannot go public: the public side skipped its number before, and GitHub"
-                 " never reuses one. Remove its summary, or open a new issue for it." for n in self.lost]
+        lines = [f"#{n} cannot go public: its public number is already used (skipped before, or an"
+                 " outside issue or pull request), and GitHub never reuses one. Remove its summary,"
+                 " or open a new issue for it." for n in self.lost]
         public = set(self.wanted) - set(self.lost)
         for number, (title, body) in self.wanted.items():
             lines += [f"#{number} title: {p}" for p in contract_breaks(title, self.settings, public)]
@@ -234,7 +255,7 @@ class PublicSync:
 
     def push(self) -> None:
         self.create_missing()
-        self.public = fetch_issues(self.settings.public_repo)
+        self.read_public()
         self.drop_placeholders()
         self.withdraw()
         self.update_texts()
@@ -251,13 +272,14 @@ class PublicSync:
         have gone, and the next run carries on from there.
         """
         repo = self.settings.public_repo
-        for number in range(max([*self.public, 0]) + 1, max([*self.wanted, 0]) + 1):
+        for number in range(self.highest + 1, max([*self.wanted, 0]) + 1):
             title, body = self.wanted.get(number, PLACEHOLDER)
             url = with_body_file(body, ["issue", "create", "--repo", repo, "--title", title])
             created = int(url.strip().rsplit("/", 1)[1])
             if created != number:
-                raise SystemExit(f"public numbers drifted: wanted #{number}, GitHub made #{created}."
-                                 " The public repo must hold only items this tool made.")
+                raise SystemExit(f"public numbers drifted: wanted #{number}, GitHub made #{created}:"
+                                 " someone opened an issue or pull request there meanwhile."
+                                 " Run push again.")
             print(f"created #{number}")
 
     def drop_placeholders(self) -> None:
