@@ -121,7 +121,8 @@ test("without a board, a roadmap out of shape is named and a tidy one passes", n
   });
   const roadmap = async (text) => (await withRoadmap(text)).checks.find((c) => c.id === "roadmap");
   assert.equal((await roadmap(null)).ok, true);
-  const tidy = "# Roadmap\n\nNext id: R4\n\n## Now\n- R3 Checkout (branch feature/checkout)\n\n## Later\n- R1 Gift cards\n";
+  const tidy = "# Roadmap\n\nNext id: R4\n\n"
+    + "## Now\n- R3 Checkout (branch feature/checkout)\n\n## Later\n- R1 Gift cards\n";
   assert.equal((await roadmap(tidy)).ok, true);
   const now = Array.from({ length: 6 }, (_, i) => `- R${i + 1} Item`).join("\n");
   const messy = `Next id: R3\n\n## Now\n${now}\n\n## Next\n- Saved carts\n- R2 Twice\n`;
