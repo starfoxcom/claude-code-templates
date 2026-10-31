@@ -82,7 +82,7 @@ Built in visual slices of about 150 lines each, checked locally by the maintaine
 - [ ] Shell, tokens, fonts, header, theme.
 - [ ] Two-question picker with key controls and the hue accent.
 - [ ] Live file tree and file preview driven by the renderer.
-- [ ] Demo project (`demo/`): a small TypeScript app with one planted problem per rule that has a visible effect.
+- [x] Demo project (`demo/`): a small TypeScript app with one planted problem per rule that has a visible effect. The list of planted problems lives in `recordings/planted.json`, outside `demo/`, so a recorded session cannot read it; `engine/test/demo.test.js` fails when one is no longer there.
 - [ ] Recording harness: headless Claude Code runs per scenario, with and without Bindwright, saved as sanitized replay data with the staleness hash test.
 - [ ] Demo pane: before and after diffs per setting.
 - [ ] Terminal pane: scenario picker and replay of recorded sessions.
