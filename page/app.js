@@ -346,10 +346,10 @@ $("tree").addEventListener("click", (event) => {
 // rebuilt, so the summary's cards keep their place and do not rise again.
 function setFilesView(open) {
   const view = open ? "files" : "overview";
-  const files = $("files");
+  const panel = $("files");
   const groups = $("groups");
-  if (files.classList.contains("away") === open) {
-    const [leaving, arriving] = open ? [groups, files] : [files, groups];
+  if (panel.classList.contains("away") === open) {
+    const [leaving, arriving] = open ? [groups, panel] : [panel, groups];
     leaving.classList.remove("arrive");
     leaving.classList.add("away", "leave");
     arriving.classList.remove("away", "leave");
