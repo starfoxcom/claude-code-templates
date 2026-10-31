@@ -73,6 +73,8 @@ h1 {
 .lede { margin-top: 22px; max-width: 46ch; font-size: 19px; color: var(--text-2); }
 
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; margin-top: 34px; }
+.source { font-size: 14px; color: var(--text-2); text-underline-offset: 4px; }
+.source:hover { color: var(--text); }
 
 .go {
   display: inline-flex; align-items: center; min-height: 52px; padding: 0 26px;
