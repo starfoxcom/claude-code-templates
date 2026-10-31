@@ -20,7 +20,7 @@ export const PERSONAL = "bindwright/settings.json";
 
 // The extras setup offers for ~/.claude, by the file that shows each is there.
 const GUARD_FILES = { "attribution-guard": "hooks/no-ai-attribution.py", "push-guard": "hooks/push-guard.py" };
-const MODS = [
+export const MODS = [
   "ci-watch", "compact-handoff", "mods", "runners", "session-facts",
   "session-info", "shared-pc", "skill-check", "tasks", "usage-guard",
 ];

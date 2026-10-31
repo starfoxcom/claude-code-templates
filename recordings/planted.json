@@ -1,0 +1,61 @@
+{
+  "about": "The problems planted in demo/ on purpose, one per rule with a visible effect on the code. Kept outside demo/ so a recorded session cannot read them. `evidence` is a regex that matches the planted code while it is still there.",
+  "planted": [
+    {
+      "id": "long-function",
+      "rule": "code-size",
+      "setting": null,
+      "file": "demo/src/split.ts",
+      "problem": "splitBill parses, validates, loads currencies, rounds and formats in one 62-line function, past the 50-line soft limit.",
+      "evidence": "export function splitBill\\(json: string\\): Split \\{"
+    },
+    {
+      "id": "copied-test",
+      "rule": "testing",
+      "setting": null,
+      "file": "demo/test/split.test.ts",
+      "problem": "The test works out the expected share with the app's own formula, so it checks the copy against itself, and it has no edge cases.",
+      "evidence": "Work out the expected share the same way the app does"
+    },
+    {
+      "id": "lost-cent",
+      "rule": "testing",
+      "setting": null,
+      "file": "demo/src/split.ts",
+      "problem": "Each share is rounded on its own, so the shares can add up to a cent more or less than the total (examples/dinner.json: $53.70 against $53.69). An edge-case table finds it.",
+      "evidence": "shares\\[person\\] = Math\\.round\\(subtotals\\[person\\] \\* tip \\* factor\\) / factor"
+    },
+    {
+      "id": "domain-reads-files",
+      "rule": "architecture",
+      "setting": "architecture",
+      "file": "demo/src/split.ts",
+      "problem": "The splitting logic reads the currency table from disk itself, so it cannot be tested or reused without the file system.",
+      "evidence": "readFileSync\\(new URL\\(\"\\.\\./data/currencies\\.json\""
+    },
+    {
+      "id": "duplicate-formatter",
+      "rule": "visual",
+      "setting": "uiRule",
+      "file": "demo/src/split.ts",
+      "problem": "splitBill builds its own table and money text instead of using formatTable and formatMoney from format.ts, and skips their thousands separators.",
+      "evidence": "lines\\.push\\(`\\$\\{name\\.padEnd\\(width\\)\\}"
+    },
+    {
+      "id": "dead-code",
+      "rule": "git",
+      "setting": null,
+      "file": "demo/src/legacy.ts",
+      "problem": "roundHalfUp and roundAll have no callers left.",
+      "evidence": "export function roundAll"
+    },
+    {
+      "id": "filler-copy",
+      "rule": "shipped-text",
+      "setting": "plainWriting",
+      "file": "demo/README.md",
+      "problem": "The README uses em dashes, filler words (robust, seamless, comprehensive, leverages, empowers) and \"not just X, it's Y\".",
+      "evidence": "robust, seamless way to split a restaurant bill —"
+    }
+  ]
+}

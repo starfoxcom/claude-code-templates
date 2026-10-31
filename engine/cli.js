@@ -9,11 +9,12 @@
 //   node engine/cli.js --audit DIR                   -> how its rules held up in recent sessions (audit.js)
 //   node engine/cli.js --export DIR < choices.json   -> the project's setup object written (share.js)
 //   node engine/cli.js --remember DIR --layer L < choices.json -> one person's choices written to layer L
+//   node engine/cli.js --doctor DIR                  -> a health check of that repo and this machine (doctor.js)
 // A failure gives {"error": message} and exit status 1.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind } from "./bind.js";
 import { MAX_DEPTH, decodeSetupCode, depthOf } from "./setupcode.js";
@@ -22,6 +23,8 @@ import { decode, runUpdate } from "./update.js";
 import { runSettings } from "./layers.js";
 import { runAudit } from "./audit.js";
 import { exportSetup, rememberChoices } from "./share.js";
+import { cliVersionFrom, runDoctor } from "./doctor.js";
+import { draftReport } from "./report.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -35,10 +38,14 @@ function option(argv, name) {
 
 async function run(argv) {
   const flags = [
-    "--code", "--year", "--write", "--update", "--settings", "--export", "--remember", "--layer", "--audit",
+    "--code", "--year", "--write", "--update", "--settings",
+    "--export", "--remember", "--layer", "--doctor", "--report", "--audit",
   ];
-  const [code, year, folder, update, settings, exported, remember, layer, audit] = flags.map((n) => option(argv, n));
+  const [code, year, folder, update, settings, exported, remember, layer, doctor, report, audit] =
+    flags.map((n) => option(argv, n));
   const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  if (report !== undefined) return reportRepo(report, config);
+  if (doctor !== undefined) return doctorRepo(doctor, config);
   if (update !== undefined) return updateRepo(update);
   if (settings !== undefined) return runSettings(settings, config);
   if (audit !== undefined) return runAudit(audit, config);
@@ -56,6 +63,22 @@ async function run(argv) {
   const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year), version });
   const files = [...bound.entries()];
   return folder === undefined ? { files } : applyFiles(files, folder, { adopt });
+}
+
+// A scrubbed bug report for the repo at `folder`, from { title, command, error, expected } on stdin.
+function reportRepo(folder, config) {
+  const what = JSON.parse(readFileSync(0, "utf8"));
+  const pluginVersion = readFileSync(join(root, "VERSION"), "utf8").trim().replace(/^v+/, "");
+  const cliVersion = cliVersionFrom(process.env.AI_AGENT);
+  const facts = { pluginVersion, cliVersion, os: process.platform, engine: "node" };
+  const who = { repo: resolve(folder), home: homedir(), user: process.env.USERNAME || process.env.USER || "" };
+  return draftReport(folder, config, what, facts, who);
+}
+
+// The doctor, for the CLI this session runs (its AI_AGENT) and this plugin's VERSION.
+function doctorRepo(folder, config) {
+  const pluginVersion = readFileSync(join(root, "VERSION"), "utf8").trim().replace(/^v+/, "");
+  return runDoctor(folder, config, { pluginVersion, cliVersion: cliVersionFrom(process.env.AI_AGENT) });
 }
 
 // The choices /bindwright:export and /bindwright:join pass on standard input.
