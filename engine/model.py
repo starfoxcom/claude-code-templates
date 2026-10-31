@@ -121,6 +121,7 @@ def defaults(team=False, client=False):
             # "<owner>/<number>" when tracker is "github" and the project has a
             # board; None keeps project status in a pinned issue instead.
             "trackerProject": None,
+            "handoffFile": True,
         },
     }
 
@@ -170,7 +171,7 @@ def validate(a):
     project = a["project"]
     get = lambda d, k: d.get(k, UNDEFINED)
     _check(_is_bool(get(a, "team")) and _is_bool(get(a, "client")), "team and client must be true or false")
-    switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck"]
+    switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck", "handoffFile"]
     for key in switches:
         _check(_is_bool(get(adv, key)), key + " must be true or false")
     name = get(project, "name")
@@ -232,6 +233,7 @@ def flags_for(a):
         "attribution_guard": adv["attributionGuard"],
         "deny_list_strict": adv["denyProfile"] == "strict",
         "code_size_check": adv["codeSizeCheck"],
+        "handoff_file": adv["tracker"] == "github" and adv["handoffFile"],
         "contributing_md": a["team"],
         "audit_trail_commits": a["client"],
         "definition_of_done_verification": True,

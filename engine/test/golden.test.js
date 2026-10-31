@@ -38,7 +38,7 @@ function oneAtATime() {
   };
   const switches = [
     "aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting",
-    "devIsDefault", "attributionGuard", "codeSizeCheck",
+    "devIsDefault", "attributionGuard", "codeSizeCheck", "handoffFile",
   ];
   const cases = [];
   for (const team of [false, true]) {
@@ -89,7 +89,7 @@ function seeded(count) {
     a.project.license = pick(Object.keys(LICENSES));
     Object.assign(a.advanced, {
       aiReview: bool(), deepEscalation: bool(), uiRule: bool(), confidentiality: bool(), cleanRoom: bool(), plainWriting: bool(),
-      devIsDefault: bool(), attributionGuard: bool(), codeSizeCheck: bool(),
+      devIsDefault: bool(), attributionGuard: bool(), codeSizeCheck: bool(), handoffFile: bool(),
       codeResearch: pick(Object.keys(CODE_RESEARCH_TOOLS)), precommit: pick(["none", ...PRECOMMIT_MANAGERS]),
       architecture: pick(ARCHITECTURES), branching: pick(["gitflow", "trunk"]), mergeStyle: pick(MERGE_STYLES),
       hookLocation: pick(HOOK_LOCATIONS), denyProfile: pick(DENY_PROFILES),
@@ -143,6 +143,7 @@ function refused() {
     (a) => { a.advanced.attributionGuard = null; },
     (a) => { a.advanced.codeSizeCheck = "on"; },
     (a) => { delete a.advanced.codeSizeCheck; },
+    (a) => { a.advanced.handoffFile = 1; },
     (a) => { a.advanced.denyProfile = "paranoid"; },
     (a) => { a.advanced.shippedTextPaths = []; },
     (a) => { a.advanced.shippedTextPaths = ["﻿docs/**"]; },
