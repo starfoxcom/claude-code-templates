@@ -35,17 +35,12 @@ function spellings(path) {
 }
 
 // The engines print JSON as ASCII, so a non-ASCII letter may arrive escaped:
-// a backslash, a u and four hex digits. scrub reads those back into letters
-// first, so every pattern below meets one form of each letter. Escapes of
-// ASCII characters and lone surrogates stay as they are.
-const ESCAPED = /\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})|\\u([0-9a-fA-F]{4})/g;
-function unescapeLetters(text) {
-  return text.replace(ESCAPED, (all, high, low, one) => {
-    if (high) return String.fromCharCode(parseInt(high, 16), parseInt(low, 16));
-    const unit = parseInt(one, 16);
-    return unit < 0x80 || (unit >= 0xd800 && unit <= 0xdfff) ? all : String.fromCharCode(unit);
-  });
-}
+// a backslash, a u and four hex digits per UTF-16 unit. anyCase lets each such
+// letter match in either form, so the text itself is never rewritten.
+const hexAnyCase = (unit) => [...unit.toString(16).padStart(4, "0")]
+  .map((d) => (/[a-f]/.test(d) ? `[${d}${d.toUpperCase()}]` : d)).join("");
+const escaped = (form) => Array.from({ length: form.length },
+  (_, i) => `\\\\[uU]${hexAnyCase(form.charCodeAt(i))}`).join("");
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -58,29 +53,19 @@ const PINNED = ["Iiİı", "Σςσ"];
 function anyCase(s) {
   return [...s].map((c) => {
     const pinned = PINNED.find((group) => group.includes(c));
-    if (pinned) return `[${pinned}]`;
-    const forms = [...new Set([c, c.toLowerCase(), c.toUpperCase()])].filter((f) => [...f].length === 1);
-    return forms.length > 1 ? `[${forms.sort().join("")}]` : escape(c);
+    const forms = pinned ? [...pinned]
+      : [...new Set([c, c.toLowerCase(), c.toUpperCase()])].filter((f) => [...f].length === 1).sort();
+    const raw = forms.length > 1 ? `[${forms.join("")}]` : escape(c);
+    const wide = forms.filter((f) => f.codePointAt(0) > 0x7f);
+    return wide.length ? `(?:${[raw, ...wide.map(escaped)].join("|")})` : raw;
   }).join("");
 }
 
 // `text` without the repo and home paths, emails, the user name, or tokens.
 // Paths go first: a token pattern could swallow part of one and hide the rest
 // from the path pass. Tokens go last; no placeholder holds a character they match.
-// A plain path can hold the same six characters as an escape (C:\Users\u1234567),
-// so the text is scrubbed as written first; the read-back copy is kept only
-// when it finds more to take out.
 export function scrub(text, { repo, home, user }) {
-  let out = people(String(text), { repo, home, user });
-  const decoded = unescapeLetters(out);
-  const again = people(decoded, { repo, home, user });
-  if (again !== decoded) out = again;
-  for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
-  return out;
-}
-
-function people(text, { repo, home, user }) {
-  let out = text;
+  let out = String(text);
   for (const [path, mark] of [[repo, "<repo>"], [home, "~"]]) {
     for (const spelled of spellings(path)) out = out.replace(new RegExp(anyCase(spelled), "gu"), () => mark);
   }
@@ -88,6 +73,7 @@ function people(text, { repo, home, user }) {
   if (user && [...user].length >= 3) {
     out = out.replace(new RegExp(`${EDGE}${anyCase(user)}(?![A-Za-z0-9_])`, "gu"), () => "<user>");
   }
+  for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
   return out;
 }
 

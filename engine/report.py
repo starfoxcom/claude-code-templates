@@ -32,18 +32,14 @@ def _spellings(path):
     return sorted(unique, key=lambda s: (-len(s.encode("utf-16-le", "surrogatepass")) // 2, _code_units(s)))
 
 
-ESCAPED = re.compile(r"\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})|\\u([0-9a-fA-F]{4})")
+def _hex_any_case(unit):
+    return "".join("[%s%s]" % (d, d.upper()) if d in "abcdef" else d for d in "%04x" % unit)
 
 
-def _unescape_letters(text):
-    # See unescapeLetters in report.js.
-    def letter(m):
-        high, low, one = m.groups()
-        if high:
-            return chr(0x10000 + ((int(high, 16) - 0xD800) << 10) + (int(low, 16) - 0xDC00))
-        unit = int(one, 16)
-        return m.group(0) if unit < 0x80 or 0xD800 <= unit <= 0xDFFF else chr(unit)
-    return ESCAPED.sub(letter, text)
+def _escaped(form):
+    # See escaped in report.js: one escape per UTF-16 unit.
+    units = form.encode("utf-16-le", "surrogatepass")
+    return "".join("\\\\[uU]" + _hex_any_case(units[i] | units[i + 1] << 8) for i in range(0, len(units), 2))
 
 
 PINNED = ["Iiİı", "Σςσ"]
@@ -54,34 +50,23 @@ def _any_case(s):
     out = []
     for c in s:
         pinned = next((group for group in PINNED if c in group), None)
-        if pinned:
-            out.append("[%s]" % pinned)
-            continue
-        forms = sorted(f for f in {c, c.lower(), c.upper()} if len(f) == 1)
-        out.append("[%s]" % "".join(forms) if len(forms) > 1 else re.escape(c))
+        forms = list(pinned) if pinned else sorted(f for f in {c, c.lower(), c.upper()} if len(f) == 1)
+        raw = "[%s]" % "".join(forms) if len(forms) > 1 else re.escape(c)
+        wide = [f for f in forms if ord(f) > 0x7F]
+        out.append("(?:%s)" % "|".join([raw] + [_escaped(f) for f in wide]) if wide else raw)
     return "".join(out)
 
 
 def scrub(text, repo=None, home=None, user=None):
-    # See scrub in report.js: as written first, then the read-back copy if it finds more.
-    out = _people(str(text), repo, home, user)
-    decoded = _unescape_letters(out)
-    again = _people(decoded, repo, home, user)
-    if again != decoded:
-        out = again
-    for pattern in TOKENS:
-        out = pattern.sub("<token>", out)
-    return out
-
-
-def _people(text, repo, home, user):
-    out = text
+    out = str(text)
     for path, mark in ((repo, "<repo>"), (home, "~")):
         for spelled in _spellings(path):
             out = re.sub(_any_case(spelled), lambda _m, mark=mark: mark, out)
     out = EMAIL.sub("<email>", out)
     if user and len(user) >= 3:
         out = re.sub(EDGE + _any_case(user) + "(?![A-Za-z0-9_])", lambda _m: "<user>", out)
+    for pattern in TOKENS:
+        out = pattern.sub("<token>", out)
     return out
 
 
