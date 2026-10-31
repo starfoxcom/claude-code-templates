@@ -43,14 +43,14 @@ AI_PROCESS = (r"\b(Claude|Fable|Opus|Sonnet|Haiku|Anthropic|OpenAI|ChatGPT|GPT(-
 # What the public side never carries, by the name `check` reports.
 CONTRACT = [
     ("history", re.compile(r"<details|Full history", re.I)),
-    ("code", re.compile(r"`|<(code|pre|kbd|samp)\b|~~~|^(?: {4}|\t)\S", re.I | re.M)),
+    ("code", re.compile(r"`|<(code|pre|kbd|samp)\b|~~~|^[ \t]*(?: {4}|\t)", re.I | re.M)),
     ("path", re.compile(r"\.(github|claude)/|\b[\w-]+/[\w.-]+/|\b[\w-]+/[\w-]+\.\w+"
                         r"|\b[\w-]+\." + EXTENSIONS + r"\b")),
     ("pull request", re.compile(r"\bPRs?\s*#?\d|\bpull requests?\b", re.I)),
     ("branch", re.compile(r"\b(feature|hotfix|release|fix|chore)/")),
     ("reference", re.compile(r"\b[\w.-]+/[\w.-]+#\d+|\bGH-\d+\b")),
     ("mention", re.compile(r"(?<![\w.@])@[A-Za-z0-9][A-Za-z0-9-]*")),
-    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\bwww\.|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)),
+    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\]\(|^\s*\[[^\]]+\]:|<a\b|\bwww\.|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)),
     ("commit", re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
     ("identifier", re.compile(r"\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\w+\(\)")),
     ("constant", re.compile(r"(?<![\w.])(?<!v)\d+\.\d+(?![\d.])(?!" + UNITS + r")|\b0x[0-9a-f]+",
@@ -61,7 +61,7 @@ CONTRACT = [
 ISSUES = """query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) { issues(first: 50, after: $cursor) {
     pageInfo { hasNextPage endCursor }
-    nodes { id number title body state stateReason author { login }
+    nodes { id number title body state stateReason authorAssociation
       parent { number repository { nameWithOwner } } } } } }"""
 ITEMS = """query($owner: String!, $number: Int!, $cursor: String) {
   repositoryOwner(login: $owner) { ... on ProjectV2Owner { projectV2(number: $number) {
@@ -208,6 +208,8 @@ def contract_breaks(text: str, settings: Settings, public: set[int]) -> list[str
 
 # Every body the tool writes ends with this line; it touches no issue without it.
 MARK = "<!-- public-roadmap -->"
+# Who can run push: the repo's owner and the people with write access to it.
+WRITERS = ("OWNER", "MEMBER", "COLLABORATOR")
 WITHDRAWN = ("Withdrawn", f"This item is no longer on the public roadmap.\n\n{MARK}\n")
 PLACEHOLDER = ("placeholder", f"placeholder\n\n{MARK}\n")
 
@@ -245,7 +247,9 @@ class PublicSync:
         """
         repo = self.settings.public_repo
         issues = fetch_issues(repo)
-        self.public = {n: i for n, i in issues.items() if MARK in (i["body"] or "")}
+        # The mark alone is not proof: anyone can copy it into an issue of their own.
+        self.public = {n: i for n, i in issues.items()
+                       if MARK in (i["body"] or "") and i.get("authorAssociation") in WRITERS}
         newest = run_gh(["api", f"repos/{repo}/issues?state=all&per_page=1", "-q", ".[0].number // 0"])
         owner, name = repo.split("/")
         talk = gql(DISCUSSIONS, owner=owner, name=name)["repository"]["discussions"]["nodes"]
@@ -367,10 +371,11 @@ class PublicSync:
         unknown = [name for name in settings.fields if name not in fields]
         if unknown:
             raise SystemExit(f"the public board has no field named {', '.join(unknown)}")
-        text = [name for name in settings.fields if fields[name]["dataType"] == "TEXT"]
-        if text:
-            raise SystemExit(f"{', '.join(text)} is free text, which check never reads: copy only"
-                             " single-select, number and date fields")
+        other = [name for name in settings.fields
+                 if fields[name]["dataType"] not in ("SINGLE_SELECT", "NUMBER", "DATE")]
+        if other:
+            raise SystemExit(f"{', '.join(other)} cannot be copied: check never reads free text or"
+                             " titles, so only single-select, number and date fields are")
 
     def sync_fields(self) -> None:
         settings = self.settings
