@@ -142,6 +142,10 @@ test("broken files fail alike in both engines", needsPython, () => {
   assert.equal(both({ local: Buffer.from([0x7b, 0xff, 0x7d]) }).error, ".bindwright/local.json is not UTF-8 text");
   assert.equal(both({ local: `${"[".repeat(70)}${"]".repeat(70)}` }).error, ".bindwright/local.json nests too deeply");
   assert.equal(both({ local: "[]" }).error, ".bindwright/local.json must hold a JSON object");
+  // Whole numbers past the double range: infinite in both engines, however many digits.
+  const huge = both({ personal: `{"schema": 1${"0".repeat(400)}}` });
+  assert.equal(huge.error, "bindwright/settings.json has no valid schema number");
+  assert.deepEqual(both({ local: `{"tracker": ${"1".repeat(5000)}}` }).ignored, ["local: tracker"]);
   assert.deepEqual(both({}).settings, {});
 });
 

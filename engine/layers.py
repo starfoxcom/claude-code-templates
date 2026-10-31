@@ -186,8 +186,10 @@ def _read_layer_file(path, file):
     if _depth(text) > MAX_DEPTH:
         raise ValueError("%s nests too deeply" % file)
     try:
-        # NaN and Infinity are not JSON, and JSON.parse refuses them.
-        return json.loads(text, parse_constant=_not_json)
+        # NaN and Infinity are not JSON, and JSON.parse refuses them. Whole numbers
+        # are read as doubles, as JSON.parse reads them: past the double range they
+        # become infinite, with no digit limit, in both engines.
+        return json.loads(text, parse_constant=_not_json, parse_int=float)
     except ValueError:
         raise ValueError("%s is not valid JSON" % file)
 
