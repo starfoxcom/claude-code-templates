@@ -14,8 +14,8 @@ List findings per area (a folder or a module) before fixing any:
 ## Fix in area batches
 
 - One area per PR, each with the full test suite green.
-- A finding whose fix spans files outside the batch goes on a tracked list (an issue, or a section of the PR body) instead of being half-fixed. Fix it in its own batch.
-- A finding that turns out to be a false positive gets its reason recorded where the next sweep will read it (the PR body, an exceptions file the check reads, or a comment beside the code), so it is not raised again.
+- A finding whose fix spans files outside the batch goes on the tracker as its own work item (an issue, or a `ROADMAP.md` item where the project plans in one) instead of being half-fixed. Fix it in its own batch.
+- A finding that turns out to be a false positive gets its reason recorded where the next sweep will read it (an exceptions file the check reads, or a comment beside the code), so it is not raised again.
 
 ## Before pushing a batch
 
