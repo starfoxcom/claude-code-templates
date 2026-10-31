@@ -189,7 +189,8 @@ class Settings:
         self.hidden = re.compile("|".join(hidden), re.I) if hidden else None
         allowed = [re.escape(word) for word in raw.get("allowed", []) if word]
         # Public names the patterns would mistake for code, such as "iOS" or "Node.js": exact words only.
-        self.allowed = re.compile(r"(?<![\w.])(?:" + "|".join(allowed) + r")(?!\w)") if allowed else None
+        # A word inside a path or reference ("org/iOS#12", "apps/iOS/x") stays, so those still get caught.
+        self.allowed = re.compile(r"(?<![\w./@#-])(?:" + "|".join(allowed) + r")(?![\w/#@-])") if allowed else None
         self.public_board = raw.get("project")
         self.fields = list(raw.get("fields", []))
 

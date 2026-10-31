@@ -167,6 +167,7 @@ test("check names every contract break and leaves summary-less issues private", 
     issue(9, "Wiki three", summary("Read <a href=\"//intra.example\">this</a>.")),
     issue(10, "Wiki four", summary("See [the wiki][1] for details.\n\n[1]: //intra.example/wiki")),
     issue(11, "Phones", summary("Ship the iOS app, then port the server to Node.js.")),
+    issue(13, "Moves", summary("Tracked in acme/iOS#12.\n\nMoved packages/iOS/Info.plist.")),
   ], { hidden: ["Falcon"], allowed: ["iOS", "Node.js"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
@@ -182,7 +183,7 @@ test("check names every contract break and leaves summary-less issues private", 
     "#6 summary: private name ('Falcon')", "#6 summary: link ('www.')", "#6 summary: code ('<code')",
     "#7 summary: link ('ops@corp.example')", "#7 summary: code ('    ')",
     "#8 summary: link ('](')", "#8 summary: code ('        ')", "#9 summary: link ('<a')",
-    "#10 summary: link ('[1]:')"]) {
+    "#10 summary: link ('[1]:')", "#13 summary: reference ('acme/iOS#12')", "#13 summary: path"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
   assert.ok(!/#1 |#2 |#11 /.test(text.replace(/#12/g, "")), text);
