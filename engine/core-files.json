@@ -53,6 +53,7 @@
   "CONTRIBUTING.md",
   "LICENSE.template",
   "README.md.template",
+  "docs/docs-audit.md",
   "docs/lazy/README.md",
   "docs/test-audit.md",
   "precommit/husky-pre-commit.template",
