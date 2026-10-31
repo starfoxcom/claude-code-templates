@@ -58,7 +58,7 @@ where `<project-slug>` is what Claude Code auto-derives from your project's work
 After SETUP determines the slug:
 
 1. Copy `memory-template/MEMORY.md` to `~/.claude/projects/<project-slug>/memory/MEMORY.md` (if it doesn't already exist).
-2. Read `memory-template/README.md` for the four memory types + when to save each + the body structure for feedback / project memories (the `**Why:**` + `**How to apply:**` lines).
+2. The memory types, when to save each and the body structure come with Claude Code itself, in its own memory instructions; the template adds nothing to them.
 
 Claude will start populating memory entries during your normal sessions — you don't need to pre-fill anything beyond the empty MEMORY.md index.
 
