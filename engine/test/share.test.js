@@ -123,6 +123,29 @@ test("export keeps the rest of project.json as it was, numbers included", needsP
   assert.match(files[0], /"note": 5,\n  "ratio": 0\.5,/);
 });
 
+test("remember keeps only what the layers use, and lists what it dropped", needsPython, () => {
+  const { seen, personal } = both((run, s) => {
+    const file = join(s.root, "teammate", "bindwright", "settings.json");
+    mkdirSync(dirname(file), { recursive: true });
+    // Hand-edited: odd numbers and number-like keys, which the twins would write differently.
+    const extras = '"extras": {"tasks": true, "ci-watch": 1}';
+    writeFileSync(file, `{"schema": 1, "tracker": "file", "x": 1e400, "2": 1, "10": 1.0, ${extras}}`);
+    return run(["--remember", s.repo, "--layer", "personal"], JSON.stringify({ extras: { "session-facts": true } }));
+  });
+  const kept = { extras: { "session-facts": true, tasks: true }, schema: 1, tracker: "file" };
+  assert.equal(personal, `${JSON.stringify(kept, null, 2)}\n`);
+  assert.deepEqual(seen.dropped, ["personal: 10", "personal: 2", "personal: extras.ci-watch", "personal: x"]);
+});
+
+test("export refuses a project.json that is not an object, and leaves it alone", needsPython, () => {
+  const { seen, files } = both((run, s) => {
+    writeFileSync(join(s.repo, ".bindwright", "project.json"), "[]");
+    return run(["--export", s.repo], JSON.stringify({ extras: { tasks: "recommended" } }));
+  });
+  assert.equal(seen.error, ".bindwright/project.json must hold a JSON object");
+  assert.equal(files[0], "[]");
+});
+
 const linksWork = (() => {
   const dir = mkdtempSync(join(tmpdir(), "bw-link-"));
   try {

@@ -39,7 +39,7 @@ async function run(argv) {
   if (settings !== undefined) return runSettings(settings, config);
   if (exported !== undefined) return { setup: exportSetup(exported, choicesFromStdin()) };
   if (remember !== undefined && layer === undefined) throw new Error("--remember needs --layer personal or local");
-  if (remember !== undefined) return { remembered: rememberChoices(remember, config, layer, choicesFromStdin()) };
+  if (remember !== undefined) return rememberChoices(remember, config, layer, choicesFromStdin());
   const adopt = argv.includes("--adopt");
   if (adopt && folder === undefined) throw new Error("--adopt needs --write");
   if (year !== undefined && !/^[0-9]+$/.test(year)) throw new Error("--year needs a whole number");
