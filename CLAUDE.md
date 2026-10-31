@@ -2,9 +2,9 @@
 
 This file guides Claude Code when working in **this** repository — the templates project itself.
 
-Yes, the templates project dogfoods itself: the discipline we ship to other projects also applies to development of this repo. The rules at `.claude/rules/` are a *resolved bind* of the canonical sources at `_core/project-template/.claude/rules/` against this project's `.claude/BIND.md` toggle state — exactly what a fresh **Multi-dev · OSS** bind would write into a downstream project. The canonical templates never leave `_core/`; this repo's `.claude/` is the proof that the bind process produces a working setup.
+Yes, the templates project dogfoods itself: the discipline we ship to other projects also applies to development of this repo. The rules at `.claude/rules/` are a *resolved bind* of the canonical sources at `_core/project-template/.claude/rules/` rendered by the v2 engine from this project's answers in `.bindwright/project.json` — exactly what a fresh team bind would write into a downstream project. The canonical templates never leave `_core/`; this repo's `.claude/` is the proof that the bind process produces a working setup.
 
-When canonical templates evolve in `_core/project-template/.claude/rules/`, re-bind by re-resolving against `.claude/BIND.md` and replacing the corresponding `.claude/rules/*.md`. Same flow as the existing `.claude/skills/` bind.
+When canonical templates evolve in `_core/`, re-bind with `node engine/cli.js --update .` (the same three-way merge `/bindwright:update` runs, against `.bindwright/pristine.json`). Two hand tunes stay on top of the render: `code-size.md` lists only JavaScript and Python, and `collaboration.md` § Who reviews describes the solo-maintainer gate.
 
 ---
 
@@ -106,7 +106,7 @@ The page IS a visual artifact. Per `.claude/rules/visual.md` (resolved from cano
 
 ## Session ritual
 
-Skills `/session-start` and `/session-close` (and `/find`, `/architecture-graph`) live at `.claude/skills/` — this repo is self-bound from `_core/project-template/.claude/skills/` per `bundles/2-multi-dev-oss/bundle.toggles.md` with Discovery-mode resolution for null toggles. Rules at `.claude/rules/` follow the same bind pattern from `_core/project-template/.claude/rules/`. See `.claude/BIND.md` for the full audit trail (placeholders, toggle decisions, evidence). When templates evolve in `_core/`, re-resolve and replace the corresponding `.claude/skills/*.md` and `.claude/rules/*.md` files; once issue #3 (v1.2.0 Audit mode) ships, that flow becomes automated.
+Skills `/session-start`, `/session-close` and `/find` live at `.claude/skills/`, rendered with the rules above. Work state lives on the GitHub board (`starfoxcom/6`) and in each issue's `### Current state` (`.claude/rules/tracker.md`); `/session-close` also rewrites the git-ignored pointer file `.bindwright/handoff.md`. This repo's own extra steps (the review gate's `--check` at session start) live in `.bindwright/session-steps.md`.
 
 ---
 

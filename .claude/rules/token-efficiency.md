@@ -17,7 +17,7 @@ Leave `model` and `effort` out of `Workflow` and agent calls, so they run on the
 
 ## Watching CI
 
-After every push, watch the PR's checks; never use `gh run watch`. When the ci-watch mod is loaded, it watches the PR after `git push` or `gh pr create` and wakes the session once all checks settle; do not start a second watcher for that PR. Otherwise use the **Monitor tool** where it exists:
+After every push, watch the PR's checks; never use `gh run watch`. When the `ci-watch` mod is loaded, it watches the PR after `git push` or `gh pr create` and wakes the session once all checks settle; follow the mod and start no second watcher. Otherwise use the **Monitor tool** where it exists:
 
 - One monitor per PR, timeout one hour, so a stuck check becomes a loud timeout instead of a silent wait.
 - Inside it, poll `gh pr checks <pr> --json name,bucket` about every 60 seconds. Filter on the `bucket` field with `gh`'s own `--jq` (the standalone `jq` binary is missing on some shells, and an empty result looks exactly like "still running").

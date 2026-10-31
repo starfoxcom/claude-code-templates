@@ -56,12 +56,14 @@ test("every code-research tool binds cleanly", async () => {
 });
 
 test("every pre-commit manager lands its config file", async () => {
+  const profiles = JSON.parse(await readFile("_core/project-template/precommit/precommit-profiles.json"));
   for (const pc of PRECOMMIT_MANAGERS) {
     const a = defaults({ team: true });
     a.advanced.precommit = pc;
     const files = await run(a);
     assertClean(files);
-    assert.ok([...files.keys()].some((p) => !p.startsWith(".claude") && !p.startsWith(".github") && !p.startsWith(STAGING) && p !== "docs/lazy/README.md"), `${pc} config missing`);
+    const config = profiles[pc].config_filename;
+    assert.ok(files.has(config), `${pc} config ${config} missing`);
   }
 });
 
@@ -143,9 +145,10 @@ test("every flag is read by a template or by bind.js", () => {
 test("always-on rules ship to every setup, the writing rule only on request", async () => {
   const a = defaults();
   let files = await run(a);
-  for (const rule of ["task-tracking.md", "testing.md", "code-size.md"]) {
+  for (const rule of ["task-tracking.md", "testing.md", "code-size.md", "security.md"]) {
     assert.ok(files.has(`.claude/rules/${rule}`), `${rule} missing`);
   }
+  assert.match(files.get("docs/security-posture.md"), /^# Security posture: \S/);
   assert.ok(!files.has(".claude/rules/shipped-text.md"));
   a.advanced.plainWriting = true;
   files = await run(a);
