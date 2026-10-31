@@ -3,11 +3,15 @@
 import { defaults } from "../engine/model.js";
 import { repoFiles, byFolder } from "./files.js";
 import { summarize, compare, describe } from "./summary.js";
+import { encodeSetupCode } from "../engine/setupcode.js";
 
 // One accent hue per setup (docs/v2/DESIGN.md).
 const HUES = { "false,false": 150, "true,false": 200, "false,true": 70, "true,true": 340 };
 const hueFor = (team, client) => HUES[`${team},${client}`];
 const $ = (id) => document.getElementById(id);
+const questions = [...document.querySelectorAll(".q")];
+const ADVANCE_MS = 350;
+const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 let answers = defaults();
 let files = [];
@@ -17,6 +21,9 @@ let latest = 0;
 let shown = null;
 let choice = null;
 let fileChange = null;
+// The setup step on screen: a question's index, or questions.length for Done.
+let step = 0;
+let copyTimer = 0;
 
 function choose(question, value, label) {
   if (answers[question] === value) return;
@@ -24,6 +31,80 @@ function choose(question, value, label) {
   // A new setup starts from that setup's defaults, as setup itself does.
   answers = defaults({ ...answers, [question]: value });
   render();
+}
+
+// Answer from a key, then move to the next step after a short pause. A pause
+// that finds the reader on another step does nothing.
+function pick(key) {
+  const from = questions.indexOf(key.closest(".q"));
+  choose(key.dataset.q, key.dataset.v === "true", key.querySelector("b").textContent);
+  setTimeout(() => { if (step === from) show(from + 1); }, ADVANCE_MS);
+}
+
+// Keys 1 and 2 pick that answer of the current question, unless a text field has focus.
+function pickByDigit(event) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.target.closest("input, textarea, select, [contenteditable]")) return;
+  const keys = questions[step]?.querySelectorAll(".k") ?? [];
+  const key = keys[Number(event.key) - 1];
+  if (key) pick(key);
+}
+
+// Keyboard focus on the step being left moves to the new step's heading.
+function show(next) {
+  const leaving = $("stage").contains(document.activeElement);
+  step = next;
+  paintStage();
+  if (leaving) stageHeading().focus({ preventScroll: true });
+}
+
+function stageHeading() {
+  const node = step < questions.length ? questions[step] : $("done");
+  return node.querySelector("h3");
+}
+
+function paintStage() {
+  questions.forEach((node, i) => { node.hidden = i !== step; });
+  $("done").hidden = step !== questions.length;
+  $("back").hidden = step === 0;
+  [...$("steps").children].forEach((dot, i) => {
+    if (i === step) dot.setAttribute("aria-current", "step");
+    else dot.removeAttribute("aria-current");
+  });
+}
+
+// One progress dot per question plus the final Done step; each jumps to its step.
+function buildSteps() {
+  const labels = [...questions.map((_, i) => `Question ${i + 1}`), "Done"];
+  const dots = labels.map((label, i) => {
+    const dot = el("button", { type: "button", className: "dot" });
+    dot.setAttribute("aria-label", label);
+    dot.addEventListener("click", () => show(i));
+    return dot;
+  });
+  $("steps").replaceChildren(...dots);
+}
+
+// The two answers in plain words, e.g. "Just me, my own project".
+function plainAnswers() {
+  const team = answers.team ? "A team" : "Just me";
+  const client = answers.client ? "a client's project" : "my own project";
+  return `${team}, ${client}`;
+}
+
+function commandLine() {
+  return `/bindwright:setup ${encodeSetupCode(answers)}`;
+}
+
+async function copyCommand() {
+  try {
+    await navigator.clipboard.writeText(commandLine());
+    $("copy").textContent = "Copied";
+  } catch {
+    $("copy").textContent = "Select and copy";
+  }
+  clearTimeout(copyTimer);
+  copyTimer = setTimeout(() => { $("copy").textContent = "Copy"; }, 1500);
 }
 
 function render() {
@@ -37,6 +118,9 @@ function render() {
     const next = { team, client, [question]: value };
     key.style.setProperty("--h", hueFor(next.team, next.client));
   }
+  $("cmd-text").textContent = commandLine();
+  $("done-line").textContent = plainAnswers();
+  paintStage();
   refresh();
 }
 
@@ -93,7 +177,14 @@ function drawGroups() {
   $("groups").replaceChildren(...items);
   $("changed").textContent = change ? changeNote(change) : "";
   $("changed").hidden = !change;
+  paintTally(next);
   $("toggle").textContent = $("files").hidden ? `Show the ${files.length} files` : "Back to the summary";
+}
+
+// "· 6 parts, 23 rules" after the heading, counted from the summary on screen.
+function paintTally(groups) {
+  const rules = groups.reduce((sum, group) => sum + (group.rules?.length ?? 0), 0);
+  $("tally").textContent = `· ${count(groups.length, "part")}, ${count(rules, "rule")}`;
 }
 
 function rulesList(rules, change) {
@@ -177,7 +268,11 @@ $("toggle").addEventListener("click", () => {
 });
 
 for (const key of document.querySelectorAll(".k[data-q]")) {
-  const label = key.querySelector("b").textContent;
-  key.addEventListener("click", () => choose(key.dataset.q, key.dataset.v === "true", label));
+  key.addEventListener("click", () => pick(key));
 }
+$("back").addEventListener("click", () => show(Math.max(0, step - 1)));
+$("edit").addEventListener("click", () => show(0));
+$("copy").addEventListener("click", copyCommand);
+document.addEventListener("keydown", pickByDigit);
+buildSteps();
 render();

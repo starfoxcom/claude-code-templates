@@ -58,28 +58,37 @@
     <h2 id="setup-title">Set up your project</h2>
     <div class="rig">
       <div class="panel">
-        <div class="q" role="group" aria-labelledby="q-team">
-          <h3 id="q-team">Who works on the project?</h3>
-          <div class="keys">
-            <button class="k" type="button" data-q="team" data-v="false" aria-pressed="true">
-              <b>Just me</b><span>One person, one machine</span></button>
-            <button class="k" type="button" data-q="team" data-v="true" aria-pressed="false">
-              <b>A team</b><span>Shared branches and reviews</span></button>
+        <nav class="steps" id="steps" aria-label="Setup steps"></nav>
+        <div class="stage" id="stage">
+          <div class="q" role="group" aria-labelledby="q-team">
+            <h3 id="q-team" tabindex="-1">Who works on the project?</h3>
+            <div class="keys">
+              <button class="k" type="button" data-q="team" data-v="false" aria-pressed="true">
+                <b>Just me</b><span>One person, one machine</span></button>
+              <button class="k" type="button" data-q="team" data-v="true" aria-pressed="false">
+                <b>A team</b><span>Shared branches and reviews</span></button>
+            </div>
+          </div>
+          <div class="q" role="group" aria-labelledby="q-client">
+            <h3 id="q-client" tabindex="-1">Whose project is it?</h3>
+            <div class="keys">
+              <button class="k" type="button" data-q="client" data-v="false" aria-pressed="true">
+                <b>Mine</b><span>Open source or my own product</span></button>
+              <button class="k" type="button" data-q="client" data-v="true" aria-pressed="false">
+                <b>A client's</b><span>Private code, kept confidential</span></button>
+            </div>
+          </div>
+          <div class="done" id="done" hidden>
+            <h3 tabindex="-1">Your setup is ready</h3>
+            <p id="done-line"></p>
+            <button class="toggle" id="edit" type="button">Edit answers</button>
           </div>
         </div>
-        <div class="q" role="group" aria-labelledby="q-client">
-          <h3 id="q-client">Whose project is it?</h3>
-          <div class="keys">
-            <button class="k" type="button" data-q="client" data-v="false" aria-pressed="true">
-              <b>Mine</b><span>Open source or my own product</span></button>
-            <button class="k" type="button" data-q="client" data-v="true" aria-pressed="false">
-              <b>A client's</b><span>Private code, kept confidential</span></button>
-          </div>
-        </div>
+        <button class="back" id="back" type="button">Back</button>
       </div>
       <div class="panel out" aria-labelledby="out-title">
         <div class="out-head">
-          <h3 id="out-title">What you get</h3>
+          <h3 id="out-title">What you get<span class="tally" id="tally"></span></h3>
           <button class="toggle" id="toggle" type="button" aria-pressed="false" aria-controls="files">Show the files</button>
         </div>
         <p class="changed" id="changed" hidden></p>
@@ -92,6 +101,10 @@
           </div>
         </div>
       </div>
+    </div>
+    <div class="command" id="command">
+      <code class="cmd" id="cmd-text"></code>
+      <button class="toggle" id="copy" type="button">Copy</button>
     </div>
   </section>
   <p class="sr-status" id="status" role="status" aria-live="polite"></p>
