@@ -112,6 +112,25 @@ test("a plugin older than the repo, or no readable version, is named with its ow
   }
 });
 
+test("without a board, a roadmap out of shape is named and a tidy one passes", needsPython, async () => {
+  const withRoadmap = (text) => doctor(({ at }) => {
+    const answers = JSON.parse(readFileSync(at(".bindwright/project.json"), "utf8"));
+    answers.advanced.tracker = "file";
+    writeFileSync(at(".bindwright/project.json"), JSON.stringify(answers));
+    if (text !== null) writeFileSync(at("ROADMAP.md"), text);
+  });
+  const roadmap = async (text) => (await withRoadmap(text)).checks.find((c) => c.id === "roadmap");
+  assert.equal((await roadmap(null)).ok, true);
+  const tidy = "# Roadmap\n\nNext id: R4\n\n## Now\n- R3 Checkout (branch feature/checkout)\n\n## Later\n- R1 Gift cards\n";
+  assert.equal((await roadmap(tidy)).ok, true);
+  const now = Array.from({ length: 6 }, (_, i) => `- R${i + 1} Item`).join("\n");
+  const messy = `Next id: R3\n\n## Now\n${now}\n\n## Next\n- Saved carts\n- R2 Twice\n`;
+  const bad = await roadmap(messy);
+  assert.equal(bad.ok, false);
+  assert.match(bad.say, /"- Saved carts" has no id; R2 is used twice; 6 items sit under Now/);
+  assert.match(bad.say, /Next id R3 is not above every id in use/);
+});
+
 test("a staging folder that is a file is named, not a crash", needsPython, async () => {
   const report = await doctor(({ at }) => writeFileSync(at(STAGING.slice(0, -1)), "not a folder\n"));
   assert.deepEqual(failing(report), ["staged"]);

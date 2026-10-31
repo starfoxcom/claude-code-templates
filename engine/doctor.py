@@ -22,6 +22,8 @@ FIX = {
     "cli": "Update the CLI. In Claude Desktop, update the app: it ships its own copy of the CLI.",
     "staged": "Run /bindwright:update, which walks through each one, or delete the ones you do not want.",
     "unreadable": "Fix or remove the file it names.",
+    "roadmap": "Fix those lines: each item is one line that starts with its id (R4), at most five sit under Now, "
+               "and the Next id line is above every id in use.",
 }
 
 
@@ -74,6 +76,50 @@ def _staged_check(root):
         return _check("staged", False, "%d staged file(s) wait under %s: %s." % (len(files), STAGING, ", ".join(files)),
                       FIX["staged"])
     return _check("staged", True, "No staged files are waiting.")
+
+
+def roadmap_problems(text):
+    """See roadmapProblems in doctor.js."""
+    problems, ids, section, now, nxt = [], [], None, 0, None
+    for line in re.split(r"\r?\n", text):
+        heading = re.match(r"## (\S.*)$", line)
+        if heading:
+            section = heading.group(1).strip()
+        counter = re.match(r"Next id: R([0-9]+) *$", line)
+        if counter:
+            nxt = int(counter.group(1))
+        if not line.startswith("- ") or section not in ("Now", "Next", "Later"):
+            continue
+        item = re.match(r"- R([0-9]+) \S", line)
+        if not item:
+            problems.append('"%s" has no id' % line[:60])
+        elif item.group(1) in ids:
+            problems.append("R%s is used twice" % item.group(1))
+        else:
+            ids.append(item.group(1))
+        if section == "Now":
+            now += 1
+    if now > 5:
+        problems.append("%d items sit under Now, more than five" % now)
+    if nxt is None:
+        problems.append("the Next id line is missing")
+    elif any(int(i) >= nxt for i in ids):
+        problems.append("Next id R%d is not above every id in use" % nxt)
+    return problems
+
+
+def _roadmap_check(root):
+    path = os.path.join(root, "ROADMAP.md")
+    if not os.path.exists(path):
+        return _check("roadmap", True, "No ROADMAP.md yet; the next /session-close writes it.")
+    try:
+        with open(path, encoding="utf-8") as f:
+            problems = roadmap_problems(f.read())
+    except (OSError, UnicodeDecodeError):
+        return _check("roadmap", False, "ROADMAP.md cannot be read.", FIX["unreadable"])
+    if problems:
+        return _check("roadmap", False, "ROADMAP.md is out of shape: %s." % "; ".join(problems), FIX["roadmap"])
+    return _check("roadmap", True, "ROADMAP.md is in shape.")
 
 
 def _state_checks(root):
@@ -167,6 +213,8 @@ def run_doctor(root, config, plugin_version, cli_version):
         checks += [_version_check(state["pristine"], plugin_version),
                    _guard_check(root, state["answers"], state["pristine"])]
         checks.append(_staged_check(root))
+        if state["answers"]["advanced"]["tracker"] == "file":
+            checks.append(_roadmap_check(root))
         settings = _settings_checks(root, config)
         checks += settings["checks"] + [_cli_check(settings["installed"], cli_version)]
     return {"problems": sum(1 for c in checks if not c["ok"]), "checks": checks}
