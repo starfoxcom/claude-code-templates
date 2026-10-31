@@ -30,21 +30,26 @@ function spellings(path) {
   // A drive path as Git Bash and WSL print it: C:\x is /c/x and /mnt/c/x.
   const drive = /^([A-Za-z]):\//.exec(forward);
   if (drive) all.push(`/${drive[1]}/${forward.slice(3)}`, `/mnt/${drive[1]}/${forward.slice(3)}`);
-  const unique = [...new Set(all)];
+  // The engines print JSON as ASCII, so a non-ASCII letter may arrive as ü.
+  const unique = [...new Set([...all, ...all.map(asciiEscaped)])];
   return unique.sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
+
+// `s` as JSON writes it with only ASCII: each UTF-16 unit past 0x7f as \uxxxx.
+const asciiEscaped = (s) => s.replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // `s` as a pattern that matches it in any letter case. Built by hand, not
 // with a case-blind flag, so both engines agree: JS and Python fold letters
-// such as the Turkish dotted I differently. The four I's all match each
-// other, since hiding too much is the safe side. Any other letter whose other
-// case is more than one character (ß) matches only as written.
-const EYES = "Iiİı";
+// such as the Turkish dotted I differently. The letters in each PINNED group
+// all match each other, since hiding too much is the safe side. Any other
+// letter whose other case is more than one character (ß) matches only as written.
+const PINNED = ["Iiİı", "Σςσ"];
 function anyCase(s) {
   return [...s].map((c) => {
-    if (EYES.includes(c)) return `[${EYES}]`;
+    const pinned = PINNED.find((group) => group.includes(c));
+    if (pinned) return `[${pinned}]`;
     const forms = [...new Set([c, c.toLowerCase(), c.toUpperCase()])].filter((f) => [...f].length === 1);
     return forms.length > 1 ? `[${forms.sort().join("")}]` : escape(c);
   }).join("");
@@ -59,8 +64,9 @@ export function scrub(text, { repo, home, user }) {
     for (const spelled of spellings(path)) out = out.replace(new RegExp(anyCase(spelled), "gu"), () => mark);
   }
   out = out.replace(EMAIL, "<email>");
-  if (user && user.length >= 3) {
-    out = out.replace(new RegExp(`${EDGE}${anyCase(user)}(?![A-Za-z0-9_])`, "gu"), () => "<user>");
+  if (user && [...user].length >= 3) {
+    const names = [...new Set([asciiEscaped(user), user])].map(anyCase).join("|");
+    out = out.replace(new RegExp(`${EDGE}(?:${names})(?![A-Za-z0-9_])`, "gu"), () => "<user>");
   }
   for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
   return out;

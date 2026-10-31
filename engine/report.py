@@ -28,19 +28,30 @@ def _spellings(path):
     drive = re.match(r"([A-Za-z]):/", forward)
     if drive:
         every += ["/%s/%s" % (drive.group(1), forward[3:]), "/mnt/%s/%s" % (drive.group(1), forward[3:])]
-    unique = list(dict.fromkeys(every))
+    unique = list(dict.fromkeys(every + [_ascii_escaped(s) for s in every]))
     return sorted(unique, key=lambda s: (-len(s.encode("utf-16-le", "surrogatepass")) // 2, _code_units(s)))
 
 
-EYES = "Iiİı"
+def _ascii_escaped(s):
+    # See asciiEscaped in report.js.
+    units = s.encode("utf-16-le", "surrogatepass")
+    out = []
+    for i in range(0, len(units), 2):
+        unit = units[i] | units[i + 1] << 8
+        out.append(chr(unit) if unit < 0x80 else "\\u%04x" % unit)
+    return "".join(out)
+
+
+PINNED = ["Iiİı", "Σςσ"]
 
 
 def _any_case(s):
     # See anyCase in report.js.
     out = []
     for c in s:
-        if c in EYES:
-            out.append("[%s]" % EYES)
+        pinned = next((group for group in PINNED if c in group), None)
+        if pinned:
+            out.append("[%s]" % pinned)
             continue
         forms = sorted(f for f in {c, c.lower(), c.upper()} if len(f) == 1)
         out.append("[%s]" % "".join(forms) if len(forms) > 1 else re.escape(c))
@@ -54,7 +65,8 @@ def scrub(text, repo=None, home=None, user=None):
             out = re.sub(_any_case(spelled), lambda _m, mark=mark: mark, out)
     out = EMAIL.sub("<email>", out)
     if user and len(user) >= 3:
-        out = re.sub(EDGE + _any_case(user) + "(?![A-Za-z0-9_])", lambda _m: "<user>", out)
+        names = "|".join(_any_case(n) for n in dict.fromkeys([_ascii_escaped(user), user]))
+        out = re.sub(EDGE + "(?:" + names + ")(?![A-Za-z0-9_])", lambda _m: "<user>", out)
     for pattern in TOKENS:
         out = pattern.sub("<token>", out)
     return out

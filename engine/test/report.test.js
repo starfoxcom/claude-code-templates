@@ -69,7 +69,9 @@ test("shell path forms and non-ASCII names in any case come out the same in both
   assert.equal(js, "pwd <repo>/x, wsl ~/y, by <user>");
 });
 
-test("the Turkish I and a bare root home folder come out the same in both engines", needsPython, () => {
+const jurgen = { repo: "C:\\Users\\Jürgen\\code\\app", home: "C:\\Users\\Jürgen", user: "Jürgen" };
+
+test("pinned letters, escaped names and a bare root home come out the same in both engines", needsPython, () => {
   const script = "import json,sys; sys.path.insert(0, sys.argv[1]); from report import scrub; "
     + "a = json.loads(sys.stdin.buffer.read().decode('utf-8')); "
     + "sys.stdout.write(json.dumps([scrub(t, **w) for t, w in a]))";
@@ -77,6 +79,9 @@ test("the Turkish I and a bare root home folder come out the same in both engine
     ["by İsmail, ismail, ISMAIL and ısmaıl", { user: "İsmail" }],
     ["by ılker, Ilker and İLKER, not Straße", { user: "ılker" }],
     ["by Straße and STRASSE", { user: "Straße" }],
+    // The engines' own JSON output writes non-ASCII letters as \u escapes.
+    [String.raw`open C:\\Users\\J\u00fcrgen\\code\\app\\x by J\u00FCrgen`, jurgen],
+    ["at c:\\users\\νικος\\x by νικος", { home: "C:\\Users\\ΝΙΚΟΣ", user: "ΝΙΚΟΣ" }],
     ["at /srv/app/x and C:\\y", { repo: "/srv/app", home: "/" }],
     ["at C:\\x and \\\\host\\share", { home: "C:\\" }],
   ];
@@ -88,6 +93,8 @@ test("the Turkish I and a bare root home folder come out the same in both engine
     "by <user>, <user>, <user> and <user>",
     "by <user>, <user> and <user>, not Straße",
     "by <user> and STRASSE",
+    String.raw`open <repo>\\x by <user>`,
+    "at ~\\x by <user>",
     "at <repo>/x and C:\\y",
     "at C:\\x and \\\\host\\share",
   ]);
