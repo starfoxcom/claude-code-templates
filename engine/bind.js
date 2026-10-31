@@ -145,7 +145,7 @@ async function globalFiles(a, ctx, readFile) {
 const byDest = ([x], [y]) => (x < y ? -1 : x > y ? 1 : 0);
 
 // Two-space JSON with a final newline; bind.py's _state_json writes the same bytes.
-const stateJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
+export const stateJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
 // The state files for a bind's repo files: each under the path it belongs
 // at, staged or not. The ~/.claude files are not the repo's, and setup's own

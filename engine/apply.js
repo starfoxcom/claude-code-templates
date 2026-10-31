@@ -14,7 +14,7 @@ export const STAGING = ".bindwright/incoming/";
 // Relative paths of plain segments only: no drive, root, backslash, "." or "..".
 const SEGMENT = /^[^/\\:\x00-\x1f]+$/;
 
-function safe(path) {
+export function safe(path) {
   return path.split("/").every((p) => SEGMENT.test(p) && p !== "." && p !== "..");
 }
 

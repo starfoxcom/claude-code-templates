@@ -4,6 +4,7 @@
 //   node engine/cli.js --code bw1-...                -> the answers come from a setup code
 //   node engine/cli.js --code bw1-... --write DIR    -> {"written": [...], "staged": [...], "skipped": [...]}
 //   ... --write DIR --adopt                          -> the same, with every file outside .bindwright/ staged
+//   node engine/cli.js --update DIR                  -> the saved answers rebound and merged (update.js)
 // A failure gives {"error": message} and exit status 1.
 
 import { readFileSync } from "node:fs";
@@ -12,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { bind } from "./bind.js";
 import { decodeSetupCode } from "./setupcode.js";
 import { applyFiles } from "./apply.js";
+import { runUpdate } from "./update.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -24,7 +26,8 @@ function option(argv, name) {
 }
 
 async function run(argv) {
-  const [code, year, folder] = ["--code", "--year", "--write"].map((n) => option(argv, n));
+  const [code, year, folder, update] = ["--code", "--year", "--write", "--update"].map((n) => option(argv, n));
+  if (update !== undefined) return updateRepo(update);
   const adopt = argv.includes("--adopt");
   if (adopt && folder === undefined) throw new Error("--adopt needs --write");
   if (year !== undefined && !/^[0-9]+$/.test(year)) throw new Error("--year needs a whole number");
@@ -36,6 +39,14 @@ async function run(argv) {
   const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year), version });
   const files = [...bound.entries()];
   return folder === undefined ? { files } : applyFiles(files, folder, { adopt });
+}
+
+async function updateRepo(folder) {
+  const coreFiles = JSON.parse(readFileSync(join(root, "engine", "core-files.json"), "utf8"));
+  const readFile = async (p) => readFileSync(join(root, p), "utf8");
+  const version = (await readFile("VERSION")).trim().replace(/^v+/, "");
+  const bindWith = (answers, { year }) => bind(answers, { readFile, coreFiles, year, version });
+  return runUpdate(folder, { bindWith, version });
 }
 
 let result;

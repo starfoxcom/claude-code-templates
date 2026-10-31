@@ -8,6 +8,7 @@
 #   python engine/bind.py --code bw1-...                 -> the answers come from a setup code
 #   python engine/bind.py --code bw1-... --write DIR     -> {"written": [...], "staged": [...], "skipped": [...]}
 #   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
+#   python engine/bind.py --update DIR                   -> the saved answers rebound and merged (update.py)
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
 import json
@@ -23,6 +24,7 @@ from model import validate, flags_for, choices_for, values_for, CHOICE_OPTIONS, 
 from render import render_template, fill_placeholders
 from setupcode import decode_setup_code, SetupCodeError
 from apply import apply_files, ApplyError
+from update import run_update
 
 CORE = "_core/project-template/"
 
@@ -261,6 +263,17 @@ def _single(argv, run):
         return {"error": str(e)}
 
 
+def _update(argv, read_file, core_files):
+    """The saved answers rebound with today's templates and merged into the repo."""
+    try:
+        folder = _option(argv, "--update")
+        version = read_file("VERSION").strip(JS_WHITESPACE).lstrip("v")
+        bind_with = lambda answers, year: bind(answers, read_file, core_files, year, version)
+        return run_update(folder, bind_with, version, _state_json)
+    except Exception as e:  # every failure is reported, as the JS engine throws it
+        return {"error": str(e)}
+
+
 def _main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cache = {}
@@ -285,6 +298,8 @@ def _main(argv):
 
     if "--batch" in argv:
         result = [run(j["answers"], j.get("year"), j.get("version")) for j in _stdin_json()]
+    elif "--update" in argv:
+        result = _update(argv, read_file, core_files)
     else:
         result = _single(argv, run)
     # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.
