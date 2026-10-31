@@ -9,8 +9,13 @@ Planning only. Change no files and create no branches in this turn.
 
 ## 1. Read
 
-- The single `CLAUDE-CODE-TEMPLATES-CONTEXT_*.md` at the repo root: the last session's hand-off. It outranks anything re-derived from git. If there are none or several, say so first.
-- `ROADMAP.md` if it exists (or the module ROADMAP for the area in focus). If the focus is unclear from the user's message or the current branch, ask before reading further.
+- The tracker, with the commands in `.claude/rules/tracker.md`: the open items (in progress first, then the next in queue, and items on hold apart with what each waits on), and the newest project status update. An item's `### Current state` is the last session's hand-off; it outranks anything re-derived from git.
+- `.bindwright/pending-tracker.md`, if it exists: writes an offline close could not post (`tracker.md`). Read them as part of the hand-off, post them once the plan is approved, then delete the file.
+- Ask of that status update: is its colour still true, given the board and what this session finds? If not, the colour has changed: say so in the report, and post the new update once the plan is approved.
+- `.bindwright/handoff.md`, if it exists: the last session's pointers in this checkout. Read it first, then the issues it names; where they disagree, the issues win.
+- `.bindwright/session-steps.md` if it exists: its "Extra start steps" run after the git checks below.
+
+If the focus is unclear from the user's message or the current branch, ask before reading further.
 
 ## 2. Check git
 
@@ -19,13 +24,14 @@ Run these as separate calls, in parallel:
 - `git status`
 - `git branch --show-current`
 - `git log --oneline -10`
-- `git fetch origin`, then `git rev-list --count HEAD..origin/develop` (how far behind the current branch is)
+- `git fetch --prune origin`, then `git rev-list --count HEAD..origin/develop` (how far behind the current branch is)
 - `gh pr list --author @me --state open`
-- `bash .github/scripts/setup-review-gate.sh --check` (read-only: it reports what the review gate is missing on GitHub and changes nothing)
+
+Then run the extra start steps, if any.
 
 ## 3. Report, in this order
 
-1. **Project status:** current focus, open work, blockers. Every `MISSING` line from the review gate check is a blocker; name the fix it prints. Running the script without `--check` sets the missing pieces up, but only once the user agrees, since this turn changes nothing.
+1. **Project status:** current focus, open work, blockers.
 2. **Git status:** current branch, uncommitted changes, how far behind `develop` it is, open PRs. If `develop` has moved ahead, propose merging it in before resuming (`git.md` § Keep branches current).
 3. **Branch:** if the work needs a new branch, propose its name per `git.md` and ask before creating it.
 4. **Areas touched:** the directories the plan will change. Anything outside the branch's scope becomes a prerequisite branch that lands first; name it.

@@ -1,0 +1,6 @@
+{
+  "USD": { "symbol": "$", "decimals": 2 },
+  "EUR": { "symbol": "€", "decimals": 2 },
+  "MXN": { "symbol": "$", "decimals": 2 },
+  "JPY": { "symbol": "¥", "decimals": 0 }
+}

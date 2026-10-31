@@ -1,0 +1,221 @@
+# Python twin of doctor.js: the same checks, in the same order and words.
+# Standard library only.
+
+import os
+import re
+
+from model import JS_WHITESPACE, validate
+from layers import MODS, _read_layer_file, run_settings
+from update import ANSWERS, PRISTINE, STAGING, _code_units
+
+# What to do about each finding, in plain words.
+FIX = {
+    "restore": "Restore it from git with `git checkout -- .bindwright/`, or set the repo up again.",
+    "update": "Run /bindwright:update: it keeps the repo's own edits.",
+    "plugin": "Update the Bindwright plugin from /plugin first. Until then, do not run /bindwright:update: "
+              "it would write this older plugin's files.",
+    "reinstall": "Reinstall the Bindwright plugin from /plugin.",
+    "guards": "Restore them from git with `git checkout -- .claude/hooks/`; "
+              "an update does not bring back deleted files.",
+    "settings": "Fix or remove those values in the files named.",
+    "join": "Run /bindwright:join: it installs each one on a yes and remembers a no.",
+    "cli": "Update the CLI. In Claude Desktop, update the app: it ships its own copy of the CLI.",
+    "staged": "Run /bindwright:update, which walks through each one, or delete the ones you do not want.",
+    "unreadable": "Fix or remove the file it names.",
+    "roadmap": "Fix those lines: each item is one line that starts with its id (R4), at most five sit under Now, "
+               "and the Next id line is above every id in use.",
+}
+
+
+MODS_SINCE = [2, 1, 287]
+
+
+def cli_version_from(agent):
+    m = re.match(r"claude-code_(\d+)-(\d+)-(\d+)_", agent if isinstance(agent, str) else "")
+    return [int(n) for n in m.groups()] if m else None
+
+
+def _before(a, b):
+    for x, y in zip(a, b):
+        if x != y:
+            return x < y
+    return False
+
+
+def _parts(v):
+    return [int(n) for n in v.split(".")] if isinstance(v, str) and re.fullmatch(r"\d+\.\d+\.\d+", v) else None
+
+
+def _staged(root):
+    base = os.path.join(root, *STAGING.strip("/").split("/"))
+    out = []
+
+    def walk(folder, prefix):
+        for name in sorted(os.listdir(folder), key=_code_units):
+            path = os.path.join(folder, name)
+            # A linked folder counts as one file, as Node's directory entries see it.
+            if os.path.isdir(path) and not os.path.islink(path):
+                walk(path, prefix + name + "/")
+            else:
+                out.append(prefix + name)
+    if os.path.exists(base):
+        walk(base, "")
+    return out
+
+
+def _check(id_, ok, say, fix=None):
+    return {"id": id_, "ok": ok, "say": say, "fix": fix}
+
+
+def _staged_check(root):
+    try:
+        files = _staged(root)
+    except OSError:
+        return _check("staged", False, "%s cannot be read as a folder." % STAGING, FIX["unreadable"])
+    if files:
+        return _check("staged", False, "%d staged file(s) wait under %s: %s." % (len(files), STAGING, ", ".join(files)),
+                      FIX["staged"])
+    return _check("staged", True, "No staged files are waiting.")
+
+
+def roadmap_problems(text):
+    """See roadmapProblems in doctor.js."""
+    problems, ids, section, now, nxt = [], [], None, 0, None
+    for line in re.split(r"\r\n|\r|\n", text):
+        if line.startswith("## "):
+            section = line[3:].strip(JS_WHITESPACE)
+        counter = re.fullmatch(r"Next id: R([0-9]{1,9}) *", line)
+        if counter:
+            nxt = int(counter.group(1))
+        if not line.startswith("- ") or section not in ("Now", "Next", "Later"):
+            continue
+        found = re.match(r"- R([0-9]{1,9}) ", line)
+        item = found if found and line[found.end():].strip(JS_WHITESPACE) else None
+        if not item:
+            problems.append('"%s" has no id' % line[:60])
+        elif item.group(1) in ids:
+            problems.append("R%s is used twice" % item.group(1))
+        else:
+            ids.append(item.group(1))
+        if section == "Now":
+            now += 1
+    if now > 5:
+        problems.append("%d items sit under Now, more than five" % now)
+    if nxt is None:
+        problems.append("the Next id line is missing")
+    elif any(int(i) >= nxt for i in ids):
+        problems.append("Next id R%d is not above every id in use" % nxt)
+    return problems
+
+
+def _roadmap_check(root):
+    path = os.path.join(root, "ROADMAP.md")
+    if not os.path.exists(path):
+        return _check("roadmap", True, "No ROADMAP.md yet; the next /session-close writes it.")
+    try:
+        # newline="" hands every line end through as written, as doctor.js reads it.
+        with open(path, encoding="utf-8", newline="") as f:
+            problems = roadmap_problems(f.read())
+    except (OSError, UnicodeDecodeError):
+        return _check("roadmap", False, "ROADMAP.md cannot be read.", FIX["unreadable"])
+    if problems:
+        return _check("roadmap", False, "ROADMAP.md is out of shape: %s." % "; ".join(problems), FIX["roadmap"])
+    return _check("roadmap", True, "ROADMAP.md is in shape.")
+
+
+def _state_checks(root):
+    def at(path):
+        return os.path.join(root, *path.split("/"))
+    try:
+        answers = _read_layer_file(at(ANSWERS), ANSWERS)
+        pristine = _read_layer_file(at(PRISTINE), PRISTINE)
+    except Exception as e:
+        return {"checks": [_check("state", False, "A Bindwright state file cannot be read: %s." % e,
+                                  FIX["restore"])]}
+    if answers is None or pristine is None:
+        say = "This repo is not set up with Bindwright."
+        return {"checks": [_check("state", False, say, "Run /bindwright:setup.")]}
+    try:
+        validate(answers)
+    except Exception as e:
+        return {"checks": [_check("state", False, "The saved answers in %s are broken: %s." % (ANSWERS, e),
+                                  "Restore the file from git with `git checkout -- %s`." % ANSWERS)]}
+    if not isinstance(pristine, dict) or not isinstance(pristine.get("files"), dict):
+        return {"checks": [_check("state", False, "%s does not hold the files setup wrote." % PRISTINE,
+                                  "Restore the file from git with `git checkout -- %s`." % PRISTINE)]}
+    return {"checks": [_check("state", True, "The setup files are present and readable.")],
+            "answers": answers, "pristine": pristine}
+
+
+def _version_check(pristine, plugin_version):
+    repo, plugin = _parts(pristine.get("version")), _parts(plugin_version)
+    if not repo:
+        return _check("version", False, "%s names no version Bindwright can read." % PRISTINE, FIX["restore"])
+    if not plugin:
+        return _check("version", False, "The plugin's own version cannot be read.", FIX["reinstall"])
+    say = "The repo's Bindwright files come from %s; the plugin is %s." % (pristine["version"], plugin_version)
+    if _before(repo, plugin):
+        return _check("version", False, say, FIX["update"])
+    if _before(plugin, repo):
+        return _check("version", False, say, FIX["plugin"])
+    return _check("version", True, "The repo's files match the plugin's version.")
+
+
+def _guard_check(root, answers, pristine):
+    guards = [".claude/hooks/push-guard.py", ".claude/hooks/run-hook.sh"]
+    missing = []
+    if answers["advanced"]["hookLocation"] == "repo":
+        missing = [p for p in guards
+                   if p in pristine["files"] and not os.path.exists(os.path.join(root, *p.split("/")))]
+    if missing:
+        return _check("guards", False,
+                      "The repo's guard hooks are missing: %s. Force pushes are not blocked here." % ", ".join(missing),
+                      FIX["guards"])
+    return _check("guards", True, "The guard hooks are in place.")
+
+
+def _settings_checks(root, config):
+    try:
+        settings = run_settings(root, config)
+    except Exception as e:
+        return {"checks": [_check("settings", False, "The settings cannot be read: %s." % e, FIX["unreadable"])],
+                "installed": {}}
+    if settings["ignored"]:
+        first = _check("settings", False, "Some settings are not used: %s." % "; ".join(settings["ignored"]),
+                       FIX["settings"])
+    else:
+        first = _check("settings", True, "Every setting is in use.")
+    if settings["drift"]:
+        lacks = "The project expects extras this machine lacks: %s." % ", ".join(settings["drift"])
+        second = _check("extras", False, lacks,
+                        FIX["join"])
+    else:
+        second = _check("extras", True, "This machine has the extras the project expects.")
+    return {"checks": [first, second], "installed": settings["installed"]}
+
+
+def _cli_check(installed, cli_version):
+    # Only mods need the newer CLI; the guards are plain hooks.
+    mods = any(has and name in MODS for name, has in installed.items())
+    if not mods or not cli_version or not _before(cli_version, MODS_SINCE):
+        return _check("cli", True, "The CLI runs the installed mods.")
+    running, needed = ".".join(map(str, cli_version)), ".".join(map(str, MODS_SINCE))
+    return _check("cli", False,
+                  "This session runs CLI %s, older than the %s the mods need, so none of them load."
+                  % (running, needed),
+                  FIX["cli"])
+
+
+def run_doctor(root, config, plugin_version, cli_version):
+    """See runDoctor in doctor.js."""
+    state = _state_checks(root)
+    checks = list(state["checks"])
+    if "answers" in state:
+        checks += [_version_check(state["pristine"], plugin_version),
+                   _guard_check(root, state["answers"], state["pristine"])]
+        checks.append(_staged_check(root))
+        if state["answers"]["advanced"]["tracker"] == "file":
+            checks.append(_roadmap_check(root))
+        settings = _settings_checks(root, config)
+        checks += settings["checks"] + [_cli_check(settings["installed"], cli_version)]
+    return {"problems": sum(1 for c in checks if not c["ok"]), "checks": checks}

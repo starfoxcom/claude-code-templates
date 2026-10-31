@@ -1,0 +1,10 @@
+{
+  "currency": "USD",
+  "tipPercent": 18,
+  "items": [
+    { "name": "Tacos al pastor", "price": 14.5, "people": ["Ana", "Ben"] },
+    { "name": "Mole enchiladas", "price": 17.25, "people": ["Cruz"] },
+    { "name": "Guacamole", "price": 9, "people": ["Ana", "Ben", "Cruz"] },
+    { "name": "Horchata", "price": 4.75, "people": ["Ben"] }
+  ]
+}
