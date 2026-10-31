@@ -134,10 +134,8 @@ h1 {
 .q h3:focus, .done h3:focus { outline: none; }
 .done p { margin-bottom: 14px; font-size: 15px; color: var(--text-2); }
 
-.steps { display: flex; gap: 4px; margin-bottom: 18px; }
-.dot {
-  position: relative; width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer;
-}
+.steps { display: flex; gap: 4px; margin: 0 0 18px; padding: 0; list-style: none; }
+.dot { position: relative; width: 24px; height: 24px; }
 .dot::before {
   content: ""; position: absolute; inset: 7px; border-radius: 50%;
   background: var(--key); box-shadow: 0 0 0 1px oklch(0 0 0 / .35);

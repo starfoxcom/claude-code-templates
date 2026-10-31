@@ -105,13 +105,13 @@ function paintStage() {
   });
 }
 
-// One progress dot per question plus the final Done step; each jumps to its step.
+// One progress dot per question plus the final Done step. The dots only show
+// progress: Back moves one step at a time and Edit answers starts over.
 function buildSteps() {
   const labels = [...questions.map((_, i) => `Question ${i + 1}`), "Done"];
-  const dots = labels.map((label, i) => {
-    const dot = el("button", { type: "button", className: "dot" });
+  const dots = labels.map((label) => {
+    const dot = el("li", { className: "dot" });
     dot.setAttribute("aria-label", label);
-    dot.addEventListener("click", () => show(i));
     return dot;
   });
   $("steps").replaceChildren(...dots);
