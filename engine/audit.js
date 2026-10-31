@@ -119,11 +119,11 @@ function toolCalls(files, counted) {
 }
 
 // The text between the quote at `start - 1` and its closing quote.
-function quoted(s, start, q) {
+function quoted(s, start, q, esc = "\\") {
   let out = "";
   for (let i = start; i < s.length; i++) {
     if (s[i] === q) return out;
-    if (s[i] === "\\" && q === '"' && i + 1 < s.length) i++;
+    if (s[i] === esc && q === '"' && i + 1 < s.length) i++;
     out += s[i];
   }
   return null;
@@ -133,9 +133,20 @@ const SEPARATORS = "|;&\n(";
 // `<<EOF`, `<<-'EOF'` or `<< "EOF"`: the word that ends a heredoc body.
 const HEREDOC = /^<<(-?)[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))/;
 const blank = (s) => s.replace(/[|;&(]/g, " ");
+// Where a word can start: a `#` there opens a comment, a `<<` there a heredoc.
+const wordStart = (line, i) => i === 0 || " \t;&|(".includes(line[i - 1]);
+// The escape character of each shell: Bash's backslash, PowerShell's backtick.
+export const escapeOf = (call) => (call.name === "PowerShell" ? "`" : "\\");
+
+// A Bash heredoc opens outside quotes, or inside double quotes within `$(`.
+function heredocAt(line, i, state) {
+  if (!state.bash || line[i] !== "<" || !wordStart(line, i)) return null;
+  if (state.quote === "'" || (state.quote === '"' && !state.subst)) return null;
+  return HEREDOC.exec(line.slice(i));
+}
 
 // Copies one line that is not a heredoc body, blanking the separators that
-// cannot start a command; `state` carries the open quote, a pending backslash
+// cannot start a command; `state` carries the open quote, a pending escape
 // and the heredocs this line opens.
 function unquoteLine(line, state) {
   let out = "";
@@ -146,33 +157,30 @@ function unquoteLine(line, state) {
       out += SEPARATORS.includes(ch) ? " " : ch;
       continue;
     }
-    const heredoc = ch === "<" && line[i - 1] !== "<" && state.quote !== "'" ? HEREDOC.exec(line.slice(i)) : null;
+    if (state.quote === null && ch === "#" && wordStart(line, i)) return out + blank(line.slice(i));
+    const heredoc = heredocAt(line, i, state);
     if (heredoc) {
       state.heredocs.push({ word: heredoc[2] ?? heredoc[3] ?? heredoc[4], tabs: heredoc[1] === "-" });
       out += heredoc[0];
       i += heredoc[0].length - 1;
-    } else if (ch === "\\" && state.quote !== "'") {
-      state.escaped = true;
-      out += ch;
-    } else if (state.quote === null && (ch === "'" || ch === '"')) {
-      state.quote = ch;
-      out += ch;
-    } else if (ch === state.quote) {
-      state.quote = null;
-      out += ch;
-    } else {
-      out += state.quote !== null && SEPARATORS.includes(ch) ? " " : ch;
+      continue;
     }
+    if (ch === state.esc && state.quote !== "'") state.escaped = true;
+    else if (state.quote === null && (ch === "'" || ch === '"')) state.quote = ch;
+    else if (ch === state.quote) [state.quote, state.subst] = [null, false];
+    else if (state.quote === '"' && ch === "$" && line[i + 1] === "(") state.subst = true;
+    out += state.quote !== null && ch !== state.quote && SEPARATORS.includes(ch) ? " " : ch;
   }
   return out;
 }
 
 // The command with ; & | ( and line breaks blanked wherever they cannot start
-// a command: inside quotes, after a backslash and in heredoc bodies, so a
-// quoted search pattern, message or file body never reads as one. Lengths stay
-// the same.
-function unquote(command) {
-  const state = { quote: null, escaped: false, heredocs: [] };
+// a command: inside quotes, after an escape, in comments and in heredoc
+// bodies, so a quoted search pattern, message or file body never reads as
+// one. Lengths stay the same. This is a best-effort reading for counting, not
+// a shell parser.
+function unquote(command, esc = "\\") {
+  const state = { quote: null, escaped: false, heredocs: [], subst: false, esc, bash: esc === "\\" };
   const lines = command.split("\n");
   return lines.map((line, k) => {
     let out;
@@ -191,8 +199,8 @@ function unquote(command) {
 }
 
 // The first line of the message a `git commit -m` command gives, or null.
-export function commitMessage(command) {
-  const plain = unquote(command);
+export function commitMessage(command, esc = "\\") {
+  const plain = unquote(command, esc);
   const found = COMMIT.exec(plain);
   if (found === null) return null;
   const at = found.index;
@@ -202,10 +210,10 @@ export function commitMessage(command) {
   if (m === null) return null;
   const start = at + m.index + m[0].length;
   // A heredoc message, `-m "$(cat <<'EOF'`, starts on the next line.
-  if (m[1] === '"' && command.startsWith("$(cat <<", start)) {
+  if (esc === "\\" && m[1] === '"' && command.startsWith("$(cat <<", start)) {
     return (command.slice(start).split("\n")[1] ?? "").replace(/\r$/, "");
   }
-  const message = quoted(command, start, m[1]);
+  const message = quoted(command, start, m[1], esc);
   return message === null ? null : message.split("\n")[0].replace(/\r$/, "");
 }
 
@@ -220,15 +228,15 @@ const shell = (call) => (call.name === "Bash" || call.name === "PowerShell" ? te
 // Per call: null when the rule does not apply, else whether it broke and what to show.
 const PER_CALL = {
   "commit-format": (call) => {
-    const m = commitMessage(shell(call));
+    const m = commitMessage(shell(call), escapeOf(call));
     return m === null ? null : { broke: !goodCommit(m), shown: m };
   },
   attribution: (call) => {
     const command = shell(call);
-    return WRITES.test(unquote(command)) ? { broke: guardBlocked(call.result), shown: command } : null;
+    return WRITES.test(unquote(command, escapeOf(call))) ? { broke: guardBlocked(call.result), shown: command } : null;
   },
   "ci-watch": (call) => {
-    const plain = unquote(shell(call));
+    const plain = unquote(shell(call), escapeOf(call));
     return CI.test(plain) ? { broke: RUN_WATCH.test(plain), shown: shell(call) } : null;
   },
   "code-research": (call, tool) => {

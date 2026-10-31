@@ -117,12 +117,12 @@ def _tool_calls(files, counted):
     return calls
 
 
-def _quoted(s, start, q):
+def _quoted(s, start, q, esc="\\"):
     out, i = [], start
     while i < len(s):
         if s[i] == q:
             return "".join(out)
-        if s[i] == "\\" and q == '"' and i + 1 < len(s):
+        if s[i] == esc and q == '"' and i + 1 < len(s):
             i += 1
         out.append(s[i])
         i += 1
@@ -134,46 +134,67 @@ HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|\"([A-Za-z_][A-
                      r"|([A-Za-z_][A-Za-z0-9_]*))")
 
 
+def _blank(s):
+    return re.sub(r"[|;&(]", " ", s)
+
+
+def _word_start(line, i):
+    return i == 0 or line[i - 1] in " \t;&|("
+
+
+def _escape_of(call):
+    return "`" if call["name"] == "PowerShell" else "\\"
+
+
+def _heredoc_at(line, i, state):
+    """See heredocAt in audit.js."""
+    if not state["bash"] or line[i] != "<" or not _word_start(line, i):
+        return None
+    if state["quote"] == "'" or (state["quote"] == '"' and not state["subst"]):
+        return None
+    return HEREDOC.match(line, i)
+
+
 def _unquote_line(line, state):
     """See unquoteLine in audit.js."""
     out, i = [], 0
     while i < len(line):
         ch = line[i]
-        heredoc = None
-        if not state["escaped"] and ch == "<" and line[i - 1:i] != "<" and state["quote"] != "'":
-            heredoc = HEREDOC.match(line, i)
         if state["escaped"]:
             state["escaped"] = False
             out.append(" " if ch in SEPARATORS else ch)
-        elif heredoc:
+            i += 1
+            continue
+        if state["quote"] is None and ch == "#" and _word_start(line, i):
+            return "".join(out) + _blank(line[i:])
+        heredoc = _heredoc_at(line, i, state)
+        if heredoc:
             word = heredoc.group(2) or heredoc.group(3) or heredoc.group(4)
             state["heredocs"].append((word, heredoc.group(1) == "-"))
             out.append(heredoc.group(0))
             i = heredoc.end()
             continue
-        elif ch == "\\" and state["quote"] != "'":
+        if ch == state["esc"] and state["quote"] != "'":
             state["escaped"] = True
-            out.append(ch)
         elif state["quote"] is None and ch in "'\"":
             state["quote"] = ch
-            out.append(ch)
         elif ch == state["quote"]:
-            state["quote"] = None
-            out.append(ch)
-        else:
-            out.append(" " if state["quote"] is not None and ch in SEPARATORS else ch)
+            state["quote"], state["subst"] = None, False
+        elif state["quote"] == '"' and ch == "$" and line[i + 1:i + 2] == "(":
+            state["subst"] = True
+        out.append(" " if state["quote"] is not None and ch != state["quote"] and ch in SEPARATORS else ch)
         i += 1
     return "".join(out)
 
 
-def _unquote(command):
+def _unquote(command, esc="\\"):
     """See unquote in audit.js."""
-    state = {"quote": None, "escaped": False, "heredocs": []}
+    state = {"quote": None, "escaped": False, "heredocs": [], "subst": False, "esc": esc, "bash": esc == "\\"}
     lines = command.split("\n")
     out = []
     for k, line in enumerate(lines):
         if state["heredocs"]:
-            out.append(re.sub(r"[|;&(]", " ", line))
+            out.append(_blank(line))
             word, tabs = state["heredocs"][0]
             body = line.lstrip("\t") if tabs else line
             if (body[:-1] if body.endswith("\r") else body) == word:
@@ -187,9 +208,9 @@ def _unquote(command):
     return "".join(out)
 
 
-def commit_message(command):
+def commit_message(command, esc="\\"):
     """See commitMessage in audit.js."""
-    plain = _unquote(command)
+    plain = _unquote(command, esc)
     found = COMMIT.search(plain)
     if found is None:
         return None
@@ -199,11 +220,11 @@ def commit_message(command):
     if m is None:
         return None
     start = at + m.end()
-    if m.group(1) == '"' and command.startswith("$(cat <<", start):
+    if esc == "\\" and m.group(1) == '"' and command.startswith("$(cat <<", start):
         lines = command[start:].split("\n")
         first = lines[1] if len(lines) > 1 else ""
         return first[:-1] if first.endswith("\r") else first
-    message = _quoted(command, start, m.group(1))
+    message = _quoted(command, start, m.group(1), esc)
     if message is None:
         return None
     first = message.split("\n")[0]
@@ -224,18 +245,18 @@ def _shell(call):
 
 
 def _commit_format(call, _tool):
-    m = commit_message(_shell(call))
+    m = commit_message(_shell(call), _escape_of(call))
     return None if m is None else (not _good_commit(m), m)
 
 
 def _attribution(call, _tool):
     command = _shell(call)
-    return (_guard_blocked(call["result"]), command) if WRITES.search(_unquote(command)) else None
+    return (_guard_blocked(call["result"]), command) if WRITES.search(_unquote(command, _escape_of(call))) else None
 
 
 def _ci_watch(call, _tool):
     command = _shell(call)
-    plain = _unquote(command)
+    plain = _unquote(command, _escape_of(call))
     return (RUN_WATCH.search(plain) is not None, command) if CI.search(plain) else None
 
 

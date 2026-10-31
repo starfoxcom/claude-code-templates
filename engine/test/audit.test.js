@@ -41,6 +41,13 @@ const NEWER = [
   bash("b1", 'echo "a \\"; gh run watch 1"'),
   bash("b2", 'echo \\"; gh run watch 1'),
   bash("g1", 'git commit -F msg.txt && git tag -a v1 -m "v1"'),
+  // A comment's apostrophe opens no quote; "<<" inside plain quotes opens no heredoc.
+  bash("k1", "# it's fine\necho 'a; gh run watch 1'"),
+  bash("k2", "# Let's check CI\ngh pr checks 502"),
+  bash("k3", 'grep -rn "<<EOF" .claude\ngit commit -m \'fix: x\''),
+  // PowerShell escapes with a backtick, never a backslash.
+  use("p1", "PowerShell", { command: 'Remove-Item "C:\\tmp\\" ; gh run watch 1' }),
+  use("p2", "PowerShell", { command: 'Write-Output "a`"; gh run watch 1"' }),
   use("t2", "TaskCreate", { subject: "y" }), // copied from the older session by a fork
   use("r1", "mcp__tokensave__tokensave_search", { query: "x" }),
   use("r2", "Grep", { pattern: "foo", path: "src" }),
@@ -113,10 +120,11 @@ test("each check counts where its rule applied and where it broke", needsPython,
   assert.equal(out.logs.from, "2026-10-28");
   assert.equal(out.logs.to, "2026-10-30");
   const c = byId(out);
-  assert.deepEqual(counts(c["commit-format"]), [5, 1, ["Added stuff"]]);
+  assert.deepEqual(counts(c["commit-format"]), [6, 1, ["Added stuff"]]);
   const blocked = ["gh pr create --title x --body-file f", 'git -C repo commit -m "docs: c"'];
-  assert.deepEqual(counts(c.attribution), [7, 2, blocked]);
-  assert.deepEqual(counts(c["ci-watch"]), [3, 2, ["gh run watch 12", 'echo \\"; gh run watch 1']]);
+  assert.deepEqual(counts(c.attribution), [8, 2, blocked]);
+  const watched = ["gh run watch 12", 'echo \\"; gh run watch 1', 'Remove-Item "C:\\tmp\\" ; gh run watch 1'];
+  assert.deepEqual(counts(c["ci-watch"]), [5, 3, watched]);
   assert.deepEqual(counts(c["code-research"]), [4, 2, ["Grep foo", "Grep big"]]);
   // Both sides of the fork made a task list; only the oldest session did not.
   assert.deepEqual(counts(c["task-tracking"]), [3, 1, ["3 edits, no task list"]]);
