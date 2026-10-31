@@ -10,6 +10,8 @@
 #   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
 #   python engine/bind.py --update DIR                   -> the saved answers rebound and merged (update.py)
 #   python engine/bind.py --settings DIR                 -> the settings layers resolved for that repo (layers.py)
+#   python engine/bind.py --export DIR < choices.json    -> the project's setup object written (share.py)
+#   python engine/bind.py --remember DIR --layer L < choices.json -> one person's choices written to layer L
 #   python engine/bind.py --doctor DIR                   -> a health check of that repo and this machine (doctor.py)
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
@@ -24,10 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from model import validate, flags_for, choices_for, values_for, CHOICE_OPTIONS, DEFERRED, LICENSES, JS_WHITESPACE
 from render import render_template, fill_placeholders
-from setupcode import decode_setup_code, SetupCodeError
+from setupcode import decode_setup_code, SetupCodeError, MAX_DEPTH, _depth, _not_json
 from apply import apply_files, ApplyError
 from update import run_update
 from layers import run_settings
+from share import export_setup, remember_choices
 from doctor import cli_version_from, run_doctor
 from report import draft_report
 
@@ -279,12 +282,32 @@ def _update(argv, read_file, core_files):
         return {"error": str(e)}
 
 
-def _settings(argv):
-    """The settings layers of the repo at --settings DIR, for this machine's config folder."""
+def _choices_from_stdin():
     try:
-        folder = _option(argv, "--settings")
+        text = sys.stdin.buffer.read().decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("the choices on standard input is not UTF-8 text")
+    if _depth(text) > MAX_DEPTH:
+        raise ValueError("the choices on standard input nest too deeply")
+    try:
+        # NaN and Infinity are not JSON, and JSON.parse refuses them.
+        return json.loads(text, parse_constant=_not_json, parse_int=float)
+    except ValueError:
+        raise ValueError("the choices on standard input are not valid JSON")
+
+
+def _settings(argv):
+    """--settings, --export and --remember: the settings layers of a repo, for this machine's config folder."""
+    try:
         config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-        return run_settings(folder, config)
+        if "--export" in argv:
+            return {"setup": export_setup(_option(argv, "--export"), _choices_from_stdin(), _state_json)}
+        if "--remember" in argv:
+            folder, layer = _option(argv, "--remember"), _option(argv, "--layer")
+            if layer is None:
+                raise ValueError("--remember needs --layer personal or local")
+            return remember_choices(folder, config, layer, _choices_from_stdin(), _state_json)
+        return run_settings(_option(argv, "--settings"), config)
     except Exception as e:  # every failure is reported, as the JS engine throws it
         return {"error": str(e)}
 
@@ -342,7 +365,7 @@ def _main(argv):
         result = [run(j["answers"], j.get("year"), j.get("version")) for j in _stdin_json()]
     elif "--update" in argv:
         result = _update(argv, read_file, core_files)
-    elif "--settings" in argv:
+    elif "--settings" in argv or "--export" in argv or "--remember" in argv:
         result = _settings(argv)
     elif "--doctor" in argv:
         result = _doctor(argv, read_file)

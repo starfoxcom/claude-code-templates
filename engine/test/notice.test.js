@@ -157,6 +157,23 @@ test("a session starting meanwhile keeps the mark it saved", async () => {
   }
 });
 
+test("drift names the extras the repo's setup expects, and nothing else", async () => {
+  const s = scene("1.4.0");
+  try {
+    const ask = (driftFor, cwd = s.repo) =>
+      notice({ cwd, today: "2026-10-31", cacheFile: s.cacheFile, pluginVersion: "1.4.0", fetchLatest: latest(null),
+        driftFor });
+    const text = await ask(async () => ["tasks", "x; rm -rf ~", "ci-watch"]);
+    assert.equal(text, "This repo's Bindwright setup expects extras this machine lacks (tasks, ci-watch): "
+      + "/bindwright:join walks through them, and remembers a no.");
+    rmSync(s.cacheFile);
+    assert.equal(await ask(async () => { throw new Error("no engine"); }), null);
+    assert.equal(await ask(async () => ["tasks"], s.root), null, "outside a set-up repo");
+  } finally {
+    rmSync(s.root, { recursive: true, force: true });
+  }
+});
+
 const bash = spawnSync("bash", ["-c", "true"]).status === 0;
 
 const needs = { skip: !(python && bash) && "needs Python 3.8+ and bash" };
@@ -178,13 +195,17 @@ test("the hook's own command, run from a pack, tells the user and then stays qui
         ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_CONFIG_DIR: join(s.root, `config-${root === plugin}`),
         BINDWRIGHT_LATEST_URL: "http://127.0.0.1:9/VERSION", // nothing listens there: offline
       };
-      const input = JSON.stringify({ cwd: s.repo });
+      const setup = { schema: 1, extras: { tasks: "recommended" } };
+    const project = { team: true, client: false, project: {}, advanced: { tracker: "github" }, setup };
+    writeFileSync(join(s.repo, ".bindwright", "project.json"), JSON.stringify(project));
+    const input = JSON.stringify({ cwd: s.repo });
       const run = () => spawnSync("bash", ["-c", command], { env, input, encoding: "utf8" });
       const first = run();
       assert.equal(first.status, 0, first.stderr);
       assert.notEqual(first.stdout, "", root);
       const out = JSON.parse(first.stdout);
       assert.match(out.systemMessage, /from 0\.1\.0 .*\/bindwright:update/);
+      assert.match(out.systemMessage, /expects extras this machine lacks \(tasks\)/);
       assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
       assert.equal(out.hookSpecificOutput.additionalContext, out.systemMessage);
       const second = run();
