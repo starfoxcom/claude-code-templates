@@ -26,11 +26,38 @@ Write `{{PROJECT_NAME_UPPER}}-CONTEXT_YYYY-MM-DD_HH-MM.md` at the repo root and 
 
 For the timestamp, use the latest `[time]` line in the conversation if a hook provides one. Otherwise read the local clock: `date '+%Y-%m-%d %H:%M'`, or `Get-Date -Format 'yyyy-MM-dd HH:mm'` in PowerShell. Never hardcode a timezone.
 
+The hand-off names roadmap items by id (`R4`) and never copies their text.
+
+## Roadmap
+
+`ROADMAP.md` lists only the work still ahead, so it cannot fill up with stale history. Create it in this shape if it is missing:
+
+```
+# Roadmap
+
+Next id: R8
+
+## Now
+- R5 Checkout page (branch feature/checkout)
+
+## Next
+- R6 Saved carts
+
+## Later
+- R7 Gift cards
+```
+
+Edit only the lines for items this session touched:
+
+- An item whose work started gets the branch in brackets and moves to Now. Now holds at most five items; ask which one waits when a sixth would join.
+- A finished item is deleted here and added to `CHANGELOG.md` in the same commit.
+- A new item takes the `Next id`, which then goes up by one. Ids are never reused.
+
 <!-- TOGGLE:tracker:file END -->
 ## Derived docs
 
 <!-- TOGGLE:tracker:file START -->
-Update `README.md`, `CLAUDE.md` or a module `ROADMAP.md` when this session changed what they describe, and say which sections changed.
+Update `README.md` or `CLAUDE.md` when this session changed what they describe, and say which sections changed.
 <!-- TOGGLE:tracker:file END -->
 <!-- TOGGLE:tracker:github START -->
 Update `README.md` or `CLAUDE.md` when this session changed what they describe, and say which sections changed.
@@ -55,10 +82,10 @@ Take the first row that matches:
 | Branch goal not finished | Commit the work. No PR. |
 <!-- TOGGLE:tracker:file START -->
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
-| Only the hand-off file changed | Commit and open the PR; it takes the docs-only path in `token-efficiency.md`. |
+| Only the hand-off file and `ROADMAP.md` changed | Commit and open the PR; it takes the docs-only path in `token-efficiency.md`. |
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge:off START -->
-| Only the hand-off file changed | Commit and open the PR, watch its checks per `token-efficiency.md`, and merge per `git.md` § Merging. |
+| Only the hand-off file and `ROADMAP.md` changed | Commit and open the PR, watch its checks per `token-efficiency.md`, and merge per `git.md` § Merging. |
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge:off END -->
 <!-- TOGGLE:tracker:file END -->
 <!-- TOGGLE:branching_model_gitflow START -->
@@ -77,6 +104,19 @@ After the commit and PR, so the state records how they ended. For each issue thi
 Then check the three status-update triggers in `tracker.md` and post an update only when one fired.
 
 <!-- TOGGLE:tracker:github END -->
+<!-- TOGGLE:handoff_file START -->
+## Hand-off file
+
+Rewrite `.bindwright/handoff.md`. It stays on this machine: the first time, add the line `.bindwright/handoff.md` to `.git/info/exclude`. It only points at the tracker, in at most ten lines, and never restates an issue's state:
+
+```
+# Hand-off (YYYY-MM-DD HH:MM)
+- Worked on: #12 (PR #40 waiting on review), #15
+- Start with: #13
+- Open question: <one line, or none>
+```
+
+<!-- TOGGLE:handoff_file END -->
 
 ## Last message
 

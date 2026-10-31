@@ -14,9 +14,12 @@ Planning only. Change no files and create no branches in this turn.
 - `.bindwright/pending-tracker.md`, if it exists: writes an offline close could not post (`tracker.md`). Read them as part of the hand-off, post them once the plan is approved, then delete the file.
 - Ask of that status update: is its colour still true, given the board and what this session finds? If not, the colour has changed: say so in the report, and post the new update once the plan is approved.
 <!-- TOGGLE:tracker:github END -->
+<!-- TOGGLE:handoff_file START -->
+- `.bindwright/handoff.md`, if it exists: the last session's pointers on this machine. Read it first, then the issues it names; where they disagree, the issues win.
+<!-- TOGGLE:handoff_file END -->
 <!-- TOGGLE:tracker:file START -->
 - The single `{{PROJECT_NAME_UPPER}}-CONTEXT_*.md` at the repo root: the last session's hand-off. It outranks anything re-derived from git. If there are none or several, say so first.
-- `ROADMAP.md` if it exists (or the module ROADMAP for the area in focus).
+- `ROADMAP.md`, its Now section first. Then check each Now item that names a branch against git: the branch is merged when `git branch --all --merged origin/{{DEV_BRANCH}}` lists it, and gone when `git branch --all` does not. Report each such item with its fix ("R4's branch is merged: mark it done?"), so the roadmap never needs a full re-read to stay true.
 <!-- TOGGLE:tracker:file END -->
 - `.bindwright/session-steps.md` if it exists: its "Extra start steps" run after the git checks below.
 
