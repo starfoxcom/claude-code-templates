@@ -136,6 +136,15 @@ function both(files) {
 
 const needsPython = { skip: !python && "needs Python 3.8+" };
 
+test("a personal layer cannot pick the custom tool, which only the project can define", needsPython, () => {
+  const out = both({
+    personal: { codeResearch: "custom" }, local: { codeResearch: "custom" },
+    project: answers({ codeResearch: "tokensave" }),
+  });
+  assert.deepEqual(out.settings.codeResearch, { value: "tokensave", from: "project", required: false });
+  assert.deepEqual(out.ignored, ["personal: codeResearch", "local: codeResearch"]);
+});
+
 test("broken files fail alike in both engines", needsPython, () => {
   assert.equal(both({ local: "{not json" }).error, ".bindwright/local.json is not valid JSON");
   assert.equal(both({ personal: '{"schema": NaN}' }).error, "bindwright/settings.json is not valid JSON");
