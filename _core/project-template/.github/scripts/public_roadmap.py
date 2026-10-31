@@ -43,14 +43,14 @@ AI_PROCESS = (r"\b(Claude|Fable|Opus|Sonnet|Haiku|Anthropic|OpenAI|ChatGPT|GPT(-
 # What the public side never carries, by the name `check` reports.
 CONTRACT = [
     ("history", re.compile(r"<details|Full history", re.I)),
-    ("code", re.compile(r"`")),
+    ("code", re.compile(r"`|<(code|pre|kbd|samp)\b|~~~|^(?: {4}|\t)\S", re.I | re.M)),
     ("path", re.compile(r"\.(github|claude)/|\b[\w-]+/[\w.-]+/|\b[\w-]+/[\w-]+\.\w+"
                         r"|\b[\w-]+\." + EXTENSIONS + r"\b")),
     ("pull request", re.compile(r"\bPRs?\s*#?\d|\bpull requests?\b", re.I)),
     ("branch", re.compile(r"\b(feature|hotfix|release|fix|chore)/")),
     ("reference", re.compile(r"\b[\w.-]+/[\w.-]+#\d+|\bGH-\d+\b")),
     ("mention", re.compile(r"(?<![\w.@])@[A-Za-z0-9][A-Za-z0-9-]*")),
-    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://", re.I)),
+    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\bwww\.|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)),
     ("commit", re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
     ("identifier", re.compile(r"\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\w+\(\)")),
     ("constant", re.compile(r"(?<![\w.])(?<!v)\d+\.\d+(?![\d.])(?!" + UNITS + r")|\b0x[0-9a-f]+",
@@ -73,6 +73,8 @@ ITEMS = """query($owner: String!, $number: Int!, $cursor: String) {
           ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
           ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
         } } } } } } } }"""
+DISCUSSIONS = """query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
+  discussions(first: 1, orderBy: {field: CREATED_AT, direction: DESC}) { nodes { number } } } }"""
 FIELDS = """query($id: ID!) { node(id: $id) { ... on ProjectV2 { fields(first: 50) { nodes {
   ... on ProjectV2FieldCommon { id name dataType }
   ... on ProjectV2SingleSelectField { options { id name } } } } } } }"""
@@ -182,7 +184,8 @@ class Settings:
         self.private_board = (board.split("/")[0], int(board.split("/")[1])) if board else None
         self.rename = dict(raw.get("rename", {}))
         hidden = [re.escape(word) for word in raw.get("hidden", []) if word]
-        self.hidden = re.compile(r"\b(" + "|".join(hidden) + r")\b", re.I) if hidden else None
+        # Anywhere, any case: "Falcon" also catches "Falcons" and "FalconDB".
+        self.hidden = re.compile("|".join(hidden), re.I) if hidden else None
         self.public_board = raw.get("project")
         self.fields = list(raw.get("fields", []))
 
@@ -203,8 +206,10 @@ def contract_breaks(text: str, settings: Settings, public: set[int]) -> list[str
     return problems
 
 
-WITHDRAWN = ("Withdrawn", "This item is no longer on the public roadmap.\n")
-PLACEHOLDER = ("placeholder", "placeholder\n")
+# Every body the tool writes ends with this line; it touches no issue without it.
+MARK = "<!-- public-roadmap -->"
+WITHDRAWN = ("Withdrawn", f"This item is no longer on the public roadmap.\n\n{MARK}\n")
+PLACEHOLDER = ("placeholder", f"placeholder\n\n{MARK}\n")
 
 
 def is_placeholder(issue: dict) -> bool:
@@ -217,7 +222,8 @@ class PublicSync:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.repo = run_gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).strip()
-        self.me = run_gh(["api", "user", "-q", ".login"]).strip()
+        if settings.public_repo.lower() == self.repo.lower():
+            raise SystemExit("advanced.publicRoadmap names this repo itself; it must name a separate public repo")
         self.private = fetch_issues(self.repo)
         self.read_public()
         self.wanted: dict[int, tuple[str, str]] = {}
@@ -225,7 +231,7 @@ class PublicSync:
             summary = summary_of(issue["body"])
             if summary is not None:
                 text = settings.public_text
-                self.wanted[number] = (text(issue["title"]), text(summary) + "\n")
+                self.wanted[number] = (text(issue["title"]), f"{text(summary)}\n\n{MARK}\n")
         # GitHub never reuses a number, so an issue whose public number is already
         # used (skipped before, or taken by an outside issue or pull request) can
         # never go public.
@@ -239,9 +245,11 @@ class PublicSync:
         """
         repo = self.settings.public_repo
         issues = fetch_issues(repo)
-        self.public = {n: i for n, i in issues.items() if (i.get("author") or {}).get("login") == self.me}
+        self.public = {n: i for n, i in issues.items() if MARK in (i["body"] or "")}
         newest = run_gh(["api", f"repos/{repo}/issues?state=all&per_page=1", "-q", ".[0].number // 0"])
-        self.highest = max([*issues, int(newest.strip() or 0)])
+        owner, name = repo.split("/")
+        talk = gql(DISCUSSIONS, owner=owner, name=name)["repository"]["discussions"]["nodes"]
+        self.highest = max([*issues, int(newest.strip() or 0), *(d["number"] for d in talk)])
 
     def problems(self) -> list[str]:
         lines = [f"#{n} cannot go public: its public number is already used (skipped before, or an"
@@ -254,6 +262,8 @@ class PublicSync:
         return lines
 
     def push(self) -> None:
+        if self.settings.public_board and self.settings.private_board and self.settings.fields:
+            self.check_fields()
         self.create_missing()
         self.read_public()
         self.drop_placeholders()
@@ -347,6 +357,20 @@ class PublicSync:
                 gql("mutation($id: ID!) { closeIssue(input: {issueId: $id, stateReason: %s})"
                     " { clientMutationId } }" % reason, id=public["id"])
             print(f"state #{number} -> {private['state'].lower()}")
+
+    def check_fields(self) -> None:
+        """Stops before any write when a field to copy is missing or free text, which skips `check`."""
+        settings = self.settings
+        owner = settings.public_repo.split("/")[0]
+        board, _ = fetch_items(owner, int(settings.public_board), settings.public_repo)
+        fields = {f["name"]: f for f in gql(FIELDS, id=board)["node"]["fields"]["nodes"] if f}
+        unknown = [name for name in settings.fields if name not in fields]
+        if unknown:
+            raise SystemExit(f"the public board has no field named {', '.join(unknown)}")
+        text = [name for name in settings.fields if fields[name]["dataType"] == "TEXT"]
+        if text:
+            raise SystemExit(f"{', '.join(text)} is free text, which check never reads: copy only"
+                             " single-select, number and date fields")
 
     def sync_fields(self) -> None:
         settings = self.settings

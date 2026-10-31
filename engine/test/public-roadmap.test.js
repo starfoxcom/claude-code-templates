@@ -56,6 +56,9 @@ def issue_command(args):
 def graphql(args):
     v = dict(args[i + 1].split("=", 1) for i in range(2, len(args), 2))
     q = v["query"]
+    if "discussions(" in q:
+        nodes = [{"number": n} for n in state["repos"][v["owner"] + "/" + v["name"]].get("discussions", [])]
+        return json.dumps({"data": {"repository": {"discussions": {"nodes": nodes[-1:]}}}})
     if "repository(owner" in q:
         nodes = sorted(state["repos"][v["owner"] + "/" + v["name"]]["issues"].values(),
                        key=lambda i: i["number"])
@@ -88,7 +91,7 @@ def graphql(args):
 
 def newest(name):
     repo = state["repos"][name]
-    return max([int(k) for k in repo["issues"]] + repo.get("prs", []) + [0])
+    return max([int(k) for k in repo["issues"]] + repo.get("prs", []) + repo.get("discussions", []) + [0])
 
 def fake_gh(args):
     if args[:2] == ["repo", "view"]:
@@ -114,13 +117,15 @@ sys.exit(code)
 const issue = (number, title, body, extra = {}) =>
   ({ id: `priv-${number}`, number, title, body, state: "OPEN", stateReason: null, parent: null, ...extra });
 const under = (number, repo = "me/private") => ({ number, repository: { nameWithOwner: repo } });
+// A public body without the tool's own closing mark.
+const words = (body) => body.split("\n\n<!-- public-roadmap -->")[0].trim();
 const summary = (text) => `## What\nInternal notes.\n\n### Public summary\n${text}\n\n### Current state\nWorking.\n`;
 
-function scene(privateIssues, settings = {}) {
+function scene(privateIssues, settings = {}, publicRepo = "me/public") {
   const root = mkdtempSync(join(tmpdir(), "bw-public-"));
   mkdirSync(join(root, ".bindwright"));
   mkdirSync(join(root, ".github"));
-  const answers = { advanced: { tracker: "github", trackerProject: null, publicRoadmap: "me/public" } };
+  const answers = { advanced: { tracker: "github", trackerProject: null, publicRoadmap: publicRepo } };
   writeFileSync(join(root, ".bindwright", "project.json"), JSON.stringify(answers));
   const config = { rename: {}, hidden: [], project: null, fields: ["Status"], ...settings };
   writeFileSync(join(root, ".github", "public-roadmap.json"), JSON.stringify(config));
@@ -153,6 +158,8 @@ test("check names every contract break and leaves summary-less issues private", 
     issue(4, "Retries",
       summary("Raised MAX_RETRIES in 3f9a2c1, see https://intra.example/x and acme/app#12, ask @dana.")),
     issue(5, "Drafts", summary("Drafted with ChatGPT, then moved into player.gd.")),
+    issue(6, "Wiki", summary("The FalconDB notes at www.intra.example, run <code>deploy</code>.")),
+    issue(7, "Ops", summary("Ask ops@corp.example.\n\n    deploy --force")),
   ], { hidden: ["Falcon"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
@@ -164,7 +171,9 @@ test("check names every contract break and leaves summary-less issues private", 
     "#3 summary: points at #12, which stays private", "#4 summary: link ('https://')",
     "#4 summary: commit ('3f9a2c1')", "#4 summary: identifier ('MAX_RETRIES')",
     "#4 summary: reference ('acme/app#12')", "#4 summary: mention ('@dana')",
-    "#5 summary: AI or review wording ('ChatGPT')", "#5 summary: path ('player.gd')"]) {
+    "#5 summary: AI or review wording ('ChatGPT')", "#5 summary: path ('player.gd')",
+    "#6 summary: private name ('Falcon')", "#6 summary: link ('www.')", "#6 summary: code ('<code')",
+    "#7 summary: link ('ops@corp.example')", "#7 summary: code ('    d')"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
   assert.ok(!/#1 |#2 /.test(text.replace(/#12/g, "")), text);
@@ -192,7 +201,7 @@ test("push mirrors summaries under the same numbers, then has nothing left to do
   const pub = s.read()["me/public"].issues;
   assert.deepEqual(Object.keys(pub).sort(), ["1", "4", "6"]);
   assert.equal(pub["1"].title, "the shop checkout");
-  assert.equal(pub["1"].body.trim(), "One-step checkout for the shop.");
+  assert.equal(words(pub["1"].body), "One-step checkout for the shop.");
   assert.equal(pub["4"].state, "CLOSED");
   assert.equal(pub["4"].stateReason, "COMPLETED");
   assert.deepEqual(pub["4"].parent, under(1, "me/public"));
@@ -227,7 +236,7 @@ test("an edited summary and a reopened issue reach the public side", { skip }, (
   });
   const out = s.run("push");
   assert.deepEqual(out.writes, ["edit 1", "reopen 1"]);
-  assert.equal(s.read()["me/public"].issues["1"].body.trim(), "Find products by name or tag.");
+  assert.equal(words(s.read()["me/public"].issues["1"].body), "Find products by name or tag.");
 });
 
 test("a summary added to an issue whose number was skipped is refused, not a crash", { skip }, () => {
@@ -287,19 +296,30 @@ test("outside issues and pull requests on the public side are never touched, onl
   s.edit((issues, pub) => {
     pub.issues["5"] = { ...issue(5, "placeholder", "placeholder\n"), id: "out-5", author: { login: "someone" } };
     pub.prs = [6];
+    pub.discussions = [7];
+    issues["8"] = issue(8, "H", summary("Eighth."));
     issues["6"] = issue(6, "F", summary("Sixth."));
     issues["7"] = issue(7, "G", summary("Seventh."));
   });
   const blocked = s.run("push");
   assert.equal(blocked.status, 1);
   assert.match(blocked.lines.join("\n"), /#6 cannot go public: its public number is already used/);
-  s.edit((issues) => { delete issues["6"]; });
+  assert.match(blocked.lines.join("\n"), /#7 cannot go public: its public number is already used/);
+  s.edit((issues) => { delete issues["6"]; delete issues["7"]; });
   const out = s.run("push");
   assert.equal(out.status, 0, out.stderr);
   const pub = s.read()["me/public"].issues;
   assert.equal(pub["5"].author.login, "someone");
   assert.equal(pub["5"].title, "placeholder");
-  assert.equal(pub["7"].title, "G");
+  assert.equal(pub["8"].title, "H");
   // A parent in another repo is no parent here.
   assert.equal(pub["4"].parent, null);
+});
+
+test("a public roadmap that names the private repo itself is refused", { skip }, () => {
+  const s = scene([issue(1, "A", summary("First."))], {}, "me/private");
+  const out = s.run("check");
+  assert.equal(out.status, 1);
+  assert.match(out.lines.join("\n"), /names this repo itself/);
+  assert.deepEqual(out.writes, []);
 });
