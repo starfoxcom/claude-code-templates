@@ -36,7 +36,8 @@ function option(argv, name) {
 
 async function run(argv) {
   const flags = [
-    "--code", "--year", "--write", "--update", "--settings", "--export", "--remember", "--layer", "--doctor", "--report",
+    "--code", "--year", "--write", "--update", "--settings",
+    "--export", "--remember", "--layer", "--doctor", "--report",
   ];
   const [code, year, folder, update, settings, exported, remember, layer, doctor, report] =
     flags.map((n) => option(argv, n));
