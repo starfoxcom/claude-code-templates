@@ -6,6 +6,7 @@
 //   ... --write DIR --adopt                          -> the same, with every file outside .bindwright/ staged
 //   node engine/cli.js --update DIR                  -> the saved answers rebound and merged (update.js)
 //   node engine/cli.js --settings DIR                -> the settings layers resolved for that repo (layers.js)
+//   node engine/cli.js --audit DIR                   -> how its rules held up in recent sessions (audit.js)
 //   node engine/cli.js --export DIR < choices.json   -> the project's setup object written (share.js)
 //   node engine/cli.js --remember DIR --layer L < choices.json -> one person's choices written to layer L
 //   node engine/cli.js --doctor DIR                  -> a health check of that repo and this machine (doctor.js)
@@ -20,6 +21,7 @@ import { MAX_DEPTH, decodeSetupCode, depthOf } from "./setupcode.js";
 import { applyFiles } from "./apply.js";
 import { decode, runUpdate } from "./update.js";
 import { runSettings } from "./layers.js";
+import { runAudit } from "./audit.js";
 import { exportSetup, rememberChoices } from "./share.js";
 import { cliVersionFrom, runDoctor } from "./doctor.js";
 import { draftReport } from "./report.js";
@@ -37,15 +39,16 @@ function option(argv, name) {
 async function run(argv) {
   const flags = [
     "--code", "--year", "--write", "--update", "--settings",
-    "--export", "--remember", "--layer", "--doctor", "--report",
+    "--export", "--remember", "--layer", "--doctor", "--report", "--audit",
   ];
-  const [code, year, folder, update, settings, exported, remember, layer, doctor, report] =
+  const [code, year, folder, update, settings, exported, remember, layer, doctor, report, audit] =
     flags.map((n) => option(argv, n));
   const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
   if (report !== undefined) return reportRepo(report, config);
   if (doctor !== undefined) return doctorRepo(doctor, config);
   if (update !== undefined) return updateRepo(update);
   if (settings !== undefined) return runSettings(settings, config);
+  if (audit !== undefined) return runAudit(audit, config);
   if (exported !== undefined) return { setup: exportSetup(exported, choicesFromStdin()) };
   if (remember !== undefined && layer === undefined) throw new Error("--remember needs --layer personal or local");
   if (remember !== undefined) return rememberChoices(remember, config, layer, choicesFromStdin());

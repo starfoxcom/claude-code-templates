@@ -9,7 +9,6 @@ global-template/
 ├── README.md                              # (this file)
 ├── CLAUDE.md.additions                    # Append to ~/.claude/CLAUDE.md
 ├── memory-template/
-│   ├── README.md                          # How the memory system works
 │   └── MEMORY.md                          # Empty index — copy to the per-project memory dir
 ├── hooks/
 │   ├── code-research-first.py.template    # Generic PreToolUse hook (rendered at bind time)
@@ -58,7 +57,7 @@ where `<project-slug>` is what Claude Code auto-derives from your project's work
 After SETUP determines the slug:
 
 1. Copy `memory-template/MEMORY.md` to `~/.claude/projects/<project-slug>/memory/MEMORY.md` (if it doesn't already exist).
-2. Read `memory-template/README.md` for the four memory types + when to save each + the body structure for feedback / project memories (the `**Why:**` + `**How to apply:**` lines).
+2. The memory types, when to save each and the body structure come from the "Auto memory" section of `CLAUDE.md.additions`, merged into `~/.claude/CLAUDE.md` in step 1.
 
 Claude will start populating memory entries during your normal sessions — you don't need to pre-fill anything beyond the empty MEMORY.md index.
 
