@@ -190,6 +190,9 @@ h1 {
 .tree .file:hover { background: var(--key); }
 .tree .file[aria-current="true"] { background: var(--key); box-shadow: inset 2px 0 0 var(--accent); }
 
+.tree .file.added { color: var(--add); }
+.tree .file.added::after { content: " (new)"; font-size: 12px; }
+.tree .file.removed { color: var(--del); text-decoration: line-through; cursor: default; }
 .view { display: flex; flex-direction: column; min-width: 0; }
 .view .path { padding: 12px 16px 8px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
 .view pre {

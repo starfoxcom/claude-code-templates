@@ -34,7 +34,7 @@ export async function repoFiles(answers) {
 }
 
 // Folders before files at each level, then by name.
-function byFolder(a, b) {
+export function byFolder(a, b) {
   const [x, y] = [a.split("/"), b.split("/")];
   for (let i = 0; i < Math.min(x.length, y.length); i++) {
     const [xDir, yDir] = [i < x.length - 1, i < y.length - 1];

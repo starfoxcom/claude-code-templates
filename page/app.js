@@ -1,7 +1,7 @@
 // The page's state and controls. The engine's own model holds the answers,
 // so the page and /bindwright:setup always start from the same defaults.
 import { defaults } from "../engine/model.js";
-import { repoFiles } from "./files.js";
+import { repoFiles, byFolder } from "./files.js";
 import { summarize, compare, describe } from "./summary.js";
 
 // One accent hue per setup (docs/v2/DESIGN.md).
@@ -16,6 +16,7 @@ let latest = 0;
 // The summary on screen, and the name of the key that last changed it.
 let shown = null;
 let choice = null;
+let fileChange = null;
 
 function choose(question, value, label) {
   if (answers[question] === value) return;
@@ -46,7 +47,14 @@ async function refresh() {
   try {
     const next = await repoFiles(answers);
     if (ticket !== latest) return;
+    const before = new Set(files.map(([path]) => path));
     files = next;
+    const now = new Set(files.map(([path]) => path));
+    // Files the last answer change added or removed; none on the first draw.
+    fileChange = choice && before.size ? {
+      added: new Set([...now].filter((path) => !before.has(path))),
+      removed: [...before].filter((path) => !now.has(path)),
+    } : null;
     if (!files.some(([path]) => path === selected)) selected = files[0]?.[0];
     drawGroups();
     drawTree();
@@ -108,18 +116,25 @@ function changeNote(change) {
   return `${choice} adds ${added}. ${removed ? `It removes ${removed}.` : "Nothing is removed."}`;
 }
 
-// Folder rows wherever a path enters a new folder, then the file itself.
+// Folder rows wherever a path enters a new folder, then the file itself. Files
+// the last change added are marked green; removed ones stay, struck through.
 function drawTree() {
   const rows = [];
   let open = [];
-  for (const [path] of files) {
+  const removed = new Set(fileChange?.removed ?? []);
+  const paths = [...files.map(([path]) => path), ...removed].sort(byFolder);
+  for (const path of paths) {
     const parts = path.split("/");
     const dirs = parts.slice(0, -1);
     let same = 0;
     while (same < dirs.length && open[same] === dirs[same]) same++;
     for (let d = same; d < dirs.length; d++) rows.push(row("div", "dir", d, `${dirs[d]}/`));
     open = dirs;
-    const file = row("button", "file", dirs.length, parts.at(-1));
+    if (removed.has(path)) {
+      rows.push(row("div", "file removed", dirs.length, parts.at(-1)));
+      continue;
+    }
+    const file = row("button", fileChange?.added.has(path) ? "file added" : "file", dirs.length, parts.at(-1));
     file.type = "button";
     file.dataset.path = path;
     if (path === selected) file.setAttribute("aria-current", "true");
