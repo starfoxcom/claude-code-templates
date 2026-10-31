@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hubot+Sans:wdth,wght@75..125,200..900&family=Fragment+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
 </head>
 <body>
 <a class="skip" href="#setup">Skip to the setup</a>
@@ -53,7 +54,24 @@
     <h2 id="setup-title">Set up your project</h2>
     <div class="rig">
       <div class="panel">
-        <p class="empty">Two questions about your project go here.</p>
+        <div class="q" role="group" aria-labelledby="q-team">
+          <h3 id="q-team">Who works on the project?</h3>
+          <div class="keys">
+            <button class="k" type="button" data-q="team" data-v="false" aria-pressed="true">
+              <b>Just me</b><span>One person, one machine</span></button>
+            <button class="k" type="button" data-q="team" data-v="true" aria-pressed="false">
+              <b>A team</b><span>Shared branches and reviews</span></button>
+          </div>
+        </div>
+        <div class="q" role="group" aria-labelledby="q-client">
+          <h3 id="q-client">Whose project is it?</h3>
+          <div class="keys">
+            <button class="k" type="button" data-q="client" data-v="false" aria-pressed="true">
+              <b>Mine</b><span>Open source or my own product</span></button>
+            <button class="k" type="button" data-q="client" data-v="true" aria-pressed="false">
+              <b>A client's</b><span>Private code, kept confidential</span></button>
+          </div>
+        </div>
       </div>
       <div class="panel out">
         <p class="empty">What Bindwright adds to your project shows up here, in plain words.</p>
