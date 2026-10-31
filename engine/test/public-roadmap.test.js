@@ -166,7 +166,8 @@ test("check names every contract break and leaves summary-less issues private", 
     issue(8, "Wiki two", summary("See [the wiki](//intra.example/wiki).\n\n        deploy --force")),
     issue(9, "Wiki three", summary("Read <a href=\"//intra.example\">this</a>.")),
     issue(10, "Wiki four", summary("See [the wiki][1] for details.\n\n[1]: //intra.example/wiki")),
-  ], { hidden: ["Falcon"] });
+    issue(11, "Phones", summary("Ship the iOS app, then port the server to Node.js.")),
+  ], { hidden: ["Falcon"], allowed: ["iOS", "Node.js"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
   assert.deepEqual(out.writes, []);
@@ -184,7 +185,7 @@ test("check names every contract break and leaves summary-less issues private", 
     "#10 summary: link ('[1]:')"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
-  assert.ok(!/#1 |#2 /.test(text.replace(/#12/g, "")), text);
+  assert.ok(!/#1 |#2 |#11 /.test(text.replace(/#12/g, "")), text);
 });
 
 test("push refuses while check reports anything", { skip }, () => {

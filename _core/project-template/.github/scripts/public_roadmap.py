@@ -187,6 +187,9 @@ class Settings:
         hidden = [re.escape(word) for word in raw.get("hidden", []) if word]
         # Anywhere, any case: "Falcon" also catches "Falcons" and "FalconDB".
         self.hidden = re.compile("|".join(hidden), re.I) if hidden else None
+        allowed = [re.escape(word) for word in raw.get("allowed", []) if word]
+        # Public names the patterns would mistake for code, such as "iOS" or "Node.js": exact words only.
+        self.allowed = re.compile(r"(?<![\w.])(?:" + "|".join(allowed) + r")(?!\w)") if allowed else None
         self.public_board = raw.get("project")
         self.fields = list(raw.get("fields", []))
 
@@ -198,8 +201,9 @@ class Settings:
 
 def contract_breaks(text: str, settings: Settings, public: set[int]) -> list[str]:
     """Why `text` cannot go public; empty when it can."""
-    problems = [f"{name} ('{rule.search(text).group(0)}')" for name, rule in CONTRACT
-                if rule.search(text)]
+    scanned = settings.allowed.sub(" ", text) if settings.allowed else text
+    problems = [f"{name} ('{rule.search(scanned).group(0)}')" for name, rule in CONTRACT
+                if rule.search(scanned)]
     if settings.hidden and settings.hidden.search(text):
         problems.append(f"private name ('{settings.hidden.search(text).group(0)}')")
     private = sorted({int(n) for n in re.findall(r"(?<![\w&])#(\d+)\b", text)} - public)

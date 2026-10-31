@@ -1,6 +1,7 @@
 {
   "rename": {},
   "hidden": [],
+  "allowed": [],
   "project": null,
   "fields": ["Status"]
 }
