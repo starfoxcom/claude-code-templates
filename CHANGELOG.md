@@ -8,6 +8,8 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ### Added
 
+- **Setup reads the CLI version the session runs** (#422). Before offering the mods, `/bindwright:setup` and `/bindwright:join` take the version from the session's `AI_AGENT` variable instead of `claude --version`, since the desktop app runs its own copy of the CLI, which can be older than the one on the PATH. Skipped mods come with a one-line reason, and setup says in one line why the built-in "You should know" mod stays off.
+
 - **`/bindwright:report`** (#470, part 2). Files a bug against Bindwright the way the CLI's own feedback command does: it drafts the report from what failed and the doctor's findings, the engine (`--report`, `engine/report.js` and its Python twin) replaces the repo path, home folder, user name, emails and tokens with placeholders, and the skill shows the whole report and files it with `gh` only on a yes, or hands over a prefilled new-issue link. Setup, update and the doctor offer it when the engine fails.
 
 - **`/bindwright:doctor`** (#470, part 1). A read-only health check of a set-up repo and this machine that says what is wrong in plain words and how to fix each thing: broken or missing setup files, a repo older than the plugin, missing guard hooks, staged files still waiting, settings the layers ignore, extras the project expects, and a CLI too old for the installed mods. It reads the version of the CLI the session actually runs, so Claude Desktop's own copy is caught too. It also runs the review gate's `--check`.
