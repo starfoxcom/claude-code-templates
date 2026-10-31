@@ -1,5 +1,4 @@
 {
-  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "attribution": {
     "commit": "",
     "pr": "",
@@ -63,5 +62,6 @@
       "Bash(git rebase * --interactive*)",
       "Bash(gh pr merge *--admin*)"
     ]
-  }
+  },
+  "$schema": "https://json.schemastore.org/claude-code-settings.json"
 }
