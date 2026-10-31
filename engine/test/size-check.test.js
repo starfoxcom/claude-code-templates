@@ -91,10 +91,25 @@ test("a new hard breach fails, and the baseline lets it stay but never grow", { 
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /SIZE_BREACH_GREW: app\.py: file - = 22 \(baseline 21\)/);
 
+  // Once the code complies, its baseline line must go, or it would excuse the next breach.
   put("app.py", lines(20));
+  r = check(root);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /SIZE_LEDGER_LEFTOVER: app\.py\|file\|- is listed 1 times in the baseline but breaches 0 times/);
+  put(".github/size-check/baseline.txt", "# path|construct|name|value\n");
   r = check(root, ["--report"]);
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /soft: app\.py: file - = 20 \(soft limit 10\)/);
+});
+
+test("a leftover same-named baseline line cannot excuse a new breach", { skip }, () => {
+  const { root, put, git } = makeRepo({ "app.py": "x\n" });
+  put(".github/size-check/baseline.txt", "app.py|function|(anonymous)|30\napp.py|function|(anonymous)|20\n");
+  git("add", ".github/size-check/baseline.txt");
+  // The 30-line one shrank below the limit and the 20-line one grew to 25.
+  const r = check(root, [], { stub: { "app.py": [{ name: "(anonymous)", length: 25 }] } });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /SIZE_LEDGER_LEFTOVER: app\.py\|function\|\(anonymous\) is listed 2 times .* breaches 1 times/);
 });
 
 test("each limit trips one step past its hard value, not at it", { skip }, () => {
@@ -164,7 +179,9 @@ test("tests get half again the file limit, and skipped folders are out of scope"
 test("exceptions cover a breach with a reason, and stale entries fail", { skip }, () => {
   const { root } = makeRepo({
     "gen.py": lines(25),
-    ".github/size-check/exceptions.txt": "# why\ngen.py|file|-|generated table\ngone.py|file|*|deleted file\n",
+    "big.py": lines(25),
+    ".github/size-check/exceptions.txt":
+      "# why\ngen.py|file|-|generated table\nbig.py|file|*|codegen | see Makefile\ngone.py|file|*|deleted file\n",
   });
   const r = check(root);
   assert.equal(r.code, 1, r.out);

@@ -188,21 +188,40 @@ def measure_file(found, path, shared, limits):
         found.judge(path, "params", name, params, shared.get("params"))
 
 
-def load_ledger(path):
+def ledger_fields(line, reason):
+    """(path, construct, name), last field. A reason may hold "|", so it takes
+    the rest of the line; a baseline value is digits only, so the name takes
+    everything before it, and a name holding "|" (a C++ operator|) reads back."""
+    if reason:
+        fields = [p.strip() for p in line.split("|", 3)]
+        return (tuple(fields[:3]), fields[3]) if len(fields) == 4 else None
+    head, _, value = line.rpartition("|")
+    fields = [p.strip() for p in head.split("|", 2)]
+    return (tuple(fields), value.strip()) if len(fields) == 3 else None
+
+
+def load_ledger(path, reason=False):
     entries = {}
     if not os.path.exists(path):
         return entries
     with open(path, encoding="utf-8") as f:
         for raw in f:
             line = raw.strip()
-            # The name sits between the first two fields and the last one, so a
-            # name holding "|" (a C++ operator|) reads back whole.
-            head, _, value = line.rpartition("|")
-            fields = [p.strip() for p in head.split("|", 2)]
-            if line and not line.startswith("#") and len(fields) == 3:
+            parsed = ledger_fields(line, reason) if line and not line.startswith("#") else None
+            if parsed:
                 # A list per key: one file can hold several same-named functions.
-                entries.setdefault(tuple(fields), []).append(value.strip())
+                entries.setdefault(parsed[0], []).append(parsed[1])
     return entries
+
+
+def leftovers(hard, baseline):
+    """Baseline keys that list more breaches than the tree still has: a line
+    left after its code complied would excuse the next breach of that name."""
+    current = {}
+    for item in hard:
+        current[item[:3]] = current.get(item[:3], 0) + 1
+    return [(key, len(values), current.get(key, 0))
+            for key, values in sorted(baseline.items()) if len(values) > current.get(key, 0)]
 
 
 def write_baseline(hard):
@@ -238,13 +257,13 @@ def compare(hard, baseline):
     return new, grown, tolerated
 
 
-def report(found, stale, compared, verbose):
+def report(found, problems, compared, verbose):
     new, grown, tolerated = compared
-    failed = bool(found.lizard_missing or stale or new or grown)
+    failed = bool(found.lizard_missing or problems or new or grown)
     if found.lizard_missing:
         print("SIZE_CHECK_DEGRADED: lizard is not installed, so no function rows ran (pip install lizard)")
-    for key in stale:
-        print(f"SIZE_LEDGER_STALE: {'|'.join(key)} names a file that is no longer tracked")
+    for problem in problems:
+        print(problem)
     for path, construct, name, value, limit in new:
         print(f"SIZE_BREACH_NEW: {path}: {construct} {name} = {value} (hard limit {limit}); "
               "shrink it, or record a reason in .github/size-check/exceptions.txt")
@@ -282,7 +301,7 @@ def main(argv=None):
     for path in files:
         measure_file(found, path, shared, by_ext[os.path.splitext(path)[1]])
 
-    exceptions = load_ledger(EXCEPTIONS)
+    exceptions = load_ledger(EXCEPTIONS, reason=True)
     hard = [h for h in found.hard if h[:3] not in exceptions and (h[0], h[1], "*") not in exceptions]
     if args.write_baseline:
         if found.lizard_missing:
@@ -294,8 +313,12 @@ def main(argv=None):
 
     baseline = load_ledger(BASELINE)
     tracked = set(files)
-    stale = [k for k in list(exceptions) + list(baseline) if k[0] not in tracked]
-    return report(found, stale, compare(hard, baseline), args.report)
+    problems = [f"SIZE_LEDGER_STALE: {'|'.join(k)} names a file that is no longer tracked"
+                for k in list(exceptions) + list(baseline) if k[0] not in tracked]
+    problems += [f"SIZE_LEDGER_LEFTOVER: {'|'.join(key)} is listed {listed} times in the baseline but breaches "
+                 f"{now} times; delete the lines whose code now complies"
+                 for key, listed, now in leftovers(hard, baseline) if key[0] in tracked]
+    return report(found, problems, compare(hard, baseline), args.report)
 
 
 if __name__ == "__main__":
