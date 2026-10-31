@@ -21,7 +21,7 @@ Pick the engine as setup does: `node "${CLAUDE_PLUGIN_ROOT}/engine/cli.js"` when
 
 Run it with `--update <repo root>`. It prints one line of JSON:
 
-- `{"error": "..."}`: show the message and stop.
+- `{"error": "..."}`: show the message and stop; nothing was written. A message starting `Refusing to write through a symbolic link` names repo files that are links: the update never writes through one. Offer to list each in `.bindwright/owned`, so later updates leave it alone, or to replace the link with a plain file, then run the update again.
 - Otherwise, lists of repo paths by what happened to each file:
 
 | List | What happened | What the user does |
@@ -36,7 +36,7 @@ Run it with `--update <repo root>`. It prints one line of JSON:
 | `deleted` | The repo deleted a file setup wrote; it stays deleted | Nothing |
 | `owned` | Listed in `.bindwright/owned`; never touched | Nothing |
 | `unchanged` | Already up to date | Nothing |
-| `skipped` | A staged copy from an earlier run was already there, so the new one was not written | Settle the old copy, then run the update again |
+| `skipped` | A staged copy from an earlier run was already there, so the new one was not written; the file keeps its old base | Settle the old copy, then run the update again: it stages the newer text |
 
 Edits inside `.claude/` ask the user for permission even when edits are otherwise accepted. Before the first one, say that the next steps change the repo's agent settings and rules.
 

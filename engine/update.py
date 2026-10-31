@@ -41,6 +41,8 @@ def _keeps_sections(ours, merged, path):
 
 def _decide(path, ours, base, theirs, merge):
     if theirs is None:
+        if ours is None:
+            return ("deleted",)
         return ("removed",) if ours == base else ("removed_edited",)
     if base is None:
         if ours is None:
@@ -136,13 +138,26 @@ def run_update(root, bind_with, version, state_json):
     rendered = bind_with(json.loads(answers), pristine["year"])
     owned = owned_patterns(read(OWNED) or "")
     plan = plan_update(rendered, pristine, read, owned, git_merge, version)
+
+    def at(path):
+        return os.path.join(root, *path.split("/"))
+
+    # Every check before the first write, so a refusal leaves the repo as it was.
+    links = [path for path, _ in plan["write"] if os.path.islink(at(path))]
+    if links:
+        raise ValueError("Refusing to write through a symbolic link: " + ", ".join(links))
+    skipped = [path[len(STAGING):] for path, _ in plan["stage"] if os.path.lexists(at(path))]
+    files = plan["pristine"]["files"]
+    for path in skipped:
+        # The old staged copy is unsettled, so its file keeps the old base and the next update stages it again.
+        if path in pristine["files"]:
+            files[path] = pristine["files"][path]
+        else:
+            files.pop(path, None)
     for path, text in plan["write"]:
         _put(root, path, text)
-    skipped = []
     for path, text in plan["stage"]:
-        if os.path.lexists(os.path.join(root, *path.split("/"))):
-            skipped.append(path[len(STAGING):])
-        else:
+        if path[len(STAGING):] not in skipped:
             _put(root, path, text, exclusive=True)
     _put(root, PRISTINE, state_json(plan["pristine"]))
     out = {o: plan[o] for o in OUTCOMES}
