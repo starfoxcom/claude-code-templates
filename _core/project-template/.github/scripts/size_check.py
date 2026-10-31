@@ -188,7 +188,8 @@ def load_ledger(path):
         for raw in f:
             parts = [p.strip() for p in raw.strip().split("|")]
             if raw.strip() and not raw.lstrip().startswith("#") and len(parts) >= 4:
-                entries[(parts[0], parts[1], parts[2])] = parts[3]
+                # A list per key: one file can hold several same-named functions.
+                entries.setdefault((parts[0], parts[1], parts[2]), []).append(parts[3])
     return entries
 
 
@@ -205,15 +206,23 @@ def write_baseline(hard):
 
 
 def compare(hard, baseline):
-    new, grown, tolerated = [], [], []
+    """Breaches that share a key (several `(anonymous)` callbacks in one file,
+    say) pair up with the recorded ones largest to largest; any beyond the
+    recorded count are new."""
+    by_key = {}
     for item in hard:
-        base = baseline.get(item[:3])
-        if base is None:
-            new.append(item)
-        elif not base.isdigit() or item[3] > int(base):
-            grown.append(item + (base,))
-        else:
-            tolerated.append(item)
+        by_key.setdefault(item[:3], []).append(item)
+    new, grown, tolerated = [], [], []
+    for key, items in by_key.items():
+        # A value that is not a number allows nothing, so its breach fails.
+        recorded = sorted((int(v) if v.isdigit() else -1 for v in baseline.get(key, [])), reverse=True)
+        for i, item in enumerate(sorted(items, key=lambda it: it[3], reverse=True)):
+            if i >= len(recorded):
+                new.append(item)
+            elif item[3] > recorded[i]:
+                grown.append(item + (recorded[i],))
+            else:
+                tolerated.append(item)
     return new, grown, tolerated
 
 
@@ -252,6 +261,10 @@ def main(argv=None):
         shared, by_ext, notes = read_rule(f.read())
     for note in notes:
         print(f"note: {note}")
+    if not by_ext:
+        # A clean result would only mean nothing was measured.
+        print("SIZE_RULE_EMPTY: .claude/rules/code-size.md gives limits for no file type")
+        return 1
     files = tracked_files(by_ext)
     found = Findings()
     for path in files:

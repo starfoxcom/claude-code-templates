@@ -113,6 +113,28 @@ test("each limit trips one step past its hard value, not at it", { skip }, () =>
   assert.match(r.out, /bad\.py: line_length - = 2 \(hard limit 40\)/);
 });
 
+test("a second same-named breach is new, not hidden behind the recorded one", { skip }, () => {
+  const one = [{ name: "(anonymous)", length: 12 }];
+  const { root, git } = makeRepo({ "app.py": "x\n" });
+  assert.equal(check(root, ["--write-baseline"], { stub: { "app.py": one } }).code, 0);
+  git("add", ".github/size-check/baseline.txt");
+  assert.equal(check(root, [], { stub: { "app.py": one } }).code, 0);
+
+  const two = [...one, { name: "(anonymous)", length: 9 }];
+  let r = check(root, [], { stub: { "app.py": two } });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /SIZE_BREACH_NEW: app\.py: function \(anonymous\) = 9/);
+  r = check(root, [], { stub: { "app.py": [{ name: "(anonymous)", length: 13 }] } });
+  assert.match(r.out, /SIZE_BREACH_GREW: app\.py: function \(anonymous\) = 13 \(baseline 12\)/);
+});
+
+test("a rule that names no file type fails instead of passing empty", { skip }, () => {
+  const { root } = makeRepo({ "app.py": "x\n" }, "# Code size\n\nNo tables.\n");
+  const r = check(root);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /SIZE_RULE_EMPTY/);
+});
+
 test("tests get half again the file limit, and skipped folders are out of scope", { skip }, () => {
   const { root } = makeRepo({
     "tests/test_app.py": lines(30), "app_test.py": lines(31),
