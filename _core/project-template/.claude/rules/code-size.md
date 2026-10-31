@@ -44,3 +44,9 @@ Values are soft / hard. Test files may run 1.5 times the file limit.
 ## Working the rule
 
 New code meets the table from its first commit. A new file or function that would pass the hard limit is designed smaller before it lands: extract functions, split the file, flatten nesting with early returns. Existing code over the limit shrinks when it is next substantially changed, not in drive-by edits.
+<!-- TOGGLE:code_size_check START -->
+
+## The check
+
+`.github/scripts/size_check.py` measures the mechanical rows of these tables on every PR (`.github/workflows/size-check.yml`): file and line length, and each function's length, complexity and parameters. Breaches the project had when the check was set up are recorded in `.github/size-check/baseline.txt` and may only shrink; any new hard breach fails the PR. Delete a baseline line once its code complies; the check fails until you do, so a leftover line cannot excuse the next breach. A breach under one of the exceptions above goes in `.github/size-check/exceptions.txt` with its reason. `--report` lists every finding, soft ones included. Edit the tables here, not in the script: it reads them from this file.
+<!-- TOGGLE:code_size_check END -->
