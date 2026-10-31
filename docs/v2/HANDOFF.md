@@ -121,7 +121,7 @@ Nothing in the current workflow breaks if the build order below is kept. The one
 
 ## Build order
 
-1. Canonical: tracker profiles (GitHub), the status-update rule as a canonical rule, the `tracker` setting replacing the two switches, the `.bindwright/project.json` and `session-steps.md` templates, the session skills reading them, engine golden tests updated. Deep review.
+1. Canonical: tracker profiles (GitHub), the status-update rule as a canonical rule, the `tracker` setting replacing the two switches, the `.bindwright/project.json` and `session-steps.md` templates, the session skills reading them, engine golden tests updated. Deep review. Built 2026-10-30 under #417: the status-update rule and the GitHub profile share one rule, `tracker.md`, and the skills read the board from `.bindwright/project.json`. The bundle files, `TOGGLES.md` and the older page keep their switches until Phase 3 replaces the page.
 2. This repo moves its hand-off to the tracker, using a project copy of the new skills.
 3. The other three projects move, one PR each, each with its `session-steps.md`; skill contracts that name a context file change in the same window.
 4. With all four on the new skills, install the global copies and delete the project copies in one window.

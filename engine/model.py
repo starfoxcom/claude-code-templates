@@ -43,6 +43,13 @@ HOOK_LOCATIONS = ["repo", "home"]
 # direct pushes to the protected branches, interactive rebase and admin
 # merges; "strict" also stops local history wipes and destructive gh calls.
 DENY_PROFILES = ["standard", "strict"]
+# Where the work state lives between sessions: GitHub issues (with a Projects
+# board when trackerProject names one), or the repo's hand-off file and
+# ROADMAP.md.
+TRACKERS = ["github", "file"]
+# "<owner>/<number>" of a GitHub Projects board. The owner lands in gh
+# command lines, so it is held to GitHub's own name rule.
+TRACKER_PROJECT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[1-9][0-9]{0,5}")
 LICENSES = {"MIT": "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "BSD-3-Clause": "BSD-3-Clause.txt", "Proprietary": "Proprietary.txt"}
 
 # Filled later by the tailoring step, which reads the user's repo.
@@ -108,6 +115,10 @@ def defaults(team=False, client=False):
             "denyProfile": "standard",
             # Files the writing rule checks. None keeps the rule's own list.
             "shippedTextPaths": None,
+            "tracker": "github",
+            # "<owner>/<number>" when tracker is "github" and the project has a
+            # board; None keeps project status in a pinned issue instead.
+            "trackerProject": None,
         },
     }
 
@@ -187,7 +198,17 @@ def validate(a):
     paths = get(adv, "shippedTextPaths")
     _check(paths is None or (isinstance(paths, list) and len(paths) > 0 and all(_glob_ok(g) for g in paths)),
            "shippedTextPaths must be null or a non-empty list of globs without quotes, backslashes, line breaks or outer spaces")
+    _check_tracker(get(adv, "tracker"), get(adv, "trackerProject"))
     return a
+
+
+def _check_tracker(tracker, board):
+    _check(isinstance(tracker, str) and tracker in TRACKERS, 'unknown tracker "%s"' % js_str(tracker))
+    if tracker == "github":
+        _check(board is None or (isinstance(board, str) and TRACKER_PROJECT.fullmatch(board) is not None),
+               'trackerProject must be null or "<owner>/<number>": a GitHub user or organization name and the board\'s number')
+    else:
+        _check(board is None or board is UNDEFINED, 'trackerProject is only for tracker "github"')
 
 
 # Every toggle name the templates use must resolve here to True or False.
@@ -210,7 +231,6 @@ def flags_for(a):
         "contributing_md": a["team"],
         "audit_trail_commits": a["client"],
         "definition_of_done_verification": True,
-        "context_refresh_files": True,
         "lazy_rules_folder": True,
         "memory_system": True,
     }
@@ -222,12 +242,14 @@ CHOICE_OPTIONS = {
     "code_research": list(CODE_RESEARCH_TOOLS),
     "precommit": ["none"] + PRECOMMIT_MANAGERS,
     "merge_style": MERGE_STYLES,
+    "tracker": TRACKERS,
 }
 
 
 def choices_for(a):
     adv = a["advanced"]
-    return {"code_research": adv["codeResearch"], "precommit": adv["precommit"], "merge_style": adv["mergeStyle"]}
+    return {"code_research": adv["codeResearch"], "precommit": adv["precommit"], "merge_style": adv["mergeStyle"],
+            "tracker": adv["tracker"]}
 
 
 def _upper_snake(s):

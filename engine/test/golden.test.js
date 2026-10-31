@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { bind } from "../bind.js";
 import { python } from "./python.js";
 import {
-  defaults, LICENSES, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES, MERGE_STYLES, HOOK_LOCATIONS, DENY_PROFILES,
+  defaults, LICENSES, CODE_RESEARCH_TOOLS, PRECOMMIT_MANAGERS, ARCHITECTURES, MERGE_STYLES, HOOK_LOCATIONS, DENY_PROFILES, TRACKERS,
 } from "../model.js";
 
 const engine = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -34,6 +34,7 @@ function oneAtATime() {
   const choices = {
     codeResearch: Object.keys(CODE_RESEARCH_TOOLS), precommit: ["none", ...PRECOMMIT_MANAGERS], architecture: ARCHITECTURES,
     branching: ["gitflow", "trunk"], mergeStyle: MERGE_STYLES, hookLocation: HOOK_LOCATIONS, denyProfile: DENY_PROFILES,
+    tracker: TRACKERS,
   };
   const switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "devIsDefault", "attributionGuard"];
   const cases = [];
@@ -57,6 +58,7 @@ function oneAtATime() {
       named.advanced.plainWriting = true;
       // U+0085 passes JavaScript's trim() but not Python's strip().
       named.advanced.shippedTextPaths = ["**/*.gd", "i18n/$&-$1.json", "docs/#public/**", "notes\u0085"];
+      named.advanced.trackerProject = "My-Org9/123456";
       cases.push(named);
       // The saved answers in .bindwright/project.json: both engines escape
       // quotes, backslashes and control characters alike, and nothing else.
@@ -89,7 +91,9 @@ function seeded(count) {
       architecture: pick(ARCHITECTURES), branching: pick(["gitflow", "trunk"]), mergeStyle: pick(MERGE_STYLES),
       hookLocation: pick(HOOK_LOCATIONS), denyProfile: pick(DENY_PROFILES),
       shippedTextPaths: bool() ? null : ["src/**/*.ts", "README*"],
+      tracker: pick(TRACKERS),
     });
+    a.advanced.trackerProject = a.advanced.tracker === "github" && bool() ? "starfoxcom/6" : null;
     a.advanced = withTool(a.advanced, a.advanced.codeResearch);
     return a;
   });
@@ -138,6 +142,20 @@ function refused() {
     (a) => { a.advanced.shippedTextPaths = []; },
     (a) => { a.advanced.shippedTextPaths = ["﻿docs/**"]; },
     (a) => { a.advanced.shippedTextPaths = ["😀".repeat(101)]; },
+    (a) => { a.advanced.tracker = "jira"; },
+    (a) => { a.advanced.tracker = ["github"]; },
+    (a) => { delete a.advanced.tracker; },
+    (a) => { delete a.advanced.trackerProject; },
+    (a) => { a.advanced.trackerProject = "owner/0"; },
+    (a) => { a.advanced.trackerProject = "owner/1234567"; },
+    (a) => { a.advanced.trackerProject = "-owner/6"; },
+    (a) => { a.advanced.trackerProject = "owner-/6"; },
+    (a) => { a.advanced.trackerProject = `${"a".repeat(40)}/6`; },
+    (a) => { a.advanced.trackerProject = "owner/6\n"; },
+    (a) => { a.advanced.trackerProject = "own;er/6"; },
+    (a) => { a.advanced.trackerProject = { owner: "x", number: 6 }; },
+    (a) => { a.advanced.trackerProject = 6; },
+    (a) => { a.advanced.tracker = "file"; a.advanced.trackerProject = "owner/6"; },
   ];
   // An edit that returns a value replaces the answers outright.
   return edits.map((edit) => { const a = defaults(); const whole = edit(a); return whole === undefined ? a : whole; });

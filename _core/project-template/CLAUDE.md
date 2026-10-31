@@ -16,7 +16,12 @@ Guidance for Claude Code in this repository. Rules in `.claude/rules/` load on t
 <!-- TOGGLE:branching_model_trunk END -->
 - **Commands:** lint `{{LINT_COMMAND}}`, type check `{{TYPECHECK_COMMAND}}`, test `{{TEST_COMMAND}}`.
 
+<!-- TOGGLE:tracker:github START -->
+Work is tracked in GitHub issues: `.claude/rules/tracker.md` says where each item's state lives and how to read and update it.
+<!-- TOGGLE:tracker:github END -->
+<!-- TOGGLE:tracker:file START -->
 Skim `ROADMAP.md`, if it exists, before starting a task.
+<!-- TOGGLE:tracker:file END -->
 
 ## Language
 

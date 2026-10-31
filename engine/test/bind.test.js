@@ -981,3 +981,38 @@ test("bound guard hooks are the canonical files, unrendered", async () => {
     assert.equal(files.get(`.claude/hooks/${name}`), src, name);
   }
 });
+
+test("the tracker decides where the hand-off lives", async () => {
+  const github = await run(defaults());
+  assertClean(github);
+  assert.ok(github.has(".claude/rules/tracker.md"));
+  assert.ok(github.has(".github/ISSUE_TEMPLATE/work-item.md"));
+  assert.ok(github.get(".claude/skills/session-start/SKILL.md").includes("tracker.md"));
+  assert.ok(!github.get(".claude/skills/session-close/SKILL.md").includes("-CONTEXT_"));
+  assert.ok(!github.get(`${STAGING}CLAUDE.md`).includes("ROADMAP.md"));
+
+  const a = defaults();
+  a.advanced.tracker = "file";
+  const file = await run(a);
+  assertClean(file);
+  assert.ok(!file.has(".claude/rules/tracker.md"));
+  assert.ok(!file.has(".github/ISSUE_TEMPLATE/work-item.md"));
+  assert.ok(file.get(".claude/skills/session-close/SKILL.md").includes("MY_PROJECT-CONTEXT_"));
+  assert.ok(!file.get(".claude/skills/session-close/SKILL.md").includes("tracker.md"));
+  assert.ok(file.get(`${STAGING}CLAUDE.md`).includes("ROADMAP.md"));
+  // Both keep the project's own session steps, written once.
+  assert.ok(github.has(".bindwright/session-steps.md") && file.has(".bindwright/session-steps.md"));
+});
+
+test("a board names a GitHub owner and a number, nothing else", async () => {
+  for (const board of ["a/1", `${"a".repeat(39)}/999999`, "my-org/6"]) {
+    const a = defaults();
+    a.advanced.trackerProject = board;
+    await run(a);
+  }
+  for (const board of ["a/01", `${"a".repeat(40)}/1`, "a--/1", "a/1 ", "a/$(id)"]) {
+    const a = defaults();
+    a.advanced.trackerProject = board;
+    await assert.rejects(run(a), /trackerProject must be null/, board);
+  }
+});
