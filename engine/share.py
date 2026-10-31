@@ -35,6 +35,8 @@ def export_setup(root, choices, state_json):
     answers = _read_layer_file(path, ANSWERS, keep_ints=True)
     if answers is None:
         raise ValueError("%s is missing: this repo was not set up with /bindwright:setup" % ANSWERS)
+    if not isinstance(answers, dict):
+        raise ValueError("%s must hold a JSON object" % ANSWERS)
     setup = {"schema": SCHEMA, "extras": extras, "required": required}
     _refuse("export", resolve_layers(project=dict(answers, setup=setup))["ignored"])
     out = {k: v for k, v in answers.items() if k != "setup"}
@@ -65,31 +67,30 @@ def remember_choices(root, config, name, choices, state_json):
     _refuse("remember", _unknown_keys(choices, list(SETTINGS) + ["extras"]))
     if "extras" in choices and not isinstance(choices["extras"], dict):
         _refuse("remember", ["extras"])
-    # Written back, so whole numbers it holds stay whole, as in share.js.
-    current = _read_layer_file(path, file, keep_ints=True)
-    current = {} if current is None else current
-    resolve_layers(**{name: current})  # refuses a file it cannot read
+    before = resolve_layers(**{name: _read_layer_file(path, file)})  # refuses a file it cannot read
     chosen = {k: v for k, v in choices.items() if k != "extras" and v is not None}
-    extras = {k: v for k, v in choices.get("extras", {}).items() if v is not None}
-    _refuse("remember", resolve_layers(**{name: dict(chosen, extras=extras)})["ignored"])
-    nxt = dict(current, schema=SCHEMA)
+    wanted = {k: v for k, v in choices.get("extras", {}).items() if v is not None}
+    _refuse("remember", resolve_layers(**{name: dict(chosen, extras=wanted)})["ignored"])
+    nxt = {k: s["value"] for k, s in before["settings"].items()}
+    extras = {k: e["want"] for k, e in before["extras"].items()}
     for key, value in choices.items():
-        if key != "extras":
-            if value is None:
-                nxt.pop(key, None)
-            else:
-                nxt[key] = value
-    if "extras" in choices:
-        merged = dict(current["extras"]) if isinstance(current.get("extras"), dict) else {}
-        for extra, value in choices["extras"].items():
-            if value is None:
-                merged.pop(extra, None)
-            else:
-                merged[extra] = value
-        nxt["extras"] = _sorted_dict(merged)
+        if key == "extras":
+            continue
+        if value is None:
+            nxt.pop(key, None)
+        else:
+            nxt[key] = value
+    for extra, value in choices.get("extras", {}).items():
+        if value is None:
+            extras.pop(extra, None)
+        else:
+            extras[extra] = value
+    nxt["schema"] = SCHEMA
+    if extras or "extras" in choices:
+        nxt["extras"] = _sorted_dict(extras)
     _put(path, file, state_json(_sorted_dict(nxt)))
     if name == "local":
         ignore = os.path.join(root, ".bindwright", ".gitignore")
         if not os.path.lexists(ignore):
             _put(ignore, ".bindwright/.gitignore", "local.json\n", exclusive=True)
-    return file
+    return {"remembered": file, "dropped": before["ignored"]}

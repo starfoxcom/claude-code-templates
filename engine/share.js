@@ -37,6 +37,7 @@ export function exportSetup(root, choices) {
   const path = join(root, ...ANSWERS.split("/"));
   const answers = readLayerFile(path, ANSWERS);
   if (answers === null) throw new Error(`${ANSWERS} is missing: this repo was not set up with /bindwright:setup`);
+  if (!isObject(answers)) throw new Error(`${ANSWERS} must hold a JSON object`);
   const setup = { schema: SCHEMA, extras, required };
   refuse("export", resolveLayers({ project: { ...answers, setup } }).ignored);
   const out = { ...answers };
@@ -55,39 +56,39 @@ function layerFile(name, root, config) {
 }
 
 // Merges `choices` ({ codeResearch, tracker, extras: { <extra>: true |
-// false } }, null removing a key) into one person's layer, keeping what the
-// file already holds. Writing the local layer also writes
+// false } }, null removing a key) into one person's layer. Only what the
+// layers use is kept: anything they ignore is dropped and listed, so the file
+// holds nothing but known names, true and false, and both twins write it
+// byte for byte alike. Writing the local layer also writes
 // .bindwright/.gitignore, so the file never reaches a commit.
 export function rememberChoices(root, config, name, choices) {
   const [path, file] = layerFile(name, root, config);
   if (!isObject(choices)) throw new Error("Cannot remember: the choices must be a JSON object");
   refuse("remember", unknownKeys(choices, [...Object.keys(SETTINGS), "extras"]));
   if (own(choices, "extras") && !isObject(choices.extras)) refuse("remember", ["extras"]);
-  const current = readLayerFile(path, file) ?? {};
-  resolveLayers({ [name]: current }); // refuses a file it cannot read
+  const before = resolveLayers({ [name]: readLayerFile(path, file) }); // refuses a file it cannot read
   const set = Object.fromEntries(Object.entries(choices).filter(([k, v]) => k !== "extras" && v !== null));
-  const extras = Object.fromEntries(Object.entries(choices.extras ?? {}).filter(([, v]) => v !== null));
-  refuse("remember", resolveLayers({ [name]: { ...set, extras } }).ignored);
-  const next = { ...current, schema: SCHEMA };
-  for (const key of Object.keys(choices)) {
-    if (key !== "extras") {
-      if (choices[key] === null) delete next[key];
-      else next[key] = choices[key];
-    }
+  const wanted = Object.fromEntries(Object.entries(choices.extras ?? {}).filter(([, v]) => v !== null));
+  refuse("remember", resolveLayers({ [name]: { ...set, extras: wanted } }).ignored);
+  const next = Object.fromEntries(Object.entries(before.settings).map(([k, s]) => [k, s.value]));
+  const extras = Object.fromEntries(Object.entries(before.extras).map(([k, e]) => [k, e.want]));
+  for (const [key, value] of Object.entries(choices)) {
+    if (key === "extras") continue;
+    if (value === null) delete next[key];
+    else next[key] = value;
   }
-  if (own(choices, "extras")) {
-    const merged = { ...(isObject(current.extras) ? current.extras : {}) };
-    for (const [extra, value] of Object.entries(choices.extras)) {
-      if (value === null) delete merged[extra];
-      else merged[extra] = value;
-    }
-    next.extras = Object.fromEntries(Object.keys(merged).sort().map((k) => [k, merged[k]]));
+  for (const [extra, value] of Object.entries(choices.extras ?? {})) {
+    if (value === null) delete extras[extra];
+    else extras[extra] = value;
   }
-  // Sorted keys, so both twins write the same bytes.
+  next.schema = SCHEMA;
+  if (Object.keys(extras).length || own(choices, "extras")) {
+    next.extras = Object.fromEntries(Object.keys(extras).sort().map((k) => [k, extras[k]]));
+  }
   put(path, file, stateJson(Object.fromEntries(Object.keys(next).sort().map((k) => [k, next[k]]))));
   if (name === "local") {
     const ignore = join(root, ".bindwright", ".gitignore");
     if (!lstatSync(ignore, { throwIfNoEntry: false })) put(ignore, ".bindwright/.gitignore", "local.json\n", "wx");
   }
-  return file;
+  return { remembered: file, dropped: before.ignored };
 }

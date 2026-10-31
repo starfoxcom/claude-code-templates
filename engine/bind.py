@@ -303,7 +303,7 @@ def _settings(argv):
             folder, layer = _option(argv, "--remember"), _option(argv, "--layer")
             if layer is None:
                 raise ValueError("--remember needs --layer personal or local")
-            return {"remembered": remember_choices(folder, config, layer, _choices_from_stdin(), _state_json)}
+            return remember_choices(folder, config, layer, _choices_from_stdin(), _state_json)
         return run_settings(_option(argv, "--settings"), config)
     except Exception as e:  # every failure is reported, as the JS engine throws it
         return {"error": str(e)}
