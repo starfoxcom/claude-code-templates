@@ -137,6 +137,14 @@ test("without a board, a roadmap out of shape is named and a tidy one passes", n
   const latin1 = await roadmap(Buffer.from("Next id: R2\n## Now\n- R1 Caf\xe9\n", "latin1"));
   assert.equal(latin1.ok, false);
   assert.match(latin1.say, /cannot be read/);
+  // Unusual spaces read alike in both twins: trim() and its Python twin, never regex space classes.
+  const shape = async (heading, item) => (await roadmap(`Next id: R2\n## Now${heading}\n${item}\n`)).ok;
+  assert.equal(await shape("\uFEFF", "- Saved carts"), false);
+  assert.equal(await shape("\u0085", "- Saved carts"), true);
+  assert.equal(await shape("\u2028", "- Saved carts"), false);
+  assert.equal(await shape("", "- R1 \uFEFFCheckout"), true);
+  const long = await roadmap("Next id: R10000000000000001\n## Now\n- R1 A\n");
+  assert.match(long.say, /the Next id line is missing/);
 });
 
 test("a staging folder that is a file is named, not a crash", needsPython, async () => {

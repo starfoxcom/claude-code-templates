@@ -4,7 +4,7 @@
 import os
 import re
 
-from model import validate
+from model import JS_WHITESPACE, validate
 from layers import MODS, _read_layer_file, run_settings
 from update import ANSWERS, PRISTINE, STAGING, _code_units
 
@@ -82,15 +82,15 @@ def roadmap_problems(text):
     """See roadmapProblems in doctor.js."""
     problems, ids, section, now, nxt = [], [], None, 0, None
     for line in re.split(r"\r\n|\r|\n", text):
-        heading = re.match(r"## (\S.*)$", line)
-        if heading:
-            section = heading.group(1).strip()
-        counter = re.match(r"Next id: R([0-9]+) *$", line)
+        if line.startswith("## "):
+            section = line[3:].strip(JS_WHITESPACE)
+        counter = re.fullmatch(r"Next id: R([0-9]{1,9}) *", line)
         if counter:
             nxt = int(counter.group(1))
         if not line.startswith("- ") or section not in ("Now", "Next", "Later"):
             continue
-        item = re.match(r"- R([0-9]+) \S", line)
+        found = re.match(r"- R([0-9]{1,9}) ", line)
+        item = found if found and line[found.end():].strip(JS_WHITESPACE) else None
         if not item:
             problems.append('"%s" has no id' % line[:60])
         elif item.group(1) in ids:

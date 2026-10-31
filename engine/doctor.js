@@ -168,13 +168,15 @@ export function roadmapProblems(text) {
   let section = null;
   let now = 0;
   let next = null;
+  // Plain string tests and trim(), never \s, \S or ".": those classes differ
+  // between the twins. Ids stop at nine digits so both compare exact numbers.
   for (const line of text.split(/\r\n|\r|\n/)) {
-    const heading = /^## (\S.*)$/.exec(line);
-    if (heading) section = heading[1].trim();
-    const counter = /^Next id: R([0-9]+) *$/.exec(line);
+    if (line.startsWith("## ")) section = line.slice(3).trim();
+    const counter = /^Next id: R([0-9]{1,9}) *$/.exec(line);
     if (counter) next = Number(counter[1]);
     if (!line.startsWith("- ") || !["Now", "Next", "Later"].includes(section)) continue;
-    const item = /^- R([0-9]+) \S/.exec(line);
+    const found = /^- R([0-9]{1,9}) /.exec(line);
+    const item = found && line.slice(found[0].length).trim() ? found : null;
     if (!item) problems.push(`"${Array.from(line).slice(0, 60).join("")}" has no id`);
     else if (ids.has(item[1])) problems.push(`R${item[1]} is used twice`);
     else ids.add(item[1]);
