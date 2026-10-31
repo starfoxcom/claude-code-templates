@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { ANSWERS, PRISTINE, STAGING } from "./bind.js";
 import { validate } from "./model.js";
 import { MODS, readLayerFile, runSettings } from "./layers.js";
+import { decode } from "./update.js";
 
 // What to do about each finding, in plain words.
 const FIX = {
@@ -167,7 +168,7 @@ export function roadmapProblems(text) {
   let section = null;
   let now = 0;
   let next = null;
-  for (const line of text.split(/\r?\n/)) {
+  for (const line of text.split(/\r\n|\r|\n/)) {
     const heading = /^## (\S.*)$/.exec(line);
     if (heading) section = heading[1].trim();
     const counter = /^Next id: R([0-9]+) *$/.exec(line);
@@ -190,7 +191,7 @@ function roadmapCheck(root) {
   if (!existsSync(file)) return check("roadmap", true, "No ROADMAP.md yet; the next /session-close writes it.");
   let problems;
   try {
-    problems = roadmapProblems(readFileSync(file, "utf8"));
+    problems = roadmapProblems(decode(readFileSync(file), "ROADMAP.md"));
   } catch {
     return check("roadmap", false, "ROADMAP.md cannot be read.", FIX.unreadable);
   }

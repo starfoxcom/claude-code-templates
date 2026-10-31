@@ -130,6 +130,13 @@ test("without a board, a roadmap out of shape is named and a tidy one passes", n
   assert.equal(bad.ok, false);
   assert.match(bad.say, /"- Saved carts" has no id; R2 is used twice; 6 items sit under Now/);
   assert.match(bad.say, /Next id R3 is not above every id in use/);
+  // Mixed and CR-only line ends read as lines in both twins.
+  assert.equal((await roadmap("Next id: R8\r\r\n## Now\r- R1 A\r\n## Later\r- R2 B\r")).ok, true);
+  const crOnly = await roadmap("Next id: R2\r## Now\r- R2 A\r");
+  assert.match(crOnly.say, /Next id R2 is not above every id in use/);
+  const latin1 = await roadmap(Buffer.from("Next id: R2\n## Now\n- R1 Caf\xe9\n", "latin1"));
+  assert.equal(latin1.ok, false);
+  assert.match(latin1.say, /cannot be read/);
 });
 
 test("a staging folder that is a file is named, not a crash", needsPython, async () => {

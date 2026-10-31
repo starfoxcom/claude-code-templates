@@ -81,7 +81,7 @@ def _staged_check(root):
 def roadmap_problems(text):
     """See roadmapProblems in doctor.js."""
     problems, ids, section, now, nxt = [], [], None, 0, None
-    for line in re.split(r"\r?\n", text):
+    for line in re.split(r"\r\n|\r|\n", text):
         heading = re.match(r"## (\S.*)$", line)
         if heading:
             section = heading.group(1).strip()
@@ -113,7 +113,8 @@ def _roadmap_check(root):
     if not os.path.exists(path):
         return _check("roadmap", True, "No ROADMAP.md yet; the next /session-close writes it.")
     try:
-        with open(path, encoding="utf-8") as f:
+        # newline="" hands every line end through as written, as doctor.js reads it.
+        with open(path, encoding="utf-8", newline="") as f:
             problems = roadmap_problems(f.read())
     except (OSError, UnicodeDecodeError):
         return _check("roadmap", False, "ROADMAP.md cannot be read.", FIX["unreadable"])
