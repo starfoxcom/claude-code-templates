@@ -70,6 +70,7 @@ test("shell path forms and non-ASCII names in any case come out the same in both
 });
 
 const jurgen = { repo: "C:\\Users\\Jürgen\\code\\app", home: "C:\\Users\\Jürgen", user: "Jürgen" };
+const lukasz = { repo: "C:\\Users\\Łukasz\\code\\app", home: "C:\\Users\\Łukasz", user: "Łukasz" };
 
 test("pinned letters, escaped names and a bare root home come out the same in both engines", needsPython, () => {
   const script = "import json,sys; sys.path.insert(0, sys.argv[1]); from report import scrub; "
@@ -81,6 +82,8 @@ test("pinned letters, escaped names and a bare root home come out the same in bo
     ["by Straße and STRASSE", { user: "Straße" }],
     // The engines' own JSON output writes non-ASCII letters as \u escapes.
     [String.raw`open C:\\Users\\J\u00fcrgen\\code\\app\\x by J\u00FCrgen`, jurgen],
+    [String.raw`open c:\\users\\\u0142ukasz\\code\\app\\x by \u0141UKASZ`, lukasz],
+    [String.raw`by \u0131sma\u0131l, \ud83d\ude00 and \u0022 and \ud800 stay`, { user: "İsmail" }],
     ["at c:\\users\\νικος\\x by νικος", { home: "C:\\Users\\ΝΙΚΟΣ", user: "ΝΙΚΟΣ" }],
     ["at /srv/app/x and C:\\y", { repo: "/srv/app", home: "/" }],
     ["at C:\\x and \\\\host\\share", { home: "C:\\" }],
@@ -94,6 +97,8 @@ test("pinned letters, escaped names and a bare root home come out the same in bo
     "by <user>, <user> and <user>, not Straße",
     "by <user> and STRASSE",
     String.raw`open <repo>\\x by <user>`,
+    String.raw`open <repo>\\x by <user>`,
+    String.raw`by <user>, 😀 and \u0022 and \ud800 stay`,
     "at ~\\x by <user>",
     "at <repo>/x and C:\\y",
     "at C:\\x and \\\\host\\share",

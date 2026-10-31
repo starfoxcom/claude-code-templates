@@ -30,13 +30,22 @@ function spellings(path) {
   // A drive path as Git Bash and WSL print it: C:\x is /c/x and /mnt/c/x.
   const drive = /^([A-Za-z]):\//.exec(forward);
   if (drive) all.push(`/${drive[1]}/${forward.slice(3)}`, `/mnt/${drive[1]}/${forward.slice(3)}`);
-  // The engines print JSON as ASCII, so a non-ASCII letter may arrive as ü.
-  const unique = [...new Set([...all, ...all.map(asciiEscaped)])];
+  const unique = [...new Set(all)];
   return unique.sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 
-// `s` as JSON writes it with only ASCII: each UTF-16 unit past 0x7f as \uxxxx.
-const asciiEscaped = (s) => s.replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+// The engines print JSON as ASCII, so a non-ASCII letter may arrive escaped:
+// a backslash, a u and four hex digits. scrub reads those back into letters
+// first, so every pattern below meets one form of each letter. Escapes of
+// ASCII characters and lone surrogates stay as they are.
+const ESCAPED = /\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})|\\u([0-9a-fA-F]{4})/g;
+function unescapeLetters(text) {
+  return text.replace(ESCAPED, (all, high, low, one) => {
+    if (high) return String.fromCharCode(parseInt(high, 16), parseInt(low, 16));
+    const unit = parseInt(one, 16);
+    return unit < 0x80 || (unit >= 0xd800 && unit <= 0xdfff) ? all : String.fromCharCode(unit);
+  });
+}
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -59,14 +68,13 @@ function anyCase(s) {
 // Paths go first: a token pattern could swallow part of one and hide the rest
 // from the path pass. Tokens go last; no placeholder holds a character they match.
 export function scrub(text, { repo, home, user }) {
-  let out = String(text);
+  let out = unescapeLetters(String(text));
   for (const [path, mark] of [[repo, "<repo>"], [home, "~"]]) {
     for (const spelled of spellings(path)) out = out.replace(new RegExp(anyCase(spelled), "gu"), () => mark);
   }
   out = out.replace(EMAIL, "<email>");
   if (user && [...user].length >= 3) {
-    const names = [...new Set([asciiEscaped(user), user])].map(anyCase).join("|");
-    out = out.replace(new RegExp(`${EDGE}(?:${names})(?![A-Za-z0-9_])`, "gu"), () => "<user>");
+    out = out.replace(new RegExp(`${EDGE}${anyCase(user)}(?![A-Za-z0-9_])`, "gu"), () => "<user>");
   }
   for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
   return out;
