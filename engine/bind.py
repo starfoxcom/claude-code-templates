@@ -91,6 +91,8 @@ def _included(path, a, flags):
         ".github/scripts/size_check.py": flags["code_size_check"],
         ".github/workflows/size-check.yml": flags["code_size_check"],
         ".github/size-check/exceptions.txt": flags["code_size_check"],
+        ".github/scripts/public_roadmap.py": flags["public_roadmap"],
+        ".github/public-roadmap.json": flags["public_roadmap"],
         ".github/workflows/claude-code-review.yml.template": flags["github_actions_routine_review"],
         ".github/workflows/claude.yml.template": flags["github_actions_deep_review"],
         ".github/scripts/review_gate.py": gate,
