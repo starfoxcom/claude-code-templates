@@ -201,7 +201,7 @@ function customTool({ name, url }) {
   return { name, url, kebab, bypass: `${upperSnake(name)}_BYPASS:`, match: `^mcp__.*${kebab.split("-").join("[-_]?")}` };
 }
 
-function researchTool(adv) {
+export function researchTool(adv) {
   if (adv.codeResearch === "custom") return customTool(adv.codeResearchCustom);
   return { ...CODE_RESEARCH_TOOLS[adv.codeResearch], kebab: adv.codeResearch };
 }
