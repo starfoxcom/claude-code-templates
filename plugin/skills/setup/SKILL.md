@@ -84,6 +84,7 @@ When the project has no such command (no type checker, no tests yet), remove tha
 
 - `.claude/rules/code-size.md`: keep only the per-language rows for languages the repo contains (count files by extension, ignoring vendored and generated folders), plus `Other` when the repo has languages the table does not list. Narrow its `paths:` globs to the same languages.
 - `.gitignore`: `.claude/settings.local.json` is personal. If `git check-ignore -q .claude/settings.local.json` fails, add that path to `.gitignore` (create the file if needed).
+- **Tracker:** when `.claude/rules/tracker.md` was written, the work state lives in GitHub issues. Check `git remote get-url origin` points at GitHub and `gh auth status` works; if either fails, say so and offer to start over with the `file` tracker on the page. With a board (`advanced.trackerProject` in `.bindwright/project.json`), check `gh project view <number> --owner <owner>` reaches it; a scope error means `gh auth refresh -s project`. Without one, offer to create and pin the `Project status` issue that `tracker.md` describes. Then offer to turn any `ROADMAP.md` items or hand-off file the repo already has into issues, one at a time; the old files stay until the user removes them.
 - `.claude/rules/git.md` names the branches work lands on. If it names a development branch the repo does not have (`git branch --list <name>`), offer to create it from the current branch, locally only.
 - Check that every command and path the new files name exists in the repo. Fix what you can; list the rest for the user.
 
