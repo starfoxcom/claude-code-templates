@@ -112,7 +112,7 @@ test("a plugin older than the repo, or no readable version, is named with its ow
   }
 });
 
-test("without a board, a roadmap out of shape is named and a tidy one passes", needsPython, async () => {
+test("with the file tracker, a roadmap out of shape is named and a tidy one passes", needsPython, async () => {
   const withRoadmap = (text) => doctor(({ at }) => {
     const answers = JSON.parse(readFileSync(at(".bindwright/project.json"), "utf8"));
     answers.advanced.tracker = "file";
