@@ -83,7 +83,9 @@ test("the release zip has the same bytes on every build and the folder pack's fi
   }
 });
 
-test("the marketplace file lists the release zip by version and SHA-256", { skip: !python && "needs Python 3.8+" }, () => {
+const needsPython = { skip: !python && "needs Python 3.8+" };
+
+test("the marketplace file lists the release zip by version and SHA-256", needsPython, () => {
   const script = "import sys; sys.path.insert(0, sys.argv[1]); import pack_plugin as p; "
     + "print(p.marketplace({'version': '2.0.0', 'description': 'd'}, 'ab' * 32), end='')";
   const out = run(python, ["-I", "-c", script, join(repo, "tools")]);
