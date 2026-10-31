@@ -45,7 +45,9 @@ def log_folder(root, config):
         names = sorted(os.listdir(os.path.join(config, "projects")), key=_code_units)
     except OSError:
         return None
-    want = re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(root)).lower()
+    # The CLI replaces each UTF-16 unit, so a character past U+FFFF becomes two dashes.
+    want = "".join(c if c.isascii() and c.isalnum() else "-" * (2 if ord(c) > 0xFFFF else 1)
+                   for c in os.path.abspath(root)).lower()
     exact = next((n for n in names if n.lower() == want), None)
     if exact is not None or len(want) <= 200:
         return exact
@@ -216,7 +218,7 @@ def _research_pattern(root, config):
         answers = _read_layer_file(os.path.join(root, *ANSWERS.split("/")), ANSWERS)
         adv = answers.get("advanced") if isinstance(answers, dict) else None
         custom = adv.get("codeResearchCustom") if isinstance(adv, dict) else None
-        if not (isinstance(custom, dict) and isinstance(custom.get("name"), str)):
+        if not (isinstance(custom, dict) and isinstance(custom.get("name"), str) and isinstance(custom.get("url"), str)):
             return None
     return re.compile(_research_tool({"codeResearch": value, "codeResearchCustom": custom})["match"])
 

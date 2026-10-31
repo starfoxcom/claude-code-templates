@@ -201,7 +201,7 @@ function researchPattern(root, config) {
     // Only the project layer can pick "custom", and runSettings has read that file already.
     const answers = JSON.parse(readFileSync(join(root, ...ANSWERS.split("/")), "utf8"));
     custom = isObject(answers.advanced) ? answers.advanced.codeResearchCustom : undefined;
-    if (!(isObject(custom) && typeof custom.name === "string")) return null;
+    if (!(isObject(custom) && typeof custom.name === "string" && typeof custom.url === "string")) return null;
   }
   return new RegExp(researchTool({ codeResearch: value, codeResearchCustom: custom }).match);
 }

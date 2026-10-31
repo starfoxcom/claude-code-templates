@@ -124,6 +124,24 @@ test("the commit message comes from -m, a heredoc, or not at all", () => {
   for (const [command, want] of cases) assert.equal(commitMessage(command), want, command);
 });
 
+test("both engines spell a folder with a character past U+FFFF the way the CLI does", needsPython, () => {
+  const root = mkdtempSync(join(tmpdir(), "bw-audit-"));
+  try {
+    const repo = join(root, "📦", "app");
+    mkdirSync(repo, { recursive: true });
+    // The CLI replaces each UTF-16 unit, so the emoji becomes two dashes.
+    const name = resolve(repo).replace(/[^A-Za-z0-9]/g, "-");
+    mkdirSync(join(root, "config", "projects", name), { recursive: true });
+    assert.equal(logFolder(repo, join(root, "config")), name);
+    const script = "import sys; sys.path.insert(0, sys.argv[1]); from audit import log_folder; "
+      + "print(log_folder(sys.argv[2], sys.argv[3]), end='')";
+    const py = spawnSync(python, ["-I", "-c", script, engine, repo, join(root, "config")], { encoding: "utf8" });
+    assert.equal(py.stdout, name, py.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a log folder name past 200 characters is found by its first 200", () => {
   const root = mkdtempSync(join(tmpdir(), "bw-audit-"));
   try {
