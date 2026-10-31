@@ -56,12 +56,14 @@ test("every code-research tool binds cleanly", async () => {
 });
 
 test("every pre-commit manager lands its config file", async () => {
+  const profiles = JSON.parse(await readFile("_core/project-template/precommit/precommit-profiles.json"));
   for (const pc of PRECOMMIT_MANAGERS) {
     const a = defaults({ team: true });
     a.advanced.precommit = pc;
     const files = await run(a);
     assertClean(files);
-    assert.ok([...files.keys()].some((p) => !p.startsWith(".claude") && !p.startsWith(".github") && !p.startsWith(STAGING) && p !== "docs/lazy/README.md"), `${pc} config missing`);
+    const config = profiles[pc].config_filename;
+    assert.ok(files.has(config), `${pc} config ${config} missing`);
   }
 });
 

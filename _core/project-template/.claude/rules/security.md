@@ -11,5 +11,5 @@ Nothing secret ships. Treat every artifact that leaves your hands as fully reada
 
 ## Before adding a credential or a download
 
-- A new credential, account or token goes into the inventory in `docs/security-posture.md`: what it opens, where it lives, who can read it and how to rotate it.
+- A new credential, account or token goes into the inventory in `docs/security-posture.md` (kept private when the repo is public): what it opens, where it lives, who can read it and how to rotate it.
 - Anything the app downloads or loads at run time (updates, plugins, mods, remote config, user files) crosses a trust boundary: verify a signature or checksum, and parse it as untrusted input.
