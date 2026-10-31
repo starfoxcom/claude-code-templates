@@ -4,7 +4,9 @@ Approved direction, 2026-09-23. `mockup.html` is the reference. This file holds 
 
 ## Idea
 
-The product is a set of files that land in a repo, so the most important thing on the page is that output: a live file tree and file preview that change as you answer. Controls feel physical, like keys on a keyboard or a synth. Color is used for one thing only: showing which setup you are building.
+The main page is a landing page. Most visitors do not know what a rule file or a hook is; they want Claude Code to work better on their project. The first screen has 3 to 5 seconds to say what they get, so it leads with the outcome: a plain promise, one button, and a short clip of a real session with and without Bindwright (decided 2026-10-31, replacing the 2026-09-23 idea of the file tree as the hero). The setup follows below: the two questions and a plain "What you get" list. The file tree and preview stay one click deeper ("Show the files") for people who want to read the files.
+
+Controls feel physical, like keys on a keyboard or a synth. Color is used for one thing only: showing which setup you are building.
 
 ## Tokens
 
@@ -47,8 +49,10 @@ Radii: 12 px for keys and buttons, 18 px for panels. No other values.
 
 ## Layout
 
-- Desktop: headline and one-line explanation on top, then answers on the left and the live output on the right.
-- Mobile: one column. The output collapses into a sticky bottom bar ("24 files, Preview, Download") that opens a sheet with a visible close button.
+- First screen (desktop): the promise, one line under it, the primary button ("Set up my project") and the clip beside them. Nothing technical: no file names, paths or setting keys.
+- Then the benefits, each one outcome in plain words.
+- Then the setup: the two questions on the left, "What you get" on the right, with the file tree behind "Show the files".
+- Mobile: one column, the clip under the button. The setup's result collapses into a sticky bottom bar that opens a sheet with a visible close button.
 
 ## Rules that keep it from looking generated
 

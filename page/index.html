@@ -12,7 +12,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<a class="skip" href="#main">Skip to the setup</a>
+<a class="skip" href="#setup">Skip to the setup</a>
 <header>
   <a class="mark" href="./">Bindwright</a>
   <nav aria-label="Site">
@@ -20,19 +20,46 @@
   </nav>
 </header>
 <main id="main">
-  <h1>House rules for your coding agent.</h1>
-  <p class="lede">Bindwright writes the files that tell Claude Code how your project works.
-    Answer two questions, change what you need, then run one command in your repo.</p>
-  <div class="rig">
-    <section class="panel" aria-labelledby="answers-title">
-      <h2 id="answers-title">Start from</h2>
-      <p class="empty">The two questions go here.</p>
-    </section>
-    <section class="panel out" aria-labelledby="output-title">
-      <h2 id="output-title">Your files</h2>
-      <p class="empty">The files Bindwright writes for your repo show up here.</p>
-    </section>
-  </div>
+  <section class="hero">
+    <div class="pitch">
+      <h1>Stop re&#8209;explaining your project to Claude.</h1>
+      <p class="lede">Bindwright gives Claude Code your house rules, safety guards and automatic pull request
+        reviews, so every session starts out knowing how you work. Set up in one command.</p>
+      <div class="actions">
+        <a class="go" href="#setup">Set up my project</a>
+        <a class="more" href="#changes">See what changes</a>
+      </div>
+    </div>
+    <figure class="panel clip" aria-label="A recorded session">
+      <p class="empty">A real session plays here: Claude fixing the same bug with and without Bindwright.</p>
+    </figure>
+  </section>
+
+  <section class="changes" id="changes" aria-labelledby="changes-title">
+    <h2 id="changes-title">What changes</h2>
+    <ul>
+      <li><b>Claude stops repeating mistakes</b>
+        It reads your rules at the start of every session: small functions, real tests, clear commits.</li>
+      <li><b>Every pull request gets reviewed</b>
+        An AI review checks each change, and nothing merges until it passes.</li>
+      <li><b>Sessions pick up where they stopped</b>
+        Each one starts with a plan and ends with a hand-off for the next.</li>
+      <li><b>Risky commands get blocked</b>
+        Force pushes to your main branch are stopped before they run.</li>
+    </ul>
+  </section>
+
+  <section class="setup" id="setup" aria-labelledby="setup-title">
+    <h2 id="setup-title">Set up your project</h2>
+    <div class="rig">
+      <div class="panel">
+        <p class="empty">Two questions about your project go here.</p>
+      </div>
+      <div class="panel out">
+        <p class="empty">What Bindwright adds to your project shows up here, in plain words.</p>
+      </div>
+    </div>
+  </section>
   <p class="sr-status" role="status" aria-live="polite"></p>
 </main>
 <footer>
