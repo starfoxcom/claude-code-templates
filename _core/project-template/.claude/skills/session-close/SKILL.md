@@ -82,10 +82,10 @@ Take the first row that matches:
 | Branch goal not finished | Commit the work. No PR. |
 <!-- TOGGLE:tracker:file START -->
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge START -->
-| Only the hand-off file and `ROADMAP.md` changed | Commit and open the PR; it takes the docs-only path in `token-efficiency.md`. |
+| Only the hand-off file, `ROADMAP.md` and `CHANGELOG.md` changed | Commit and open the PR; it takes the docs-only path in `token-efficiency.md`. |
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge END -->
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge:off START -->
-| Only the hand-off file and `ROADMAP.md` changed | Commit and open the PR, watch its checks per `token-efficiency.md`, and merge per `git.md` § Merging. |
+| Only the hand-off file, `ROADMAP.md` and `CHANGELOG.md` changed | Commit and open the PR, watch its checks per `token-efficiency.md`, and merge per `git.md` § Merging. |
 <!-- TOGGLE:github_actions_paths_ignore_auto_merge:off END -->
 <!-- TOGGLE:tracker:file END -->
 <!-- TOGGLE:branching_model_gitflow START -->
@@ -107,7 +107,7 @@ Then check the three status-update triggers in `tracker.md` and post an update o
 <!-- TOGGLE:handoff_file START -->
 ## Hand-off file
 
-Rewrite `.bindwright/handoff.md`. It stays on this machine: the first time, add the line `.bindwright/handoff.md` to `.git/info/exclude`. It only points at the tracker, in at most ten lines, and never restates an issue's state:
+Rewrite `.bindwright/handoff.md`. It stays in this checkout, out of git: the first time, add the line `.bindwright/handoff.md` to the file `git rev-parse --git-path info/exclude` prints (a worktree shares it with its main checkout, but keeps its own hand-off file). It only points at the tracker, in at most ten lines, and never restates an issue's state:
 
 ```
 # Hand-off (YYYY-MM-DD HH:MM)

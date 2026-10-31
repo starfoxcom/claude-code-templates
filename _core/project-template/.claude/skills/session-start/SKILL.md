@@ -19,7 +19,7 @@ Planning only. Change no files and create no branches in this turn.
 <!-- TOGGLE:handoff_file END -->
 <!-- TOGGLE:tracker:file START -->
 - The single `{{PROJECT_NAME_UPPER}}-CONTEXT_*.md` at the repo root: the last session's hand-off. It outranks anything re-derived from git. If there are none or several, say so first.
-- `ROADMAP.md`, its Now section first. Then check each Now item that names a branch against git: the branch is merged when `git branch --all --merged origin/{{DEV_BRANCH}}` lists it, and gone when `git branch --all` does not. Report each such item with its fix ("R4's branch is merged: mark it done?"), so the roadmap never needs a full re-read to stay true.
+- `ROADMAP.md`, its Now section first; its branches are checked in step 2.
 <!-- TOGGLE:tracker:file END -->
 - `.bindwright/session-steps.md` if it exists: its "Extra start steps" run after the git checks below.
 
@@ -32,8 +32,12 @@ Run these as separate calls, in parallel:
 - `git status`
 - `git branch --show-current`
 - `git log --oneline -10`
-- `git fetch origin`, then `git rev-list --count HEAD..origin/{{DEV_BRANCH}}` (how far behind the current branch is)
+- `git fetch --prune origin`, then `git rev-list --count HEAD..origin/{{DEV_BRANCH}}` (how far behind the current branch is)
 - `gh pr list --author @me --state open`
+
+<!-- TOGGLE:tracker:file START -->
+After the fetch, check each Now item in `ROADMAP.md` that names a branch: it is merged when `git branch --all --merged origin/{{DEV_BRANCH}}` lists the branch, and gone when `git branch --all` no longer does (the prune drops a deleted remote branch, which is how a squash or rebase merge shows). Report each such item with its fix ("R4's branch is gone: mark it done?"), so the roadmap never needs a full re-read to stay true.
+<!-- TOGGLE:tracker:file END -->
 
 Then run the extra start steps, if any.
 
