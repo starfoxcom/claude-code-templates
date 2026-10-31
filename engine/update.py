@@ -21,7 +21,8 @@ OUTCOMES = [
 
 
 def _code_units(s):
-    return s.encode("utf-16-le", "surrogatepass")
+    # JavaScript compares strings by UTF-16 code unit, which big-endian bytes order alike.
+    return s.encode("utf-16-be", "surrogatepass")
 
 
 def repo_files(rendered):
@@ -41,6 +42,8 @@ def _keeps_sections(ours, merged, path):
 
 def _decide(path, ours, base, theirs, merge):
     if theirs is None:
+        if ours is None:
+            return ("deleted",)
         return ("removed",) if ours == base else ("removed_edited",)
     if base is None:
         if ours is None:
@@ -108,11 +111,13 @@ def git_merge(ours, base, theirs):
 def _reader(root):
     def read(path):
         try:
-            # newline=None turns \r\n into \n, as update.js does.
-            with open(os.path.join(root, *path.split("/")), encoding="utf-8") as f:
-                return f.read()
+            # newline="" keeps a lone \r, so only \r\n becomes \n, as in update.js.
+            with open(os.path.join(root, *path.split("/")), encoding="utf-8", newline="") as f:
+                return f.read().replace("\r\n", "\n")
         except FileNotFoundError:
             return None
+        except UnicodeDecodeError:
+            raise ValueError("%s is not UTF-8 text" % path)
     return read
 
 
@@ -136,13 +141,27 @@ def run_update(root, bind_with, version, state_json):
     rendered = bind_with(json.loads(answers), pristine["year"])
     owned = owned_patterns(read(OWNED) or "")
     plan = plan_update(rendered, pristine, read, owned, git_merge, version)
+
+    def at(path):
+        return os.path.join(root, *path.split("/"))
+
+    # Every check before the first write, so a refusal leaves the repo as it was.
+    targets = [path for path, _ in plan["write"]] + [PRISTINE]
+    links = [path for path in targets if os.path.islink(at(path))]
+    if links:
+        raise ValueError("Refusing to write through a symbolic link: " + ", ".join(links))
+    skipped = [path[len(STAGING):] for path, _ in plan["stage"] if os.path.lexists(at(path))]
+    files = plan["pristine"]["files"]
+    for path in skipped:
+        # The old staged copy is unsettled, so its file keeps the old base and the next update stages it again.
+        if path in pristine["files"]:
+            files[path] = pristine["files"][path]
+        else:
+            files.pop(path, None)
     for path, text in plan["write"]:
         _put(root, path, text)
-    skipped = []
     for path, text in plan["stage"]:
-        if os.path.lexists(os.path.join(root, *path.split("/"))):
-            skipped.append(path[len(STAGING):])
-        else:
+        if path[len(STAGING):] not in skipped:
             _put(root, path, text, exclusive=True)
     _put(root, PRISTINE, state_json(plan["pristine"]))
     out = {o: plan[o] for o in OUTCOMES}

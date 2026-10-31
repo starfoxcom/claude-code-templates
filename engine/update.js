@@ -4,7 +4,7 @@
 // templates. update.py is the Python twin; a test runs both on the same cases.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { STAGING, ANSWERS, PRISTINE, stateJson } from "./bind.js";
@@ -38,7 +38,10 @@ export const OUTCOMES = [
 ];
 
 function decide(path, { ours, base, theirs }, merge) {
-  if (theirs === undefined) return ours === base ? ["removed"] : ["removed_edited"];
+  if (theirs === undefined) {
+    if (ours === null) return ["deleted"];
+    return ours === base ? ["removed"] : ["removed_edited"];
+  }
   if (base === undefined) {
     if (ours === null) return ["added", theirs];
     return ours === theirs ? ["unchanged"] : ["staged", theirs];
@@ -95,10 +98,10 @@ export function gitMerge(ours, base, theirs) {
     const labels = MERGE_LABELS.flatMap((l) => ["-L", l]);
     const args = ["merge-file", "-p", "--diff3", ...labels, at("ours", ours), at("base", base), at("theirs", theirs)];
     try {
-      return { text: execFileSync("git", args, { encoding: "utf8" }), conflicts: 0 };
+      return { text: decode(execFileSync("git", args), "git merge-file's output"), conflicts: 0 };
     } catch (err) {
       const clashes = typeof err.status === "number" && err.status > 0 && err.status < 128;
-      if (clashes) return { text: err.stdout, conflicts: err.status };
+      if (clashes) return { text: decode(err.stdout, "git merge-file's output"), conflicts: err.status };
       throw err;
     }
   } finally {
@@ -106,15 +109,29 @@ export function gitMerge(ours, base, theirs) {
   }
 }
 
-// The repo's text at a path with \n line endings, or null when it has none.
+// Strict UTF-8 that keeps a byte order mark, as Python's decoder does: a file
+// that is not UTF-8 stops the update instead of being written back damaged.
+const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+function decode(bytes, what) {
+  try {
+    return utf8.decode(bytes);
+  } catch {
+    throw new Error(`${what} is not UTF-8 text`);
+  }
+}
+
+// The repo's text at a path with \r\n turned into \n, or null when it has none.
 function reader(root) {
   return (path) => {
+    let bytes;
     try {
-      return readFileSync(join(root, ...path.split("/")), "utf8").replace(/\r\n/g, "\n");
+      bytes = readFileSync(join(root, ...path.split("/")));
     } catch (err) {
       if (err.code === "ENOENT") return null;
       throw err;
     }
+    return decode(bytes, path).replace(/\r\n/g, "\n");
   };
 }
 
@@ -122,6 +139,13 @@ function put(root, path, text, flag = "w") {
   const target = join(root, ...path.split("/"));
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, text, { encoding: "utf8", flag });
+}
+
+// What sits at a path without following a link: "link", "other" or null.
+function entry(root, path) {
+  const stat = lstatSync(join(root, ...path.split("/")), { throwIfNoEntry: false });
+  if (!stat) return null;
+  return stat.isSymbolicLink() ? "link" : "other";
 }
 
 // Binds the saved answers with today's templates and the saved year, writes
@@ -141,11 +165,19 @@ export async function runUpdate(root, { bindWith, version }) {
   const rendered = await bindWith(JSON.parse(answers), { year: pristine.year, version });
   const owned = ownedPatterns(read(OWNED) ?? "");
   const plan = planUpdate(rendered, pristine, { readRepo: read, owned, merge: gitMerge, version });
+  // Every check before the first write, so a refusal leaves the repo as it was.
+  const targets = [...plan.write.map(([path]) => path), PRISTINE];
+  const links = targets.filter((path) => entry(root, path) === "link");
+  if (links.length) throw new Error(`Refusing to write through a symbolic link: ${links.join(", ")}`);
+  const skipped = plan.stage.filter(([path]) => entry(root, path) !== null).map(([path]) => path.slice(STAGING.length));
+  for (const path of skipped) {
+    // The old staged copy is unsettled, so its file keeps the old base and the next update stages it again.
+    if (path in pristine.files) plan.pristine.files[path] = pristine.files[path];
+    else delete plan.pristine.files[path];
+  }
   for (const [path, text] of plan.write) put(root, path, text);
-  const skipped = [];
   for (const [path, text] of plan.stage) {
-    if (existsSync(join(root, ...path.split("/")))) skipped.push(path.slice(STAGING.length));
-    else put(root, path, text, "wx");
+    if (!skipped.includes(path.slice(STAGING.length))) put(root, path, text, "wx");
   }
   put(root, PRISTINE, stateJson(plan.pristine));
   return { ...Object.fromEntries(OUTCOMES.map((o) => [o, plan[o]])), skipped };

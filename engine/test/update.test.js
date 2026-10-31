@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -173,6 +173,7 @@ test("new, dropped and deleted files each get their own outcome", needsPython, a
     r.write("docs/gone.md", "old\n");
     r.pristine.files["docs/edited.md"] = "old\n";
     r.write("docs/edited.md", "changed\n");
+    r.pristine.files["docs/both-gone.md"] = "old\n"; // dropped, and the repo had already deleted it
     rmSync(r.at(OTHER)); // the repo deleted a file the bind wrote
   });
   assert.deepEqual(out.added, [THIRD]);
@@ -183,7 +184,7 @@ test("new, dropped and deleted files each get their own outcome", needsPython, a
   assert.ok(existsSync(repo.at(`.bindwright/incoming/${RULE}`)));
   assert.deepEqual(out.removed, ["docs/gone.md"]);
   assert.deepEqual(out.removed_edited, ["docs/edited.md"]);
-  assert.deepEqual(out.deleted, [OTHER]);
+  assert.deepEqual(out.deleted, [OTHER, "docs/both-gone.md"]);
   assert.ok(!existsSync(repo.at(OTHER)));
 });
 
@@ -195,6 +196,122 @@ test("a staged copy left from before is kept, not overwritten", needsPython, asy
   });
   assert.deepEqual(out.skipped, [RULE]);
   assert.equal(repo.read(`.bindwright/incoming/${RULE}`), "staged last time\n");
+  // Still new to the repo, so the next update stages it again.
+  assert.ok(!(RULE in JSON.parse(repo.read(PRISTINE)).files));
+});
+
+test("an unsettled conflict keeps its old base until its staged copy is gone", needsPython, async () => {
+  for (const [cmd, args] of python ? engines : []) {
+    const repo = await makeRepo((r) => {
+      clash(r);
+      r.write(`.bindwright/incoming/${RULE}`, "settled later\n");
+    });
+    const run = () => JSON.parse(spawnSync(cmd, [...args, "--update", repo.at("")], { encoding: "utf8" }).stdout);
+    assert.deepEqual(run().skipped, [RULE], cmd);
+    assert.match(JSON.parse(repo.read(PRISTINE)).files[RULE], /\(old\)/, cmd);
+    rmSync(repo.at(STAGING), { recursive: true, force: true });
+    assert.deepEqual(run().conflict, [RULE], cmd);
+    rmSync(repo.at(""), { recursive: true, force: true });
+  }
+});
+
+// Symbolic links need extra rights on Windows; the cases skip where they cannot be made.
+const linksWork = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "update-link-"));
+  try {
+    symlinkSync(join(dir, "nowhere"), join(dir, "link"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+const needsLinks = { skip: !(python && linksWork) && "needs Python 3.8+ and symbolic links" };
+
+test("a write through a symbolic link is refused before anything is written", needsLinks, async () => {
+  const outside = mkdtempSync(join(tmpdir(), "update-outside-"));
+  try {
+    let before, target;
+    const { out, status, repo } = await update((r) => {
+      // The link reads as the old render, so the file would take the new text.
+      target = older(r.read(RULE));
+      writeFileSync(join(outside, "target.md"), target);
+      r.pristine.files[RULE] = target;
+      before = older(r.read(OTHER));
+      r.pristine.files[OTHER] = before;
+      r.write(OTHER, before); // would update cleanly
+      rmSync(r.at(RULE));
+      symlinkSync(join(outside, "target.md"), r.at(RULE));
+    });
+    assert.equal(status, 1);
+    assert.equal(out.error, `Refusing to write through a symbolic link: ${RULE}`);
+    assert.equal(readFileSync(join(outside, "target.md"), "utf8"), target);
+    assert.equal(JSON.parse(repo.read(PRISTINE)).version, "0.0.1");
+    assert.equal(repo.read(OTHER), before, "no other file was written either");
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a linked pristine.json is refused, not written through", needsLinks, async () => {
+  const outside = mkdtempSync(join(tmpdir(), "update-outside-"));
+  try {
+    let saved;
+    const { out, status } = await update((r) => {
+      saved = `${JSON.stringify(r.pristine, null, 2)}\n`;
+      writeFileSync(join(outside, "pristine.json"), saved);
+      rmSync(r.at(PRISTINE));
+      symlinkSync(join(outside, "pristine.json"), r.at(PRISTINE));
+    });
+    assert.equal(status, 1);
+    assert.equal(out.error, `Refusing to write through a symbolic link: ${PRISTINE}`);
+    assert.equal(readFileSync(join(outside, "pristine.json"), "utf8"), saved);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a dangling link where a staged copy goes counts as an old copy", needsLinks, async () => {
+  const { out } = await update((r) => {
+    delete r.pristine.files[RULE];
+    r.write(RULE, "the repo's own copy\n");
+    mkdirSync(dirname(r.at(`${STAGING}${RULE}`)), { recursive: true });
+    symlinkSync(r.at("nowhere.md"), r.at(`${STAGING}${RULE}`));
+  });
+  assert.deepEqual(out.skipped, [RULE]);
+});
+
+test("a file that is not UTF-8 stops the update instead of being written back", needsPython, async () => {
+  const latin1 = Buffer.from("caf\xe9\n", "latin1");
+  const { out, status, repo } = await update((r) => {
+    const theirs = r.read(RULE);
+    r.pristine.files[RULE] = older(theirs);
+    writeFileSync(r.at(RULE), Buffer.concat([Buffer.from(older(theirs)), latin1]));
+  });
+  assert.equal(status, 1);
+  assert.equal(out.error, `${RULE} is not UTF-8 text`);
+  assert.ok(readFileSync(repo.at(RULE)).subarray(-latin1.length).equals(latin1));
+});
+
+test("a lone carriage return survives a merge in both engines", needsPython, async () => {
+  const { out, repo } = await update((r) => {
+    const theirs = r.read(RULE);
+    r.pristine.files[RULE] = older(theirs);
+    r.write(RULE, `mine\rstill mine\n${older(theirs)}`);
+  });
+  assert.deepEqual(out.merged, [RULE]);
+  assert.ok(repo.read(RULE).startsWith("mine\rstill mine\n"));
+});
+
+test("paths sort by UTF-16 code unit in both engines", needsPython, async () => {
+  const { out } = await update((r) => {
+    for (const name of ["docs/ł.md", "docs/a.md", "docs/\u{1f600}.md", "docs/Ａ.md"]) {
+      r.pristine.files[name] = "old\n";
+      r.write(name, "old\n");
+    }
+  });
+  assert.deepEqual(out.removed, ["docs/a.md", "docs/ł.md", "docs/\u{1f600}.md", "docs/Ａ.md"]);
 });
 
 test("a repo that was never set up is refused", needsPython, async () => {
