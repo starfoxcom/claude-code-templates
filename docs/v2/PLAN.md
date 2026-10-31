@@ -79,9 +79,9 @@ Until Phase 3 lands, the current page (`index.html`, `redesign/*.jsx`) and `SETU
 
 ### Phase 3: the page
 Built in visual slices of about 150 lines each, checked locally by the maintainer before any push.
-- [ ] Shell, tokens, fonts, header, theme.
+- [ ] Shell, tokens, fonts, header, theme, and the landing screen: a plain promise, one button, the clip slot and what changes (decided 2026-10-31: the page is a landing page that has to hook a visitor in 3 to 5 seconds; see `DESIGN.md`).
 - [ ] Two-question picker with key controls and the hue accent.
-- [ ] Live file tree and file preview driven by the renderer.
+- [ ] "What you get": the renderer's files as a few plain groups (what each does for the project), with the file tree and preview behind "Show the files".
 - [ ] Demo project (`demo/`): a small TypeScript app with one planted problem per rule that has a visible effect.
 - [ ] Recording harness: headless Claude Code runs per scenario, with and without Bindwright, saved as sanitized replay data with the staleness hash test.
 - [ ] Demo pane: before and after diffs per setting.

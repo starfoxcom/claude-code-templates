@@ -73,12 +73,23 @@
           </div>
         </div>
       </div>
-      <div class="panel out">
-        <p class="empty">What Bindwright adds to your project shows up here, in plain words.</p>
+      <div class="panel out" aria-labelledby="out-title">
+        <div class="out-head">
+          <h3 id="out-title">What you get</h3>
+          <button class="toggle" id="toggle" type="button" aria-pressed="false" aria-controls="files">Show the files</button>
+        </div>
+        <ul class="groups" id="groups"></ul>
+        <div class="out-body" id="files" hidden>
+          <nav class="tree" id="tree" aria-label="Files"></nav>
+          <div class="view">
+            <p class="path" id="path"></p>
+            <pre id="code" tabindex="0" aria-labelledby="path"></pre>
+          </div>
+        </div>
       </div>
     </div>
   </section>
-  <p class="sr-status" role="status" aria-live="polite"></p>
+  <p class="sr-status" id="status" role="status" aria-live="polite"></p>
 </main>
 <footer>
   <p>Bindwright works with Claude Code. It is not made by, endorsed by or affiliated with Anthropic.</p>
