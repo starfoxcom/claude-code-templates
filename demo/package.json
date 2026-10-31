@@ -5,10 +5,16 @@
   "type": "module",
   "private": true,
   "license": "MIT",
-  "engines": { "node": ">=23.6" },
+  "engines": {
+    "node": ">=23.6"
+  },
   "scripts": {
     "start": "node src/cli.ts",
     "test": "node --test",
-    "typecheck": "npx -y -p typescript@5.9.3 tsc --noEmit"
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
   }
 }

@@ -32,3 +32,10 @@ test("the demo app runs and its own tests pass", needsTs, () => {
   // The lost cent is part of the demo: the shares add up to more than the total.
   assert.match(run.stdout, /Total \(with 18% tip\): \$53\.69/);
 });
+
+// Only where `npm install` has run in demo/; the planted problems are not type errors.
+const tsc = join(demo, "node_modules", "typescript", "bin", "tsc");
+test("the demo type-checks clean", { skip: !existsSync(tsc) && "run npm install in demo/ first" }, () => {
+  const out = spawnSync(process.execPath, [tsc, "--noEmit"], { cwd: demo, encoding: "utf8" });
+  assert.equal(out.status, 0, out.stdout + out.stderr);
+});
