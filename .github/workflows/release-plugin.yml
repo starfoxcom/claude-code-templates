@@ -1,0 +1,78 @@
+name: Release plugin
+
+# Attaches the Bindwright plugin zip to a published release, for the
+# marketplace's archive source. The zip is rebuilt from the release tag by
+# tools/pack_plugin.py, which reads the files git stores, so it has the bytes
+# the release PR computed; the job refuses to upload a zip whose SHA-256
+# differs from the one .claude-plugin/marketplace.json pins at that tag,
+# because the marketplace would refuse it on every machine anyway.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  zip:
+    name: Plugin zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      # Releases before the plugin have no marketplace file: nothing to attach.
+      - name: Check for the marketplace file
+        id: market
+        run: |
+          if [ -f .claude-plugin/marketplace.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::This release has no marketplace file, so there is no plugin zip to attach."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the zip and check it against the marketplace file
+        if: steps.market.outputs.present == 'true'
+        id: build
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${TAG#v}"
+          zip="bindwright-$version.zip"
+          python3 tools/pack_plugin.py --zip "$zip" --ref HEAD
+          python3 - "$zip" "$version" <<'EOF'
+          import hashlib, json, sys
+          zip_path, version = sys.argv[1], sys.argv[2]
+          with open(".claude-plugin/marketplace.json", encoding="utf-8") as fh:
+              entry = next(p for p in json.load(fh)["plugins"] if p["name"] == "bindwright")
+          with open(zip_path, "rb") as fh:
+              built = hashlib.sha256(fh.read()).hexdigest()
+          problems = []
+          if entry.get("version") != version:
+              problems.append("the marketplace lists version %s, the tag is %s" % (entry.get("version"), version))
+          if entry["source"].get("sha256", "").lower() != built:
+              problems.append("the marketplace pins %s, the rebuilt zip is %s" % (entry["source"].get("sha256"), built))
+          if not entry["source"].get("url", "").endswith("/v%s/bindwright-%s.zip" % (version, version)):
+              problems.append("the marketplace url does not name this release's zip")
+          for p in problems:
+              print("::error::" + p)
+          sys.exit(1 if problems else 0)
+          EOF
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the zip to the release
+        if: steps.market.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          ZIP: ${{ steps.build.outputs.zip }}
+        run: gh release upload "$TAG" "$ZIP" --clobber --repo "$GITHUB_REPOSITORY"
