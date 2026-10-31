@@ -46,6 +46,8 @@ export const TRACKERS = ["github", "file"];
 // "<owner>/<number>" of a GitHub Projects board. The owner lands in gh
 // command lines, so it is held to GitHub's own name rule.
 const TRACKER_PROJECT = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[1-9][0-9]{0,5}$/;
+// "<owner>/<repo>" of the public roadmap repo; the repo part follows GitHub's rule.
+const PUBLIC_REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/(?!\.+$)[A-Za-z0-9._-]{1,100}$/;
 export const LICENSES = { MIT: "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "BSD-3-Clause": "BSD-3-Clause.txt", Proprietary: "Proprietary.txt" };
 
 // Filled later by the tailoring step, which reads the user's repo.
@@ -85,6 +87,9 @@ export function defaults({ team = false, client = false } = {}) {
       // "<owner>/<number>" when tracker is "github" and the project has a
       // board; null keeps project status in a pinned issue instead.
       trackerProject: null,
+      // "<owner>/<repo>" of a public roadmap mirrored from the private tracker
+      // at session close (github tracker only); null keeps everything private.
+      publicRoadmap: null,
     },
   };
 }
@@ -138,8 +143,11 @@ export function validate(a) {
   if (adv.tracker === "github") {
     check(adv.trackerProject === null || (typeof adv.trackerProject === "string" && TRACKER_PROJECT.test(adv.trackerProject)),
       'trackerProject must be null or "<owner>/<number>": a GitHub user or organization name and the board\'s number');
+    check(adv.publicRoadmap === null || (typeof adv.publicRoadmap === "string" && PUBLIC_REPO.test(adv.publicRoadmap)),
+      'publicRoadmap must be null or "<owner>/<repo>": the public repo that mirrors the roadmap');
   } else {
     check(adv.trackerProject === null || adv.trackerProject === undefined, 'trackerProject is only for tracker "github"');
+    check(adv.publicRoadmap === null || adv.publicRoadmap === undefined, 'publicRoadmap is only for tracker "github"');
   }
   return a;
 }
