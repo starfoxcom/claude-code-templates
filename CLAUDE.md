@@ -4,7 +4,7 @@ This file guides Claude Code when working in **this** repository — the templat
 
 Yes, the templates project dogfoods itself: the discipline we ship to other projects also applies to development of this repo. The rules at `.claude/rules/` are a *resolved bind* of the canonical sources at `_core/project-template/.claude/rules/` rendered by the v2 engine from this project's answers in `.bindwright/project.json` — exactly what a fresh team bind would write into a downstream project. The canonical templates never leave `_core/`; this repo's `.claude/` is the proof that the bind process produces a working setup.
 
-When canonical templates evolve in `_core/`, re-bind with `node engine/cli.js --update .` (the same three-way merge `/bindwright:update` runs, against `.bindwright/pristine.json`). The one hand tune kept on top of the render: `code-size.md` lists only JavaScript and Python.
+When canonical templates evolve in `_core/`, re-bind with `node engine/cli.js --update .` (the same three-way merge `/bindwright:update` runs, against `.bindwright/pristine.json`). Two hand tunes stay on top of the render: `code-size.md` lists only JavaScript and Python, and `collaboration.md` § Who reviews describes the solo-maintainer gate.
 
 ---
 
