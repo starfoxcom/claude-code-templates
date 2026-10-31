@@ -33,6 +33,24 @@ test("tokens, emails, paths and the user name are taken out", () => {
   assert.match(out, /mail <email> token <token>/);
 });
 
+// A long path is one long run of token characters: the paths must go before
+// the token pattern can swallow part of one.
+const dotted = { repo: "/home/jane.doe/src/acme.internal-billing", home: "/home/jane.doe", user: "jane.doe" };
+const longPath = "boom at /home/jane.doe/work/some-really-long-project-name/src/x"
+  + " and /home/jane.doe/src/acme.internal-billing/y";
+
+test("a dotted home folder and user name are taken out before tokens, in both engines", needsPython, () => {
+  const script = "import json,sys; sys.path.insert(0, sys.argv[1]); from report import scrub; "
+    + "a = json.loads(sys.stdin.read()); print(scrub(a['text'], **a['who']), end='')";
+  const py = spawnSync(python, ["-I", "-c", script, engine], {
+    input: JSON.stringify({ text: longPath, who: dotted }), encoding: "utf8",
+  });
+  const js = scrub(longPath, dotted);
+  assert.equal(py.stdout, js, py.stderr);
+  // The rest of the long path still reads as a token: hiding too much is the safe side.
+  assert.equal(js, "boom at ~<token> and <repo>/y");
+});
+
 test("both engines draft the same scrubbed report, and file nothing", needsPython, () => {
   const root = mkdtempSync(join(tmpdir(), "bw-report-"));
   try {

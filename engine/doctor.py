@@ -5,7 +5,7 @@ import os
 import re
 
 from model import validate
-from layers import _read_layer_file, run_settings
+from layers import MODS, _read_layer_file, run_settings
 from update import ANSWERS, PRISTINE, STAGING, _code_units
 
 # What to do about each finding, in plain words.
@@ -130,7 +130,8 @@ def _settings_checks(root, config):
 
 
 def _cli_check(installed, cli_version):
-    mods = any(has and not name.endswith("-guard") for name, has in installed.items())
+    # Only mods need the newer CLI; the guards are plain hooks.
+    mods = any(has and name in MODS for name, has in installed.items())
     if not mods or not cli_version or not _before(cli_version, MODS_SINCE):
         return _check("cli", True, "The CLI runs the installed mods.")
     running, needed = ".".join(map(str, cli_version)), ".".join(map(str, MODS_SINCE))

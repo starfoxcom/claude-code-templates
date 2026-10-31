@@ -105,4 +105,12 @@ test("an old CLI is named only with mods installed and the session's version kno
   assert.match(old.checks.at(-1).fix, /Claude Desktop, update the app/);
   assert.equal((await doctor(withMods, "")).problems, 0, "unknown version");
   assert.equal((await doctor(() => {}, "claude-code_2-1-286_agent")).problems, 0, "no mods");
+  // A mod whose name ends like a guard's is still a mod; a guard hook alone needs no newer CLI.
+  const guardNamedMod = ({ config }) => mkdirSync(join(config, "mods", "usage-guard"), { recursive: true });
+  assert.deepEqual(failing(await doctor(guardNamedMod, "claude-code_2-1-286_agent")), ["cli"]);
+  const guardHook = ({ config }) => {
+    mkdirSync(join(config, "hooks"), { recursive: true });
+    writeFileSync(join(config, "hooks", "push-guard.py"), "");
+  };
+  assert.equal((await doctor(guardHook, "claude-code_2-1-286_agent")).problems, 0, "a guard hook only");
 });

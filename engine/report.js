@@ -7,8 +7,8 @@ import { runDoctor } from "./doctor.js";
 
 export const ISSUES = "https://github.com/starfoxcom/claude-code-templates/issues/new";
 
-// Secrets first, then the places and names that identify the person. Word
-// edges are spelled out in ASCII, which both engines read alike.
+// Secrets, and the places and names that identify the person. Word edges are
+// spelled out in ASCII, which both engines read alike.
 const EDGE = "(?<![A-Za-z0-9_])";
 const TOKENS = [
   new RegExp(`${EDGE}(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})`, "g"),
@@ -31,17 +31,19 @@ function spellings(path) {
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-// `text` without tokens, emails, the repo and home paths, or the user name.
+// `text` without the repo and home paths, emails, the user name, or tokens.
+// Paths go first: a token pattern could swallow part of one and hide the rest
+// from the path pass. Tokens go last; no placeholder holds a character they match.
 export function scrub(text, { repo, home, user }) {
   let out = String(text);
-  for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
-  out = out.replace(EMAIL, "<email>");
   for (const [path, mark] of [[repo, "<repo>"], [home, "~"]]) {
     for (const spelled of spellings(path)) out = out.split(spelled).join(mark);
   }
+  out = out.replace(EMAIL, "<email>");
   if (user && user.length >= 3) {
     out = out.replace(new RegExp(`${EDGE}${escape(user)}(?![A-Za-z0-9_])`, "g"), "<user>");
   }
+  for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
   return out;
 }
 

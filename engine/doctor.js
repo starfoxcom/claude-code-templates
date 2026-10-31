@@ -6,9 +6,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ANSWERS, PRISTINE, STAGING } from "./bind.js";
 import { validate } from "./model.js";
-import { readLayerFile, runSettings } from "./layers.js";
+import { MODS, readLayerFile, runSettings } from "./layers.js";
 
-// The first CLI with mods; older ones load none of them.
 // What to do about each finding, in plain words.
 const FIX = {
   restore: "Restore it from git with `git checkout -- .bindwright/`, or set the repo up again.",
@@ -21,6 +20,7 @@ const FIX = {
   unreadable: "Fix or remove the file it names.",
 };
 
+// The first CLI with mods; older ones load none of them.
 export const MODS_SINCE = [2, 1, 287];
 
 // "claude-code_2-1-286_agent", the variable the CLI sets for what it runs,
@@ -128,7 +128,8 @@ function settingsChecks(root, config) {
 }
 
 function cliCheck(installed, cliVersion) {
-  const mods = Object.entries(installed ?? {}).some(([name, has]) => has && !name.endsWith("-guard"));
+  // Only mods need the newer CLI; the guards are plain hooks.
+  const mods = Object.entries(installed ?? {}).some(([name, has]) => has && MODS.includes(name));
   if (!mods || !cliVersion || !before(cliVersion, MODS_SINCE)) {
     return check("cli", true, "The CLI runs the installed mods.");
   }

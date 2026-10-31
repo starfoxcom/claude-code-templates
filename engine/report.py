@@ -31,14 +31,14 @@ def _spellings(path):
 
 def scrub(text, repo=None, home=None, user=None):
     out = str(text)
-    for pattern in TOKENS:
-        out = pattern.sub("<token>", out)
-    out = EMAIL.sub("<email>", out)
     for path, mark in ((repo, "<repo>"), (home, "~")):
         for spelled in _spellings(path):
             out = out.replace(spelled, mark)
+    out = EMAIL.sub("<email>", out)
     if user and len(user) >= 3:
         out = re.sub(EDGE + re.escape(user) + "(?![A-Za-z0-9_])", "<user>", out)
+    for pattern in TOKENS:
+        out = pattern.sub("<token>", out)
     return out
 
 
