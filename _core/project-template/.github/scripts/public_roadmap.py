@@ -53,7 +53,7 @@ CONTRACT = [
     ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\]\(|^[ \t]*\[[^\]]+\]:|<a\b|\bwww\."
                         r"|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I | re.M)),
     ("commit", re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
-    ("identifier", re.compile(r"\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\w+\(\)")),
+    ("identifier", re.compile(r"\w+\(\)|\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b")),
     ("constant", re.compile(r"(?<![\w.])(?<!v)\d+\.\d+(?![\d.])(?!" + UNITS + r")|\b0x[0-9a-f]+",
                             re.I)),
     ("AI or review wording", re.compile(AI_PROCESS, re.I)),
@@ -187,10 +187,9 @@ class Settings:
         hidden = [re.escape(word) for word in raw.get("hidden", []) if word]
         # Anywhere, any case: "Falcon" also catches "Falcons" and "FalconDB".
         self.hidden = re.compile("|".join(hidden), re.I) if hidden else None
-        allowed = [re.escape(word) for word in raw.get("allowed", []) if word]
-        # Public names the patterns would mistake for code, such as "iOS" or "Node.js": exact words only.
-        # A word inside a path or reference ("org/iOS#12", "apps/iOS/x") stays, so those still get caught.
-        self.allowed = re.compile(r"(?<![\w./@#-])(?:" + "|".join(allowed) + r")(?![\w/#@-])") if allowed else None
+        # Public names the patterns would mistake for code, such as "iOS" or "Node.js". A hit is let
+        # through only when it is exactly one of them, so "iOS.swift" or "org/iOS#12" still gets caught.
+        self.allowed = set(raw.get("allowed", []))
         self.public_board = raw.get("project")
         self.fields = list(raw.get("fields", []))
 
@@ -202,9 +201,11 @@ class Settings:
 
 def contract_breaks(text: str, settings: Settings, public: set[int]) -> list[str]:
     """Why `text` cannot go public; empty when it can."""
-    scanned = settings.allowed.sub(" ", text) if settings.allowed else text
-    problems = [f"{name} ('{rule.search(scanned).group(0)}')" for name, rule in CONTRACT
-                if rule.search(scanned)]
+    problems = []
+    for name, rule in CONTRACT:
+        hit = next((m.group(0) for m in rule.finditer(text) if m.group(0) not in settings.allowed), None)
+        if hit is not None:
+            problems.append(f"{name} ('{hit}')")
     if settings.hidden and settings.hidden.search(text):
         problems.append(f"private name ('{settings.hidden.search(text).group(0)}')")
     private = sorted({int(n) for n in re.findall(r"(?<![\w&])#(\d+)\b", text)} - public)
