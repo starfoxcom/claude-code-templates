@@ -56,6 +56,7 @@
   "README.md.template",
   "docs/comment-audit.md",
   "docs/lazy/README.md",
+  "docs/test-audit.md",
   "precommit/husky-pre-commit.template",
   "precommit/lefthook.yml.template",
   "precommit/pre-commit-config.yaml.template",
