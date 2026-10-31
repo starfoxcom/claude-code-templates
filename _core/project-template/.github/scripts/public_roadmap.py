@@ -50,7 +50,8 @@ CONTRACT = [
     ("branch", re.compile(r"\b(feature|hotfix|release|fix|chore)/")),
     ("reference", re.compile(r"\b[\w.-]+/[\w.-]+#\d+|\bGH-\d+\b")),
     ("mention", re.compile(r"(?<![\w.@])@[A-Za-z0-9][A-Za-z0-9-]*")),
-    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\]\(|^\s*\[[^\]]+\]:|<a\b|\bwww\.|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)),
+    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\]\(|^[ \t]*\[[^\]]+\]:|<a\b|\bwww\."
+                        r"|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I | re.M)),
     ("commit", re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
     ("identifier", re.compile(r"\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\w+\(\)")),
     ("constant", re.compile(r"(?<![\w.])(?<!v)\d+\.\d+(?![\d.])(?!" + UNITS + r")|\b0x[0-9a-f]+",
@@ -61,7 +62,7 @@ CONTRACT = [
 ISSUES = """query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) { issues(first: 50, after: $cursor) {
     pageInfo { hasNextPage endCursor }
-    nodes { id number title body state stateReason authorAssociation
+    nodes { id number title body state stateReason labels(first: 20) { nodes { name } }
       parent { number repository { nameWithOwner } } } } } }"""
 ITEMS = """query($owner: String!, $number: Int!, $cursor: String) {
   repositoryOwner(login: $owner) { ... on ProjectV2Owner { projectV2(number: $number) {
@@ -208,8 +209,9 @@ def contract_breaks(text: str, settings: Settings, public: set[int]) -> list[str
 
 # Every body the tool writes ends with this line; it touches no issue without it.
 MARK = "<!-- public-roadmap -->"
-# Who can run push: the repo's owner and the people with write access to it.
-WRITERS = ("OWNER", "MEMBER", "COLLABORATOR")
+# Only people with triage or write access can label an issue, and the label stays
+# when its author's access changes later, so it proves the issue is the tool's.
+LABEL = "public-roadmap"
 WITHDRAWN = ("Withdrawn", f"This item is no longer on the public roadmap.\n\n{MARK}\n")
 PLACEHOLDER = ("placeholder", f"placeholder\n\n{MARK}\n")
 
@@ -248,8 +250,8 @@ class PublicSync:
         repo = self.settings.public_repo
         issues = fetch_issues(repo)
         # The mark alone is not proof: anyone can copy it into an issue of their own.
-        self.public = {n: i for n, i in issues.items()
-                       if MARK in (i["body"] or "") and i.get("authorAssociation") in WRITERS}
+        self.public = {n: i for n, i in issues.items() if MARK in (i["body"] or "")
+                       and LABEL in (label["name"] for label in i["labels"]["nodes"])}
         newest = run_gh(["api", f"repos/{repo}/issues?state=all&per_page=1", "-q", ".[0].number // 0"])
         owner, name = repo.split("/")
         talk = gql(DISCUSSIONS, owner=owner, name=name)["repository"]["discussions"]["nodes"]
@@ -286,9 +288,14 @@ class PublicSync:
         have gone, and the next run carries on from there.
         """
         repo = self.settings.public_repo
-        for number in range(self.highest + 1, max([*self.wanted, 0]) + 1):
+        numbers = range(self.highest + 1, max([*self.wanted, 0]) + 1)
+        if numbers:
+            run_gh(["label", "create", LABEL, "--repo", repo, "--force",
+                    "--description", "Written by the public roadmap tool"])
+        for number in numbers:
             title, body = self.wanted.get(number, PLACEHOLDER)
-            url = with_body_file(body, ["issue", "create", "--repo", repo, "--title", title])
+            url = with_body_file(body, ["issue", "create", "--repo", repo, "--title", title,
+                                        "--label", LABEL])
             created = int(url.strip().rsplit("/", 1)[1])
             if created != number:
                 raise SystemExit(f"public numbers drifted: wanted #{number}, GitHub made #{created}:"

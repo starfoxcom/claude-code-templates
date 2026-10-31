@@ -45,7 +45,8 @@ def issue_command(args):
         n = repo["next"]
         repo["issues"][str(n)] = {"id": "pub-%d" % n, "number": n, "title": title, "body": body,
                                   "state": "OPEN", "stateReason": None, "parent": None,
-                                  "authorAssociation": "OWNER"}
+                                  "labels": {"nodes": [{"name": l} for i, l in enumerate(args)
+                                                       if i and args[i - 1] == "--label"]}}
         writes.append("create %d" % n)
         return "https://github.com/x/y/issues/%d" % n
     issue = repo["issues"][args[2]]
@@ -94,6 +95,8 @@ def newest(name):
     return max([int(k) for k in repo["issues"]] + repo.get("prs", []) + repo.get("discussions", []) + [0])
 
 def fake_gh(args):
+    if args[:2] == ["label", "create"]:
+        return ""
     if args[:2] == ["repo", "view"]:
         return "me/private\\n"
     if args[:2] == ["api", "user"]:
@@ -114,8 +117,8 @@ print("WRITES " + json.dumps(writes))
 sys.exit(code)
 `;
 
-const issue = (number, title, body, extra = {}) =>
-  ({ id: `priv-${number}`, number, title, body, state: "OPEN", stateReason: null, parent: null, ...extra });
+const issue = (number, title, body, extra = {}) => ({ id: `priv-${number}`, number, title, body,
+  state: "OPEN", stateReason: null, parent: null, labels: { nodes: [] }, ...extra });
 const under = (number, repo = "me/private") => ({ number, repository: { nameWithOwner: repo } });
 // A public body without the tool's own closing mark.
 const words = (body) => body.split("\n\n<!-- public-roadmap -->")[0].trim();
@@ -162,6 +165,7 @@ test("check names every contract break and leaves summary-less issues private", 
     issue(7, "Ops", summary("Ask ops@corp.example.\n\n    deploy --force")),
     issue(8, "Wiki two", summary("See [the wiki](//intra.example/wiki).\n\n        deploy --force")),
     issue(9, "Wiki three", summary("Read <a href=\"//intra.example\">this</a>.")),
+    issue(10, "Wiki four", summary("See [the wiki][1] for details.\n\n[1]: //intra.example/wiki")),
   ], { hidden: ["Falcon"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
@@ -176,7 +180,8 @@ test("check names every contract break and leaves summary-less issues private", 
     "#5 summary: AI or review wording ('ChatGPT')", "#5 summary: path ('player.gd')",
     "#6 summary: private name ('Falcon')", "#6 summary: link ('www.')", "#6 summary: code ('<code')",
     "#7 summary: link ('ops@corp.example')", "#7 summary: code ('    ')",
-    "#8 summary: link ('](')", "#8 summary: code ('        ')", "#9 summary: link ('<a')"]) {
+    "#8 summary: link ('](')", "#8 summary: code ('        ')", "#9 summary: link ('<a')",
+    "#10 summary: link ('[1]:')"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
   assert.ok(!/#1 |#2 /.test(text.replace(/#12/g, "")), text);
@@ -297,9 +302,8 @@ test("outside issues and pull requests on the public side are never touched, onl
   assert.equal(s.run("push").status, 0);
   // An outsider opens #5 (an issue) and #6 (a pull request) on the public repo.
   s.edit((issues, pub) => {
-    // It even copies the tool's mark: the mark alone does not make an issue the tool's.
-    pub.issues["5"] = { ...issue(5, "placeholder", "placeholder\n\n<!-- public-roadmap -->\n"), id: "out-5",
-      authorAssociation: "NONE" };
+    // It even copies the tool's mark: without the label the tool adds, the issue is not the tool's.
+    pub.issues["5"] = { ...issue(5, "placeholder", "placeholder\n\n<!-- public-roadmap -->\n"), id: "out-5" };
     pub.prs = [6];
     pub.discussions = [7];
     issues["8"] = issue(8, "H", summary("Eighth."));
@@ -314,7 +318,7 @@ test("outside issues and pull requests on the public side are never touched, onl
   const out = s.run("push");
   assert.equal(out.status, 0, out.stderr);
   const pub = s.read()["me/public"].issues;
-  assert.equal(pub["5"].authorAssociation, "NONE");
+  assert.deepEqual(pub["5"].labels.nodes, []);
   assert.equal(pub["5"].title, "placeholder");
   assert.equal(pub["8"].title, "H");
   // A parent in another repo is no parent here.
