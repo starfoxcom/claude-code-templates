@@ -90,6 +90,9 @@ export function defaults({ team = false, client = false } = {}) {
       // "<owner>/<repo>" of a public roadmap mirrored from the private tracker
       // at session close (github tracker only); null keeps everything private.
       publicRoadmap: null,
+      // With the github tracker: a short, git-ignored hand-off file that
+      // points at the issues the last session worked on.
+      handoffFile: true,
     },
   };
 }
@@ -109,7 +112,7 @@ export function validate(a) {
   check(isObject(a) && isObject(a.project) && isObject(a.advanced), "the answers must hold project and advanced objects");
   const adv = a.advanced;
   check(typeof a.team === "boolean" && typeof a.client === "boolean", "team and client must be true or false");
-  const switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck"];
+  const switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck", "handoffFile"];
   for (const key of switches) {
     check(typeof adv[key] === "boolean", `${key} must be true or false`);
   }
@@ -171,6 +174,7 @@ export function flagsFor(a) {
     deny_list_strict: adv.denyProfile === "strict",
     code_size_check: adv.codeSizeCheck,
     public_roadmap: adv.tracker === "github" && adv.publicRoadmap !== null && adv.publicRoadmap !== undefined,
+    handoff_file: adv.tracker === "github" && adv.handoffFile,
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
