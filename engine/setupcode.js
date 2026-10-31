@@ -7,14 +7,14 @@ export const PREFIX = "bw1-";
 // a huge code from reaching the JSON reader, and a deep one from Python's,
 // which gives up near 1000 levels where JSON.parse keeps going.
 const MAX_BODY = 20000;
-const MAX_DEPTH = 64;
+export const MAX_DEPTH = 64;
 
 function fail(msg) {
   throw new Error(`Invalid setup code: ${msg}`);
 }
 
 // The deepest bracket nesting outside JSON strings.
-function depthOf(text) {
+export function depthOf(text) {
   let depth = 0;
   let deepest = 0;
   let inString = false;
