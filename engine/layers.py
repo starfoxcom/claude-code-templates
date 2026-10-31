@@ -178,7 +178,8 @@ def installed_extras(config):
     return {extra: os.path.exists(os.path.join(config, *at(extra).split("/"))) for extra in EXTRAS}
 
 
-def _read_layer_file(path, file):
+def _read_layer_file(path, file, keep_ints=False):
+    # keep_ints: for a file written back, where 5 must stay 5, as JSON.stringify writes it.
     try:
         with open(path, "rb") as f:
             raw = f.read()
@@ -194,7 +195,7 @@ def _read_layer_file(path, file):
         # NaN and Infinity are not JSON, and JSON.parse refuses them. Whole numbers
         # are read as doubles, as JSON.parse reads them: past the double range they
         # become infinite, with no digit limit, in both engines.
-        return json.loads(text, parse_constant=_not_json, parse_int=float)
+        return json.loads(text, parse_constant=_not_json, parse_int=None if keep_ints else float)
     except ValueError:
         raise ValueError("%s is not valid JSON" % file)
 
