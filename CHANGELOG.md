@@ -8,6 +8,8 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ### Added
 
+- **The daily notice reports setup drift** (#419, part 3). When the repo's shared setup rates an extra `required` or `recommended` that this machine lacks and nobody declined, the once-a-day notice names it and points at `/bindwright:join`. The packed engine's `runSettings` decides, so the notice and join never disagree; any error leaves the line out.
+
 - **`/bindwright:export` and `/bindwright:join`** (#419, part 2). Export records which `~/.claude` extras the project requires or recommends, and which settings no one may override, in `.bindwright/project.json`. Join, on a teammate's machine, checks tracker access, the code-research tool and each missing extra with a yes or no, remembers every answer in the person's own settings layer, and ends by starting the session. The engine writes both through `--export` and `--remember` (`engine/share.js` and its Python twin), refusing any value the layers would ignore and any write through a symbolic link.
 
 - **Settings layers** (#419, part 1). `engine/layers.js` and its Python twin resolve Bindwright's settings from three layers: personal (`~/.claude/bindwright/settings.json`), the project (`.bindwright/project.json`, whose new optional `setup` object rates extras as required or recommended and lists the settings no one may override) and personal-in-this-project (`.bindwright/local.json`). `cli.js --settings DIR` and `bind.py --settings DIR` print the result with the extras this machine has and the drift between them. Files are data only: unknown keys and bad values are listed and never applied, and a file from a newer schema is refused. The format is in `docs/v2/HANDOFF.md`.

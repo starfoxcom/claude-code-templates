@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // The released version: main moves only on a release, and the plugin packs this file.
 export const LATEST_URL = "https://raw.githubusercontent.com/starfoxcom/claude-code-templates/main/VERSION";
@@ -60,9 +60,10 @@ function save(cacheFile, cache, today) {
 }
 
 // The notice text, or null. `fetchLatest()` gives the released version or
-// null; `cacheFile` remembers the day of the last check, what it found, and
+// null; `driftFor(repo)` the extras the repo's setup expects that this machine
+// lacks; `cacheFile` remembers the day of the last check, what it found, and
 // the day each repo last saw a notice.
-export async function notice({ cwd, today, cacheFile, pluginVersion, fetchLatest }) {
+export async function notice({ cwd, today, cacheFile, pluginVersion, fetchLatest, driftFor = async () => [] }) {
   const cache = { checked: null, latest: null, ...readJson(cacheFile) };
   cache.shown = Object.fromEntries(todays(cache.shown, today));
   const repo = findRepo(cwd);
@@ -85,6 +86,12 @@ export async function notice({ cwd, today, cacheFile, pluginVersion, fetchLatest
     lines.push(`This repo's Bindwright files come from ${repoVersion} and the plugin is ${pluginVersion}: `
       + "/bindwright:update brings them up to date and keeps the repo's own edits.");
   }
+  // Only extra names, which come from the engine's fixed list, reach the text.
+  const drift = repo ? (await driftFor(repo).catch(() => [])).filter((name) => /^[a-z][a-z-]{0,40}$/.test(name)) : [];
+  if (drift.length) {
+    lines.push(`This repo's Bindwright setup expects extras this machine lacks (${drift.join(", ")}): `
+      + "/bindwright:join walks through them, and remembers a no.");
+  }
   if (lines.length) {
     cache.shown[key] = today;
     dirty = true;
@@ -101,6 +108,12 @@ export async function fetchVersion(url) {
   return parse(text) ? text.replace(/^v+/, "") : null;
 }
 
+// The engine ships beside this hook in the packed plugin.
+async function driftOf(root, repo, config) {
+  const { runSettings } = await import(pathToFileURL(join(root, "engine", "layers.js")).href);
+  return runSettings(repo, config).drift;
+}
+
 async function main() {
   const input = readJson(0) ?? {};
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -114,6 +127,7 @@ async function main() {
     cacheFile: join(config, "bindwright", "notice.json"),
     pluginVersion: pluginVersion.replace(/^v+/, ""),
     fetchLatest: () => fetchVersion(url),
+    driftFor: (repo) => driftOf(root, repo, config),
   });
   if (!text) return;
   const hookSpecificOutput = { hookEventName: "SessionStart", additionalContext: text };
