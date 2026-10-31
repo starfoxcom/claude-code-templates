@@ -69,6 +69,30 @@ test("shell path forms and non-ASCII names in any case come out the same in both
   assert.equal(js, "pwd <repo>/x, wsl ~/y, by <user>");
 });
 
+test("the Turkish I and a bare root home folder come out the same in both engines", needsPython, () => {
+  const script = "import json,sys; sys.path.insert(0, sys.argv[1]); from report import scrub; "
+    + "a = json.loads(sys.stdin.buffer.read().decode('utf-8')); "
+    + "sys.stdout.write(json.dumps([scrub(t, **w) for t, w in a]))";
+  const cases = [
+    ["by İsmail, ismail, ISMAIL and ısmaıl", { user: "İsmail" }],
+    ["by ılker, Ilker and İLKER, not Straße", { user: "ılker" }],
+    ["by Straße and STRASSE", { user: "Straße" }],
+    ["at /srv/app/x and C:\\y", { repo: "/srv/app", home: "/" }],
+    ["at C:\\x and \\\\host\\share", { home: "C:\\" }],
+  ];
+  const py = spawnSync(python, ["-I", "-c", script, engine], { input: JSON.stringify(cases), encoding: "utf8" });
+  const js = cases.map(([t, w]) => scrub(t, w));
+  assert.deepEqual(JSON.parse(py.stdout), js, py.stderr);
+  // Every I matches every other; ß, whose capital is two letters, only as written; a root home matches nothing.
+  assert.deepEqual(js, [
+    "by <user>, <user>, <user> and <user>",
+    "by <user>, <user> and <user>, not Straße",
+    "by <user> and STRASSE",
+    "at <repo>/x and C:\\y",
+    "at C:\\x and \\\\host\\share",
+  ]);
+});
+
 test("both engines draft the same scrubbed report, and file nothing", needsPython, () => {
   const root = mkdtempSync(join(tmpdir(), "bw-report-"));
   try {

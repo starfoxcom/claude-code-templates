@@ -97,6 +97,21 @@ test("a missing guard, an old repo and waiting staged files are each named", nee
   assert.match(say.staged.say, /1 staged file\(s\) .*: docs\/x\.md\./);
 });
 
+test("a plugin older than the repo, or no readable version, is named with its own fix", needsPython, async () => {
+  const withVersion = (version) => doctor(({ at }) => {
+    const pristine = JSON.parse(readFileSync(at(".bindwright/pristine.json"), "utf8"));
+    writeFileSync(at(".bindwright/pristine.json"), JSON.stringify({ ...pristine, version }));
+  });
+  const newer = (await withVersion("999.0.0")).checks.find((c) => c.id === "version");
+  assert.equal(newer.ok, false);
+  assert.match(newer.fix, /Update the Bindwright plugin .* do not run \/bindwright:update/);
+  for (const version of [undefined, "2.0"]) {
+    const unread = (await withVersion(version)).checks.find((c) => c.id === "version");
+    assert.equal(unread.ok, false);
+    assert.match(unread.say, /names no version/);
+  }
+});
+
 test("a staging folder that is a file is named, not a crash", needsPython, async () => {
   const report = await doctor(({ at }) => writeFileSync(at(STAGING.slice(0, -1)), "not a folder\n"));
   assert.deepEqual(failing(report), ["staged"]);

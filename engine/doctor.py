@@ -12,6 +12,9 @@ from update import ANSWERS, PRISTINE, STAGING, _code_units
 FIX = {
     "restore": "Restore it from git with `git checkout -- .bindwright/`, or set the repo up again.",
     "update": "Run /bindwright:update: it keeps the repo's own edits.",
+    "plugin": "Update the Bindwright plugin from /plugin first. Until then, do not run /bindwright:update: "
+              "it would write this older plugin's files.",
+    "reinstall": "Reinstall the Bindwright plugin from /plugin.",
     "guards": "Restore them from git with `git checkout -- .claude/hooks/`; "
               "an update does not bring back deleted files.",
     "settings": "Fix or remove those values in the files named.",
@@ -99,11 +102,15 @@ def _state_checks(root):
 
 def _version_check(pristine, plugin_version):
     repo, plugin = _parts(pristine.get("version")), _parts(plugin_version)
-    if repo and plugin and _before(repo, plugin):
-        return _check("version", False,
-                      "The repo's Bindwright files come from %s; the plugin is %s."
-                      % (pristine["version"], plugin_version),
-                      FIX["update"])
+    if not repo:
+        return _check("version", False, "%s names no version Bindwright can read." % PRISTINE, FIX["restore"])
+    if not plugin:
+        return _check("version", False, "The plugin's own version cannot be read.", FIX["reinstall"])
+    say = "The repo's Bindwright files come from %s; the plugin is %s." % (pristine["version"], plugin_version)
+    if _before(repo, plugin):
+        return _check("version", False, say, FIX["update"])
+    if _before(plugin, repo):
+        return _check("version", False, say, FIX["plugin"])
     return _check("version", True, "The repo's files match the plugin's version.")
 
 

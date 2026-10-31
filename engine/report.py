@@ -20,7 +20,7 @@ EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
 def _spellings(path):
-    if not path:
+    if not path or not re.sub(r"[\\/]", "", re.sub(r"^[A-Za-z]:", "", path)):
         return []
     forward = path.replace("\\", "/")
     back = path.replace("/", "\\")
@@ -32,14 +32,29 @@ def _spellings(path):
     return sorted(unique, key=lambda s: (-len(s.encode("utf-16-le", "surrogatepass")) // 2, _code_units(s)))
 
 
+EYES = "Iiİı"
+
+
+def _any_case(s):
+    # See anyCase in report.js.
+    out = []
+    for c in s:
+        if c in EYES:
+            out.append("[%s]" % EYES)
+            continue
+        forms = sorted(f for f in {c, c.lower(), c.upper()} if len(f) == 1)
+        out.append("[%s]" % "".join(forms) if len(forms) > 1 else re.escape(c))
+    return "".join(out)
+
+
 def scrub(text, repo=None, home=None, user=None):
     out = str(text)
     for path, mark in ((repo, "<repo>"), (home, "~")):
         for spelled in _spellings(path):
-            out = re.sub(re.escape(spelled), lambda _m, mark=mark: mark, out, flags=re.I)
+            out = re.sub(_any_case(spelled), lambda _m, mark=mark: mark, out)
     out = EMAIL.sub("<email>", out)
     if user and len(user) >= 3:
-        out = re.sub(EDGE + re.escape(user) + "(?![A-Za-z0-9_])", "<user>", out, flags=re.I)
+        out = re.sub(EDGE + _any_case(user) + "(?![A-Za-z0-9_])", lambda _m: "<user>", out)
     for pattern in TOKENS:
         out = pattern.sub("<token>", out)
     return out

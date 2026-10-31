@@ -22,7 +22,8 @@ const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 // and JSON-escaped; longest first. Each is matched in any letter case, since
 // Windows and macOS paths are, and tools print them in either.
 function spellings(path) {
-  if (!path) return [];
+  // A bare root (/, C:\, \\) would replace every slash in the text.
+  if (!path || !path.replace(/^[A-Za-z]:/, "").replace(/[\\/]/g, "")) return [];
   const forward = path.split("\\").join("/");
   const back = path.split("/").join("\\");
   const all = [path, forward, back, back.split("\\").join("\\\\")];
@@ -35,17 +36,31 @@ function spellings(path) {
 
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// `s` as a pattern that matches it in any letter case. Built by hand, not
+// with a case-blind flag, so both engines agree: JS and Python fold letters
+// such as the Turkish dotted I differently. The four I's all match each
+// other, since hiding too much is the safe side. Any other letter whose other
+// case is more than one character (ß) matches only as written.
+const EYES = "Iiİı";
+function anyCase(s) {
+  return [...s].map((c) => {
+    if (EYES.includes(c)) return `[${EYES}]`;
+    const forms = [...new Set([c, c.toLowerCase(), c.toUpperCase()])].filter((f) => [...f].length === 1);
+    return forms.length > 1 ? `[${forms.sort().join("")}]` : escape(c);
+  }).join("");
+}
+
 // `text` without the repo and home paths, emails, the user name, or tokens.
 // Paths go first: a token pattern could swallow part of one and hide the rest
 // from the path pass. Tokens go last; no placeholder holds a character they match.
 export function scrub(text, { repo, home, user }) {
   let out = String(text);
   for (const [path, mark] of [[repo, "<repo>"], [home, "~"]]) {
-    for (const spelled of spellings(path)) out = out.replace(new RegExp(escape(spelled), "giu"), () => mark);
+    for (const spelled of spellings(path)) out = out.replace(new RegExp(anyCase(spelled), "gu"), () => mark);
   }
   out = out.replace(EMAIL, "<email>");
   if (user && user.length >= 3) {
-    out = out.replace(new RegExp(`${EDGE}${escape(user)}(?![A-Za-z0-9_])`, "giu"), "<user>");
+    out = out.replace(new RegExp(`${EDGE}${anyCase(user)}(?![A-Za-z0-9_])`, "gu"), () => "<user>");
   }
   for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
   return out;

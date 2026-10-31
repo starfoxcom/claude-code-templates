@@ -12,6 +12,9 @@ import { MODS, readLayerFile, runSettings } from "./layers.js";
 const FIX = {
   restore: "Restore it from git with `git checkout -- .bindwright/`, or set the repo up again.",
   update: "Run /bindwright:update: it keeps the repo's own edits.",
+  plugin: "Update the Bindwright plugin from /plugin first. Until then, do not run /bindwright:update: "
+    + "it would write this older plugin's files.",
+  reinstall: "Reinstall the Bindwright plugin from /plugin.",
   guards: "Restore them from git with `git checkout -- .claude/hooks/`; an update does not bring back deleted files.",
   settings: "Fix or remove those values in the files named.",
   join: "Run /bindwright:join: it installs each one on a yes and remembers a no.",
@@ -88,11 +91,11 @@ function stateChecks(root) {
 
 function versionCheck(pristine, pluginVersion) {
   const [repo, plugin] = [parts(pristine.version), parts(pluginVersion)];
-  if (repo && plugin && before(repo, plugin)) {
-    const say = `The repo's Bindwright files come from ${pristine.version}; the plugin is ${pluginVersion}.`;
-    return check("version", false, say,
-      FIX.update);
-  }
+  if (!repo) return check("version", false, `${PRISTINE} names no version Bindwright can read.`, FIX.restore);
+  if (!plugin) return check("version", false, "The plugin's own version cannot be read.", FIX.reinstall);
+  const say = `The repo's Bindwright files come from ${pristine.version}; the plugin is ${pluginVersion}.`;
+  if (before(repo, plugin)) return check("version", false, say, FIX.update);
+  if (before(plugin, repo)) return check("version", false, say, FIX.plugin);
   return check("version", true, "The repo's files match the plugin's version.");
 }
 
