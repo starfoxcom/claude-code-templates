@@ -145,9 +145,10 @@ test("every flag is read by a template or by bind.js", () => {
 test("always-on rules ship to every setup, the writing rule only on request", async () => {
   const a = defaults();
   let files = await run(a);
-  for (const rule of ["task-tracking.md", "testing.md", "code-size.md"]) {
+  for (const rule of ["task-tracking.md", "testing.md", "code-size.md", "security.md"]) {
     assert.ok(files.has(`.claude/rules/${rule}`), `${rule} missing`);
   }
+  assert.match(files.get("docs/security-posture.md"), /^# Security posture: \S/);
   assert.ok(!files.has(".claude/rules/shipped-text.md"));
   a.advanced.plainWriting = true;
   files = await run(a);
