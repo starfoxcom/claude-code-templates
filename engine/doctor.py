@@ -53,7 +53,7 @@ def _staged(root):
                 walk(path, prefix + name + "/")
             else:
                 out.append(prefix + name)
-    if os.path.lexists(base):
+    if os.path.exists(base):
         walk(base, "")
     return out
 

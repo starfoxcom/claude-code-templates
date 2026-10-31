@@ -25,7 +25,11 @@ function spellings(path) {
   if (!path) return [];
   const forward = path.split("\\").join("/");
   const back = path.split("/").join("\\");
-  const unique = [...new Set([path, forward, back, back.split("\\").join("\\\\")])];
+  const all = [path, forward, back, back.split("\\").join("\\\\")];
+  // A drive path as Git Bash and WSL print it: C:\x is /c/x and /mnt/c/x.
+  const drive = /^([A-Za-z]):\//.exec(forward);
+  if (drive) all.push(`/${drive[1]}/${forward.slice(3)}`, `/mnt/${drive[1]}/${forward.slice(3)}`);
+  const unique = [...new Set(all)];
   return unique.sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 

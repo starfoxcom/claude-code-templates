@@ -56,6 +56,19 @@ test("a path or name in another letter case is taken out too", () => {
   assert.equal(out, "at <repo>\\x and ~/y, user <user>");
 });
 
+test("shell path forms and non-ASCII names in any case come out the same in both engines", needsPython, () => {
+  const win = { repo: "C:\\Users\\Jürgen\\code\\app", home: "C:\\Users\\Jürgen", user: "Jürgen" };
+  const text = "pwd /c/Users/JÜRGEN/code/app/x, wsl /mnt/c/users/jürgen/y, by JÜRGEN";
+  const script = "import json,sys; sys.path.insert(0, sys.argv[1]); from report import scrub; "
+    + "a = json.loads(sys.stdin.buffer.read().decode('utf-8')); "
+    + "sys.stdout.write(json.dumps(scrub(a['text'], **a['who'])))";
+  const input = JSON.stringify({ text, who: win });
+  const py = spawnSync(python, ["-I", "-c", script, engine], { input, encoding: "utf8" });
+  const js = scrub(text, win);
+  assert.equal(JSON.parse(py.stdout), js, py.stderr);
+  assert.equal(js, "pwd <repo>/x, wsl ~/y, by <user>");
+});
+
 test("both engines draft the same scrubbed report, and file nothing", needsPython, () => {
   const root = mkdtempSync(join(tmpdir(), "bw-report-"));
   try {

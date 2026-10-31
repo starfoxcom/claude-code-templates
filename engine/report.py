@@ -24,7 +24,11 @@ def _spellings(path):
         return []
     forward = path.replace("\\", "/")
     back = path.replace("/", "\\")
-    unique = list(dict.fromkeys([path, forward, back, back.replace("\\", "\\\\")]))
+    every = [path, forward, back, back.replace("\\", "\\\\")]
+    drive = re.match(r"([A-Za-z]):/", forward)
+    if drive:
+        every += ["/%s/%s" % (drive.group(1), forward[3:]), "/mnt/%s/%s" % (drive.group(1), forward[3:])]
+    unique = list(dict.fromkeys(every))
     return sorted(unique, key=lambda s: (-len(s.encode("utf-16-le", "surrogatepass")) // 2, _code_units(s)))
 
 
