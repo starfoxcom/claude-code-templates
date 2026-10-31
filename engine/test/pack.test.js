@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +79,13 @@ test("the release zip has the same bytes on every build and the folder pack's fi
       + "os.path.relpath(os.path.join(d, f), r).replace(os.sep, '/') for d, _, fs in os.walk(r) for f in fs)))",
     join(root, "dir")]).stdout.trim().split(/\r?\n/);
     assert.deepEqual(names, walk.filter((p) => p !== ".bindwright-pack"));
+
+    // --marketplace creates its folder and pins the zip just built.
+    const file = join(root, "new", ".claude-plugin", "marketplace.json");
+    const wrote = run(python, [join(repo, "tools", "pack_plugin.py"), "--marketplace", file]);
+    assert.equal(wrote.status, 0, wrote.stderr);
+    const sha = createHash("sha256").update(zip("c.zip")).digest("hex");
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).plugins[0].source.sha256, sha);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

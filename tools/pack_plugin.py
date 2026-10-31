@@ -200,7 +200,13 @@ def main(argv):
         os.makedirs(os.path.dirname(tmp), exist_ok=True)
         manifest, sha = pack_zip(tmp, ref)
         os.remove(tmp)
-        with open(os.path.join(ROOT, *MARKETPLACE.split("/")), "w", encoding="utf-8", newline="\n") as fh:
+        # An optional path after the flag, for tests; the repo's own file otherwise.
+        i = argv.index("--marketplace") + 1
+        target = os.path.join(ROOT, *MARKETPLACE.split("/"))
+        if i < len(argv) and not argv[i].startswith("--"):
+            target = argv[i]
+        os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+        with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(marketplace(manifest, sha))
         print("Wrote %s for %s (sha256 %s)" % (MARKETPLACE, manifest["version"], sha))
         return
