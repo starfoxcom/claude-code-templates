@@ -254,6 +254,24 @@ test("a write through a symbolic link is refused before anything is written", ne
   }
 });
 
+test("a linked pristine.json is refused, not written through", needsLinks, async () => {
+  const outside = mkdtempSync(join(tmpdir(), "update-outside-"));
+  try {
+    let saved;
+    const { out, status } = await update((r) => {
+      saved = `${JSON.stringify(r.pristine, null, 2)}\n`;
+      writeFileSync(join(outside, "pristine.json"), saved);
+      rmSync(r.at(PRISTINE));
+      symlinkSync(join(outside, "pristine.json"), r.at(PRISTINE));
+    });
+    assert.equal(status, 1);
+    assert.equal(out.error, `Refusing to write through a symbolic link: ${PRISTINE}`);
+    assert.equal(readFileSync(join(outside, "pristine.json"), "utf8"), saved);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("a dangling link where a staged copy goes counts as an old copy", needsLinks, async () => {
   const { out } = await update((r) => {
     delete r.pristine.files[RULE];
@@ -262,6 +280,38 @@ test("a dangling link where a staged copy goes counts as an old copy", needsLink
     symlinkSync(r.at("nowhere.md"), r.at(`${STAGING}${RULE}`));
   });
   assert.deepEqual(out.skipped, [RULE]);
+});
+
+test("a file that is not UTF-8 stops the update instead of being written back", needsPython, async () => {
+  const latin1 = Buffer.from("caf\xe9\n", "latin1");
+  const { out, status, repo } = await update((r) => {
+    const theirs = r.read(RULE);
+    r.pristine.files[RULE] = older(theirs);
+    writeFileSync(r.at(RULE), Buffer.concat([Buffer.from(older(theirs)), latin1]));
+  });
+  assert.equal(status, 1);
+  assert.equal(out.error, `${RULE} is not UTF-8 text`);
+  assert.ok(readFileSync(repo.at(RULE)).subarray(-latin1.length).equals(latin1));
+});
+
+test("a lone carriage return survives a merge in both engines", needsPython, async () => {
+  const { out, repo } = await update((r) => {
+    const theirs = r.read(RULE);
+    r.pristine.files[RULE] = older(theirs);
+    r.write(RULE, `mine\rstill mine\n${older(theirs)}`);
+  });
+  assert.deepEqual(out.merged, [RULE]);
+  assert.ok(repo.read(RULE).startsWith("mine\rstill mine\n"));
+});
+
+test("paths sort by UTF-16 code unit in both engines", needsPython, async () => {
+  const { out } = await update((r) => {
+    for (const name of ["docs/ł.md", "docs/a.md", "docs/\u{1f600}.md", "docs/Ａ.md"]) {
+      r.pristine.files[name] = "old\n";
+      r.write(name, "old\n");
+    }
+  });
+  assert.deepEqual(out.removed, ["docs/a.md", "docs/ł.md", "docs/\u{1f600}.md", "docs/Ａ.md"]);
 });
 
 test("a repo that was never set up is refused", needsPython, async () => {

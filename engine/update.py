@@ -21,7 +21,8 @@ OUTCOMES = [
 
 
 def _code_units(s):
-    return s.encode("utf-16-le", "surrogatepass")
+    # JavaScript compares strings by UTF-16 code unit, which big-endian bytes order alike.
+    return s.encode("utf-16-be", "surrogatepass")
 
 
 def repo_files(rendered):
@@ -110,11 +111,13 @@ def git_merge(ours, base, theirs):
 def _reader(root):
     def read(path):
         try:
-            # newline=None turns \r\n into \n, as update.js does.
-            with open(os.path.join(root, *path.split("/")), encoding="utf-8") as f:
-                return f.read()
+            # newline="" keeps a lone \r, so only \r\n becomes \n, as in update.js.
+            with open(os.path.join(root, *path.split("/")), encoding="utf-8", newline="") as f:
+                return f.read().replace("\r\n", "\n")
         except FileNotFoundError:
             return None
+        except UnicodeDecodeError:
+            raise ValueError("%s is not UTF-8 text" % path)
     return read
 
 
@@ -143,7 +146,8 @@ def run_update(root, bind_with, version, state_json):
         return os.path.join(root, *path.split("/"))
 
     # Every check before the first write, so a refusal leaves the repo as it was.
-    links = [path for path, _ in plan["write"] if os.path.islink(at(path))]
+    targets = [path for path, _ in plan["write"]] + [PRISTINE]
+    links = [path for path in targets if os.path.islink(at(path))]
     if links:
         raise ValueError("Refusing to write through a symbolic link: " + ", ".join(links))
     skipped = [path[len(STAGING):] for path, _ in plan["stage"] if os.path.lexists(at(path))]
