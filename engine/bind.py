@@ -10,6 +10,7 @@
 #   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
 #   python engine/bind.py --update DIR                   -> the saved answers rebound and merged (update.py)
 #   python engine/bind.py --settings DIR                 -> the settings layers resolved for that repo (layers.py)
+#   python engine/bind.py --doctor DIR                   -> a health check of that repo and this machine (doctor.py)
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
 import json
@@ -27,6 +28,7 @@ from setupcode import decode_setup_code, SetupCodeError
 from apply import apply_files, ApplyError
 from update import run_update
 from layers import run_settings
+from doctor import cli_version_from, run_doctor
 
 CORE = "_core/project-template/"
 
@@ -286,6 +288,17 @@ def _settings(argv):
         return {"error": str(e)}
 
 
+def _doctor(argv, read_file):
+    """The doctor, for the CLI this session runs (its AI_AGENT) and this plugin's VERSION."""
+    try:
+        folder = _option(argv, "--doctor")
+        version = read_file("VERSION").strip(JS_WHITESPACE).lstrip("v")
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        return run_doctor(folder, config, version, cli_version_from(os.environ.get("AI_AGENT")))
+    except Exception as e:  # every failure is reported, as the JS engine throws it
+        return {"error": str(e)}
+
+
 def _main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cache = {}
@@ -314,6 +327,8 @@ def _main(argv):
         result = _update(argv, read_file, core_files)
     elif "--settings" in argv:
         result = _settings(argv)
+    elif "--doctor" in argv:
+        result = _doctor(argv, read_file)
     else:
         result = _single(argv, run)
     # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.

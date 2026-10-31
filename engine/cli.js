@@ -6,6 +6,7 @@
 //   ... --write DIR --adopt                          -> the same, with every file outside .bindwright/ staged
 //   node engine/cli.js --update DIR                  -> the saved answers rebound and merged (update.js)
 //   node engine/cli.js --settings DIR                -> the settings layers resolved for that repo (layers.js)
+//   node engine/cli.js --doctor DIR                  -> a health check of that repo and this machine (doctor.js)
 // A failure gives {"error": message} and exit status 1.
 
 import { readFileSync } from "node:fs";
@@ -17,6 +18,7 @@ import { decodeSetupCode } from "./setupcode.js";
 import { applyFiles } from "./apply.js";
 import { runUpdate } from "./update.js";
 import { runSettings } from "./layers.js";
+import { cliVersionFrom, runDoctor } from "./doctor.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -29,8 +31,9 @@ function option(argv, name) {
 }
 
 async function run(argv) {
-  const flags = ["--code", "--year", "--write", "--update", "--settings"];
-  const [code, year, folder, update, settings] = flags.map((n) => option(argv, n));
+  const flags = ["--code", "--year", "--write", "--update", "--settings", "--doctor"];
+  const [code, year, folder, update, settings, doctor] = flags.map((n) => option(argv, n));
+  if (doctor !== undefined) return doctorRepo(doctor);
   if (update !== undefined) return updateRepo(update);
   if (settings !== undefined) return runSettings(settings, process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const adopt = argv.includes("--adopt");
@@ -44,6 +47,13 @@ async function run(argv) {
   const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year), version });
   const files = [...bound.entries()];
   return folder === undefined ? { files } : applyFiles(files, folder, { adopt });
+}
+
+// The doctor, for the CLI this session runs (its AI_AGENT) and this plugin's VERSION.
+function doctorRepo(folder) {
+  const pluginVersion = readFileSync(join(root, "VERSION"), "utf8").trim().replace(/^v+/, "");
+  const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  return runDoctor(folder, config, { pluginVersion, cliVersion: cliVersionFrom(process.env.AI_AGENT) });
 }
 
 async function updateRepo(folder) {

@@ -1,0 +1,157 @@
+// /bindwright:doctor's engine step: a read-only health check of a set-up repo
+// and this machine. Each check says what it found and, when something is
+// wrong, the fix in plain words. Node only; doctor.py is the Python twin.
+
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { ANSWERS, PRISTINE, STAGING } from "./bind.js";
+import { validate } from "./model.js";
+import { readLayerFile, runSettings } from "./layers.js";
+
+// The first CLI with mods; older ones load none of them.
+// What to do about each finding, in plain words.
+const FIX = {
+  restore: "Restore it from git with `git checkout -- .bindwright/`, or set the repo up again.",
+  update: "Run /bindwright:update: it keeps the repo's own edits.",
+  guards: "Restore them from git with `git checkout -- .claude/hooks/`; an update does not bring back deleted files.",
+  settings: "Fix or remove those values in the files named.",
+  join: "Run /bindwright:join: it installs each one on a yes and remembers a no.",
+  cli: "Update the CLI. In Claude Desktop, update the app: it ships its own copy of the CLI.",
+  staged: "Run /bindwright:update, which walks through each one, or delete the ones you do not want.",
+  unreadable: "Fix or remove the file it names.",
+};
+
+export const MODS_SINCE = [2, 1, 287];
+
+// "claude-code_2-1-286_agent", the variable the CLI sets for what it runs,
+// as [2, 1, 286]; null when unknown. Read from the session, not from PATH,
+// since Claude Desktop runs its own copy of the CLI.
+export function cliVersionFrom(agent) {
+  const m = /^claude-code_(\d+)-(\d+)-(\d+)_/.exec(typeof agent === "string" ? agent : "");
+  return m ? m.slice(1).map(Number) : null;
+}
+
+const before = (a, b) => {
+  const i = a.findIndex((n, k) => n !== b[k]);
+  return i !== -1 && a[i] < b[i];
+};
+
+const parts = (v) => (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v) ? v.split(".").map(Number) : null);
+
+// Every file still waiting under .bindwright/incoming/, as repo paths.
+function staged(root) {
+  const base = join(root, ...STAGING.split("/"));
+  const out = [];
+  const walk = (dir, prefix) => {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (entry.isDirectory()) walk(join(dir, entry.name), `${prefix}${entry.name}/`);
+      else out.push(`${prefix}${entry.name}`);
+    }
+  };
+  if (existsSync(base)) walk(base, "");
+  return out;
+}
+
+const check = (id, ok, say, fix = null) => ({ id, ok, say, fix });
+
+// The state files: present, readable, and the answers valid.
+function stateChecks(root) {
+  const at = (path) => join(root, ...path.split("/"));
+  let answers;
+  let pristine;
+  try {
+    answers = readLayerFile(at(ANSWERS), ANSWERS);
+    pristine = readLayerFile(at(PRISTINE), PRISTINE);
+  } catch (err) {
+    return { checks: [check("state", false, `A Bindwright state file cannot be read: ${err.message}.`,
+      FIX.restore)] };
+  }
+  if (answers === null || pristine === null) {
+    return { checks: [check("state", false, "This repo is not set up with Bindwright.", "Run /bindwright:setup.")] };
+  }
+  try {
+    validate(answers);
+  } catch (err) {
+    return { checks: [check("state", false, `The saved answers in ${ANSWERS} are broken: ${err.message}.`,
+      `Restore the file from git with \`git checkout -- ${ANSWERS}\`.`)] };
+  }
+  const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+  const shaped = isObject(pristine) && isObject(pristine.files);
+  if (!shaped) {
+    return { checks: [check("state", false, `${PRISTINE} does not hold the files setup wrote.`,
+      `Restore the file from git with \`git checkout -- ${PRISTINE}\`.`)] };
+  }
+  return { checks: [check("state", true, "The setup files are present and readable.")], answers, pristine };
+}
+
+function versionCheck(pristine, pluginVersion) {
+  const [repo, plugin] = [parts(pristine.version), parts(pluginVersion)];
+  if (repo && plugin && before(repo, plugin)) {
+    const say = `The repo's Bindwright files come from ${pristine.version}; the plugin is ${pluginVersion}.`;
+    return check("version", false, say,
+      FIX.update);
+  }
+  return check("version", true, "The repo's files match the plugin's version.");
+}
+
+function guardCheck(root, answers, pristine) {
+  const guards = [".claude/hooks/push-guard.py", ".claude/hooks/run-hook.sh"];
+  const missing = answers.advanced.hookLocation === "repo"
+    ? guards.filter((p) => Object.hasOwn(pristine.files, p) && !existsSync(join(root, ...p.split("/"))))
+    : [];
+  if (missing.length) {
+    const say = `The repo's guard hooks are missing: ${missing.join(", ")}. Force pushes are not blocked here.`;
+    return check("guards", false, say,
+      FIX.guards);
+  }
+  return check("guards", true, "The guard hooks are in place.");
+}
+
+function settingsChecks(root, config) {
+  let settings;
+  try {
+    settings = runSettings(root, config);
+  } catch (err) {
+    const say = `The settings cannot be read: ${err.message}.`;
+    return { checks: [check("settings", false, say, FIX.unreadable)], installed: {} };
+  }
+  const out = [settings.ignored.length
+    ? check("settings", false, `Some settings are not used: ${settings.ignored.join("; ")}.`, FIX.settings)
+    : check("settings", true, "Every setting is in use.")];
+  out.push(settings.drift.length
+    ? check("extras", false, `The project expects extras this machine lacks: ${settings.drift.join(", ")}.`,
+      FIX.join)
+    : check("extras", true, "This machine has the extras the project expects."));
+  return { checks: out, installed: settings.installed };
+}
+
+function cliCheck(installed, cliVersion) {
+  const mods = Object.entries(installed ?? {}).some(([name, has]) => has && !name.endsWith("-guard"));
+  if (!mods || !cliVersion || !before(cliVersion, MODS_SINCE)) {
+    return check("cli", true, "The CLI runs the installed mods.");
+  }
+  const [running, needed] = [cliVersion.join("."), MODS_SINCE.join(".")];
+  const say = `This session runs CLI ${running}, older than the ${needed} the mods need, so none of them load.`;
+  return check("cli", false, say,
+    FIX.cli);
+}
+
+// Every check for the repo at `root` and the config folder `config`.
+// `pluginVersion` is "x.y.z"; `cliVersion` [major, minor, patch] or null.
+export function runDoctor(root, config, { pluginVersion, cliVersion }) {
+  const state = stateChecks(root);
+  const checks = [...state.checks];
+  if (state.answers) {
+    checks.push(versionCheck(state.pristine, pluginVersion), guardCheck(root, state.answers, state.pristine));
+    const files = staged(root);
+    checks.push(files.length
+      ? check("staged", false, `${files.length} staged file(s) wait under ${STAGING}: ${files.join(", ")}.`,
+        FIX.staged)
+      : check("staged", true, "No staged files are waiting."));
+    const settings = settingsChecks(root, config);
+    checks.push(...settings.checks, cliCheck(settings.installed, cliVersion));
+  }
+  return { problems: checks.filter((c) => !c.ok).length, checks };
+}

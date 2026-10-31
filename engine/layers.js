@@ -173,7 +173,7 @@ export function installedExtras(config) {
 }
 
 // A settings file's JSON, or null when it is missing.
-function readLayerFile(path, file) {
+export function readLayerFile(path, file) {
   let bytes;
   try {
     bytes = readFileSync(path);
