@@ -22,7 +22,7 @@ Read the draft yourself before showing it: if anything personal is still there (
 
 Show the title and the whole body exactly as they would be filed, and ask: "File this as a public issue on the Bindwright repo?"
 
-- **Yes, and `gh auth status` works:** write the body to a temporary file and run `gh issue create --repo starfoxcom/claude-code-templates --title "<title>" --body-file <file>`. Give the user the issue link.
+- **Yes, and `gh auth status` works:** write the body to a temporary file and run `gh issue create --repo starfoxcom/claude-code-templates --title '<title>' --body-file <file>`. The title comes from error text, which can hold backticks or `$(...)`, so it goes in single quotes, never double ones, with each `'` in it written as `'\''`; the shell then runs nothing inside it. Give the user the issue link.
 - **Yes, without `gh`:** give the user the draft's `url`, which opens GitHub's new-issue page with the report filled in; they file it from there.
 - **No:** file nothing. Offer the body as text they can keep.
 

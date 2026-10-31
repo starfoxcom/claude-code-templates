@@ -42,7 +42,7 @@ def _parts(v):
 
 
 def _staged(root):
-    base = os.path.join(root, *STAGING.split("/"))
+    base = os.path.join(root, *STAGING.strip("/").split("/"))
     out = []
 
     def walk(folder, prefix):
@@ -53,13 +53,24 @@ def _staged(root):
                 walk(path, prefix + name + "/")
             else:
                 out.append(prefix + name)
-    if os.path.exists(base):
+    if os.path.lexists(base):
         walk(base, "")
     return out
 
 
 def _check(id_, ok, say, fix=None):
     return {"id": id_, "ok": ok, "say": say, "fix": fix}
+
+
+def _staged_check(root):
+    try:
+        files = _staged(root)
+    except OSError:
+        return _check("staged", False, "%s cannot be read as a folder." % STAGING, FIX["unreadable"])
+    if files:
+        return _check("staged", False, "%d staged file(s) wait under %s: %s." % (len(files), STAGING, ", ".join(files)),
+                      FIX["staged"])
+    return _check("staged", True, "No staged files are waiting.")
 
 
 def _state_checks(root):
@@ -148,13 +159,7 @@ def run_doctor(root, config, plugin_version, cli_version):
     if "answers" in state:
         checks += [_version_check(state["pristine"], plugin_version),
                    _guard_check(root, state["answers"], state["pristine"])]
-        files = _staged(root)
-        if files:
-            checks.append(_check("staged", False,
-                                 "%d staged file(s) wait under %s: %s." % (len(files), STAGING, ", ".join(files)),
-                                 FIX["staged"]))
-        else:
-            checks.append(_check("staged", True, "No staged files are waiting."))
+        checks.append(_staged_check(root))
         settings = _settings_checks(root, config)
         checks += settings["checks"] + [_cli_check(settings["installed"], cli_version)]
     return {"problems": sum(1 for c in checks if not c["ok"]), "checks": checks}

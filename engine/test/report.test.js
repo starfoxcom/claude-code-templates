@@ -51,6 +51,11 @@ test("a dotted home folder and user name are taken out before tokens, in both en
   assert.equal(js, "boom at ~<token> and <repo>/y");
 });
 
+test("a path or name in another letter case is taken out too", () => {
+  const out = scrub("at c:\\USERS\\JDoe\\Code\\App\\x and C:/Users/JDOE/y, user JDoe", who);
+  assert.equal(out, "at <repo>\\x and ~/y, user <user>");
+});
+
 test("both engines draft the same scrubbed report, and file nothing", needsPython, () => {
   const root = mkdtempSync(join(tmpdir(), "bw-report-"));
   try {
@@ -71,6 +76,14 @@ test("both engines draft the same scrubbed report, and file nothing", needsPytho
     assert.ok(!js.body.includes(repo) && !js.body.includes(homedir()) && !js.body.includes("ghp_"), js.body);
     assert.match(js.body, /This repo is not set up with Bindwright\. \(state\)/);
     assert.match(js.url, /^https:\/\/github\.com\/starfoxcom\/claude-code-templates\/issues\/new\?title=bug%3A%20/);
+
+    // A home path across the title's 100-character cut is taken out whole first.
+    const long = { title: `${"word ".repeat(17)}at ${join(homedir(), "x")}` };
+    const titled = (cmd, args) => JSON.parse(spawnSync(cmd, [...args, "--report", repo],
+      { ...options, input: JSON.stringify(long) }).stdout).title;
+    const title = titled(process.execPath, [join(engine, "cli.js")]);
+    assert.equal(titled(python, ["-I", join(engine, "bind.py")]), title);
+    assert.equal(title, `bug: ${"word ".repeat(17)}at ${join("~", "x")}`);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

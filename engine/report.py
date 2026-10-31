@@ -24,8 +24,7 @@ def _spellings(path):
         return []
     forward = path.replace("\\", "/")
     back = path.replace("/", "\\")
-    every = [path, forward, back, back.replace("\\", "\\\\")]
-    unique = list(dict.fromkeys(every + [s.lower() for s in every]))
+    unique = list(dict.fromkeys([path, forward, back, back.replace("\\", "\\\\")]))
     return sorted(unique, key=lambda s: (-len(s.encode("utf-16-le", "surrogatepass")) // 2, _code_units(s)))
 
 
@@ -33,10 +32,10 @@ def scrub(text, repo=None, home=None, user=None):
     out = str(text)
     for path, mark in ((repo, "<repo>"), (home, "~")):
         for spelled in _spellings(path):
-            out = out.replace(spelled, mark)
+            out = re.sub(re.escape(spelled), lambda _m, mark=mark: mark, out, flags=re.I)
     out = EMAIL.sub("<email>", out)
     if user and len(user) >= 3:
-        out = re.sub(EDGE + re.escape(user) + "(?![A-Za-z0-9_])", "<user>", out)
+        out = re.sub(EDGE + re.escape(user) + "(?![A-Za-z0-9_])", "<user>", out, flags=re.I)
     for pattern in TOKENS:
         out = pattern.sub("<token>", out)
     return out
@@ -72,6 +71,6 @@ def draft_report(root, config, what, facts, who):
     if first is None:
         error = what.get("error")
         first = ("report" if error is None else error).split("\n")[0]
-    title = scrub(("bug: " + first)[:100], **who)
+    title = scrub("bug: " + first, **who)[:100]
     url = "%s?title=%s&body=%s" % (ISSUES, _quote(title), _quote(body[:6000]))
     return {"title": title, "body": body, "url": url}

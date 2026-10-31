@@ -19,13 +19,13 @@ const TOKENS = [
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
 // Every spelling of a path the text may carry: as given, with either slash,
-// JSON-escaped, and each in lower case; longest first.
+// and JSON-escaped; longest first. Each is matched in any letter case, since
+// Windows and macOS paths are, and tools print them in either.
 function spellings(path) {
   if (!path) return [];
   const forward = path.split("\\").join("/");
   const back = path.split("/").join("\\");
-  const all = [path, forward, back, back.split("\\").join("\\\\")];
-  const unique = [...new Set([...all, ...all.map((s) => s.toLowerCase())])];
+  const unique = [...new Set([path, forward, back, back.split("\\").join("\\\\")])];
   return unique.sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
 }
 
@@ -37,11 +37,11 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function scrub(text, { repo, home, user }) {
   let out = String(text);
   for (const [path, mark] of [[repo, "<repo>"], [home, "~"]]) {
-    for (const spelled of spellings(path)) out = out.split(spelled).join(mark);
+    for (const spelled of spellings(path)) out = out.replace(new RegExp(escape(spelled), "giu"), () => mark);
   }
   out = out.replace(EMAIL, "<email>");
   if (user && user.length >= 3) {
-    out = out.replace(new RegExp(`${EDGE}${escape(user)}(?![A-Za-z0-9_])`, "g"), "<user>");
+    out = out.replace(new RegExp(`${EDGE}${escape(user)}(?![A-Za-z0-9_])`, "giu"), "<user>");
   }
   for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
   return out;
@@ -71,7 +71,8 @@ export function draftReport(root, config, what, facts, who) {
     `- Engine: ${facts.engine}`,
   ];
   const body = scrub(lines.join("\n"), who);
-  const title = scrub(cut(`bug: ${what.title ?? (what.error ?? "report").split("\n")[0]}`, 100), who);
+  // Scrubbed before the cut, so a cut cannot leave part of a path or token unmatched.
+  const title = cut(scrub(`bug: ${what.title ?? (what.error ?? "report").split("\n")[0]}`, who), 100);
   const url = `${ISSUES}?title=${encodeURIComponent(title)}&body=${encodeURIComponent(cut(body, 6000))}`;
   return { title, body, url };
 }

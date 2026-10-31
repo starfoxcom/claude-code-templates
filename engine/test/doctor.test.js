@@ -97,6 +97,12 @@ test("a missing guard, an old repo and waiting staged files are each named", nee
   assert.match(say.staged.say, /1 staged file\(s\) .*: docs\/x\.md\./);
 });
 
+test("a staging folder that is a file is named, not a crash", needsPython, async () => {
+  const report = await doctor(({ at }) => writeFileSync(at(STAGING.slice(0, -1)), "not a folder\n"));
+  assert.deepEqual(failing(report), ["staged"]);
+  assert.match(report.checks.find((c) => c.id === "staged").say, /cannot be read as a folder/);
+});
+
 test("an old CLI is named only with mods installed and the session's version known", needsPython, async () => {
   const withMods = ({ config }) => mkdirSync(join(config, "mods", "session-facts"), { recursive: true });
   const old = await doctor(withMods, "claude-code_2-1-286_agent");

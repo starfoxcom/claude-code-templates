@@ -40,7 +40,7 @@ const parts = (v) => (typeof v === "string" && /^\d+\.\d+\.\d+$/.test(v) ? v.spl
 
 // Every file still waiting under .bindwright/incoming/, as repo paths.
 function staged(root) {
-  const base = join(root, ...STAGING.split("/"));
+  const base = join(root, ...STAGING.split("/").filter(Boolean));
   const out = [];
   const walk = (dir, prefix) => {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -139,6 +139,20 @@ function cliCheck(installed, cliVersion) {
     FIX.cli);
 }
 
+// A staging folder that cannot be read is a finding, not a crash: the doctor
+// is what explains a broken repo.
+function stagedCheck(root) {
+  let files;
+  try {
+    files = staged(root);
+  } catch {
+    return check("staged", false, `${STAGING} cannot be read as a folder.`, FIX.unreadable);
+  }
+  return files.length
+    ? check("staged", false, `${files.length} staged file(s) wait under ${STAGING}: ${files.join(", ")}.`, FIX.staged)
+    : check("staged", true, "No staged files are waiting.");
+}
+
 // Every check for the repo at `root` and the config folder `config`.
 // `pluginVersion` is "x.y.z"; `cliVersion` [major, minor, patch] or null.
 export function runDoctor(root, config, { pluginVersion, cliVersion }) {
@@ -146,11 +160,7 @@ export function runDoctor(root, config, { pluginVersion, cliVersion }) {
   const checks = [...state.checks];
   if (state.answers) {
     checks.push(versionCheck(state.pristine, pluginVersion), guardCheck(root, state.answers, state.pristine));
-    const files = staged(root);
-    checks.push(files.length
-      ? check("staged", false, `${files.length} staged file(s) wait under ${STAGING}: ${files.join(", ")}.`,
-        FIX.staged)
-      : check("staged", true, "No staged files are waiting."));
+    checks.push(stagedCheck(root));
     const settings = settingsChecks(root, config);
     checks.push(...settings.checks, cliCheck(settings.installed, cliVersion));
   }
