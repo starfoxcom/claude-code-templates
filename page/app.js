@@ -2,7 +2,7 @@
 // so the page and /bindwright:setup always start from the same defaults.
 import { defaults } from "../engine/model.js";
 import { repoFiles } from "./files.js";
-import { summarize } from "./summary.js";
+import { summarize, compare, describe } from "./summary.js";
 
 // One accent hue per setup (docs/v2/DESIGN.md).
 const HUES = { "false,false": 150, "true,false": 200, "false,true": 70, "true,true": 340 };
@@ -13,9 +13,13 @@ let answers = defaults();
 let files = [];
 let selected = "CLAUDE.md";
 let latest = 0;
+// The summary on screen, and the name of the key that last changed it.
+let shown = null;
+let choice = null;
 
-function choose(question, value) {
+function choose(question, value, label) {
   if (answers[question] === value) return;
+  choice = label;
   // A new setup starts from that setup's defaults, as setup itself does.
   answers = defaults({ ...answers, [question]: value });
   render();
@@ -47,7 +51,7 @@ async function refresh() {
     drawGroups();
     drawTree();
     drawFile();
-    $("status").textContent = "What you get is updated.";
+    $("status").textContent = $("changed").textContent || "What you get is updated.";
   } catch (err) {
     if (ticket !== latest) return;
     const fail = document.createElement("li");
@@ -62,17 +66,46 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+// The summary, with what the last answer change added (green) and removed
+// (struck through, red) marked until the next change.
 function drawGroups() {
-  $("groups").replaceChildren(...summarize(files).map((group) => {
+  const next = summarize(files);
+  const change = shown && choice ? compare(shown, next) : null;
+  shown = next;
+  const items = next.map((group) => {
     const item = el("li", {}, el("b", { textContent: group.title }), el("p", { textContent: group.say }));
-    if (group.rules) {
-      const list = el("ul", { className: "rules" },
-        ...group.rules.map(([name, line]) => el("li", {}, el("b", { textContent: name }), ` ${line}`)));
-      item.append(el("details", {}, el("summary", { textContent: `See the ${group.rules.length} rules` }), list));
-    }
+    if (change?.addedGroups.has(group.id)) item.className = "added";
+    if (group.rules) item.append(rulesList(group.rules, change));
     return item;
-  }));
+  });
+  for (const gone of change?.removedGroups ?? []) {
+    const title = el("b", { textContent: gone.title });
+    items.push(el("li", { className: "removed" }, title, el("p", { textContent: gone.say })));
+  }
+  $("groups").replaceChildren(...items);
+  $("changed").textContent = change ? changeNote(change) : "";
+  $("changed").hidden = !change;
   $("toggle").textContent = $("files").hidden ? `Show the ${files.length} files` : "Back to the summary";
+}
+
+function rulesList(rules, change) {
+  const rows = rules.map(([name, line]) => el("li", { className: change?.addedRules.has(name) ? "added" : "" },
+    el("b", { textContent: name }), ` ${line}`));
+  for (const name of change?.removedRules ?? []) {
+    rows.push(el("li", { className: "removed" }, el("b", { textContent: name })));
+  }
+  const changed = change && (change.addedRules.size || change.removedRules.length);
+  return el("details", { open: Boolean(changed) },
+    el("summary", { textContent: `See the ${rules.length} rules` }), el("ul", { className: "rules" }, ...rows));
+}
+
+function changeNote(change) {
+  const newGroups = [...change.addedGroups].map((id) => shown.find((g) => g.id === id).title);
+  const added = describe(newGroups, [...change.addedRules]);
+  const removed = describe(change.removedGroups.map((g) => g.title), change.removedRules);
+  if (!added && !removed) return `${choice} changes settings inside the files, not this list.`;
+  if (!added) return `${choice} removes ${removed}.`;
+  return `${choice} adds ${added}. ${removed ? `It removes ${removed}.` : "Nothing is removed."}`;
 }
 
 // Folder rows wherever a path enters a new folder, then the file itself.
@@ -129,6 +162,7 @@ $("toggle").addEventListener("click", () => {
 });
 
 for (const key of document.querySelectorAll(".k[data-q]")) {
-  key.addEventListener("click", () => choose(key.dataset.q, key.dataset.v === "true"));
+  const label = key.querySelector("b").textContent;
+  key.addEventListener("click", () => choose(key.dataset.q, key.dataset.v === "true", label));
 }
 render();

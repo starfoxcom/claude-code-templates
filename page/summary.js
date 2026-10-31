@@ -57,6 +57,27 @@ const RULES = {
   "visual": ["Screen changes in small steps", "Anything people see is built in pieces you check by eye."],
 };
 
+// What an answer change did to the summary: groups and rules that came or went.
+export function compare(before, after) {
+  const ids = (list) => new Set(list.map((g) => g.id));
+  const ruleNames = (list) => new Set((list.find((g) => g.id === "rules")?.rules ?? []).map(([name]) => name));
+  const [was, now] = [ids(before), ids(after)];
+  const [hadRules, hasRules] = [ruleNames(before), ruleNames(after)];
+  return {
+    addedGroups: new Set([...now].filter((id) => !was.has(id))),
+    removedGroups: before.filter((g) => !now.has(g.id)),
+    addedRules: new Set([...hasRules].filter((name) => !hadRules.has(name))),
+    removedRules: [...hadRules].filter((name) => !hasRules.has(name)),
+  };
+}
+
+// "Code checks and the Working together rule", for the change note.
+export function describe(groups, rules) {
+  const parts = [...groups, ...rules.map((name) => `the ${name} rule`)];
+  if (parts.length < 2) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
 // [{ id, title, say, files, rules? }] for the groups that have files, in GROUPS order.
 export function summarize(files) {
   const groups = GROUPS.map((g) => ({ ...g, files: [] }));

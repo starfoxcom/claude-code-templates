@@ -149,7 +149,20 @@ h1 {
 }
 .toggle:active { transform: translateY(1px); box-shadow: none; }
 
+.changed {
+  margin-bottom: 10px; padding: 10px 14px; border-radius: 12px;
+  background: var(--key); font-size: 15px; font-weight: 600;
+}
 .groups { display: grid; padding: 0; list-style: none; }
+.groups > li.added, .rules li.added { box-shadow: inset 3px 0 0 var(--add); padding-left: 12px; }
+.groups > li.added > b::after, .rules li.added > b::after {
+  content: "New"; margin-left: 8px; padding: 1px 7px; border-radius: 12px;
+  font-size: 13px; font-weight: 600; color: var(--canvas); background: var(--add);
+}
+.groups > li.removed, .rules li.removed { color: var(--del); }
+.groups > li.removed > b, .groups > li.removed > p, .rules li.removed > b {
+  color: var(--del); text-decoration: line-through;
+}
 .groups > li { padding: 14px 0; border-top: 1px solid var(--rule); }
 .groups > li > b { font-size: 16px; font-weight: 650; }
 .groups > li > p { margin-top: 2px; font-size: 15px; color: var(--text-2); }
