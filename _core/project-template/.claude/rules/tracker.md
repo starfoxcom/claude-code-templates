@@ -37,13 +37,14 @@ The update's own status field matches its Health line. Root causes, file names a
 <!-- TOGGLE:public_roadmap START -->
 ## Public roadmap
 
-`advanced.publicRoadmap` in `.bindwright/project.json` names a public repo that mirrors this roadmap for outsiders. Every public item is generated from its private item and never edited by hand:
+`advanced.publicRoadmap` in `.bindwright/project.json` names a public repo that mirrors chosen items of this roadmap for outsiders. `.github/scripts/public_roadmap.py` writes every public item from its private issue; nobody edits one by hand.
 
-- Only the private issue's `### Public summary` section goes public, under the same number. An issue without one stays private and `check` lists it.
-- The public side carries no history, comments, PR numbers, file paths, code names, tuning constants, or text that names AI models or code review. The sync refuses such text, and so does a hook that guards issue bodies, when one is installed.
-- Items on the exclude list in `.bindwright/public-roadmap.json` (internal process, tooling) never go public.
+- An issue goes public only when its body has a `### Public summary` section, written for outsiders. That section becomes the public body under the same number, and the title goes with it. Every other issue stays private.
+- The public text carries no history, code, file paths, branch or pull request references, identifiers, tuning constants, links to private issues, or wording about AI models and code review. The tool refuses such text.
+- Deleting an issue's public summary withdraws it: the public item is blanked and closed.
+- `.github/public-roadmap.json` holds the rest: `rename` maps internal names to public ones, `hidden` lists names that must never appear, `project` is the public board's number (or `null` for none), and `fields` names the board fields copied from the private board.
 
-At session close, after the issues are updated, run `python3 .github/scripts/public_roadmap.py check` (`python` on Windows). Fix what it lists in the private issues' public summaries, then run it with `push`. `push` refuses while `check` reports anything.
+At session close, after the issues are updated, run `python3 .github/scripts/public_roadmap.py check` (`python` on Windows). Fix what it lists in the public summaries, then run it with `push`. `push` refuses while `check` reports anything, and needs admin rights on the public repo: it deletes the placeholders that keep the numbers matched.
 
 <!-- TOGGLE:public_roadmap END -->
 ## Commands

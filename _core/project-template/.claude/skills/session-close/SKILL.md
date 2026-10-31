@@ -76,6 +76,10 @@ After the commit and PR, so the state records how they ended. For each issue thi
 
 Then check the three status-update triggers in `tracker.md` and post an update only when one fired.
 
+<!-- TOGGLE:public_roadmap START -->
+Last, bring the public roadmap in line (`tracker.md` § Public roadmap): run `python3 .github/scripts/public_roadmap.py check` (`python` on Windows), fix what it lists in the issues' public summaries, then run it with `push`.
+<!-- TOGGLE:public_roadmap END -->
+
 <!-- TOGGLE:tracker:github END -->
 
 ## Last message
