@@ -8,6 +8,8 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ### Added
 
+- **Setup reads the CLI version the session runs** (#422). Before offering the mods, `/bindwright:setup` and `/bindwright:join` take the version from the session's `AI_AGENT` variable instead of `claude --version`, since the desktop app runs its own copy of the CLI, which can be older than the one on the PATH. Skipped mods come with a one-line reason, and setup says in one line why the built-in "You should know" mod stays off.
+
 - **The daily notice reports setup drift** (#419, part 3). When the repo's shared setup rates an extra `required` or `recommended` that this machine lacks and nobody declined, the once-a-day notice names it and points at `/bindwright:join`. The packed engine's `runSettings` decides, so the notice and join never disagree; any error leaves the line out.
 
 - **`/bindwright:export` and `/bindwright:join`** (#419, part 2). Export records which `~/.claude` extras the project requires or recommends, and which settings no one may override, in `.bindwright/project.json`. Join, on a teammate's machine, checks tracker access, the code-research tool and each missing extra with a yes or no, remembers every answer in the person's own settings layer, and ends by starting the session. The engine writes both through `--export` and `--remember` (`engine/share.js` and its Python twin), refusing any value the layers would ignore and any write through a symbolic link.
