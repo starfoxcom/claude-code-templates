@@ -40,7 +40,8 @@ The update's own status field matches its Health line. Root causes, file names a
 `advanced.publicRoadmap` in `.bindwright/project.json` names a public repo that mirrors chosen items of this roadmap for outsiders. `.github/scripts/public_roadmap.py` writes every public item from its private issue; nobody edits one by hand.
 
 - An issue goes public only when its body has a `### Public summary` section, written for outsiders. That section becomes the public body under the same number, and the title goes with it. Every other issue stays private.
-- The public text carries no history, code, file paths, branch or pull request references, identifiers, tuning constants, links to private issues, or wording about AI models and code review. The tool refuses such text.
+- GitHub never reuses an issue number, and the public side skips each private number below its newest item. So give an issue its summary before a later issue goes public; afterwards `check` reports it as unable to go public.
+- The public text carries no history, code, file paths, links, commit hashes, branch or pull request references, identifiers, tuning constants, links to private issues, or wording about AI models and code review. The tool refuses such text.
 - Deleting an issue's public summary withdraws it: the public item is blanked and closed.
 - `.github/public-roadmap.json` holds the rest: `rename` maps internal names to public ones, `hidden` lists names that must never appear, `project` is the public board's number (or `null` for none), and `fields` names the board fields copied from the private board.
 

@@ -38,6 +38,9 @@ def issue_command(args):
     with open(args[args.index("--body-file") + 1], encoding="utf-8") as f:
         body = f.read()
     if args[1] == "create":
+        if repo["next"] + 1 in state.get("fail_create", []):
+            state["fail_create"].remove(repo["next"] + 1)
+            raise SystemExit("gh issue create failed: network down")
         repo["next"] += 1
         n = repo["next"]
         repo["issues"][str(n)] = {"id": "pub-%d" % n, "number": n, "title": title, "body": body,
@@ -84,7 +87,11 @@ def fake_gh(args):
     return issue_command(args) if args[0] == "issue" else graphql(args)
 
 tool.run_gh = fake_gh
-code = tool.main(sys.argv[3:])
+try:
+    code = tool.main(sys.argv[3:])
+except SystemExit as stop:
+    print(stop)
+    code = 1
 with open(path, "w", encoding="utf-8") as f:
     json.dump(state, f)
 print("WRITES " + json.dumps(writes))
@@ -115,10 +122,10 @@ function scene(privateIssues, settings = {}) {
     return { status: r.status, lines, writes, stderr: r.stderr };
   };
   const read = () => JSON.parse(readFileSync(join(root, "state.json"), "utf8")).repos;
-  const edit = (change) => {
+  const edit = (change, failCreate = []) => {
     const repos = read();
     change(repos["me/private"].issues);
-    writeFileSync(join(root, "state.json"), JSON.stringify({ repos }));
+    writeFileSync(join(root, "state.json"), JSON.stringify({ repos, fail_create: failCreate }));
   };
   return { run, read, edit };
 }
@@ -129,6 +136,7 @@ test("check names every contract break and leaves summary-less issues private", 
     issue(2, "Refactor the cart store", "## What\nInternal only.\n"),
     issue(3, "Falcon sync", summary(
       "Uses `syncAll` from docs/sync/plan.md, see PR #12 and #2.\nTuned to 3.14 by Claude.")),
+    issue(4, "Retries", summary("Raised MAX_RETRIES in 3f9a2c1, see https://intra.example/x.")),
   ], { hidden: ["Falcon"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
@@ -137,7 +145,8 @@ test("check names every contract break and leaves summary-less issues private", 
   for (const want of ["#3 title: private name ('Falcon')", "#3 summary: code ('`')", "#3 summary: path",
     "#3 summary: pull request ('PR #1", "#3 summary: identifier ('syncAll')", "#3 summary: constant ('3.14')",
     "#3 summary: AI or review wording ('Claude')", "#3 summary: points at #2, which stays private",
-    "#3 summary: points at #12, which stays private"]) {
+    "#3 summary: points at #12, which stays private", "#4 summary: link ('https://')",
+    "#4 summary: commit ('3f9a2c1')", "#4 summary: identifier ('MAX_RETRIES')"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
   assert.ok(!/#1 |#2 /.test(text.replace(/#12/g, "")), text);
@@ -201,4 +210,31 @@ test("an edited summary and a reopened issue reach the public side", { skip }, (
   const out = s.run("push");
   assert.deepEqual(out.writes, ["edit 1", "reopen 1"]);
   assert.equal(s.read()["me/public"].issues["1"].body.trim(), "Find products by name or tag.");
+});
+
+test("a summary added to an issue whose number was skipped is refused, not a crash", { skip }, () => {
+  const s = scene([issue(1, "A", summary("First.")), issue(2, "B", "## What\nPrivate.\n"),
+    issue(3, "C", summary("Third."))]);
+  assert.equal(s.run("push").status, 0);
+  s.edit((issues) => { issues["2"].body = summary("Second, now public."); });
+  const out = s.run("push");
+  assert.equal(out.status, 1, out.stderr);
+  assert.deepEqual(out.writes, []);
+  assert.match(out.lines.join("\n"), /#2 cannot go public: the public side skipped its number before/);
+});
+
+test("a push that stops halfway leaves its placeholders, and the next one carries on", { skip }, () => {
+  const s = scene([issue(4, "D", summary("Fourth.")), issue(5, "E", summary("Fifth."))]);
+  s.edit(() => {}, [4]);
+  const stopped = s.run("push");
+  assert.equal(stopped.status, 1);
+  assert.deepEqual(stopped.writes, ["create 1", "create 2", "create 3"]);
+  // #2 gains a summary meanwhile: its leftover placeholder becomes its public item.
+  s.edit((issues) => { issues["2"] = issue(2, "B", summary("Second.")); });
+  const out = s.run("push");
+  assert.equal(out.status, 0, out.stderr);
+  const pub = s.read()["me/public"].issues;
+  assert.deepEqual(Object.keys(pub).sort(), ["2", "4", "5"]);
+  assert.equal(pub["2"].title, "B");
+  assert.deepEqual(s.run("push").writes, []);
 });

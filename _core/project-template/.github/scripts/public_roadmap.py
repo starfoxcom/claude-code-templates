@@ -47,7 +47,9 @@ CONTRACT = [
                         r"|\b[\w-]+\." + EXTENSIONS + r"\b")),
     ("pull request", re.compile(r"\bPRs?\s*#?\d|\bpull requests?\b", re.I)),
     ("branch", re.compile(r"\b(feature|hotfix|release|fix|chore)/")),
-    ("identifier", re.compile(r"\b[a-z0-9]+_[a-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\w+\(\)")),
+    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://", re.I)),
+    ("commit", re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
+    ("identifier", re.compile(r"\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\w+\(\)")),
     ("constant", re.compile(r"(?<![\w.])(?<!v)\d+\.\d+(?![\d.])(?!" + UNITS + r")|\b0x[0-9a-f]+",
                             re.I)),
     ("AI or review wording", re.compile(AI_PROCESS, re.I)),
@@ -193,6 +195,11 @@ def contract_breaks(text: str, settings: Settings, public: set[int]) -> list[str
 
 
 WITHDRAWN = ("Withdrawn", "This item is no longer on the public roadmap.\n")
+PLACEHOLDER = ("placeholder", "placeholder\n")
+
+
+def is_placeholder(issue: dict) -> bool:
+    return issue["title"] == PLACEHOLDER[0] and same_text(issue["body"], PLACEHOLDER[1])
 
 
 class PublicSync:
@@ -202,17 +209,22 @@ class PublicSync:
         self.settings = settings
         self.repo = run_gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]).strip()
         self.private = fetch_issues(self.repo)
-        self.public: dict[int, dict] = {}
+        self.public = fetch_issues(settings.public_repo)
         self.wanted: dict[int, tuple[str, str]] = {}
         for number, issue in sorted(self.private.items()):
             summary = summary_of(issue["body"])
             if summary is not None:
                 text = settings.public_text
                 self.wanted[number] = (text(issue["title"]), text(summary) + "\n")
+        # GitHub never reuses a number, so a summary added to an issue whose
+        # number the public side already skipped can never go public.
+        highest = max([*self.public, 0])
+        self.lost = sorted(n for n in self.wanted if n < highest and n not in self.public)
 
     def problems(self) -> list[str]:
-        lines = []
-        public = set(self.wanted)
+        lines = [f"#{n} cannot go public: the public side skipped its number before, and GitHub"
+                 " never reuses one. Remove its summary, or open a new issue for it." for n in self.lost]
+        public = set(self.wanted) - set(self.lost)
         for number, (title, body) in self.wanted.items():
             lines += [f"#{number} title: {p}" for p in contract_breaks(title, self.settings, public)]
             lines += [f"#{number} summary: {p}" for p in contract_breaks(body, self.settings, public)]
@@ -221,6 +233,7 @@ class PublicSync:
     def push(self) -> None:
         self.create_missing()
         self.public = fetch_issues(self.settings.public_repo)
+        self.drop_placeholders()
         self.withdraw()
         self.update_texts()
         self.sync_parents()
@@ -231,29 +244,36 @@ class PublicSync:
     def create_missing(self) -> None:
         """Creates public items in number order; a number with no public item gets a placeholder.
 
-        GitHub never reuses a deleted number, so a run stops at the newest wanted item: a
-        placeholder is only made when a real item follows it, and the newest surviving public
-        issue always marks how far the numbers have gone.
+        Placeholders are deleted only once a real item stands after them (`drop_placeholders`),
+        so a run that stops halfway leaves the newest public issue marking how far the numbers
+        have gone, and the next run carries on from there.
         """
         repo = self.settings.public_repo
-        highest = max([*fetch_issues(repo), 0])
-        for number in range(highest + 1, max([*self.wanted, 0]) + 1):
-            title, body = self.wanted.get(number, ("placeholder", "placeholder\n"))
+        for number in range(max([*self.public, 0]) + 1, max([*self.wanted, 0]) + 1):
+            title, body = self.wanted.get(number, PLACEHOLDER)
             url = with_body_file(body, ["issue", "create", "--repo", repo, "--title", title])
             created = int(url.strip().rsplit("/", 1)[1])
             if created != number:
                 raise SystemExit(f"public numbers drifted: wanted #{number}, GitHub made #{created}."
                                  " The public repo must hold only items this tool made.")
-            if number not in self.wanted:
-                issue_id = fetch_issues(repo)[number]["id"]
-                gql("mutation($id: ID!) { deleteIssue(input: {issueId: $id}) { clientMutationId } }",
-                    id=issue_id)
             print(f"created #{number}")
+
+    def drop_placeholders(self) -> None:
+        """Deletes the placeholders below the newest real item; a wanted one becomes that item."""
+        real = [n for n, issue in self.public.items() if not is_placeholder(issue) or n in self.wanted]
+        for number in sorted(self.public):
+            issue = self.public[number]
+            if number in self.wanted or not is_placeholder(issue) or number > max(real, default=0):
+                continue
+            gql("mutation($id: ID!) { deleteIssue(input: {issueId: $id}) { clientMutationId } }",
+                id=issue["id"])
+            del self.public[number]
+            print(f"deleted placeholder #{number}")
 
     def withdraw(self) -> None:
         """Blanks and closes the public items whose private issue lost its summary."""
         for number, current in sorted(self.public.items()):
-            if number in self.wanted or current["title"] == WITHDRAWN[0]:
+            if number in self.wanted or is_placeholder(current) or current["title"] == WITHDRAWN[0]:
                 continue
             title, body = WITHDRAWN
             with_body_file(body, ["issue", "edit", str(number), "--repo", self.settings.public_repo,
@@ -320,7 +340,9 @@ class PublicSync:
             target = wanted.get(name)
             if item["values"].get(name) == target:
                 continue
-            ids = f'projectId: "{board}", itemId: "{item["id"]}", fieldId: "{fields[name]["id"]}"'
+            # Every value is written as a JSON string literal, which GraphQL reads the same way.
+            ids = "projectId: %s, itemId: %s, fieldId: %s" % tuple(
+                json.dumps(v) for v in (board, item["id"], fields[name]["id"]))
             if target in (None, ""):
                 writes.append(f"clearProjectV2ItemFieldValue(input: {{{ids}}}) {{ clientMutationId }}")
             else:
@@ -336,11 +358,11 @@ def field_value(field: dict, target) -> str:
         option = next((o["id"] for o in field["options"] if o["name"] == target), None)
         if option is None:
             raise SystemExit(f"public field {field['name']} has no option '{target}'")
-        return f'{{singleSelectOptionId: "{option}"}}'
+        return "{singleSelectOptionId: %s}" % json.dumps(option)
     if field["dataType"] == "NUMBER":
-        return f"{{number: {float(target)}}}"
+        return "{number: %s}" % json.dumps(float(target))
     if field["dataType"] == "DATE":
-        return f'{{date: "{target}"}}'
+        return "{date: %s}" % json.dumps(str(target))
     return "{text: %s}" % json.dumps(str(target))
 
 
