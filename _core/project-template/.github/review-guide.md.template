@@ -13,7 +13,7 @@ Replace these starting points with the rules a change here must never break, hig
 1. **Contract stability**: public APIs, file formats and schemas change only on purpose, with every caller and stored file still handled.
 2. **Shared code**: a change to a shared utility keeps working for every caller, not only the one the PR needed.
 3. **Tests earn their place**: a new test that misses rules 1 to 3 of `.claude/rules/testing.md` § When a test earns its place is a blocking finding.
-4. **Clean code**: a breach of `.claude/rules/clean-code.md` (history or planning codes in comments, cryptic names, copied helpers) is a blocking finding.
+4. **Clean code**: a breach of `.claude/rules/clean-code.md` (history or planning codes in comments, cryptic names, copied helpers) in lines the PR adds or changes is a blocking finding.
 
 <!-- TOGGLE:github_actions_deep_review_auto_fire START -->
 ## Also escalate when the diff includes

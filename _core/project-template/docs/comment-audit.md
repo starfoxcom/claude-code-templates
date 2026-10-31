@@ -14,7 +14,7 @@ How to bring the comments of existing code in line with `.claude/rules/clean-cod
 
 A comment pass must not change one character of code. Check it mechanically before committing:
 
-- Strip the comments from each changed file, before and after, with the language's own tokenizer or compiler (Python's `tokenize`, a JavaScript minifier with comments off, `gcc -fpreprocessed -E` for C and C++), and compare the two results. They must match exactly.
+- Strip the comments from each changed file, before and after, with the language's own tokenizer or compiler (Python's `tokenize`, a JavaScript minifier with comments off, `gcc -fpreprocessed -dD -E -P` for C and C++, which keeps `#define` lines), and compare the two results. They must match exactly.
 - Where no tokenizer is handy, check that every line `git diff -U0` adds or removes is a comment line or blank. A short script that fails on any other line is enough; keep it out of the repo.
 
 A diff that fails the guard goes back to step 3: whatever changed in the code moves to its own PR.
