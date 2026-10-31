@@ -50,6 +50,7 @@ TRACKERS = ["github", "file"]
 # "<owner>/<number>" of a GitHub Projects board. The owner lands in gh
 # command lines, so it is held to GitHub's own name rule.
 TRACKER_PROJECT = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[1-9][0-9]{0,5}")
+PUBLIC_REPO = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\.+$)[A-Za-z0-9._-]{1,100}")
 LICENSES = {"MIT": "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "BSD-3-Clause": "BSD-3-Clause.txt", "Proprietary": "Proprietary.txt"}
 
 # Filled later by the tailoring step, which reads the user's repo.
@@ -121,6 +122,7 @@ def defaults(team=False, client=False):
             # "<owner>/<number>" when tracker is "github" and the project has a
             # board; None keeps project status in a pinned issue instead.
             "trackerProject": None,
+            "publicRoadmap": None,
             "handoffFile": True,
         },
     }
@@ -203,6 +205,12 @@ def validate(a):
     _check(paths is None or (isinstance(paths, list) and len(paths) > 0 and all(_glob_ok(g) for g in paths)),
            "shippedTextPaths must be null or a non-empty list of globs without quotes, backslashes, line breaks or outer spaces")
     _check_tracker(get(adv, "tracker"), get(adv, "trackerProject"))
+    public = get(adv, "publicRoadmap")
+    if get(adv, "tracker") == "github":
+        _check(public is None or (isinstance(public, str) and PUBLIC_REPO.fullmatch(public) is not None),
+               'publicRoadmap must be null or "<owner>/<repo>": the public repo that mirrors the roadmap')
+    else:
+        _check(public is None or public is UNDEFINED, 'publicRoadmap is only for tracker "github"')
     return a
 
 
@@ -233,6 +241,7 @@ def flags_for(a):
         "attribution_guard": adv["attributionGuard"],
         "deny_list_strict": adv["denyProfile"] == "strict",
         "code_size_check": adv["codeSizeCheck"],
+        "public_roadmap": adv["tracker"] == "github" and adv.get("publicRoadmap") is not None,
         "handoff_file": adv["tracker"] == "github" and adv["handoffFile"],
         "contributing_md": a["team"],
         "audit_trail_commits": a["client"],
