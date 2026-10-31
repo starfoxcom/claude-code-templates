@@ -1,0 +1,33 @@
+{
+  "team": true,
+  "client": false,
+  "project": {
+    "name": "claude-code-templates",
+    "repoUrl": "https://github.com/starfoxcom/claude-code-templates",
+    "licenseHolder": "Jorge Alexandro Zamudio Arredondo",
+    "license": "MIT"
+  },
+  "advanced": {
+    "aiReview": true,
+    "deepEscalation": true,
+    "precommit": "none",
+    "uiRule": true,
+    "confidentiality": false,
+    "cleanRoom": false,
+    "plainWriting": false,
+    "codeResearch": "tokensave",
+    "codeResearchCustom": null,
+    "branching": "gitflow",
+    "devIsDefault": false,
+    "mergeStyle": "merge",
+    "architecture": "none",
+    "hookLocation": "repo",
+    "attributionGuard": true,
+    "denyProfile": "standard",
+    "shippedTextPaths": null,
+    "codeSizeCheck": false,
+    "tracker": "github",
+    "trackerProject": "starfoxcom/6",
+    "handoffFile": true
+  }
+}
