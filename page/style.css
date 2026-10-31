@@ -19,6 +19,9 @@
   interpolate-size: allow-keywords;
   transition: --hue 380ms cubic-bezier(.2, .8, .2, 1);
 }
+@media (prefers-reduced-motion: no-preference) {
+  :root { scroll-behavior: smooth; }
+}
 
 * { box-sizing: border-box; margin: 0; }
 [hidden] { display: none !important; }
