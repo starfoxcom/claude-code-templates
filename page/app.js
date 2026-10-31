@@ -427,6 +427,28 @@ function reset() {
   render();
 }
 
+// Opening or closing a rules list resizes its card to the full row and moves
+// the cards after it; each card glides from where it was instead of jumping.
+function glideRules(event) {
+  const summary = event.target.closest("summary");
+  if (!summary || still()) return;
+  event.preventDefault();
+  const cards = [...$("groups").children];
+  const before = cards.map((card) => card.getBoundingClientRect());
+  summary.parentElement.open = !summary.parentElement.open;
+  cards.forEach((card, i) => {
+    const was = before[i];
+    const now = card.getBoundingClientRect();
+    const dx = was.left - now.left;
+    const dy = was.top - now.top;
+    if (!dx && !dy && was.width === now.width) return;
+    card.animate([
+      { transform: `translate(${dx}px, ${dy}px)`, width: `${was.width}px` },
+      { transform: "none", width: `${now.width}px` },
+    ], { duration: 280, easing: "cubic-bezier(.2, .8, .2, 1)" });
+  });
+}
+
 for (const key of document.querySelectorAll(".k[data-q]")) {
   key.addEventListener("click", () => pick(key));
 }
@@ -434,6 +456,7 @@ $("switch").addEventListener("click", (event) => {
   const opt = event.target.closest(".seg-opt");
   if (opt) setFilesView(opt.dataset.view === "files");
 });
+$("groups").addEventListener("click", glideRules);
 $("back").addEventListener("click", goBack);
 $("edit").addEventListener("click", () => snap([...$("groups").children], reset));
 $("copy").addEventListener("click", copyCommand);
