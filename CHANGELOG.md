@@ -8,6 +8,8 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ### Added
 
+- **A security rule and posture template** (#495). Every setup ships `.claude/rules/security.md`: nothing secret ships, every shipped artifact is assumed readable, reverse engineering included, secrets live server-side or in the platform's secret store, a leaked secret is rotated first, and downloads and plugins are parsed as untrusted input. `docs/security-posture.md` is the fill-in record it points to: threats ranked by cost, a credential inventory, account hardening, what ships in each build, export-time hardening and download trust boundaries.
+
 - **Setup reads the CLI version the session runs** (#422). Before offering the mods, `/bindwright:setup` and `/bindwright:join` take the version from the session's `AI_AGENT` variable instead of `claude --version`, since the desktop app runs its own copy of the CLI, which can be older than the one on the PATH. Skipped mods come with a one-line reason, and setup says in one line why the built-in "You should know" mod stays off.
 
 - **`/bindwright:report`** (#470, part 2). Files a bug against Bindwright the way the CLI's own feedback command does: it drafts the report from what failed and the doctor's findings, the engine (`--report`, `engine/report.js` and its Python twin) replaces the repo path, home folder, user name, emails and tokens with placeholders, and the skill shows the whole report and files it with `gh` only on a yes, or hands over a prefilled new-issue link. Setup, update and the doctor offer it when the engine fails.
