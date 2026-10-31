@@ -123,6 +123,17 @@ test("export keeps the rest of project.json as it was, numbers included", needsP
   assert.match(files[0], /"note": 5,\n  "ratio": 0\.5,/);
 });
 
+test("remember keeps a whole number the file already holds, in both engines", needsPython, () => {
+  const { personal } = both((run, s) => {
+    const file = join(s.root, "teammate", "bindwright", "settings.json");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ schema: 1, tracker: 2, extras: { tasks: 1 } }));
+    return run(["--remember", s.repo, "--layer", "personal"], JSON.stringify({ extras: { "ci-watch": true } }));
+  });
+  assert.match(personal, /"tasks": 1\n/);
+  assert.match(personal, /"tracker": 2\n/);
+});
+
 const linksWork = (() => {
   const dir = mkdtempSync(join(tmpdir(), "bw-link-"));
   try {

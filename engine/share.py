@@ -65,7 +65,8 @@ def remember_choices(root, config, name, choices, state_json):
     _refuse("remember", _unknown_keys(choices, list(SETTINGS) + ["extras"]))
     if "extras" in choices and not isinstance(choices["extras"], dict):
         _refuse("remember", ["extras"])
-    current = _read_layer_file(path, file)
+    # Written back, so whole numbers it holds stay whole, as in share.js.
+    current = _read_layer_file(path, file, keep_ints=True)
     current = {} if current is None else current
     resolve_layers(**{name: current})  # refuses a file it cannot read
     chosen = {k: v for k, v in choices.items() if k != "extras" and v is not None}
