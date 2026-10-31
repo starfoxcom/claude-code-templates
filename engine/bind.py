@@ -10,8 +10,10 @@
 #   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
 #   python engine/bind.py --update DIR                   -> the saved answers rebound and merged (update.py)
 #   python engine/bind.py --settings DIR                 -> the settings layers resolved for that repo (layers.py)
+#   python engine/bind.py --audit DIR                    -> how its rules held up in recent sessions (audit.py)
 #   python engine/bind.py --export DIR < choices.json    -> the project's setup object written (share.py)
 #   python engine/bind.py --remember DIR --layer L < choices.json -> one person's choices written to layer L
+#   python engine/bind.py --doctor DIR                   -> a health check of that repo and this machine (doctor.py)
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
 import json
@@ -29,7 +31,10 @@ from setupcode import decode_setup_code, SetupCodeError, MAX_DEPTH, _depth, _not
 from apply import apply_files, ApplyError
 from update import run_update
 from layers import run_settings
+from audit import run_audit
 from share import export_setup, remember_choices
+from doctor import cli_version_from, run_doctor
+from report import draft_report
 
 CORE = "_core/project-template/"
 
@@ -88,6 +93,8 @@ def _included(path, a, flags):
         ".github/scripts/size_check.py": flags["code_size_check"],
         ".github/workflows/size-check.yml": flags["code_size_check"],
         ".github/size-check/exceptions.txt": flags["code_size_check"],
+        ".github/scripts/public_roadmap.py": flags["public_roadmap"],
+        ".github/public-roadmap.json": flags["public_roadmap"],
         ".github/workflows/claude-code-review.yml.template": flags["github_actions_routine_review"],
         ".github/workflows/claude.yml.template": flags["github_actions_deep_review"],
         ".github/scripts/review_gate.py": gate,
@@ -294,7 +301,7 @@ def _choices_from_stdin():
 
 
 def _settings(argv):
-    """--settings, --export and --remember: the settings layers of a repo, for this machine's config folder."""
+    """--settings, --export, --remember and --audit: the settings layers of a repo, for this machine's config folder."""
     try:
         config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
         if "--export" in argv:
@@ -304,7 +311,36 @@ def _settings(argv):
             if layer is None:
                 raise ValueError("--remember needs --layer personal or local")
             return remember_choices(folder, config, layer, _choices_from_stdin(), _state_json)
+        if "--audit" in argv:
+            return run_audit(_option(argv, "--audit"), config)
         return run_settings(_option(argv, "--settings"), config)
+    except Exception as e:  # every failure is reported, as the JS engine throws it
+        return {"error": str(e)}
+
+
+def _doctor(argv, read_file):
+    """The doctor, for the CLI this session runs (its AI_AGENT) and this plugin's VERSION."""
+    try:
+        folder = _option(argv, "--doctor")
+        version = read_file("VERSION").strip(JS_WHITESPACE).lstrip("v")
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        return run_doctor(folder, config, version, cli_version_from(os.environ.get("AI_AGENT")))
+    except Exception as e:  # every failure is reported, as the JS engine throws it
+        return {"error": str(e)}
+
+
+def _report(argv, read_file):
+    """A scrubbed bug report for the repo at --report DIR, from the details on standard input."""
+    try:
+        folder = _option(argv, "--report")
+        what = _stdin_json()
+        version = read_file("VERSION").strip(JS_WHITESPACE).lstrip("v")
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        facts = {"pluginVersion": version, "cliVersion": cli_version_from(os.environ.get("AI_AGENT")),
+                 "os": sys.platform, "engine": "python"}
+        user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+        who = {"repo": os.path.abspath(folder), "home": os.path.expanduser("~"), "user": user}
+        return draft_report(folder, config, what, facts, who)
     except Exception as e:  # every failure is reported, as the JS engine throws it
         return {"error": str(e)}
 
@@ -335,8 +371,12 @@ def _main(argv):
         result = [run(j["answers"], j.get("year"), j.get("version")) for j in _stdin_json()]
     elif "--update" in argv:
         result = _update(argv, read_file, core_files)
-    elif "--settings" in argv or "--export" in argv or "--remember" in argv:
+    elif any(f in argv for f in ("--settings", "--export", "--remember", "--audit")):
         result = _settings(argv)
+    elif "--doctor" in argv:
+        result = _doctor(argv, read_file)
+    elif "--report" in argv:
+        result = _report(argv, read_file)
     else:
         result = _single(argv, run)
     # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.

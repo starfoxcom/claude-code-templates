@@ -38,7 +38,7 @@ function oneAtATime() {
   };
   const switches = [
     "aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting",
-    "devIsDefault", "attributionGuard", "codeSizeCheck",
+    "devIsDefault", "attributionGuard", "codeSizeCheck", "handoffFile",
   ];
   const cases = [];
   for (const team of [false, true]) {
@@ -62,6 +62,7 @@ function oneAtATime() {
       // U+0085 passes JavaScript's trim() but not Python's strip().
       named.advanced.shippedTextPaths = ["**/*.gd", "i18n/$&-$1.json", "docs/#public/**", "notes\u0085"];
       named.advanced.trackerProject = "My-Org9/123456";
+      named.advanced.publicRoadmap = "My-Org9/road.map_1";
       cases.push(named);
       // The saved answers in .bindwright/project.json: both engines escape
       // quotes, backslashes and control characters alike, and nothing else.
@@ -89,7 +90,7 @@ function seeded(count) {
     a.project.license = pick(Object.keys(LICENSES));
     Object.assign(a.advanced, {
       aiReview: bool(), deepEscalation: bool(), uiRule: bool(), confidentiality: bool(), cleanRoom: bool(), plainWriting: bool(),
-      devIsDefault: bool(), attributionGuard: bool(), codeSizeCheck: bool(),
+      devIsDefault: bool(), attributionGuard: bool(), codeSizeCheck: bool(), handoffFile: bool(),
       codeResearch: pick(Object.keys(CODE_RESEARCH_TOOLS)), precommit: pick(["none", ...PRECOMMIT_MANAGERS]),
       architecture: pick(ARCHITECTURES), branching: pick(["gitflow", "trunk"]), mergeStyle: pick(MERGE_STYLES),
       hookLocation: pick(HOOK_LOCATIONS), denyProfile: pick(DENY_PROFILES),
@@ -97,6 +98,7 @@ function seeded(count) {
       tracker: pick(TRACKERS),
     });
     a.advanced.trackerProject = a.advanced.tracker === "github" && bool() ? "starfoxcom/6" : null;
+    a.advanced.publicRoadmap = a.advanced.tracker === "github" && bool() ? "starfoxcom/roadmap" : null;
     a.advanced = withTool(a.advanced, a.advanced.codeResearch);
     return a;
   });
@@ -143,6 +145,7 @@ function refused() {
     (a) => { a.advanced.attributionGuard = null; },
     (a) => { a.advanced.codeSizeCheck = "on"; },
     (a) => { delete a.advanced.codeSizeCheck; },
+    (a) => { a.advanced.handoffFile = 1; },
     (a) => { a.advanced.denyProfile = "paranoid"; },
     (a) => { a.advanced.shippedTextPaths = []; },
     (a) => { a.advanced.shippedTextPaths = ["﻿docs/**"]; },
@@ -161,6 +164,14 @@ function refused() {
     (a) => { a.advanced.trackerProject = { owner: "x", number: 6 }; },
     (a) => { a.advanced.trackerProject = 6; },
     (a) => { a.advanced.tracker = "file"; a.advanced.trackerProject = "owner/6"; },
+    (a) => { delete a.advanced.publicRoadmap; },
+    (a) => { a.advanced.publicRoadmap = "owner"; },
+    (a) => { a.advanced.publicRoadmap = "owner/.."; },
+    (a) => { a.advanced.publicRoadmap = "owner/road map"; },
+    (a) => { a.advanced.publicRoadmap = "-owner/roadmap"; },
+    (a) => { a.advanced.publicRoadmap = `owner/${"r".repeat(101)}`; },
+    (a) => { a.advanced.publicRoadmap = 6; },
+    (a) => { a.advanced.tracker = "file"; a.advanced.publicRoadmap = "owner/roadmap"; },
   ];
   // An edit that returns a value replaces the answers outright.
   return edits.map((edit) => { const a = defaults(); const whole = edit(a); return whole === undefined ? a : whole; });

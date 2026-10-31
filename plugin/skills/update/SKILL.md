@@ -21,7 +21,7 @@ Pick the engine as setup does: `node "${CLAUDE_PLUGIN_ROOT}/engine/cli.js"` when
 
 Run it with `--update <repo root>`. It prints one line of JSON:
 
-- `{"error": "..."}`: show the message and stop; nothing was written. A message starting `Refusing to write through a symbolic link` names repo files that are links: the update never writes through one. Offer to list each in `.bindwright/owned`, so later updates leave it alone, or to replace the link with a plain file, then run the update again.
+- `{"error": "..."}`: show the message and stop; nothing was written. Unless it is the symbolic-link message below, offer `/bindwright:report`. A message starting `Refusing to write through a symbolic link` names repo files that are links: the update never writes through one. Offer to list each in `.bindwright/owned`, so later updates leave it alone, or to replace the link with a plain file, then run the update again.
 - Otherwise, lists of repo paths by what happened to each file:
 
 | List | What happened | What the user does |
