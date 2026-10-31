@@ -22,7 +22,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE_FILES = [
     "package.json", "core-files.json", "cli.js",
     "bind.js", "model.js", "render.js", "setupcode.js", "apply.js", "keep.js", "update.js", "layers.js", "share.js",
-    "bind.py", "model.py", "render.py", "setupcode.py", "apply.py", "keep.py", "update.py", "layers.py", "share.py", "home.py",
+    "bind.py", "model.py", "render.py", "setupcode.py", "apply.py", "keep.py", "update.py", "layers.py", "share.py",
+    "home.py",
 ]
 # The ~/.claude templates bind.js and bind.py read (globalFiles).
 GLOBAL_FILES = [

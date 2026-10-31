@@ -25,7 +25,7 @@ function refuse(what, problems) {
 }
 
 // Keys outside `allowed`, in sorted order.
-const unknownKeys = (obj, allowed, prefix = "") => Object.keys(obj).sort().filter((k) => !allowed.includes(k)).map((k) => `${prefix}${k}`);
+const unknownKeys = (obj, allowed) => Object.keys(obj).sort().filter((k) => !allowed.includes(k));
 
 // Writes `{ extras, required }` as the project's `setup` object, keeping
 // every other key of .bindwright/project.json as it was. Both empty removes

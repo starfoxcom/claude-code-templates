@@ -13,7 +13,9 @@ import { python } from "./python.js";
 
 const engine = join(dirname(fileURLToPath(import.meta.url)), "..");
 const needsPython = { skip: !python && "needs Python 3.8+" };
-const ANSWERS = { team: true, client: false, project: { name: "x" }, advanced: { codeResearch: "tokensave", tracker: "github" } };
+const ANSWERS = {
+  team: true, client: false, project: { name: "x" }, advanced: { codeResearch: "tokensave", tracker: "github" },
+};
 
 // A set-up repo and two machines' config folders, one per engine run.
 function scene() {
@@ -35,7 +37,8 @@ function both(steps) {
     try {
       const run = (flags, input, config = join(s.root, "teammate")) => {
         const env = { ...process.env, CLAUDE_CONFIG_DIR: config };
-        const out = spawnSync(cmd, [...args, ...flags], { env, input: input === undefined ? "" : input, encoding: "utf8" });
+        const options = { env, input: input === undefined ? "" : input, encoding: "utf8" };
+        const out = spawnSync(cmd, [...args, ...flags], options);
         return { ...JSON.parse(out.stdout), status: out.status };
       };
       const seen = steps(run, s);
@@ -57,12 +60,14 @@ test("a setup round-trips: export, then a teammate's settings, choices and drift
     const exported = run(["--export", s.repo], JSON.stringify(choices));
     const before = run(["--settings", s.repo]);
     const declined = run(["--remember", s.repo, "--layer", "personal"], JSON.stringify({ extras: { tasks: false } }));
-    const local = run(["--remember", s.repo, "--layer", "local"], JSON.stringify({ codeResearch: "serena", tracker: "file" }));
+    const mine = JSON.stringify({ codeResearch: "serena", tracker: "file" });
+    const local = run(["--remember", s.repo, "--layer", "local"], mine);
     const after = run(["--settings", s.repo]);
     return { exported, before, declined, local, after };
   });
   assert.equal(seen.exported.status, 0);
-  assert.deepEqual(seen.exported.setup, { schema: 1, extras: { "session-facts": "required", tasks: "recommended" }, required: ["codeResearch"] });
+  const extras = { "session-facts": "required", tasks: "recommended" };
+  assert.deepEqual(seen.exported.setup, { schema: 1, extras, required: ["codeResearch"] });
   assert.deepEqual(seen.before.drift, ["session-facts", "tasks"]);
   assert.deepEqual(seen.after.drift, ["session-facts"]);
   assert.deepEqual(seen.after.settings, {
@@ -109,6 +114,15 @@ test("null removes a choice, and an empty export removes the setup object", need
   assert.equal(personal, '{\n  "extras": {},\n  "schema": 1\n}\n');
 });
 
+test("export keeps the rest of project.json as it was, numbers included", needsPython, () => {
+  const { files } = both((run, s) => {
+    const answers = { ...ANSWERS, note: 5, ratio: 0.5 };
+    writeFileSync(join(s.repo, ".bindwright", "project.json"), `${JSON.stringify(answers, null, 2)}\n`);
+    return run(["--export", s.repo], JSON.stringify({ extras: { tasks: "recommended" } }));
+  });
+  assert.match(files[0], /"note": 5,\n  "ratio": 0\.5,/);
+});
+
 const linksWork = (() => {
   const dir = mkdtempSync(join(tmpdir(), "bw-link-"));
   try {
@@ -121,7 +135,9 @@ const linksWork = (() => {
   }
 })();
 
-test("a linked local.json is refused, not written through", { skip: !(python && linksWork) && "needs Python and links" }, () => {
+const needsLinks = { skip: !(python && linksWork) && "needs Python and links" };
+
+test("a linked local.json is refused, not written through", needsLinks, () => {
   const { seen } = both((run, s) => {
     const outside = join(s.root, "outside.txt");
     writeFileSync(outside, "{}\n");

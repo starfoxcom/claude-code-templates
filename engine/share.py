@@ -32,7 +32,7 @@ def export_setup(root, choices, state_json):
     extras = choices.get("extras", {})
     required = choices.get("required", [])
     path = os.path.join(root, *ANSWERS.split("/"))
-    answers = _read_layer_file(path, ANSWERS)
+    answers = _read_layer_file(path, ANSWERS, keep_ints=True)
     if answers is None:
         raise ValueError("%s is missing: this repo was not set up with /bindwright:setup" % ANSWERS)
     setup = {"schema": SCHEMA, "extras": extras, "required": required}

@@ -288,7 +288,7 @@ def _choices_from_stdin():
         raise ValueError("the choices on standard input nest too deeply")
     try:
         # NaN and Infinity are not JSON, and JSON.parse refuses them.
-        return json.loads(text, parse_constant=_not_json)
+        return json.loads(text, parse_constant=_not_json, parse_int=float)
     except ValueError:
         raise ValueError("the choices on standard input are not valid JSON")
 
