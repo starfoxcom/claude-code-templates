@@ -99,8 +99,6 @@ def fake_gh(args):
         return ""
     if args[:2] == ["repo", "view"]:
         return "me/private\\n"
-    if args[:2] == ["api", "user"]:
-        return "me\\n"
     if args[0] == "api" and args[1].startswith("repos/"):
         return "%d\\n" % newest(args[1].split("/issues")[0][len("repos/"):])
     return issue_command(args) if args[0] == "issue" else graphql(args)
@@ -170,6 +168,7 @@ test("check names every contract break and leaves summary-less issues private", 
     issue(13, "Moves", summary("Tracked in acme/iOS#12.\n\nMoved packages/iOS/Info.plist.")),
     issue(14, "Files", summary("Moved iOS.swift.")),
     issue(15, "Calls", summary("Call iOS() first.")),
+    issue(16, "Quoted", summary("See [the wiki][1].\n\n> [1]: //intra.example/wiki")),
   ], { hidden: ["Falcon"], allowed: ["iOS", "Node.js"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
@@ -182,10 +181,11 @@ test("check names every contract break and leaves summary-less issues private", 
     "#4 summary: commit ('3f9a2c1')", "#4 summary: identifier ('MAX_RETRIES')",
     "#4 summary: reference ('acme/app#12')", "#4 summary: mention ('@dana')",
     "#5 summary: AI or review wording ('ChatGPT')", "#5 summary: path ('player.gd')",
-    "#6 summary: private name ('Falcon')", "#6 summary: link ('www.')", "#6 summary: code ('<code')",
+    "#6 summary: private name ('Falcon')", "#6 summary: link ('www.')", "#6 summary: markup ('<')",
     "#7 summary: link ('ops@corp.example')", "#7 summary: code ('    ')",
-    "#8 summary: link ('](')", "#8 summary: code ('        ')", "#9 summary: link ('<a')",
-    "#10 summary: link ('[1]:')", "#13 summary: reference ('acme/iOS#12')", "#13 summary: path",
+    "#8 summary: markup ('[')", "#8 summary: code ('        ')", "#9 summary: markup ('<')",
+    "#10 summary: markup ('[')", "#16 summary: markup ('[')",
+    "#13 summary: reference ('acme/iOS#12')", "#13 summary: path",
     "#14 summary: path ('iOS.swift')", "#15 summary: identifier ('iOS()')"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
@@ -210,7 +210,7 @@ test("push mirrors summaries under the same numbers, then has nothing left to do
     issue(6, "Wish lists", summary("Save items for later, part of #1.")),
   ], { rename: { Falcon: "the shop" } });
   const out = s.run("push");
-  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.status, 0, out.lines.join("\n") + out.stderr);
   const pub = s.read()["me/public"].issues;
   assert.deepEqual(Object.keys(pub).sort(), ["1", "4", "6"]);
   assert.equal(pub["1"].title, "the shop checkout");
@@ -328,6 +328,20 @@ test("outside issues and pull requests on the public side are never touched, onl
   assert.equal(pub["8"].title, "H");
   // A parent in another repo is no parent here.
   assert.equal(pub["4"].parent, null);
+});
+
+test("a number GitHub hands out elsewhere never carries an item's text", { skip }, () => {
+  const s = scene([issue(1, "A", summary("First.")), issue(2, "B", summary("Second."))]);
+  assert.equal(s.run("push").status, 0);
+  // An outsider opened #3 and an admin deleted it: GitHub's next number is #4, though no issue shows #3.
+  s.edit((issues, pub) => { pub.next = 3; issues["3"] = issue(3, "C", summary("Third.")); });
+  const out = s.run("push");
+  assert.equal(out.status, 1);
+  assert.match(out.lines.join("\n"), /wanted #3, GitHub made #4/);
+  const pub = s.read()["me/public"].issues;
+  assert.equal(pub["4"].title, "placeholder");
+  assert.ok(Object.values(pub).every((i) => i.title !== "C"));
+  assert.match(s.run("check").lines.join("\n"), /#3 cannot go public/);
 });
 
 test("a public roadmap that names the private repo itself is refused", { skip }, () => {

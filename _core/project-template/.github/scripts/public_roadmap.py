@@ -43,15 +43,16 @@ AI_PROCESS = (r"\b(Claude|Fable|Opus|Sonnet|Haiku|Anthropic|OpenAI|ChatGPT|GPT(-
 # What the public side never carries, by the name `check` reports.
 CONTRACT = [
     ("history", re.compile(r"<details|Full history", re.I)),
-    ("code", re.compile(r"`|<(code|pre|kbd|samp)\b|~~~|^[ \t]*(?: {4}|\t)", re.I | re.M)),
+    # Links, images, link definitions, HTML tags and comments all need one of these.
+    ("markup", re.compile(r"[\[\]<]")),
+    ("code", re.compile(r"`|~~~|^[ \t]*(?: {4}|\t)", re.M)),
     ("path", re.compile(r"\.(github|claude)/|\b[\w-]+/[\w.-]+/|\b[\w-]+/[\w-]+\.\w+"
                         r"|\b[\w-]+\." + EXTENSIONS + r"\b")),
     ("pull request", re.compile(r"\bPRs?\s*#?\d|\bpull requests?\b", re.I)),
     ("branch", re.compile(r"\b(feature|hotfix|release|fix|chore)/")),
     ("reference", re.compile(r"\b[\w.-]+/[\w.-]+#\d+|\bGH-\d+\b")),
     ("mention", re.compile(r"(?<![\w.@])@[A-Za-z0-9][A-Za-z0-9-]*")),
-    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\]\(|^[ \t]*\[[^\]]+\]:|<a\b|\bwww\."
-                        r"|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I | re.M)),
+    ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://|\bwww\.|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)),
     ("commit", re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
     ("identifier", re.compile(r"\w+\(\)|\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b")),
     ("constant", re.compile(r"(?<![\w.])(?<!v)\d+\.\d+(?![\d.])(?!" + UNITS + r")|\b0x[0-9a-f]+",
@@ -270,7 +271,8 @@ class PublicSync:
         public = set(self.wanted) - set(self.lost)
         for number, (title, body) in self.wanted.items():
             lines += [f"#{number} title: {p}" for p in contract_breaks(title, self.settings, public)]
-            lines += [f"#{number} summary: {p}" for p in contract_breaks(body, self.settings, public)]
+            summary = body.rsplit(f"\n\n{MARK}", 1)[0]
+            lines += [f"#{number} summary: {p}" for p in contract_breaks(summary, self.settings, public)]
         return lines
 
     def push(self) -> None:
@@ -287,7 +289,8 @@ class PublicSync:
             self.sync_fields()
 
     def create_missing(self) -> None:
-        """Creates public items in number order; a number with no public item gets a placeholder.
+        """Creates a placeholder for every missing number, in order; `update_texts` writes the
+        real text once the number is confirmed, so no text ever lands under the wrong number.
 
         Placeholders are deleted only once a real item stands after them (`drop_placeholders`),
         so a run that stops halfway leaves the newest public issue marking how far the numbers
@@ -299,14 +302,14 @@ class PublicSync:
             run_gh(["label", "create", LABEL, "--repo", repo, "--force",
                     "--description", "Written by the public roadmap tool"])
         for number in numbers:
-            title, body = self.wanted.get(number, PLACEHOLDER)
+            title, body = PLACEHOLDER
             url = with_body_file(body, ["issue", "create", "--repo", repo, "--title", title,
                                         "--label", LABEL])
             created = int(url.strip().rsplit("/", 1)[1])
             if created != number:
-                raise SystemExit(f"public numbers drifted: wanted #{number}, GitHub made #{created}:"
-                                 " someone opened an issue or pull request there meanwhile."
-                                 " Run push again.")
+                raise SystemExit(f"public numbers drifted: wanted #{number}, GitHub made #{created}"
+                                 " (an issue or pull request was opened or deleted there meanwhile)."
+                                 " Only a placeholder went up. Run check to see which items moved.")
             print(f"created #{number}")
 
     def drop_placeholders(self) -> None:
