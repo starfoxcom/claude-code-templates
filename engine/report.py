@@ -63,15 +63,25 @@ def _any_case(s):
 
 
 def scrub(text, repo=None, home=None, user=None):
-    out = _unescape_letters(str(text))
+    # See scrub in report.js: as written first, then the read-back copy if it finds more.
+    out = _people(str(text), repo, home, user)
+    decoded = _unescape_letters(out)
+    again = _people(decoded, repo, home, user)
+    if again != decoded:
+        out = again
+    for pattern in TOKENS:
+        out = pattern.sub("<token>", out)
+    return out
+
+
+def _people(text, repo, home, user):
+    out = text
     for path, mark in ((repo, "<repo>"), (home, "~")):
         for spelled in _spellings(path):
             out = re.sub(_any_case(spelled), lambda _m, mark=mark: mark, out)
     out = EMAIL.sub("<email>", out)
     if user and len(user) >= 3:
         out = re.sub(EDGE + _any_case(user) + "(?![A-Za-z0-9_])", lambda _m: "<user>", out)
-    for pattern in TOKENS:
-        out = pattern.sub("<token>", out)
     return out
 
 

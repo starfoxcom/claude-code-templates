@@ -67,8 +67,20 @@ function anyCase(s) {
 // `text` without the repo and home paths, emails, the user name, or tokens.
 // Paths go first: a token pattern could swallow part of one and hide the rest
 // from the path pass. Tokens go last; no placeholder holds a character they match.
+// A plain path can hold the same six characters as an escape (C:\Users\u1234567),
+// so the text is scrubbed as written first; the read-back copy is kept only
+// when it finds more to take out.
 export function scrub(text, { repo, home, user }) {
-  let out = unescapeLetters(String(text));
+  let out = people(String(text), { repo, home, user });
+  const decoded = unescapeLetters(out);
+  const again = people(decoded, { repo, home, user });
+  if (again !== decoded) out = again;
+  for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
+  return out;
+}
+
+function people(text, { repo, home, user }) {
+  let out = text;
   for (const [path, mark] of [[repo, "<repo>"], [home, "~"]]) {
     for (const spelled of spellings(path)) out = out.replace(new RegExp(anyCase(spelled), "gu"), () => mark);
   }
@@ -76,7 +88,6 @@ export function scrub(text, { repo, home, user }) {
   if (user && [...user].length >= 3) {
     out = out.replace(new RegExp(`${EDGE}${anyCase(user)}(?![A-Za-z0-9_])`, "gu"), () => "<user>");
   }
-  for (const pattern of TOKENS) out = out.replace(pattern, "<token>");
   return out;
 }
 
