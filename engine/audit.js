@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import { ANSWERS } from "./bind.js";
 import { runSettings } from "./layers.js";
 import { researchTool } from "./model.js";
+import { MAX_DEPTH, depthOf } from "./setupcode.js";
 
 export const SESSIONS = 50; // the newest main transcripts read
 const EXAMPLES = 3;
@@ -75,6 +76,8 @@ function sessions(dir) {
 function entries(file) {
   const out = [];
   for (const line of readFileSync(file, "utf8").split("\n")) {
+    // Past this depth Python's parser gives up, so neither engine reads the line.
+    if (depthOf(line) > MAX_DEPTH) continue;
     try {
       const entry = JSON.parse(line);
       if (isObject(entry) && isObject(entry.message) && Array.isArray(entry.message.content)) out.push(entry);
@@ -94,17 +97,19 @@ function resultText(content) {
   return content.filter((c) => isObject(c) && c.type === "text").map((c) => text(c.text)).join("\n");
 }
 
-// A session's tool calls in log order, each counted once across all sessions
-// (a resumed or forked session copies earlier calls), with its result's text.
+// A session's tool calls in log order, with each result's text. A resumed or
+// forked session copies earlier calls: each is counted once across all
+// sessions, and the other copies are marked `copied`.
 function toolCalls(files, counted) {
   const calls = [];
   const results = new Map();
   for (const entry of files.flatMap(entries)) {
     for (const item of entry.message.content.filter(isObject)) {
-      if (item.type === "tool_use" && typeof item.id === "string" && !counted.has(item.id)) {
+      if (item.type === "tool_use" && typeof item.id === "string") {
+        const copied = counted.has(item.id);
         counted.add(item.id);
         const input = isObject(item.input) ? item.input : {};
-        calls.push({ id: item.id, name: text(item.name), input, when: stamp(entry.timestamp) });
+        calls.push({ id: item.id, name: text(item.name), input, when: stamp(entry.timestamp), copied });
       } else if (item.type === "tool_result" && typeof item.tool_use_id === "string") {
         results.set(item.tool_use_id, resultText(item.content));
       }
@@ -124,34 +129,84 @@ function quoted(s, start, q) {
   return null;
 }
 
-// The command with ; & | ( and line breaks inside quotes blanked, so a quoted
-// search pattern or message cannot start a command. Lengths stay the same.
-function unquote(command) {
+const SEPARATORS = "|;&\n(";
+// `<<EOF`, `<<-'EOF'` or `<< "EOF"`: the word that ends a heredoc body.
+const HEREDOC = /^<<(-?)[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|"([A-Za-z_][A-Za-z0-9_]*)"|([A-Za-z_][A-Za-z0-9_]*))/;
+const blank = (s) => s.replace(/[|;&(]/g, " ");
+
+// Copies one line that is not a heredoc body, blanking the separators that
+// cannot start a command; `state` carries the open quote, a pending backslash
+// and the heredocs this line opens.
+function unquoteLine(line, state) {
   let out = "";
-  let quote = null;
-  for (const ch of command) {
-    if (quote === null && (ch === "'" || ch === '"')) quote = ch;
-    else if (ch === quote) quote = null;
-    else if (quote !== null && "|;&\n(".includes(ch)) {
-      out += " ";
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (state.escaped) {
+      state.escaped = false;
+      out += SEPARATORS.includes(ch) ? " " : ch;
       continue;
     }
-    out += ch;
+    const heredoc = ch === "<" && line[i - 1] !== "<" && state.quote !== "'" ? HEREDOC.exec(line.slice(i)) : null;
+    if (heredoc) {
+      state.heredocs.push({ word: heredoc[2] ?? heredoc[3] ?? heredoc[4], tabs: heredoc[1] === "-" });
+      out += heredoc[0];
+      i += heredoc[0].length - 1;
+    } else if (ch === "\\" && state.quote !== "'") {
+      state.escaped = true;
+      out += ch;
+    } else if (state.quote === null && (ch === "'" || ch === '"')) {
+      state.quote = ch;
+      out += ch;
+    } else if (ch === state.quote) {
+      state.quote = null;
+      out += ch;
+    } else {
+      out += state.quote !== null && SEPARATORS.includes(ch) ? " " : ch;
+    }
   }
   return out;
 }
 
+// The command with ; & | ( and line breaks blanked wherever they cannot start
+// a command: inside quotes, after a backslash and in heredoc bodies, so a
+// quoted search pattern, message or file body never reads as one. Lengths stay
+// the same.
+function unquote(command) {
+  const state = { quote: null, escaped: false, heredocs: [] };
+  const lines = command.split("\n");
+  return lines.map((line, k) => {
+    let out;
+    if (state.heredocs.length) {
+      out = blank(line);
+      const { word, tabs } = state.heredocs[0];
+      if ((tabs ? line.replace(/^\t+/, "") : line).replace(/\r$/, "") === word) state.heredocs.shift();
+    } else {
+      out = unquoteLine(line, state);
+    }
+    if (k === lines.length - 1) return out;
+    const inside = state.heredocs.length > 0 || state.quote !== null || state.escaped;
+    state.escaped = false;
+    return out + (inside ? " " : "\n");
+  }).join("");
+}
+
 // The first line of the message a `git commit -m` command gives, or null.
 export function commitMessage(command) {
-  const at = unquote(command).search(COMMIT);
-  if (at === -1) return null;
-  const m = MESSAGE.exec(command.slice(at));
+  const plain = unquote(command);
+  const found = COMMIT.exec(plain);
+  if (found === null) return null;
+  const at = found.index;
+  // The message belongs to this command, so the search stops at the next one.
+  const end = plain.slice(at + found[0].length).search(/[;&|\n]/);
+  const m = MESSAGE.exec(command.slice(at, end === -1 ? command.length : at + found[0].length + end));
   if (m === null) return null;
-  const message = quoted(command, at + m.index + m[0].length, m[1]);
-  if (message === null) return null;
-  const lines = message.split("\n");
+  const start = at + m.index + m[0].length;
   // A heredoc message, `-m "$(cat <<'EOF'`, starts on the next line.
-  return (message.startsWith("$(cat <<") ? lines[1] ?? "" : lines[0]).replace(/\r$/, "");
+  if (m[1] === '"' && command.startsWith("$(cat <<", start)) {
+    return (command.slice(start).split("\n")[1] ?? "").replace(/\r$/, "");
+  }
+  const message = quoted(command, start, m[1]);
+  return message === null ? null : message.split("\n")[0].replace(/\r$/, "");
 }
 
 const goodCommit = (m) => m.startsWith("Merge ") || (FORMAT.test(m) && [...m].length <= 72);
@@ -233,7 +288,7 @@ export function runAudit(root, config) {
   const days = [];
   for (const { id, files } of list) {
     const calls = toolCalls(files, counted);
-    days.push(...calls.map((c) => c.when.slice(0, 10)).filter(Boolean));
+    days.push(...calls.filter((c) => !c.copied).map((c) => c.when.slice(0, 10)).filter(Boolean));
     tallySession(id.slice(0, 8), calls, tallies, research);
   }
   days.sort(byUnits);
@@ -241,7 +296,10 @@ export function runAudit(root, config) {
   return { logs, checks: Object.values(tallies), skipped };
 }
 
-function tallySession(session, calls, tallies, research) {
+// Every call counts toward this session's task list, copied ones too; the
+// per-call checks and the edits count only the calls first seen here.
+function tallySession(session, all, tallies, research) {
+  const calls = all.filter((c) => !c.copied);
   for (const call of calls) {
     for (const [id, check] of Object.entries(PER_CALL)) {
       const hit = tallies[id] ? check(call, research) : null;
@@ -250,7 +308,7 @@ function tallySession(session, calls, tallies, research) {
   }
   const edits = calls.filter((c) => EDIT_TOOLS.includes(c.name));
   if (tallies["task-tracking"] && edits.length >= EDITS_FOR_TASKS) {
-    const tracked = calls.some((c) => TASK_TOOLS.includes(c.name));
+    const tracked = all.some((c) => TASK_TOOLS.includes(c.name));
     const example = { session, when: edits[0].when, text: `${edits.length} edits, no task list` };
     count(tallies["task-tracking"], !tracked, example);
   }

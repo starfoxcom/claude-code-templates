@@ -7,7 +7,7 @@ import re
 
 from layers import _read_layer_file, run_settings
 from model import _research_tool
-from setupcode import _not_json
+from setupcode import MAX_DEPTH, _depth, _not_json
 from update import ANSWERS, _code_units
 
 SESSIONS = 50
@@ -74,8 +74,11 @@ def _entries(path):
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
         lines = f.read().split("\n")
     for line in lines:
+        if _depth(line) > MAX_DEPTH:
+            continue
         try:
-            entry = json.loads(line, parse_constant=_not_json)
+            # parse_int=float reads a number of any length, as JSON.parse does.
+            entry = json.loads(line, parse_constant=_not_json, parse_int=float)
         except (ValueError, RecursionError):
             continue
         message = entry.get("message") if isinstance(entry, dict) else None
@@ -101,11 +104,12 @@ def _tool_calls(files, counted):
     calls, results = [], {}
     for entry in (e for path in files for e in _entries(path)):
         for item in (i for i in entry["message"]["content"] if isinstance(i, dict)):
-            if item.get("type") == "tool_use" and isinstance(item.get("id"), str) and item["id"] not in counted:
+            if item.get("type") == "tool_use" and isinstance(item.get("id"), str):
+                copied = item["id"] in counted
                 counted.add(item["id"])
                 tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
                 calls.append({"id": item["id"], "name": _text(item.get("name")), "input": tool_input,
-                              "when": _stamp(entry.get("timestamp"))})
+                              "when": _stamp(entry.get("timestamp")), "copied": copied})
             elif item.get("type") == "tool_result" and isinstance(item.get("tool_use_id"), str):
                 results[item["tool_use_id"]] = _result_text(item.get("content"))
     for c in calls:
@@ -125,33 +129,84 @@ def _quoted(s, start, q):
     return None
 
 
+SEPARATORS = "|;&\n("
+HEREDOC = re.compile(r"<<(-?)[ \t]*(?:'([A-Za-z_][A-Za-z0-9_]*)'|\"([A-Za-z_][A-Za-z0-9_]*)\""
+                     r"|([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def _unquote_line(line, state):
+    """See unquoteLine in audit.js."""
+    out, i = [], 0
+    while i < len(line):
+        ch = line[i]
+        heredoc = None
+        if not state["escaped"] and ch == "<" and line[i - 1:i] != "<" and state["quote"] != "'":
+            heredoc = HEREDOC.match(line, i)
+        if state["escaped"]:
+            state["escaped"] = False
+            out.append(" " if ch in SEPARATORS else ch)
+        elif heredoc:
+            word = heredoc.group(2) or heredoc.group(3) or heredoc.group(4)
+            state["heredocs"].append((word, heredoc.group(1) == "-"))
+            out.append(heredoc.group(0))
+            i = heredoc.end()
+            continue
+        elif ch == "\\" and state["quote"] != "'":
+            state["escaped"] = True
+            out.append(ch)
+        elif state["quote"] is None and ch in "'\"":
+            state["quote"] = ch
+            out.append(ch)
+        elif ch == state["quote"]:
+            state["quote"] = None
+            out.append(ch)
+        else:
+            out.append(" " if state["quote"] is not None and ch in SEPARATORS else ch)
+        i += 1
+    return "".join(out)
+
+
 def _unquote(command):
-    out, quote = [], None
-    for ch in command:
-        if quote is None and ch in "'\"":
-            quote = ch
-        elif ch == quote:
-            quote = None
-        elif quote is not None and ch in "|;&\n(":
-            ch = " "
-        out.append(ch)
+    """See unquote in audit.js."""
+    state = {"quote": None, "escaped": False, "heredocs": []}
+    lines = command.split("\n")
+    out = []
+    for k, line in enumerate(lines):
+        if state["heredocs"]:
+            out.append(re.sub(r"[|;&(]", " ", line))
+            word, tabs = state["heredocs"][0]
+            body = line.lstrip("\t") if tabs else line
+            if (body[:-1] if body.endswith("\r") else body) == word:
+                state["heredocs"].pop(0)
+        else:
+            out.append(_unquote_line(line, state))
+        if k < len(lines) - 1:
+            inside = bool(state["heredocs"]) or state["quote"] is not None or state["escaped"]
+            state["escaped"] = False
+            out.append(" " if inside else "\n")
     return "".join(out)
 
 
 def commit_message(command):
     """See commitMessage in audit.js."""
-    found = COMMIT.search(_unquote(command))
+    plain = _unquote(command)
+    found = COMMIT.search(plain)
     if found is None:
         return None
     at = found.start()
-    m = MESSAGE.search(command[at:])
+    end = re.search(r"[;&|\n]", plain[found.end():])
+    m = MESSAGE.search(command[at:found.end() + end.start()] if end else command[at:])
     if m is None:
         return None
-    message = _quoted(command, at + m.end(), m.group(1))
+    start = at + m.end()
+    if m.group(1) == '"' and command.startswith("$(cat <<", start):
+        lines = command[start:].split("\n")
+        first = lines[1] if len(lines) > 1 else ""
+        return first[:-1] if first.endswith("\r") else first
+    message = _quoted(command, start, m.group(1))
     if message is None:
         return None
-    lines = message.split("\n")
-    first = (lines[1] if len(lines) > 1 else "") if message.startswith("$(cat <<") else lines[0]
+    first = message.split("\n")[0]
     return first[:-1] if first.endswith("\r") else first
 
 
@@ -255,7 +310,7 @@ def run_audit(root, config):
     counted, days = set(), []
     for sid, files in found:
         calls = _tool_calls(files, counted)
-        days += [c["when"][:10] for c in calls if c["when"]]
+        days += [c["when"][:10] for c in calls if c["when"] and not c["copied"]]
         _tally_session(sid[:8], calls, tallies, research)
     days.sort(key=_code_units)
     logs = {"folder": folder, "sessions": len(found), "from": days[0] if days else None,
@@ -263,7 +318,9 @@ def run_audit(root, config):
     return {"logs": logs, "checks": list(tallies.values()), "skipped": skipped}
 
 
-def _tally_session(session, calls, tallies, research):
+def _tally_session(session, every, tallies, research):
+    """See tallySession in audit.js."""
+    calls = [c for c in every if not c["copied"]]
     for call in calls:
         for check, measure in PER_CALL.items():
             hit = measure(call, research) if check in tallies else None
@@ -271,6 +328,6 @@ def _tally_session(session, calls, tallies, research):
                 _count(tallies[check], hit[0], {"session": session, "when": call["when"], "text": hit[1]})
     edits = [c for c in calls if c["name"] in EDIT_TOOLS]
     if "task-tracking" in tallies and len(edits) >= EDITS_FOR_TASKS:
-        tracked = any(c["name"] in TASK_TOOLS for c in calls)
+        tracked = any(c["name"] in TASK_TOOLS for c in every)
         _count(tallies["task-tracking"], not tracked,
                {"session": session, "when": edits[0]["when"], "text": "%d edits, no task list" % len(edits)})

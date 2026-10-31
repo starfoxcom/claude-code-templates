@@ -35,6 +35,13 @@ const NEWER = [
   result("w5", [{ type: "text", text: "PreToolUse:Bash hook error: BLOCKED (no AI attribution): marker found" }]),
   bash("ci1", "gh run watch 12"),
   bash("ci2", "gh pr checks 3 --json name,bucket"),
+  // A heredoc body and an escaped quote are text, not commands; an escaped quote outside quotes is.
+  bash("h1", "cat > body.md <<'EOF'\ngh run watch 12\ngit commit -m \"wip\"\nEOF"),
+  bash("h2", "git commit -m \"$(cat <<'EOF'\ndocs: \"quote\" the thing\n\nEOF\n)\""),
+  bash("b1", 'echo "a \\"; gh run watch 1"'),
+  bash("b2", 'echo \\"; gh run watch 1'),
+  bash("g1", 'git commit -F msg.txt && git tag -a v1 -m "v1"'),
+  use("t2", "TaskCreate", { subject: "y" }), // copied from the older session by a fork
   use("r1", "mcp__tokensave__tokensave_search", { query: "x" }),
   use("r2", "Grep", { pattern: "foo", path: "src" }),
   use("r3", "Grep", { pattern: "x", glob: "*.md" }),
@@ -44,11 +51,18 @@ const OLDER = [
   "not json",
   '{"message": {"content": "plain text"}}',
   bash("ci1", "gh run watch 12"), // copied from the newer session by a fork: counted there only
-  use("t1", "TaskCreate", { subject: "x" }, "2026-10-28T08:00:00.000Z"),
+  use("t2", "TaskCreate", { subject: "y" }, "2026-10-28T08:00:00.000Z"),
+  use("r9", "mcp__tokensave__tokensave_context", { task: "x" }, "2026-10-28T08:05:00.000Z"),
+  // Lines Python's parser alone would refuse: nested too deep, or a number past 4,300 digits.
+  `{"message": {"content": [{"type": "tool_use", "id": "deep", "name": "Grep", "input": {"pattern": "d"}}]}, `
+    + `"x": ${"[".repeat(1100)}${"]".repeat(1100)}}`,
+  `{"message": {"content": [{"type": "tool_use", "id": "big", "name": "Grep", "input": {"pattern": "big"}}]}, `
+    + `"x": 1${"0".repeat(5000)}}`,
 ];
+const OLDEST = ["o1", "o2", "o3"].map((id) => use(id, "Edit", { file_path: id }));
 const AGENT = ["w2", "w3", "w4"].map((id) => use(id, "Write", { file_path: id }));
 
-function scene({ rules = RULES, logs = true } = {}) {
+function scene({ rules = RULES, logs = true, answers = { codeResearch: "tokensave" } } = {}) {
   const root = mkdtempSync(join(tmpdir(), "bw-audit-"));
   const repo = join(root, "repo");
   for (const rule of rules) {
@@ -56,13 +70,15 @@ function scene({ rules = RULES, logs = true } = {}) {
     writeFileSync(join(repo, rule), "# rule\n");
   }
   mkdirSync(join(repo, ".bindwright"), { recursive: true });
-  writeFileSync(join(repo, ".bindwright", "project.json"), JSON.stringify({ advanced: { codeResearch: "tokensave" } }));
+  writeFileSync(join(repo, ".bindwright", "project.json"), JSON.stringify({ advanced: answers }));
   const folder = join(root, "config", "projects", resolve(repo).replace(/[^A-Za-z0-9]/g, "-"));
   if (logs) {
     mkdirSync(join(folder, "older", "subagents"), { recursive: true });
     writeFileSync(join(folder, "newer.jsonl"), jsonl(NEWER));
     writeFileSync(join(folder, "older.jsonl"), jsonl(OLDER));
     writeFileSync(join(folder, "older", "subagents", "agent-1.jsonl"), jsonl(AGENT));
+    writeFileSync(join(folder, "oldest.jsonl"), jsonl(OLDEST));
+    utimesSync(join(folder, "oldest.jsonl"), new Date("2026-10-27"), new Date("2026-10-27"));
     utimesSync(join(folder, "older.jsonl"), new Date("2026-10-28"), new Date("2026-10-28"));
     utimesSync(join(folder, "newer.jsonl"), new Date("2026-10-30"), new Date("2026-10-30"));
   }
@@ -93,16 +109,18 @@ const counts = (c) => [c.seen, c.broken, c.examples.map((e) => e.text)];
 test("each check counts where its rule applied and where it broke", needsPython, () => {
   const out = audit();
   assert.equal(out.status, 0);
-  assert.equal(out.logs.sessions, 2);
+  assert.equal(out.logs.sessions, 3);
   assert.equal(out.logs.from, "2026-10-28");
   assert.equal(out.logs.to, "2026-10-30");
   const c = byId(out);
-  assert.deepEqual(counts(c["commit-format"]), [4, 1, ["Added stuff"]]);
+  assert.deepEqual(counts(c["commit-format"]), [5, 1, ["Added stuff"]]);
   const blocked = ["gh pr create --title x --body-file f", 'git -C repo commit -m "docs: c"'];
-  assert.deepEqual(counts(c.attribution), [5, 2, blocked]);
-  assert.deepEqual(counts(c["ci-watch"]), [2, 1, ["gh run watch 12"]]);
-  assert.deepEqual(counts(c["code-research"]), [2, 1, ["Grep foo"]]);
-  assert.deepEqual(counts(c["task-tracking"]), [2, 1, ["3 edits, no task list"]]);
+  assert.deepEqual(counts(c.attribution), [7, 2, blocked]);
+  assert.deepEqual(counts(c["ci-watch"]), [3, 2, ["gh run watch 12", 'echo \\"; gh run watch 1']]);
+  assert.deepEqual(counts(c["code-research"]), [4, 2, ["Grep foo", "Grep big"]]);
+  // Both sides of the fork made a task list; only the oldest session did not.
+  assert.deepEqual(counts(c["task-tracking"]), [3, 1, ["3 edits, no task list"]]);
+  assert.equal(c["task-tracking"].examples[0].session, "oldest");
   assert.deepEqual(c["commit-format"].examples[0], { session: "newer", when: "2026-10-30 09:15", text: "Added stuff" });
   assert.deepEqual(out.skipped, []);
 });
@@ -123,8 +141,17 @@ test("the commit message comes from -m, a heredoc, or not at all", () => {
     ["git commit -F msg.txt", null],
     ["echo git commit -m 'x'", null],
     ["git commit -m 'unclosed", null],
+    ['git commit -F msg.txt && git tag -a v1.3.0 -m "v1.3.0"', null],
+    ["git commit -m \"$(cat <<'EOF'\ndocs: \"quote\" the thing\n\nEOF\n)\"", 'docs: "quote" the thing'],
+    ['echo "x \\"; git commit -m y"', null],
   ];
   for (const [command, want] of cases) assert.equal(commitMessage(command), want, command);
+  if (!python) return;
+  const script = "import json, sys; sys.path.insert(0, sys.argv[1]); from audit import commit_message; "
+    + "print(json.dumps([commit_message(c) for c in json.load(sys.stdin)]), end='')";
+  const py = spawnSync(python, ["-I", "-c", script, engine], { input: JSON.stringify(cases.map(([c]) => c)),
+    encoding: "utf8" });
+  assert.deepEqual(JSON.parse(py.stdout), cases.map(([, want]) => want), py.stderr);
 });
 
 test("both engines spell a folder with a character past U+FFFF the way the CLI does", needsPython, () => {
@@ -155,5 +182,13 @@ test("a log folder name past 200 characters is found by its first 200", () => {
     assert.equal(logFolder(join(root, "other"), join(root, "config")), null);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a custom code-research tool with no URL skips that check in both engines", needsPython, () => {
+  for (const custom of [{ name: "foo" }, { name: "foo", url: 7 }]) {
+    const out = audit({ answers: { codeResearch: "custom", codeResearchCustom: custom } });
+    assert.equal(out.status, 0);
+    assert.ok(out.skipped.some((s) => s.id === "code-research"), JSON.stringify(out.skipped));
   }
 });
