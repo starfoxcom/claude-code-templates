@@ -218,7 +218,8 @@ def _research_pattern(root, config):
         answers = _read_layer_file(os.path.join(root, *ANSWERS.split("/")), ANSWERS)
         adv = answers.get("advanced") if isinstance(answers, dict) else None
         custom = adv.get("codeResearchCustom") if isinstance(adv, dict) else None
-        if not (isinstance(custom, dict) and isinstance(custom.get("name"), str) and isinstance(custom.get("url"), str)):
+        named = isinstance(custom, dict) and isinstance(custom.get("name"), str)
+        if not (named and isinstance(custom.get("url"), str)):
             return None
     return re.compile(_research_tool({"codeResearch": value, "codeResearchCustom": custom})["match"])
 
