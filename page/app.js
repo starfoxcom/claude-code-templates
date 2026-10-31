@@ -145,7 +145,7 @@ function render() {
   const ready = answered.size === questions.length;
   $("cmd-text").textContent = commandLine();
   $("command").hidden = !ready;
-  $("toggle").hidden = !ready;
+  $("switch").hidden = !ready;
   $("idle").hidden = answered.size > 0;
   $("done-line").textContent = plainAnswers();
   paintStage();
@@ -323,12 +323,17 @@ $("tree").addEventListener("click", (event) => {
   drawFile();
 });
 
-// The summary and the file tree take turns in the same panel.
+// The summary and the file tree take turns in the same panel. The summary is
+// only moved out of sight, so its cards keep their place and do not rise again.
 function setFilesView(open) {
+  const view = open ? "files" : "overview";
   $("files").hidden = !open;
-  $("groups").hidden = open;
-  $("toggle").setAttribute("aria-pressed", String(open));
-  $("toggle").textContent = open ? "Back to the summary" : `Show the ${files.length} files`;
+  $("groups").classList.toggle("away", open);
+  $("switch").dataset.view = view;
+  for (const opt of $("switch").querySelectorAll(".seg-opt")) {
+    opt.setAttribute("aria-pressed", String(opt.dataset.view === view));
+  }
+  $("files-opt").textContent = `Files · ${files.length}`;
 }
 
 // Dissolves the given summary items, from the last one up, then calls done once.
@@ -399,7 +404,10 @@ function reset() {
 for (const key of document.querySelectorAll(".k[data-q]")) {
   key.addEventListener("click", () => pick(key));
 }
-$("toggle").addEventListener("click", () => setFilesView($("files").hidden));
+$("switch").addEventListener("click", (event) => {
+  const opt = event.target.closest(".seg-opt");
+  if (opt) setFilesView(opt.dataset.view === "files");
+});
 $("back").addEventListener("click", goBack);
 $("edit").addEventListener("click", () => snap([...$("groups").children], reset));
 $("copy").addEventListener("click", copyCommand);

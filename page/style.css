@@ -110,15 +110,15 @@ h1 {
   font-weight: 700; font-stretch: 112%; letter-spacing: -0.02em; color: var(--text);
 }
 
-.rig { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 24px; }
-
 .panel {
   background: var(--panel); border-radius: 18px; padding: 22px;
   box-shadow: inset 0 1px 0 oklch(1 0 0 / .06);
 }
+.panel + .panel { margin-top: 24px; }
 .panel h2 { margin-bottom: 14px; font-size: 15px; font-weight: 600; color: var(--text-2); }
 .panel.out, .clip { box-shadow: inset 0 1px 0 oklch(1 0 0 / .06); }
-.panel.out { min-height: 420px; }
+.panel.out { position: relative; min-height: 420px; }
+.ask { max-width: 760px; margin: 0 auto; }
 .out-body { margin-top: 4px; }
 
 @keyframes rise { from { opacity: 0; transform: translateX(16px); } }
@@ -169,9 +169,28 @@ h1 {
 .k[aria-pressed="true"]::after { background: var(--on-accent); box-shadow: none; }
 .k[aria-pressed="true"] span { color: oklch(0.30 0.05 var(--hue)); }
 
-.out-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+.out-head {
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px;
+  margin-bottom: 14px;
+}
 .out-head h3 { font-size: 17px; font-weight: 600; }
 .tally { margin-left: 6px; font-weight: 400; color: var(--text-2); }
+.seg {
+  position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: none; padding: 3px; border-radius: 12px; background: var(--key);
+  box-shadow: inset 0 -2px 0 oklch(0 0 0 / .3);
+}
+.seg-pill {
+  position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 2);
+  border-radius: 9px; background: var(--accent); transition: transform 220ms ease;
+}
+.seg[data-view="files"] .seg-pill { transform: translateX(100%); }
+.seg-opt {
+  position: relative; min-height: 36px; padding: 0 14px; font: 600 14px/1 "Hubot Sans", sans-serif;
+  color: var(--text-2); white-space: nowrap; cursor: pointer;
+  background: none; border: 0; border-radius: 9px;
+}
+.seg-opt[aria-pressed="true"] { color: var(--on-accent); }
 .toggle {
   min-height: 32px; padding: 0 12px; font: 600 14px/1 "Hubot Sans", sans-serif; color: var(--text); cursor: pointer;
   background: var(--key); border: 0; border-radius: 12px; box-shadow: inset 0 -2px 0 oklch(0 0 0 / .3);
@@ -196,12 +215,17 @@ h1 {
 .idle {
   display: grid; place-items: center; min-height: 340px; text-align: center; color: var(--text-2);
 }
-.groups { display: grid; padding: 0; list-style: none; }
+.groups {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px;
+  padding: 0; list-style: none;
+}
+/* Switched out of view, the cards stay laid out, so they never rise again. */
+.groups.away { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
 @keyframes glow {
   from { background-color: color-mix(in oklch, var(--add) 28%, transparent); }
   to { background-color: transparent; }
 }
-.groups > li.added, .rules li.added { box-shadow: inset 3px 0 0 var(--add); padding-left: 12px; }
+.rules li.added { box-shadow: inset 3px 0 0 var(--add); padding-left: 12px; }
 .rules li.added { animation: glow 900ms ease-out; }
 @keyframes lift { from { opacity: 0; transform: translateY(10px); } }
 @keyframes dissolve {
@@ -220,8 +244,8 @@ h1 {
 .groups > li.removed > b, .groups > li.removed > p, .rules li.removed > b {
   color: var(--del); text-decoration: line-through;
 }
-.groups > li { padding: 14px 0; border-top: 1px solid var(--rule); }
-.groups > li > b { font-size: 16px; font-weight: 650; }
+.groups > li { padding: 20px; border-radius: 14px; background: var(--key); }
+.groups > li > b { font-size: 18px; font-weight: 700; }
 .groups > li > p { margin-top: 2px; font-size: 15px; color: var(--text-2); }
 .groups details { margin-top: 8px; }
 .groups summary { width: fit-content; font-size: 15px; font-weight: 600; cursor: pointer; }
@@ -277,7 +301,6 @@ footer {
   .hero { grid-template-columns: minmax(0, 1fr); gap: 32px; min-height: 0; padding-top: 16px; }
   .changes li { padding: 24px; }
   .changes, .setup { margin-top: 64px; }
-  .rig { grid-template-columns: minmax(0, 1fr); }
   .out-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: 220px 420px; height: auto; }
   .tree { border-right: 0; border-bottom: 1px solid var(--rule); }
   .panel.out { min-height: 240px; }
@@ -285,7 +308,7 @@ footer {
 }
 
 @media (max-width: 560px) {
-  .changes ul { grid-template-columns: minmax(0, 1fr); }
+  .changes ul, .groups { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {
