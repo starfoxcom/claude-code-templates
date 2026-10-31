@@ -5,7 +5,7 @@ paths:
 
 # Clean code
 
-A developer who just arrived opens any file and understands it at once, even with the comments stripped. Size limits live in `code-size.md` and dead code in `git.md`; this file covers the rest.
+A developer who just arrived opens any file and understands it at once, even with the comments stripped. Size limits live in `code-size.md` and dead code in `git.md`; this file covers the rest. Generated or vendored code is out of scope.
 
 ## The newcomer test
 
