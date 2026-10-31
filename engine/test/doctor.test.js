@@ -112,6 +112,41 @@ test("a plugin older than the repo, or no readable version, is named with its ow
   }
 });
 
+test("with the file tracker, a roadmap out of shape is named and a tidy one passes", needsPython, async () => {
+  const withRoadmap = (text) => doctor(({ at }) => {
+    const answers = JSON.parse(readFileSync(at(".bindwright/project.json"), "utf8"));
+    answers.advanced.tracker = "file";
+    writeFileSync(at(".bindwright/project.json"), JSON.stringify(answers));
+    if (text !== null) writeFileSync(at("ROADMAP.md"), text);
+  });
+  const roadmap = async (text) => (await withRoadmap(text)).checks.find((c) => c.id === "roadmap");
+  assert.equal((await roadmap(null)).ok, true);
+  const tidy = "# Roadmap\n\nNext id: R4\n\n"
+    + "## Now\n- R3 Checkout (branch feature/checkout)\n\n## Later\n- R1 Gift cards\n";
+  assert.equal((await roadmap(tidy)).ok, true);
+  const now = Array.from({ length: 6 }, (_, i) => `- R${i + 1} Item`).join("\n");
+  const messy = `Next id: R3\n\n## Now\n${now}\n\n## Next\n- Saved carts\n- R2 Twice\n`;
+  const bad = await roadmap(messy);
+  assert.equal(bad.ok, false);
+  assert.match(bad.say, /"- Saved carts" has no id; R2 is used twice; 6 items sit under Now/);
+  assert.match(bad.say, /Next id R3 is not above every id in use/);
+  // Mixed and CR-only line ends read as lines in both twins.
+  assert.equal((await roadmap("Next id: R8\r\r\n## Now\r- R1 A\r\n## Later\r- R2 B\r")).ok, true);
+  const crOnly = await roadmap("Next id: R2\r## Now\r- R2 A\r");
+  assert.match(crOnly.say, /Next id R2 is not above every id in use/);
+  const latin1 = await roadmap(Buffer.from("Next id: R2\n## Now\n- R1 Caf\xe9\n", "latin1"));
+  assert.equal(latin1.ok, false);
+  assert.match(latin1.say, /cannot be read/);
+  // Unusual spaces read alike in both twins: trim() and its Python twin, never regex space classes.
+  const shape = async (heading, item) => (await roadmap(`Next id: R2\n## Now${heading}\n${item}\n`)).ok;
+  assert.equal(await shape("\uFEFF", "- Saved carts"), false);
+  assert.equal(await shape("\u0085", "- Saved carts"), true);
+  assert.equal(await shape("\u2028", "- Saved carts"), false);
+  assert.equal(await shape("", "- R1 \uFEFFCheckout"), true);
+  const long = await roadmap("Next id: R10000000000000001\n## Now\n- R1 A\n");
+  assert.match(long.say, /the Next id line is missing/);
+});
+
 test("a staging folder that is a file is named, not a crash", needsPython, async () => {
   const report = await doctor(({ at }) => writeFileSync(at(STAGING.slice(0, -1)), "not a folder\n"));
   assert.deepEqual(failing(report), ["staged"]);
