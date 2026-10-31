@@ -2,11 +2,12 @@
 // and this machine. Each check says what it found and, when something is
 // wrong, the fix in plain words. Node only; doctor.py is the Python twin.
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ANSWERS, PRISTINE, STAGING } from "./bind.js";
 import { validate } from "./model.js";
 import { MODS, readLayerFile, runSettings } from "./layers.js";
+import { decode } from "./update.js";
 
 // What to do about each finding, in plain words.
 const FIX = {
@@ -21,6 +22,8 @@ const FIX = {
   cli: "Update the CLI. In Claude Desktop, update the app: it ships its own copy of the CLI.",
   staged: "Run /bindwright:update, which walks through each one, or delete the ones you do not want.",
   unreadable: "Fix or remove the file it names.",
+  roadmap: "Fix those lines: each item is one line that starts with its id (R4), at most five sit under Now, "
+    + "and the Next id line is above every id in use.",
 };
 
 // The first CLI with mods; older ones load none of them.
@@ -156,6 +159,49 @@ function stagedCheck(root) {
     : check("staged", true, "No staged files are waiting.");
 }
 
+// What breaks the ROADMAP.md shape /session-close keeps: items are one line
+// that starts with an unused id, at most five sit under Now, and the Next id
+// is above every id in use. A missing file is fine; the next close writes it.
+export function roadmapProblems(text) {
+  const problems = [];
+  const ids = new Set();
+  let section = null;
+  let now = 0;
+  let next = null;
+  // Plain string tests and trim(), never \s, \S or ".": those classes differ
+  // between the twins. Ids stop at nine digits so both compare exact numbers.
+  for (const line of text.split(/\r\n|\r|\n/)) {
+    if (line.startsWith("## ")) section = line.slice(3).trim();
+    const counter = /^Next id: R([0-9]{1,9}) *$/.exec(line);
+    if (counter) next = Number(counter[1]);
+    if (!line.startsWith("- ") || !["Now", "Next", "Later"].includes(section)) continue;
+    const found = /^- R([0-9]{1,9}) /.exec(line);
+    const item = found && line.slice(found[0].length).trim() ? found : null;
+    if (!item) problems.push(`"${Array.from(line).slice(0, 60).join("")}" has no id`);
+    else if (ids.has(item[1])) problems.push(`R${item[1]} is used twice`);
+    else ids.add(item[1]);
+    if (section === "Now") now++;
+  }
+  if (now > 5) problems.push(`${now} items sit under Now, more than five`);
+  if (next === null) problems.push("the Next id line is missing");
+  else if ([...ids].some((id) => Number(id) >= next)) problems.push(`Next id R${next} is not above every id in use`);
+  return problems;
+}
+
+function roadmapCheck(root) {
+  const file = join(root, "ROADMAP.md");
+  if (!existsSync(file)) return check("roadmap", true, "No ROADMAP.md yet; the next /session-close writes it.");
+  let problems;
+  try {
+    problems = roadmapProblems(decode(readFileSync(file), "ROADMAP.md"));
+  } catch {
+    return check("roadmap", false, "ROADMAP.md cannot be read.", FIX.unreadable);
+  }
+  return problems.length
+    ? check("roadmap", false, `ROADMAP.md is out of shape: ${problems.join("; ")}.`, FIX.roadmap)
+    : check("roadmap", true, "ROADMAP.md is in shape.");
+}
+
 // Every check for the repo at `root` and the config folder `config`.
 // `pluginVersion` is "x.y.z"; `cliVersion` [major, minor, patch] or null.
 export function runDoctor(root, config, { pluginVersion, cliVersion }) {
@@ -164,6 +210,7 @@ export function runDoctor(root, config, { pluginVersion, cliVersion }) {
   if (state.answers) {
     checks.push(versionCheck(state.pristine, pluginVersion), guardCheck(root, state.answers, state.pristine));
     checks.push(stagedCheck(root));
+    if (state.answers.advanced.tracker === "file") checks.push(roadmapCheck(root));
     const settings = settingsChecks(root, config);
     checks.push(...settings.checks, cliCheck(settings.installed, cliVersion));
   }
