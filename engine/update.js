@@ -113,7 +113,7 @@ export function gitMerge(ours, base, theirs) {
 // that is not UTF-8 stops the update instead of being written back damaged.
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-function decode(bytes, what) {
+export function decode(bytes, what) {
   try {
     return utf8.decode(bytes);
   } catch {

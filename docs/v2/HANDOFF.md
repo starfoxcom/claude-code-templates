@@ -66,6 +66,16 @@ Bindwright settings sit in three layers, the same way Claude Code's own settings
 | Project | `.bindwright/project.json`, committed | The team's setup: tracker profile and ids, branch names, review gate settings, chosen rules and switches, extras the project requires or recommends | Yes, through git |
 | Personal, this project | `.bindwright/local.json`, git-ignored | One person's overrides for this project | No |
 
+### The settings format
+
+Built 2026-10-31 under #419 (`engine/layers.js` and its Python twin; `--settings DIR` prints the result).
+
+- **What a layer holds.** `codeResearch` (a tool the engine knows; `custom` only from the project, whose answers define it), `tracker` (`github` or `file`) and `extras`: one entry per `~/.claude` extra setup offers (each mod, `push-guard`, `attribution-guard`). A personal layer says `true` (I want it) or `false` (I decline it) per extra; the project rates one `required` or `recommended`. Personal files carry `"schema": 1`.
+- **The project layer** is `.bindwright/project.json` itself: `codeResearch` and `tracker` come from its `advanced` answers, and a `setup` object, written by `/bindwright:export`, adds `extras` ratings and `required`, the settings no personal layer may change.
+- **Resolving.** Per setting, the project's value when it requires one, else the highest layer that sets it (local, then project, then personal). Per extra: `required` means wanted; otherwise local, then personal, decides; with neither, it stays undecided for `/bindwright:join` to ask. A personal value the project's requirement overrides is listed, not applied.
+- **Data only.** Unknown keys and bad values are listed in `ignored` and never applied. A file with a newer schema number stops with "written by a newer Bindwright". Files are strict UTF-8 JSON nested at most 64 deep, the setup code's limit, so both engines read every file alike.
+- **Drift** is every extra the project rates that this machine lacks (`~/.claude/mods/<name>/`, or the guard's file under `~/.claude/hooks/`) and that nobody declined.
+
 `.bindwright/project.json` is the "saved answers" that Phase 2b already plans for `.bindwright/`, so nothing new is added to the repo layout. Beside it, `.bindwright/session-steps.md` holds the project's own session steps in two sections, `## Extra start steps` and `## Extra close steps`, which the global session skills run at fixed points: a board checker, a sweep of scheduled-failure issues, a visual gate, analyzer runs. The session skills read both files directly, so they work before the plugin exists and nothing moves when it lands.
 
 ## Sharing a setup with the team

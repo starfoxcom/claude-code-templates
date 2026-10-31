@@ -9,6 +9,7 @@
 #   python engine/bind.py --code bw1-... --write DIR     -> {"written": [...], "staged": [...], "skipped": [...]}
 #   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
 #   python engine/bind.py --update DIR                   -> the saved answers rebound and merged (update.py)
+#   python engine/bind.py --settings DIR                 -> the settings layers resolved for that repo (layers.py)
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
 import json
@@ -25,6 +26,7 @@ from render import render_template, fill_placeholders
 from setupcode import decode_setup_code, SetupCodeError
 from apply import apply_files, ApplyError
 from update import run_update
+from layers import run_settings
 
 CORE = "_core/project-template/"
 
@@ -274,6 +276,16 @@ def _update(argv, read_file, core_files):
         return {"error": str(e)}
 
 
+def _settings(argv):
+    """The settings layers of the repo at --settings DIR, for this machine's config folder."""
+    try:
+        folder = _option(argv, "--settings")
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        return run_settings(folder, config)
+    except Exception as e:  # every failure is reported, as the JS engine throws it
+        return {"error": str(e)}
+
+
 def _main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cache = {}
@@ -300,6 +312,8 @@ def _main(argv):
         result = [run(j["answers"], j.get("year"), j.get("version")) for j in _stdin_json()]
     elif "--update" in argv:
         result = _update(argv, read_file, core_files)
+    elif "--settings" in argv:
+        result = _settings(argv)
     else:
         result = _single(argv, run)
     # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.

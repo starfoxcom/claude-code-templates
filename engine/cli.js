@@ -5,15 +5,18 @@
 //   node engine/cli.js --code bw1-... --write DIR    -> {"written": [...], "staged": [...], "skipped": [...]}
 //   ... --write DIR --adopt                          -> the same, with every file outside .bindwright/ staged
 //   node engine/cli.js --update DIR                  -> the saved answers rebound and merged (update.js)
+//   node engine/cli.js --settings DIR                -> the settings layers resolved for that repo (layers.js)
 // A failure gives {"error": message} and exit status 1.
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind } from "./bind.js";
 import { decodeSetupCode } from "./setupcode.js";
 import { applyFiles } from "./apply.js";
 import { runUpdate } from "./update.js";
+import { runSettings } from "./layers.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,8 +29,10 @@ function option(argv, name) {
 }
 
 async function run(argv) {
-  const [code, year, folder, update] = ["--code", "--year", "--write", "--update"].map((n) => option(argv, n));
+  const flags = ["--code", "--year", "--write", "--update", "--settings"];
+  const [code, year, folder, update, settings] = flags.map((n) => option(argv, n));
   if (update !== undefined) return updateRepo(update);
+  if (settings !== undefined) return runSettings(settings, process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
   const adopt = argv.includes("--adopt");
   if (adopt && folder === undefined) throw new Error("--adopt needs --write");
   if (year !== undefined && !/^[0-9]+$/.test(year)) throw new Error("--year needs a whole number");
