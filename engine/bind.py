@@ -10,6 +10,7 @@
 #   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
 #   python engine/bind.py --update DIR                   -> the saved answers rebound and merged (update.py)
 #   python engine/bind.py --settings DIR                 -> the settings layers resolved for that repo (layers.py)
+#   python engine/bind.py --audit DIR                    -> how its rules held up in recent sessions (audit.py)
 #   python engine/bind.py --export DIR < choices.json    -> the project's setup object written (share.py)
 #   python engine/bind.py --remember DIR --layer L < choices.json -> one person's choices written to layer L
 #   python engine/bind.py --doctor DIR                   -> a health check of that repo and this machine (doctor.py)
@@ -30,6 +31,7 @@ from setupcode import decode_setup_code, SetupCodeError, MAX_DEPTH, _depth, _not
 from apply import apply_files, ApplyError
 from update import run_update
 from layers import run_settings
+from audit import run_audit
 from share import export_setup, remember_choices
 from doctor import cli_version_from, run_doctor
 from report import draft_report
@@ -297,7 +299,7 @@ def _choices_from_stdin():
 
 
 def _settings(argv):
-    """--settings, --export and --remember: the settings layers of a repo, for this machine's config folder."""
+    """--settings, --export, --remember and --audit: the settings layers of a repo, for this machine's config folder."""
     try:
         config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
         if "--export" in argv:
@@ -307,6 +309,8 @@ def _settings(argv):
             if layer is None:
                 raise ValueError("--remember needs --layer personal or local")
             return remember_choices(folder, config, layer, _choices_from_stdin(), _state_json)
+        if "--audit" in argv:
+            return run_audit(_option(argv, "--audit"), config)
         return run_settings(_option(argv, "--settings"), config)
     except Exception as e:  # every failure is reported, as the JS engine throws it
         return {"error": str(e)}
@@ -365,7 +369,7 @@ def _main(argv):
         result = [run(j["answers"], j.get("year"), j.get("version")) for j in _stdin_json()]
     elif "--update" in argv:
         result = _update(argv, read_file, core_files)
-    elif "--settings" in argv or "--export" in argv or "--remember" in argv:
+    elif any(f in argv for f in ("--settings", "--export", "--remember", "--audit")):
         result = _settings(argv)
     elif "--doctor" in argv:
         result = _doctor(argv, read_file)
