@@ -31,6 +31,11 @@ SETTINGS = {
 }
 
 
+def _personal_only_bad(key, value):
+    # The custom tool needs the name and URL only the project's answers carry.
+    return key == "codeResearch" and value == "custom"
+
+
 def _sorted_keys(obj):
     return sorted(obj, key=_code_units)
 
@@ -75,7 +80,7 @@ def _read_personal(raw, name, file):
             continue
         if key == "extras":
             layer["extras"] = _read_extras(value, name, lambda v: isinstance(v, bool), layer["ignored"])
-        elif key in SETTINGS and SETTINGS[key](value):
+        elif key in SETTINGS and SETTINGS[key](value) and not _personal_only_bad(key, value):
             layer["settings"][key] = value
         else:
             layer["ignored"].append("%s: %s" % (name, key))

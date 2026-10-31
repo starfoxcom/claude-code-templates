@@ -36,6 +36,10 @@ export const SETTINGS = {
   tracker: (v) => typeof v === "string" && TRACKERS.includes(v),
 };
 
+// The custom tool needs the name and URL only the project's answers carry,
+// so a personal layer cannot pick it.
+const personalOnlyBad = (key, value) => key === "codeResearch" && value === "custom";
+
 // Refuses a file from a newer Bindwright, or one whose version is not a whole number.
 function checkSchema(schema, file) {
   if (schema === undefined) return;
@@ -68,7 +72,7 @@ function readPersonal(raw, name, file) {
     const value = raw[key];
     if (key === "schema") continue;
     if (key === "extras") layer.extras = readExtras(value, name, (v) => typeof v === "boolean", layer.ignored);
-    else if (own(SETTINGS, key) && SETTINGS[key](value)) layer.settings[key] = value;
+    else if (own(SETTINGS, key) && SETTINGS[key](value) && !personalOnlyBad(key, value)) layer.settings[key] = value;
     else layer.ignored.push(`${name}: ${key}`);
   }
   return layer;
