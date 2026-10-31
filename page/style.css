@@ -82,8 +82,6 @@ h1 {
 }
 .go:active { transform: translateY(2px); box-shadow: inset 0 -1px 0 var(--accent-deep); }
 
-.more { font-size: 16px; color: var(--text-2); text-underline-offset: 4px; }
-.more:hover { color: var(--text); }
 
 .clip { margin: 0; aspect-ratio: 16 / 11; display: grid; place-items: center; text-align: center; }
 
