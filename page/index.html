@@ -63,7 +63,7 @@
           <div class="q" role="group" aria-labelledby="q-team">
             <h3 id="q-team" tabindex="-1">Who works on the project?</h3>
             <div class="keys">
-              <button class="k" type="button" data-q="team" data-v="false" aria-pressed="true">
+              <button class="k" type="button" data-q="team" data-v="false" aria-pressed="false">
                 <b>Just me</b><span>One person, one machine</span></button>
               <button class="k" type="button" data-q="team" data-v="true" aria-pressed="false">
                 <b>A team</b><span>Shared branches and reviews</span></button>
@@ -72,7 +72,7 @@
           <div class="q" role="group" aria-labelledby="q-client">
             <h3 id="q-client" tabindex="-1">Whose project is it?</h3>
             <div class="keys">
-              <button class="k" type="button" data-q="client" data-v="false" aria-pressed="true">
+              <button class="k" type="button" data-q="client" data-v="false" aria-pressed="false">
                 <b>Mine</b><span>Open source or my own product</span></button>
               <button class="k" type="button" data-q="client" data-v="true" aria-pressed="false">
                 <b>A client's</b><span>Private code, kept confidential</span></button>
@@ -89,9 +89,10 @@
       <div class="panel out" aria-labelledby="out-title">
         <div class="out-head">
           <h3 id="out-title">What you get<span class="tally" id="tally"></span></h3>
-          <button class="toggle" id="toggle" type="button" aria-pressed="false" aria-controls="files">Show the files</button>
+          <button class="toggle" id="toggle" type="button" aria-pressed="false" aria-controls="files" hidden>Show the files</button>
         </div>
         <p class="changed" id="changed" hidden></p>
+        <p class="idle" id="idle">Your setup builds here as you answer.</p>
         <ul class="groups" id="groups"></ul>
         <div class="out-body" id="files" hidden>
           <nav class="tree" id="tree" aria-label="Files"></nav>
@@ -102,7 +103,7 @@
         </div>
       </div>
     </div>
-    <div class="command" id="command">
+    <div class="command" id="command" hidden>
       <code class="cmd" id="cmd-text"></code>
       <button class="toggle" id="copy" type="button">Copy</button>
     </div>

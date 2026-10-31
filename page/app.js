@@ -11,25 +11,48 @@ const hueFor = (team, client) => HUES[`${team},${client}`];
 const $ = (id) => document.getElementById(id);
 const questions = [...document.querySelectorAll(".q")];
 const ADVANCE_MS = 350;
+const RISE_STEP_MS = 90;
+const DISSOLVE_STEP_MS = 70;
+const DISSOLVE_MS = 700;
+const TALLY_MS = 500;
 const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const mix = (from, to, t) => Math.round(from + (to - from) * t);
+const ruleCount = (groups) => groups.reduce((sum, group) => sum + (group.rules?.length ?? 0), 0);
 
 let answers = defaults();
+// The questions the reader has picked an answer for.
+const answered = new Set();
 let files = [];
 let selected = "CLAUDE.md";
 let latest = 0;
 // The summary on screen, and the name of the key that last changed it.
-let shown = null;
+let shown = [];
 let choice = null;
 let fileChange = null;
+// The tally on screen, counting toward the summary's numbers.
+let tally = { parts: 0, rules: 0 };
+let tallyFrame = 0;
+// Set while the summary dissolves before the page starts over.
+let dissolving = false;
+let snapTimer = 0;
+// The group ids on screen just before each question's answer was picked.
+const snapshots = new Map();
 // The setup step on screen: a question's index, or questions.length for Done.
 let step = 0;
 let copyTimer = 0;
 
 function choose(question, value, label) {
-  if (answers[question] === value) return;
-  choice = label;
+  if (dissolving) return;
+  if (!answered.has(question) || answers[question] !== value) {
+    snapshots.set(question, new Set(shown.map((group) => group.id)));
+  }
+  answered.add(question);
+  const same = answers[question] === value;
+  // Picking the answer already set changes nothing, so no change is named.
+  choice = same ? null : label;
   // A new setup starts from that setup's defaults, as setup itself does.
-  answers = defaults({ ...answers, [question]: value });
+  if (!same) answers = defaults({ ...answers, [question]: value });
   render();
 }
 
@@ -113,12 +136,17 @@ function render() {
   for (const key of document.querySelectorAll(".k[data-q]")) {
     const value = key.dataset.v === "true";
     const question = key.dataset.q;
-    key.setAttribute("aria-pressed", String(answers[question] === value));
+    const picked = answered.has(question) && answers[question] === value;
+    key.setAttribute("aria-pressed", String(picked));
     // The key's light shows the setup that pressing it would give.
     const next = { team, client, [question]: value };
     key.style.setProperty("--h", hueFor(next.team, next.client));
   }
+  const ready = answered.size === questions.length;
   $("cmd-text").textContent = commandLine();
+  $("command").hidden = !ready;
+  $("toggle").hidden = !ready;
+  $("idle").hidden = answered.size > 0;
   $("done-line").textContent = plainAnswers();
   paintStage();
   refresh();
@@ -158,42 +186,79 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-// The summary, with what the last answer change added (green) and removed
-// (struck through, red) marked until the next change.
+// The summary. Groups the change adds rise in list order; groups it removes
+// dissolve as they leave. Unchanged groups are drawn again without motion.
 function drawGroups() {
-  const next = summarize(files);
-  const change = shown && choice ? compare(shown, next) : null;
+  const before = shown;
+  const next = answered.size ? summarize(files) : [];
+  const change = compare(before, next);
   shown = next;
+  let risen = 0;
   const items = next.map((group) => {
-    const item = el("li", {}, el("b", { textContent: group.title }), el("p", { textContent: group.say }));
-    if (change?.addedGroups.has(group.id)) item.className = "added";
-    if (group.rules) item.append(rulesList(group.rules, change));
+    const added = change.addedGroups.has(group.id);
+    const item = el("li", {},
+      el("b", { textContent: group.title }), el("p", { textContent: group.say }));
+    item.dataset.id = group.id;
+    if (added) {
+      item.className = "added enter";
+      item.style.animationDelay = `${risen++ * RISE_STEP_MS}ms`;
+    }
+    if (group.rules) item.append(rulesList(group.rules, change, added));
     return item;
   });
-  for (const gone of change?.removedGroups ?? []) {
-    const title = el("b", { textContent: gone.title });
-    items.push(el("li", { className: "removed" }, title, el("p", { textContent: gone.say })));
-  }
+  items.push(...departing(change.removedGroups));
   $("groups").replaceChildren(...items);
-  $("changed").textContent = change ? changeNote(change) : "";
-  $("changed").hidden = !change;
-  paintTally(next);
-  $("toggle").textContent = $("files").hidden ? `Show the ${files.length} files` : "Back to the summary";
+  // The first summary has nothing to compare with, so it names no change.
+  const note = choice && before.length ? changeNote(change) : "";
+  $("changed").textContent = note;
+  $("changed").hidden = !note;
+  countTally(next);
+  setFilesView(!$("files").hidden);
 }
 
-// "· 6 parts, 23 rules" after the heading, counted from the summary on screen.
-function paintTally(groups) {
-  const rules = groups.reduce((sum, group) => sum + (group.rules?.length ?? 0), 0);
-  $("tally").textContent = `· ${count(groups.length, "part")}, ${count(rules, "rule")}`;
+// Groups the last change removed, struck through, then gone once they dissolve.
+function departing(gone) {
+  if (still()) return [];
+  return gone.map((group, i) => {
+    const item = el("li", { className: "removed leaving" },
+      el("b", { textContent: group.title }), el("p", { textContent: group.say }));
+    item.style.animationDelay = `${i * DISSOLVE_STEP_MS}ms`;
+    item.addEventListener("animationend", () => item.remove(), { once: true });
+    return item;
+  });
 }
 
-function rulesList(rules, change) {
-  const rows = rules.map(([name, line]) => el("li", { className: change?.addedRules.has(name) ? "added" : "" },
+// The tally counts from its old numbers to the new ones over TALLY_MS.
+function countTally(groups) {
+  const to = { parts: groups.length, rules: ruleCount(groups) };
+  const from = tally;
+  const start = performance.now();
+  cancelAnimationFrame(tallyFrame);
+  const frame = (now) => {
+    const t = still() ? 1 : Math.min(Math.max(now - start, 0) / TALLY_MS, 1);
+    tally = { parts: mix(from.parts, to.parts, t), rules: mix(from.rules, to.rules, t) };
+    paintTally();
+    if (t < 1) tallyFrame = requestAnimationFrame(frame);
+  };
+  frame(start);
+}
+
+// "· 6 parts, 23 rules" after the heading; empty until the first answer.
+function paintTally() {
+  const { parts, rules } = tally;
+  const text = `· ${count(parts, "part")}, ${count(rules, "rule")}`;
+  $("tally").textContent = answered.size ? text : "";
+}
+
+// A group the change added is marked New, and its rules are not marked again.
+function rulesList(rules, change, entering) {
+  const isNew = (name) => !entering && change.addedRules.has(name);
+  const rows = rules.map(([name, line]) => el("li", { className: isNew(name) ? "added" : "" },
     el("b", { textContent: name }), ` ${line}`));
-  for (const name of change?.removedRules ?? []) {
+  for (const name of change.removedRules) {
     rows.push(el("li", { className: "removed" }, el("b", { textContent: name })));
   }
-  const changed = change && (change.addedRules.size || change.removedRules.length);
+  const changed = !entering && (change.addedRules.size || change.removedRules.length);
   return el("details", { open: Boolean(changed) },
     el("summary", { textContent: `See the ${rules.length} rules` }), el("ul", { className: "rules" }, ...rows));
 }
@@ -259,19 +324,84 @@ $("tree").addEventListener("click", (event) => {
 });
 
 // The summary and the file tree take turns in the same panel.
-$("toggle").addEventListener("click", () => {
-  const showFiles = $("files").hidden;
-  $("files").hidden = !showFiles;
-  $("groups").hidden = showFiles;
-  $("toggle").setAttribute("aria-pressed", String(showFiles));
-  $("toggle").textContent = showFiles ? "Back to the summary" : `Show the ${files.length} files`;
-});
+function setFilesView(open) {
+  $("files").hidden = !open;
+  $("groups").hidden = open;
+  $("toggle").setAttribute("aria-pressed", String(open));
+  $("toggle").textContent = open ? "Back to the summary" : `Show the ${files.length} files`;
+}
+
+// Dissolves the given summary items, from the last one up, then calls done once.
+function snap(items, done) {
+  if (dissolving) return;
+  dissolving = true;
+  const finish = () => {
+    if (!dissolving) return;
+    clearTimeout(snapTimer);
+    dissolving = false;
+    done();
+  };
+  if (still() || items.length === 0) {
+    finish();
+    return;
+  }
+  items.forEach((item, i) => {
+    item.classList.add("leaving");
+    item.style.animationDelay = `${(items.length - 1 - i) * DISSOLVE_STEP_MS}ms`;
+  });
+  // The first item starts last, so it ends last; the timer covers a missed event.
+  const last = items[0];
+  last.addEventListener("animationend", (event) => { if (event.target === last) finish(); });
+  snapTimer = setTimeout(finish, (items.length - 1) * DISSOLVE_STEP_MS + DISSOLVE_MS + 100);
+}
+
+// Back returns one step. The question it returns to is un-answered: the groups
+// that answer added dissolve, and the groups it removed come back with the rise.
+function goBack() {
+  if (step === 0 || dissolving) return;
+  const to = step - 1;
+  show(to);
+  const question = questions[to].querySelector("[data-q]").dataset.q;
+  if (!answered.has(question)) return;
+  const before = snapshots.get(question) ?? new Set();
+  const added = [...$("groups").children]
+    .filter((item) => item.dataset.id && !before.has(item.dataset.id));
+  snap(added, () => unanswer(to, before));
+}
+
+// Drops the answers from a question index on, so the summary falls back to what came before.
+function unanswer(index, before) {
+  const base = defaults();
+  for (const node of questions.slice(index)) {
+    const key = node.querySelector("[data-q]").dataset.q;
+    answered.delete(key);
+    answers = defaults({ ...answers, [key]: base[key] });
+  }
+  choice = null;
+  shown = shown.filter((group) => before.has(group.id));
+  render();
+}
+
+// Back to the empty start: no answers picked, question 1, files closed, default hue.
+function reset() {
+  answers = defaults();
+  answered.clear();
+  snapshots.clear();
+  choice = null;
+  shown = [];
+  fileChange = null;
+  selected = "CLAUDE.md";
+  setFilesView(false);
+  show(0);
+  render();
+}
 
 for (const key of document.querySelectorAll(".k[data-q]")) {
   key.addEventListener("click", () => pick(key));
 }
-$("back").addEventListener("click", () => show(Math.max(0, step - 1)));
-$("edit").addEventListener("click", () => show(0));
+$("toggle").addEventListener("click", () => setFilesView($("files").hidden));
+$("back").addEventListener("click", goBack);
+$("edit").addEventListener("click", () => snap([...$("groups").children], reset));
 $("copy").addEventListener("click", copyCommand);
 document.addEventListener("keydown", pickByDigit);
 buildSteps();

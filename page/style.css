@@ -193,13 +193,25 @@ h1 {
   margin-bottom: 10px; padding: 10px 14px; border-radius: 12px;
   background: var(--key); font-size: 15px; font-weight: 600;
 }
+.idle {
+  display: grid; place-items: center; min-height: 340px; text-align: center; color: var(--text-2);
+}
 .groups { display: grid; padding: 0; list-style: none; }
 @keyframes glow {
   from { background-color: color-mix(in oklch, var(--add) 28%, transparent); }
   to { background-color: transparent; }
 }
 .groups > li.added, .rules li.added { box-shadow: inset 3px 0 0 var(--add); padding-left: 12px; }
-.groups > li.added, .rules li.added { animation: glow 900ms ease-out; }
+.rules li.added { animation: glow 900ms ease-out; }
+@keyframes lift { from { opacity: 0; transform: translateY(10px); } }
+@keyframes dissolve {
+  to {
+    opacity: 0; filter: blur(6px); letter-spacing: 0.15em;
+    transform: translate(28px, -14px) rotate(2deg);
+  }
+}
+.groups > li.enter { animation: lift 420ms ease both; }
+.groups > li.leaving { animation: dissolve 700ms ease-in both; }
 .groups > li.added > b::after, .rules li.added > b::after {
   content: "New"; margin-left: 8px; padding: 1px 7px; border-radius: 12px;
   font-size: 13px; font-weight: 600; color: var(--canvas); background: var(--add);
@@ -279,5 +291,5 @@ footer {
 @media (prefers-reduced-motion: reduce) {
   :root { transition: none; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
-  .q, .done, .added { animation: none; }
+  .q, .done, .enter, .leaving { animation: none; }
 }
