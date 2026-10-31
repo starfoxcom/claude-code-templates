@@ -1,0 +1,17 @@
+{
+  "description": "Once a day, says when this repo's Bindwright files or the plugin itself are behind",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${CLAUDE_PLUGIN_ROOT}/hooks/notice.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
