@@ -72,7 +72,7 @@ Commit and PR format, `--body-file`, merge style and branch cleanup are in `git.
 <!-- TOGGLE:tracker:github START -->
 ## Hand-off in the tracker
 
-After the commit and PR, so the state records how they ended. For each issue this session worked on, rewrite its `### Current state` per `.claude/rules/tracker.md`: where the work stands, decisions made and why, what the next session should do first. Work without an issue gets one now, a branch with no PR included. Rules and conventions stay in `.claude/rules/`; session figures (the code-research count, context use) stay in the chat.
+After the commit and PR, so the state records how they ended. For each issue this session worked on, rewrite its `### Current state` per `.claude/rules/tracker.md`: where the work stands, decisions made and why, what the next session should do first. Work without an issue gets one now with the "New item" command, a branch with no PR included. Rules and conventions stay in `.claude/rules/`; session figures (the code-research count, context use) stay in the chat.
 
 Then check the three status-update triggers in `tracker.md` and post an update only when one fired.
 

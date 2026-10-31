@@ -10,7 +10,8 @@ Planning only. Change no files and create no branches in this turn.
 ## 1. Read
 
 <!-- TOGGLE:tracker:github START -->
-- The tracker, with the commands in `.claude/rules/tracker.md`: my open items in board order (in progress first, then the next in queue, and items on hold apart with what each waits on), and the newest project status update. An item's `### Current state` is the last session's hand-off; it outranks anything re-derived from git.
+- The tracker, with the commands in `.claude/rules/tracker.md`: the open items (in progress first, then the next in queue, and items on hold apart with what each waits on), and the newest project status update. An item's `### Current state` is the last session's hand-off; it outranks anything re-derived from git.
+- `.bindwright/pending-tracker.md`, if it exists: writes an offline close could not post (`tracker.md`). Read them as part of the hand-off, post them once the plan is approved, then delete the file.
 - Ask of that status update: is its colour still true, given the board and what this session finds? If not, the colour has changed: say so in the report, and post the new update once the plan is approved.
 <!-- TOGGLE:tracker:github END -->
 <!-- TOGGLE:tracker:file START -->

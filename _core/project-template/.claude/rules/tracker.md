@@ -40,11 +40,11 @@ Board commands need the `project` scope: `gh auth refresh -s project` adds it. W
 
 | Job | With a board | Without one |
 |---|---|---|
-| Open items in board order | `gh project item-list <number> --owner <owner> --format json --limit 200` and skip items whose `status` is `Done` | `gh issue list --state open --assignee @me` |
-| Read an item | `gh issue view <n> --json title,body,labels` | Same |
+| Open items | `gh project item-list <number> --owner <owner> --format json --limit 200`, in board order; skip items whose `status` is `Done`, those whose `content.type` is not `Issue` (pull requests, drafts), and issues the read below shows closed | `gh issue list --state open --assignee @me` |
+| Read an item | `gh issue view <n> --json title,state,body,labels` | Same |
 | Update its state | `gh issue edit <n> --body-file <file>` | Same |
-| New item | `gh issue create --title <title> --body-file <file>`, then `gh project item-add <number> --owner <owner> --url <issue url>` | `gh issue create` alone |
-| Newest status update | `gh api graphql -f query='query($o:String!,$n:Int!){repositoryOwner(login:$o){... on ProjectV2Owner{projectV2(number:$n){id statusUpdates(last:1){nodes{createdAt status body}}}}}}' -f o=<owner> -F n=<number>` | The newest comment on the pinned `Project status` issue |
+| New item | `gh issue create --assignee @me --title <title> --body-file <file>`, then `gh project item-add <number> --owner <owner> --url <issue url>` | The same `gh issue create`; the `--assignee @me` is what lets the open-items list find it |
+| Newest status update | `gh api graphql -f query='query($o:String!,$n:Int!){repositoryOwner(login:$o){... on ProjectV2Owner{projectV2(number:$n){id statusUpdates(first:1,orderBy:{field:CREATED_AT,direction:DESC}){nodes{createdAt status body}}}}}}' -f o=<owner> -F n=<number>`; the order must be explicit, since `last:1` without it returns the oldest | The newest comment on the pinned `Project status` issue |
 | Post a status update | The query above gives the board's `id`; then `gh api graphql -f query='mutation($p:ID!,$s:ProjectV2StatusUpdateStatus!,$b:String!){createProjectV2StatusUpdate(input:{projectId:$p,status:$s,body:$b}){statusUpdate{id}}}' -f p=<id> -f s=<ON_TRACK, AT_RISK, OFF_TRACK or COMPLETE> -F b=@<file>` | `gh issue comment <status issue> --body-file <file>`; create and pin the issue (`gh issue pin`) the first time |
 
-Offline or signed out, say the tracker cannot be read, plan from git alone, and keep what would have been written in the chat summary for the next session to post.
+Offline or signed out, say the tracker cannot be read and plan from git alone. At close, write what could not be posted (each issue's new current state, any status update) to `.bindwright/pending-tracker.md` and leave it out of every commit; the next `/session-start` posts it once the tracker answers, then deletes the file.

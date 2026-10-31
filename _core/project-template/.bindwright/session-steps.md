@@ -8,4 +8,4 @@ Run after the git checks, before the report.
 
 ## Extra close steps
 
-Run after the code-research count, before the commit.
+Run just before the commit.
