@@ -21,8 +21,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # package.json, which tells Node the .js files are ES modules.
 ENGINE_FILES = [
     "package.json", "core-files.json", "cli.js",
-    "bind.js", "model.js", "render.js", "setupcode.js", "apply.js", "keep.js", "update.js", "layers.js",
-    "bind.py", "model.py", "render.py", "setupcode.py", "apply.py", "keep.py", "update.py", "layers.py", "home.py",
+    "bind.js", "model.js", "render.js", "setupcode.js", "apply.js", "keep.js", "update.js", "layers.js", "share.js",
+    "bind.py", "model.py", "render.py", "setupcode.py", "apply.py", "keep.py", "update.py", "layers.py", "share.py",
+    "home.py",
 ]
 # The ~/.claude templates bind.js and bind.py read (globalFiles).
 GLOBAL_FILES = [

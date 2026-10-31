@@ -31,7 +31,7 @@ const own = (obj, key) => typeof key === "string" && Object.prototype.hasOwnProp
 const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 
 // The settings a layer may hold, each with its test for a valid value.
-const SETTINGS = {
+export const SETTINGS = {
   codeResearch: (v) => own(CODE_RESEARCH_TOOLS, v),
   tracker: (v) => typeof v === "string" && TRACKERS.includes(v),
 };
@@ -173,7 +173,7 @@ export function installedExtras(config) {
 }
 
 // A settings file's JSON, or null when it is missing.
-function readLayerFile(path, file) {
+export function readLayerFile(path, file) {
   let bytes;
   try {
     bytes = readFileSync(path);

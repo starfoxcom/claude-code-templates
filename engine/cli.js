@@ -7,6 +7,8 @@
 //   node engine/cli.js --update DIR                  -> the saved answers rebound and merged (update.js)
 //   node engine/cli.js --settings DIR                -> the settings layers resolved for that repo (layers.js)
 //   node engine/cli.js --audit DIR                   -> how its rules held up in recent sessions (audit.js)
+//   node engine/cli.js --export DIR < choices.json   -> the project's setup object written (share.js)
+//   node engine/cli.js --remember DIR --layer L < choices.json -> one person's choices written to layer L
 // A failure gives {"error": message} and exit status 1.
 
 import { readFileSync } from "node:fs";
@@ -14,11 +16,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind } from "./bind.js";
-import { decodeSetupCode } from "./setupcode.js";
+import { MAX_DEPTH, decodeSetupCode, depthOf } from "./setupcode.js";
 import { applyFiles } from "./apply.js";
-import { runUpdate } from "./update.js";
+import { decode, runUpdate } from "./update.js";
 import { runSettings } from "./layers.js";
 import { runAudit } from "./audit.js";
+import { exportSetup, rememberChoices } from "./share.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -31,12 +34,15 @@ function option(argv, name) {
 }
 
 async function run(argv) {
-  const flags = ["--code", "--year", "--write", "--update", "--settings", "--audit"];
-  const [code, year, folder, update, settings, audit] = flags.map((n) => option(argv, n));
+  const flags = ["--code", "--year", "--write", "--update", "--settings", "--export", "--remember", "--layer", "--audit"];
+  const [code, year, folder, update, settings, exported, remember, layer, audit] = flags.map((n) => option(argv, n));
   const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
   if (update !== undefined) return updateRepo(update);
   if (settings !== undefined) return runSettings(settings, config);
   if (audit !== undefined) return runAudit(audit, config);
+  if (exported !== undefined) return { setup: exportSetup(exported, choicesFromStdin()) };
+  if (remember !== undefined && layer === undefined) throw new Error("--remember needs --layer personal or local");
+  if (remember !== undefined) return rememberChoices(remember, config, layer, choicesFromStdin());
   const adopt = argv.includes("--adopt");
   if (adopt && folder === undefined) throw new Error("--adopt needs --write");
   if (year !== undefined && !/^[0-9]+$/.test(year)) throw new Error("--year needs a whole number");
@@ -48,6 +54,17 @@ async function run(argv) {
   const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year), version });
   const files = [...bound.entries()];
   return folder === undefined ? { files } : applyFiles(files, folder, { adopt });
+}
+
+// The choices /bindwright:export and /bindwright:join pass on standard input.
+function choicesFromStdin() {
+  const text = decode(readFileSync(0), "the choices on standard input");
+  if (depthOf(text) > MAX_DEPTH) throw new Error("the choices on standard input nest too deeply");
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("the choices on standard input are not valid JSON");
+  }
 }
 
 async function updateRepo(folder) {
