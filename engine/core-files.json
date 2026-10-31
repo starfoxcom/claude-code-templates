@@ -56,6 +56,7 @@
   "LICENSE.template",
   "README.md.template",
   "docs/comment-audit.md",
+  "docs/docs-audit.md",
   "docs/lazy/README.md",
   "docs/security-posture.md",
   "docs/test-audit.md",
