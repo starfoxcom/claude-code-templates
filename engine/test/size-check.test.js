@@ -38,6 +38,7 @@ class _F:
         self.name, self.start_line, self.end_line = d["name"], 1, d["length"]
         self.cyclomatic_complexity = d.get("ccn", 1)
         self.parameters = d.get("names") or ["p"] * d.get("params", 0)
+        self.parameter_count = len(self.parameters)
 class _R:
     def __init__(self, fns): self.function_list = fns
 def get_reader_for(path):
