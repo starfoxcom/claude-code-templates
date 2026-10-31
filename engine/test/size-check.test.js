@@ -134,6 +134,15 @@ test("a second same-named breach is new, not hidden behind the recorded one", { 
   assert.match(r.out, /SIZE_BREACH_GREW: app\.py: function \(anonymous\) = 13 \(baseline 12\)/);
 });
 
+test("a name holding the ledger's separator reads back from the baseline", { skip }, () => {
+  const stub = { "app.py": [{ name: "operator|=", length: 12 }] };
+  const { root, git } = makeRepo({ "app.py": "x\n" });
+  assert.equal(check(root, ["--write-baseline"], { stub }).code, 0);
+  git("add", ".github/size-check/baseline.txt");
+  const r = check(root, [], { stub });
+  assert.equal(r.code, 0, r.out);
+});
+
 test("a rule that names no file type fails instead of passing empty", { skip }, () => {
   const { root } = makeRepo({ "app.py": "x\n" }, "# Code size\n\nNo tables.\n");
   const r = check(root);

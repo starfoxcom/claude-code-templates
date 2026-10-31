@@ -194,10 +194,14 @@ def load_ledger(path):
         return entries
     with open(path, encoding="utf-8") as f:
         for raw in f:
-            parts = [p.strip() for p in raw.strip().split("|")]
-            if raw.strip() and not raw.lstrip().startswith("#") and len(parts) >= 4:
+            line = raw.strip()
+            # The name sits between the first two fields and the last one, so a
+            # name holding "|" (a C++ operator|) reads back whole.
+            head, _, value = line.rpartition("|")
+            fields = [p.strip() for p in head.split("|", 2)]
+            if line and not line.startswith("#") and len(fields) == 3:
                 # A list per key: one file can hold several same-named functions.
-                entries.setdefault((parts[0], parts[1], parts[2]), []).append(parts[3])
+                entries.setdefault(tuple(fields), []).append(value.strip())
     return entries
 
 
