@@ -14,7 +14,7 @@ How to bring the comments of existing code in line with `.claude/rules/clean-cod
 
 A comment pass must not change what the code does. Check it before committing:
 
-- Where the language has a parser or tokenizer at hand, strip the comments from each changed file, before and after, and compare the two results (Python's `ast.dump(ast.parse(source))` drops `#` comments; a JavaScript minifier with comments off; `gcc -fpreprocessed -dD -E -P` for C and C++). A difference means code changed.
+- Where the language has a parser or tokenizer at hand, strip the comments from each changed file, before and after, and compare the two results (Python's `ast.dump(ast.parse(source))` drops `#` comments, once the docstring is removed from the module and from every class and function; a JavaScript minifier with comments off; `gcc -fpreprocessed -dD -E -P` for C and C++). A difference means code changed.
 - Then read the whole diff yourself. No script sees everything: a docstring the program reads (help text, a grammar, a doctest), a directive that looks like a comment, a block comment that opens or closes, or a multi-line string can all hide a change.
 
 A diff that changes code goes back to step 3: whatever changed in the code moves to its own PR.
