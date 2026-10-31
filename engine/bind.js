@@ -13,6 +13,8 @@ const MERGE_TARGETS = new Set([
   "CLAUDE.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", ".gitattributes", ".claude/settings.json",
 ]);
 export const STAGING = ".bindwright/incoming/";
+// Setup's own folder; GLOBAL and the state files below live in it too.
+const OWN = ".bindwright/";
 
 // Files for the user's ~/.claude, under the same paths there. Setup installs
 // each one only with consent; the zip fallback leaves them to the reader.
@@ -36,6 +38,7 @@ function included(path, a, flags) {
   const adv = a.advanced;
   // The review gate's scripts, settings, guide and pin check serve both tiers.
   const gate = flags.github_actions_routine_review || flags.github_actions_deep_review;
+  const github = adv.tracker === "github";
   if (path.startsWith("precommit/")) return false;
   if (path.startsWith(".claude/rules/architecture/")) return false;
   if (path.startsWith(".claude/skills/architecture-graph/")) return false;
@@ -49,6 +52,8 @@ function included(path, a, flags) {
     ".claude/rules/shipped-text.md": adv.plainWriting,
     ".claude/rules/visual.md": adv.uiRule,
     ".claude/rules/review-tiers.md": adv.aiReview,
+    ".claude/rules/tracker.md": github,
+    ".github/ISSUE_TEMPLATE/work-item.md": github,
     ".claude/scripts/research-adherence.py": flags.code_research_first,
     ".github/scripts/size_check.py": flags.code_size_check,
     ".github/workflows/size-check.yml": flags.code_size_check,
@@ -143,10 +148,11 @@ const byDest = ([x], [y]) => (x < y ? -1 : x > y ? 1 : 0);
 const stateJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
 // The state files for a bind's repo files: each under the path it belongs
-// at, staged or not. The ~/.claude files are not the repo's.
+// at, staged or not. The ~/.claude files are not the repo's, and setup's own
+// files (session-steps.md) are the project's from the start, never merged.
 function stateFiles(answers, files, version, year) {
   const pristine = files
-    .filter(([dest]) => !dest.startsWith(GLOBAL))
+    .filter(([dest]) => dest.startsWith(STAGING) || !dest.startsWith(OWN))
     .map(([dest, text]) => [dest.startsWith(STAGING) ? dest.slice(STAGING.length) : dest, text])
     .sort(byDest);
   return [

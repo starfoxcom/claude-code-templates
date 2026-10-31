@@ -9,10 +9,18 @@ Planning only. Change no files and create no branches in this turn.
 
 ## 1. Read
 
-<!-- TOGGLE:context_refresh_files START -->
+<!-- TOGGLE:tracker:github START -->
+- The tracker, with the commands in `.claude/rules/tracker.md`: the open items (in progress first, then the next in queue, and items on hold apart with what each waits on), and the newest project status update. An item's `### Current state` is the last session's hand-off; it outranks anything re-derived from git.
+- `.bindwright/pending-tracker.md`, if it exists: writes an offline close could not post (`tracker.md`). Read them as part of the hand-off, post them once the plan is approved, then delete the file.
+- Ask of that status update: is its colour still true, given the board and what this session finds? If not, the colour has changed: say so in the report, and post the new update once the plan is approved.
+<!-- TOGGLE:tracker:github END -->
+<!-- TOGGLE:tracker:file START -->
 - The single `{{PROJECT_NAME_UPPER}}-CONTEXT_*.md` at the repo root: the last session's hand-off. It outranks anything re-derived from git. If there are none or several, say so first.
-<!-- TOGGLE:context_refresh_files END -->
-- `ROADMAP.md` if it exists (or the module ROADMAP for the area in focus). If the focus is unclear from the user's message or the current branch, ask before reading further.
+- `ROADMAP.md` if it exists (or the module ROADMAP for the area in focus).
+<!-- TOGGLE:tracker:file END -->
+- `.bindwright/session-steps.md` if it exists: its "Extra start steps" run after the git checks below.
+
+If the focus is unclear from the user's message or the current branch, ask before reading further.
 
 ## 2. Check git
 
@@ -23,6 +31,8 @@ Run these as separate calls, in parallel:
 - `git log --oneline -10`
 - `git fetch origin`, then `git rev-list --count HEAD..origin/{{DEV_BRANCH}}` (how far behind the current branch is)
 - `gh pr list --author @me --state open`
+
+Then run the extra start steps, if any.
 
 ## 3. Report, in this order
 

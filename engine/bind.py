@@ -32,6 +32,8 @@ MERGE_TARGETS = {
     "CLAUDE.md", "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", ".gitattributes", ".claude/settings.json",
 }
 STAGING = ".bindwright/incoming/"
+# Setup's own folder; GLOBAL and the state files below live in it too.
+OWN = ".bindwright/"
 
 # Files for the user's ~/.claude, under the same paths there. Setup installs
 # each one only with consent; the zip fallback leaves them to the reader.
@@ -56,6 +58,7 @@ def _included(path, a, flags):
     adv = a["advanced"]
     # The review gate's scripts, settings, guide and pin check serve both tiers.
     gate = flags["github_actions_routine_review"] or flags["github_actions_deep_review"]
+    github = adv["tracker"] == "github"
     if path.startswith("precommit/"):
         return False
     if path.startswith(".claude/rules/architecture/"):
@@ -72,6 +75,8 @@ def _included(path, a, flags):
         ".claude/rules/shipped-text.md": adv["plainWriting"],
         ".claude/rules/visual.md": adv["uiRule"],
         ".claude/rules/review-tiers.md": adv["aiReview"],
+        ".claude/rules/tracker.md": github,
+        ".github/ISSUE_TEMPLATE/work-item.md": github,
         ".claude/scripts/research-adherence.py": flags["code_research_first"],
         ".github/scripts/size_check.py": flags["code_size_check"],
         ".github/workflows/size-check.yml": flags["code_size_check"],
@@ -173,11 +178,12 @@ def _state_json(value):
 
 def _state_files(answers, files, version, year):
     """The state files for a bind's repo files: each under the path it belongs
-    at, staged or not. The ~/.claude files are not the repo's."""
+    at, staged or not. The ~/.claude files are not the repo's, and setup's own
+    files (session-steps.md) are the project's from the start, never merged."""
     pristine = [
         (dest[len(STAGING):] if dest.startswith(STAGING) else dest, text)
         for dest, text in files
-        if not dest.startswith(GLOBAL)
+        if dest.startswith(STAGING) or not dest.startswith(OWN)
     ]
     pristine.sort(key=lambda f: _code_units(f[0]))
     return [

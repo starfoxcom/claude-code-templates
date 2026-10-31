@@ -1,4 +1,5 @@
 [
+  ".bindwright/session-steps.md",
   ".claude/hooks/no-ai-attribution.py",
   ".claude/hooks/push-guard.py",
   ".claude/hooks/run-hook.sh",
@@ -20,6 +21,7 @@
   ".claude/rules/task-tracking.md",
   ".claude/rules/testing.md",
   ".claude/rules/token-efficiency.md",
+  ".claude/rules/tracker.md",
   ".claude/rules/visual.md",
   ".claude/scripts/research-adherence.py",
   ".claude/settings.json.template",
@@ -33,6 +35,7 @@
   ".github/ISSUE_TEMPLATE/bug_report.yml",
   ".github/ISSUE_TEMPLATE/config.yml",
   ".github/ISSUE_TEMPLATE/feature_request.yml",
+  ".github/ISSUE_TEMPLATE/work-item.md",
   ".github/PULL_REQUEST_TEMPLATE.md",
   ".github/review-gate.yml.template",
   ".github/review-guide.md.template",
