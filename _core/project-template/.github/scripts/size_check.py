@@ -130,7 +130,15 @@ def functions(path):
     if lizard.get_reader_for(path) is None:
         return False
     found = lizard.analyze_file(os.path.join(ROOT, path)).function_list
-    return [(f.name, f.end_line - f.start_line + 1, f.cyclomatic_complexity, len(f.parameters)) for f in found]
+    return [(f.name, f.end_line - f.start_line + 1, f.cyclomatic_complexity, param_count(path, f.parameters))
+            for f in found]
+
+
+def param_count(path, names):
+    # lizard lists a Python method's self or cls, which the caller never passes.
+    if path.endswith(".py") and names and names[0] in ("self", "cls"):
+        return len(names) - 1
+    return len(names)
 
 
 class Findings:

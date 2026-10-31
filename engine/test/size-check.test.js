@@ -36,7 +36,8 @@ const STUB = `import json, os
 class _F:
     def __init__(self, d):
         self.name, self.start_line, self.end_line = d["name"], 1, d["length"]
-        self.cyclomatic_complexity, self.parameters = d.get("ccn", 1), ["p"] * d.get("params", 0)
+        self.cyclomatic_complexity = d.get("ccn", 1)
+        self.parameters = d.get("names") or ["p"] * d.get("params", 0)
 class _R:
     def __init__(self, fns): self.function_list = fns
 def get_reader_for(path):
@@ -98,9 +99,12 @@ test("a new hard breach fails, and the baseline lets it stay but never grow", { 
 
 test("each limit trips one step past its hard value, not at it", { skip }, () => {
   const stub = {
-    "ok.py": [{ name: "fine", length: 8, ccn: 5, params: 3 }],
+    "ok.py": [
+      { name: "fine", length: 8, ccn: 5, params: 3 }, { name: "method", length: 2, names: ["self", "a", "b", "c"] },
+    ],
     "bad.py": [
       { name: "long", length: 9 }, { name: "branchy", length: 2, ccn: 6 }, { name: "wide", length: 2, params: 4 },
+      { name: "selfish", length: 2, names: ["a", "self", "b", "c"] },
     ],
   };
   const { root } = makeRepo({ "ok.py": lines(20, 40), "bad.py": `${"y".repeat(41)}\n${"y".repeat(41)}\n` });
@@ -110,6 +114,8 @@ test("each limit trips one step past its hard value, not at it", { skip }, () =>
   assert.match(r.out, /bad\.py: function long = 9 \(hard limit 8\)/);
   assert.match(r.out, /bad\.py: ccn branchy = 6 \(hard limit 5\)/);
   assert.match(r.out, /bad\.py: params wide = 4 \(hard limit 3\)/);
+  // Only a leading self or cls is the method's own; a later one counts.
+  assert.match(r.out, /bad\.py: params selfish = 4 \(hard limit 3\)/);
   assert.match(r.out, /bad\.py: line_length - = 2 \(hard limit 40\)/);
 });
 
