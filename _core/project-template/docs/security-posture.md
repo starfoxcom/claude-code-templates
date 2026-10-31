@@ -1,8 +1,8 @@
 # Security posture: {{PROJECT_NAME}}
 
-Internal record of what this project defends, which controls are live and which are owed. `.claude/rules/security.md` holds the everyday rule; this file holds the facts it points to. Fill in the tables, delete the rows that do not apply, and update the file at each review below.
+Internal record of what this project defends, which controls are live and which are owed. `.claude/rules/security.md` holds the everyday rule; this file holds the facts it points to. In a private repo, fill in the tables here, delete the rows that do not apply, and update the file at each review below.
 
-In a public repo, keep the filled-in record somewhere private (a private repo, wiki or vault) and commit only this empty template: the open hardening items and the list of what is not defended map exactly where to attack.
+In a public repo, fill in a copy kept somewhere private (a private repo, wiki or vault) and commit only this empty template: the open hardening items and the list of what is not defended map exactly where to attack.
 
 ## What we defend against
 
