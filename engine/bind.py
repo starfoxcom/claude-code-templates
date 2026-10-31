@@ -10,6 +10,7 @@
 #   ... --write DIR --adopt                              -> the same, with every file outside .bindwright/ staged
 #   python engine/bind.py --update DIR                   -> the saved answers rebound and merged (update.py)
 #   python engine/bind.py --settings DIR                 -> the settings layers resolved for that repo (layers.py)
+#   python engine/bind.py --audit DIR                    -> how its rules held up in recent sessions (audit.py)
 # A failed bind gives {"error": message} and, alone, exit status 1.
 
 import json
@@ -27,6 +28,7 @@ from setupcode import decode_setup_code, SetupCodeError
 from apply import apply_files, ApplyError
 from update import run_update
 from layers import run_settings
+from audit import run_audit
 
 CORE = "_core/project-template/"
 
@@ -276,12 +278,12 @@ def _update(argv, read_file, core_files):
         return {"error": str(e)}
 
 
-def _settings(argv):
-    """The settings layers of the repo at --settings DIR, for this machine's config folder."""
+def _for_repo(argv, flag, command):
+    """`command` run on the repo at `flag` DIR, for this machine's config folder."""
     try:
-        folder = _option(argv, "--settings")
+        folder = _option(argv, flag)
         config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
-        return run_settings(folder, config)
+        return command(folder, config)
     except Exception as e:  # every failure is reported, as the JS engine throws it
         return {"error": str(e)}
 
@@ -313,7 +315,9 @@ def _main(argv):
     elif "--update" in argv:
         result = _update(argv, read_file, core_files)
     elif "--settings" in argv:
-        result = _settings(argv)
+        result = _for_repo(argv, "--settings", run_settings)
+    elif "--audit" in argv:
+        result = _for_repo(argv, "--audit", run_audit)
     else:
         result = _single(argv, run)
     # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.
