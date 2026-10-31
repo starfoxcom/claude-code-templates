@@ -40,7 +40,7 @@ Board commands need the `project` scope: `gh auth refresh -s project` adds it. W
 
 | Job | With a board | Without one |
 |---|---|---|
-| Open items | `gh project item-list <number> --owner <owner> --format json --limit 200`, in board order; skip items whose `status` is `Done`, those whose `content.type` is not `Issue` (pull requests, drafts), and issues the read below shows closed | `gh issue list --state open --assignee @me` |
+| Open items | `gh project item-list <number> --owner <owner> --format json --limit 200`, in board order; when its `totalCount` is larger than the items it returned, run it again with a `--limit` above that count. Skip items whose `status` is `Done`, those whose `content.type` is not `Issue` (pull requests, drafts), those whose `content.repository` is not this repo (`gh repo view --json nameWithOwner -q .nameWithOwner`; a board can span repos, and the commands below act on this one), and issues the read below shows closed | `gh issue list --state open --assignee @me` |
 | Read an item | `gh issue view <n> --json title,state,body,labels` | Same |
 | Update its state | `gh issue edit <n> --body-file <file>` | Same |
 | New item | `gh issue create --assignee @me --title <title> --body-file <file>`, then `gh project item-add <number> --owner <owner> --url <issue url>` | The same `gh issue create`; the `--assignee @me` is what lets the open-items list find it |
