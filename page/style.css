@@ -320,8 +320,7 @@ footer {
   .q, .done, .enter, .leaving { animation: none; }
 }
 
-/* An opened rules list takes the whole row and flows in columns; other cards keep their height. */
-.groups { align-items: start; }
+/* An opened rules list takes a row of its own and flows in columns. */
 .groups > li:has(details[open]) { grid-column: 1 / -1; }
 .groups .rules {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px 28px;
