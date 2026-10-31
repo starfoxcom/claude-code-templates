@@ -85,6 +85,9 @@ export function defaults({ team = false, client = false } = {}) {
       // "<owner>/<number>" when tracker is "github" and the project has a
       // board; null keeps project status in a pinned issue instead.
       trackerProject: null,
+      // With the github tracker: a short, git-ignored hand-off file that
+      // points at the issues the last session worked on.
+      handoffFile: true,
     },
   };
 }
@@ -104,7 +107,7 @@ export function validate(a) {
   check(isObject(a) && isObject(a.project) && isObject(a.advanced), "the answers must hold project and advanced objects");
   const adv = a.advanced;
   check(typeof a.team === "boolean" && typeof a.client === "boolean", "team and client must be true or false");
-  const switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck"];
+  const switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck", "handoffFile"];
   for (const key of switches) {
     check(typeof adv[key] === "boolean", `${key} must be true or false`);
   }
@@ -162,6 +165,7 @@ export function flagsFor(a) {
     attribution_guard: adv.attributionGuard,
     deny_list_strict: adv.denyProfile === "strict",
     code_size_check: adv.codeSizeCheck,
+    handoff_file: adv.tracker === "github" && adv.handoffFile,
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
