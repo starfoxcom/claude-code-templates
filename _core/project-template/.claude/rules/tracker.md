@@ -34,6 +34,18 @@ Most sessions post none. Shape, about 60 to 100 words:
 
 The update's own status field matches its Health line. Root causes, file names and dead ends stay on the issues.
 
+<!-- TOGGLE:public_roadmap START -->
+## Public roadmap
+
+`advanced.publicRoadmap` in `.bindwright/project.json` names a public repo that mirrors this roadmap for outsiders. Every public item is generated from its private item and never edited by hand:
+
+- Only the private issue's `### Public summary` section goes public, under the same number. An issue without one stays private and `check` lists it.
+- The public side carries no history, comments, PR numbers, file paths, code names, tuning constants, or text that names AI models or code review. The sync refuses such text, and so does a hook that guards issue bodies, when one is installed.
+- Items on the exclude list in `.bindwright/public-roadmap.json` (internal process, tooling) never go public.
+
+At session close, after the issues are updated, run `python3 .github/scripts/public_roadmap.py check` (`python` on Windows). Fix what it lists in the private issues' public summaries, then run it with `push`. `push` refuses while `check` reports anything.
+
+<!-- TOGGLE:public_roadmap END -->
 ## Commands
 
 Board commands need the `project` scope: `gh auth refresh -s project` adds it. Write every body to a file first and pass it with `--body-file`, or `-F body=@<file>` for `gh api`.

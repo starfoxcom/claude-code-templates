@@ -240,6 +240,7 @@ def flags_for(a):
         "attribution_guard": adv["attributionGuard"],
         "deny_list_strict": adv["denyProfile"] == "strict",
         "code_size_check": adv["codeSizeCheck"],
+        "public_roadmap": adv["tracker"] == "github" and adv.get("publicRoadmap") is not None,
         "contributing_md": a["team"],
         "audit_trail_commits": a["client"],
         "definition_of_done_verification": True,

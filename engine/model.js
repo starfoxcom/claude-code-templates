@@ -170,6 +170,7 @@ export function flagsFor(a) {
     attribution_guard: adv.attributionGuard,
     deny_list_strict: adv.denyProfile === "strict",
     code_size_check: adv.codeSizeCheck,
+    public_roadmap: adv.tracker === "github" && adv.publicRoadmap !== null && adv.publicRoadmap !== undefined,
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
