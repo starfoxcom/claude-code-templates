@@ -71,12 +71,16 @@ def graphql(args):
         writes.append("close %d %s" % (issue["number"], issue["stateReason"]))
     elif "reopenIssue" in q:
         issue = find(v["id"])
-        issue["state"], issue["stateReason"] = "OPEN", None
+        issue["state"], issue["stateReason"] = "OPEN", "REOPENED"  # as GitHub marks it
         writes.append("reopen %d" % issue["number"])
     elif "addSubIssue" in q:
         child, parent = find(v["c"]), find(v["p"])
         child["parent"] = {"number": parent["number"]}
         writes.append("link %d %d" % (child["number"], parent["number"]))
+    elif "removeSubIssue" in q:
+        child = find(v["c"])
+        child["parent"] = None
+        writes.append("unlink %d" % child["number"])
     else:
         raise SystemExit("unexpected query: " + q[:60])
     return json.dumps({"data": {}})
@@ -136,7 +140,8 @@ test("check names every contract break and leaves summary-less issues private", 
     issue(2, "Refactor the cart store", "## What\nInternal only.\n"),
     issue(3, "Falcon sync", summary(
       "Uses `syncAll` from docs/sync/plan.md, see PR #12 and #2.\nTuned to 3.14 by Claude.")),
-    issue(4, "Retries", summary("Raised MAX_RETRIES in 3f9a2c1, see https://intra.example/x.")),
+    issue(4, "Retries",
+      summary("Raised MAX_RETRIES in 3f9a2c1, see https://intra.example/x and acme/app#12, ask @dana.")),
   ], { hidden: ["Falcon"] });
   const out = s.run("check");
   assert.equal(out.status, 1, out.stderr);
@@ -146,7 +151,8 @@ test("check names every contract break and leaves summary-less issues private", 
     "#3 summary: pull request ('PR #1", "#3 summary: identifier ('syncAll')", "#3 summary: constant ('3.14')",
     "#3 summary: AI or review wording ('Claude')", "#3 summary: points at #2, which stays private",
     "#3 summary: points at #12, which stays private", "#4 summary: link ('https://')",
-    "#4 summary: commit ('3f9a2c1')", "#4 summary: identifier ('MAX_RETRIES')"]) {
+    "#4 summary: commit ('3f9a2c1')", "#4 summary: identifier ('MAX_RETRIES')",
+    "#4 summary: reference ('acme/app#12')", "#4 summary: mention ('@dana')"]) {
     assert.ok(text.includes(want), `missing "${want}" in:\n${text}`);
   }
   assert.ok(!/#1 |#2 /.test(text.replace(/#12/g, "")), text);
@@ -236,5 +242,27 @@ test("a push that stops halfway leaves its placeholders, and the next one carrie
   const pub = s.read()["me/public"].issues;
   assert.deepEqual(Object.keys(pub).sort(), ["2", "4", "5"]);
   assert.equal(pub["2"].title, "B");
+  assert.deepEqual(s.run("push").writes, []);
+});
+
+test("reopened and duplicate issues settle, and an unlinked child leaves its public parent", { skip }, () => {
+  const s = scene([
+    issue(1, "Parent", summary("The parent.")),
+    issue(2, "Child", summary("The child."), { parent: { number: 1 } }),
+    issue(3, "Again", summary("Reopened once."), { stateReason: "REOPENED" }),
+    issue(4, "Twin", summary("A duplicate."), { state: "CLOSED", stateReason: "DUPLICATE" }),
+  ]);
+  assert.equal(s.run("push").status, 0);
+  assert.deepEqual(s.run("push").writes, []);
+  s.edit((issues) => { issues["2"].parent = null; });
+  assert.deepEqual(s.run("push").writes, ["unlink 2"]);
+  assert.equal(s.read()["me/public"].issues["2"].parent, null);
+  // Withdrawn, then back: the public reopen leaves REOPENED behind, which still reads as open.
+  s.edit((issues) => { issues["4"].body = "Private now."; });
+  s.run("push");
+  s.edit((issues) => {
+    Object.assign(issues["4"], { body: summary("A duplicate."), state: "OPEN", stateReason: null });
+  });
+  assert.equal(s.run("push").status, 0);
   assert.deepEqual(s.run("push").writes, []);
 });

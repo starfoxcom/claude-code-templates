@@ -47,6 +47,8 @@ CONTRACT = [
                         r"|\b[\w-]+\." + EXTENSIONS + r"\b")),
     ("pull request", re.compile(r"\bPRs?\s*#?\d|\bpull requests?\b", re.I)),
     ("branch", re.compile(r"\b(feature|hotfix|release|fix|chore)/")),
+    ("reference", re.compile(r"\b[\w.-]+/[\w.-]+#\d+|\bGH-\d+\b")),
+    ("mention", re.compile(r"(?<![\w.@])@[A-Za-z0-9][A-Za-z0-9-]*")),
     ("link", re.compile(r"\b[a-z][a-z0-9+.-]*://", re.I)),
     ("commit", re.compile(r"\b(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")),
     ("identifier", re.compile(r"\b[A-Za-z0-9]+_[A-Za-z0-9_]+\b|\b[a-z]+[A-Z]\w*\b|\w+\(\)")),
@@ -293,20 +295,27 @@ class PublicSync:
             print(f"updated #{number}")
 
     def sync_parents(self) -> None:
+        """Links each public item under its private parent; a parent that is not public unlinks it."""
         for number in sorted(self.wanted):
             parent = (self.private[number].get("parent") or {}).get("number")
+            parent = parent if parent in self.wanted else None
             current = (self.public[number].get("parent") or {}).get("number")
-            if parent == current or parent not in self.wanted:
+            if parent == current:
+                continue
+            child = self.public[number]["id"]
+            if parent is None:
+                gql("mutation($p: ID!, $c: ID!) { removeSubIssue(input: {issueId: $p, subIssueId: $c})"
+                    " { clientMutationId } }", p=self.public[current]["id"], c=child)
+                print(f"unlinked #{number} from #{current}")
                 continue
             gql("mutation($p: ID!, $c: ID!) { addSubIssue(input: {issueId: $p, subIssueId: $c,"
-                " replaceParent: true}) { clientMutationId } }",
-                p=self.public[parent]["id"], c=self.public[number]["id"])
+                " replaceParent: true}) { clientMutationId } }", p=self.public[parent]["id"], c=child)
             print(f"linked #{number} under #{parent}")
 
     def sync_states(self) -> None:
         for number in sorted(self.wanted):
             private, public = self.private[number], self.public[number]
-            if (private["state"], private["stateReason"]) == (public["state"], public["stateReason"]):
+            if state_of(private) == state_of(public):
                 continue
             if private["state"] == "OPEN":
                 gql("mutation($id: ID!) { reopenIssue(input: {issueId: $id}) { clientMutationId } }",
@@ -351,6 +360,17 @@ class PublicSync:
                               " { clientMutationId }")
         if writes:
             gql("mutation { " + " ".join(f"w{i}: {write}" for i, write in enumerate(writes)) + " }")
+
+
+def state_of(issue: dict) -> tuple[str, str | None]:
+    """Open, or closed as completed or not planned: the states the public side can take.
+
+    GitHub marks a reopened issue REOPENED and a duplicate DUPLICATE; neither can be set
+    on the public side, so they read as open and as completed.
+    """
+    if issue["state"] == "OPEN":
+        return ("OPEN", None)
+    return ("CLOSED", "NOT_PLANNED" if issue["stateReason"] == "NOT_PLANNED" else "COMPLETED")
 
 
 def field_value(field: dict, target) -> str:
