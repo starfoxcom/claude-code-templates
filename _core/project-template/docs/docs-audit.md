@@ -8,7 +8,7 @@ List findings per area (a folder or a module) before fixing any:
 
 - **Stale docs:** a claim in `README.md`, `CLAUDE.md`, `docs/` or `.claude/rules/` about a behaviour, name, path, command or number the code no longer has. Search for each name and path the docs mention and check it still exists and does what they say.
 - **Comments that contradict code:** a comment that describes behaviour the code beside it no longer has.
-- **Rule breaches:** code that breaks a rule in `.claude/rules/` (code size, clean code, testing).
+- **Rule breaches:** code that breaks a rule in `.claude/rules/`, such as `code-size.md` or `testing.md`.
 - **Size limits:** the code-size check's report, when the project has one.
 
 ## Fix in area batches
