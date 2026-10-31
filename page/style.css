@@ -16,6 +16,7 @@
   --del: oklch(0.72 0.15 25);
   color-scheme: dark;
   scroll-padding: 96px 0;
+  interpolate-size: allow-keywords;
   transition: --hue 380ms cubic-bezier(.2, .8, .2, 1);
 }
 
@@ -150,9 +151,15 @@ h1 {
 .k {
   position: relative; min-height: 76px; padding: 14px 40px 16px 16px;
   font: inherit; text-align: left; color: var(--text); cursor: pointer;
-  background: var(--key); border: 0; border-radius: 12px;
+  background: var(--key); border: 1px solid transparent; border-radius: 12px;
   box-shadow: inset 0 1px 0 oklch(1 0 0 / .08), 0 0 0 1px oklch(0 0 0 / .35), inset 0 -3px 0 oklch(0 0 0 / .3);
-  transition: transform .08s, box-shadow .08s, background-color .08s;
+  transition: transform 150ms ease, box-shadow 150ms ease, background-color 180ms ease,
+    border-color 180ms ease, color 180ms ease;
+}
+.k:hover {
+  transform: translateY(-2px);
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / .08), 0 0 0 1px oklch(0 0 0 / .35), inset 0 -3px 0 oklch(0 0 0 / .3),
+    0 10px 20px -12px oklch(0 0 0 / .7);
 }
 .k:active {
   transform: translateY(2px);
@@ -165,10 +172,10 @@ h1 {
 .k b { display: block; font-size: 17px; font-weight: 650; }
 .k span { font-size: 14px; color: var(--text-2); }
 .k[aria-pressed="true"] {
-  background: var(--accent); color: var(--on-accent);
-  box-shadow: inset 0 -3px 0 var(--accent-deep), 0 0 0 1px oklch(1 0 0 / .25);
+  background: var(--accent); color: var(--on-accent); border-color: oklch(1 0 0 / .25);
+  box-shadow: inset 0 -3px 0 var(--accent-deep);
 }
-.k[aria-pressed="true"]:active { box-shadow: inset 0 -1px 0 var(--accent-deep), 0 0 0 1px oklch(1 0 0 / .25); }
+.k[aria-pressed="true"]:active { box-shadow: inset 0 -1px 0 var(--accent-deep); }
 .k[aria-pressed="true"]::after { background: var(--on-accent); box-shadow: none; }
 .k[aria-pressed="true"] span { color: oklch(0.30 0.05 var(--hue)); }
 
@@ -199,6 +206,8 @@ h1 {
   background: var(--key); border: 0; border-radius: 12px; box-shadow: inset 0 -2px 0 oklch(0 0 0 / .3);
 }
 .toggle:active { transform: translateY(1px); box-shadow: none; }
+.toggle.pulse { animation: pulse 240ms ease; }
+@keyframes pulse { 50% { transform: scale(1.06); } }
 
 .command {
   display: flex; align-items: center; gap: 16px; margin-top: 24px; padding: 18px 22px;
@@ -215,6 +224,8 @@ h1 {
   margin-bottom: 10px; padding: 10px 14px; border-radius: 12px;
   background: var(--key); font-size: 15px; font-weight: 600;
 }
+.changed.fade-up, .done.fade-up { animation: text-rise 240ms ease both; }
+@keyframes text-rise { from { opacity: 0; transform: translateY(8px); } }
 .idle {
   display: grid; place-items: center; min-height: 340px; text-align: center; color: var(--text-2);
 }
@@ -222,8 +233,18 @@ h1 {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px;
   padding: 0; list-style: none;
 }
-/* Switched out of view, the cards stay laid out, so they never rise again. */
-.groups.away { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
+/* The summary and the files share one box. The view switched out of view stays
+   laid out, so its cards never rise again; it fades and slides out, and the one
+   coming in fades up. */
+.views { position: relative; }
+.views > .away { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
+.views > .leave { animation: view-out 220ms ease both; }
+.views > .arrive { animation: view-in 220ms ease both; }
+@keyframes view-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes view-out {
+  from { visibility: visible; }
+  to { opacity: 0; transform: translateY(-8px); visibility: hidden; }
+}
 @keyframes glow {
   from { background-color: color-mix(in oklch, var(--add) 28%, transparent); }
   to { background-color: transparent; }
@@ -252,6 +273,17 @@ h1 {
 .groups > li > p { margin-top: 2px; font-size: 15px; color: var(--text-2); }
 .groups details { margin-top: 8px; }
 .groups summary { width: fit-content; font-size: 15px; font-weight: 600; cursor: pointer; }
+/* The rules open and close by height; interpolate-size lets the browser measure it. */
+.groups details::details-content {
+  block-size: 0; overflow: hidden;
+  transition: block-size 280ms ease, content-visibility 280ms allow-discrete;
+}
+.groups details[open]::details-content { block-size: auto; }
+@keyframes rule-in { from { opacity: 0; } }
+.groups details[open] .rules li { animation: rule-in 200ms calc(var(--i, 0) * 30ms) ease both; }
+.groups details[open] .rules li.added {
+  animation: glow 900ms ease-out, rule-in 200ms calc(var(--i, 0) * 30ms) ease both;
+}
 .rules { display: grid; gap: 6px; margin-top: 10px; padding-left: 18px; font-size: 15px; color: var(--text-2); }
 .rules b { font-weight: 600; color: var(--text); }
 
@@ -284,6 +316,8 @@ h1 {
   font: 400 13px/1.6 "Fragment Mono", ui-monospace, monospace; color: var(--text); white-space: pre-wrap;
   overflow-wrap: anywhere; tab-size: 4;
 }
+.view.swap { animation: swap-in 160ms ease both; }
+@keyframes swap-in { from { opacity: 0; } }
 
 .empty { color: var(--text-2); }
 
@@ -318,6 +352,8 @@ footer {
   :root { transition: none; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
   .q, .done, .enter, .leaving { animation: none; }
+  .k:hover { transform: none; }
+  .groups details::details-content { transition: none; }
 }
 
 /* An opened rules list takes a row of its own and flows in columns. */

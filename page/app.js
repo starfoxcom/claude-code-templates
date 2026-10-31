@@ -19,6 +19,15 @@ const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 const mix = (from, to, t) => Math.round(from + (to - from) * t);
 const ruleCount = (groups) => groups.reduce((sum, group) => sum + (group.rules?.length ?? 0), 0);
+const filesOpen = () => !$("files").classList.contains("away");
+
+// Restarts the one-shot CSS animation that the named class sets on the node.
+function restart(node, name) {
+  if (still()) return;
+  node.classList.remove(name);
+  void node.offsetWidth;
+  node.classList.add(name);
+}
 
 let answers = defaults();
 // The questions the reader has picked an answer for.
@@ -123,6 +132,7 @@ async function copyCommand() {
   try {
     await navigator.clipboard.writeText(commandLine());
     $("copy").textContent = "Copied";
+    restart($("copy"), "pulse");
   } catch {
     $("copy").textContent = "Select and copy";
   }
@@ -147,7 +157,9 @@ function render() {
   $("command").hidden = !ready;
   $("switch").hidden = !ready;
   $("idle").hidden = answered.size > 0;
-  $("done-line").textContent = plainAnswers();
+  const line = plainAnswers();
+  if (line !== $("done-line").textContent) restart($("done"), "fade-up");
+  $("done-line").textContent = line;
   paintStage();
   refresh();
 }
@@ -210,10 +222,11 @@ function drawGroups() {
   $("groups").replaceChildren(...items);
   // The first summary has nothing to compare with, so it names no change.
   const note = choice && before.length ? changeNote(change) : "";
+  if (note && note !== $("changed").textContent) restart($("changed"), "fade-up");
   $("changed").textContent = note;
   $("changed").hidden = !note;
   countTally(next);
-  setFilesView(!$("files").hidden);
+  setFilesView(filesOpen());
 }
 
 // Groups the last change removed, struck through, then gone once they dissolve.
@@ -253,8 +266,12 @@ function paintTally() {
 // A group the change added is marked New, and its rules are not marked again.
 function rulesList(rules, change, entering) {
   const isNew = (name) => !entering && change.addedRules.has(name);
-  const rows = rules.map(([name, line]) => el("li", { className: isNew(name) ? "added" : "" },
-    el("b", { textContent: name }), ` ${line}`));
+  const rows = rules.map(([name, line], i) => {
+    const row = el("li", { className: isNew(name) ? "added" : "" },
+      el("b", { textContent: name }), ` ${line}`);
+    row.style.setProperty("--i", i);
+    return row;
+  });
   for (const name of change.removedRules) {
     rows.push(el("li", { className: "removed" }, el("b", { textContent: name })));
   }
@@ -321,14 +338,23 @@ $("tree").addEventListener("click", (event) => {
     else node.removeAttribute("aria-current");
   }
   drawFile();
+  restart($("code").parentElement, "swap");
 });
 
-// The summary and the file tree take turns in the same panel. The summary is
-// only moved out of sight, so its cards keep their place and do not rise again.
+// The summary and the file tree take turns in the same panel. The view that
+// leaves fades and slides out, the one that comes in fades up. Neither is
+// rebuilt, so the summary's cards keep their place and do not rise again.
 function setFilesView(open) {
   const view = open ? "files" : "overview";
-  $("files").hidden = !open;
-  $("groups").classList.toggle("away", open);
+  const files = $("files");
+  const groups = $("groups");
+  if (files.classList.contains("away") === open) {
+    const [leaving, arriving] = open ? [groups, files] : [files, groups];
+    leaving.classList.remove("arrive");
+    leaving.classList.add("away", "leave");
+    arriving.classList.remove("away", "leave");
+    arriving.classList.add("arrive");
+  }
   $("switch").dataset.view = view;
   for (const opt of $("switch").querySelectorAll(".seg-opt")) {
     opt.setAttribute("aria-pressed", String(opt.dataset.view === view));
