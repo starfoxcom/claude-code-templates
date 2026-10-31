@@ -31,7 +31,7 @@ With neither, tell the user setup needs Node or Python 3.8+, or the zip download
 
 Run the engine with `--code <the setup code> --write <repo root>`, adding `--adopt` in adopt mode: it then stages every file, new ones included, instead of writing them in place. It prints one line of JSON:
 
-- `{"error": "..."}`: show the message and stop. A message starting `Invalid setup code` means the code was cut or changed while copying; ask for a fresh copy.
+- `{"error": "..."}`: show the message and stop. A message starting `Invalid setup code` means the code was cut or changed while copying; ask for a fresh copy. For any other error, offer `/bindwright:report`.
 - `{"written": [...], "staged": [...], "skipped": [...]}`: paths relative to the repo root.
   - `written`: new files, now in place.
   - `staged`: files the repo already had. The repo's copy is untouched; the new text is at `.bindwright/incoming/<path>`.

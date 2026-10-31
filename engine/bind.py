@@ -29,6 +29,7 @@ from apply import apply_files, ApplyError
 from update import run_update
 from layers import run_settings
 from doctor import cli_version_from, run_doctor
+from report import draft_report
 
 CORE = "_core/project-template/"
 
@@ -299,6 +300,22 @@ def _doctor(argv, read_file):
         return {"error": str(e)}
 
 
+def _report(argv, read_file):
+    """A scrubbed bug report for the repo at --report DIR, from the details on standard input."""
+    try:
+        folder = _option(argv, "--report")
+        what = _stdin_json()
+        version = read_file("VERSION").strip(JS_WHITESPACE).lstrip("v")
+        config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        facts = {"pluginVersion": version, "cliVersion": cli_version_from(os.environ.get("AI_AGENT")),
+                 "os": sys.platform, "engine": "python"}
+        user = os.environ.get("USERNAME") or os.environ.get("USER") or ""
+        who = {"repo": os.path.abspath(folder), "home": os.path.expanduser("~"), "user": user}
+        return draft_report(folder, config, what, facts, who)
+    except Exception as e:  # every failure is reported, as the JS engine throws it
+        return {"error": str(e)}
+
+
 def _main(argv):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cache = {}
@@ -329,6 +346,8 @@ def _main(argv):
         result = _settings(argv)
     elif "--doctor" in argv:
         result = _doctor(argv, read_file)
+    elif "--report" in argv:
+        result = _report(argv, read_file)
     else:
         result = _single(argv, run)
     # ASCII output, so no console code page can mangle it; compact, as cli.js prints it.

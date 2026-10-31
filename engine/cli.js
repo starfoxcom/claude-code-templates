@@ -11,7 +11,7 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bind } from "./bind.js";
 import { decodeSetupCode } from "./setupcode.js";
@@ -19,6 +19,7 @@ import { applyFiles } from "./apply.js";
 import { runUpdate } from "./update.js";
 import { runSettings } from "./layers.js";
 import { cliVersionFrom, runDoctor } from "./doctor.js";
+import { draftReport } from "./report.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -31,8 +32,9 @@ function option(argv, name) {
 }
 
 async function run(argv) {
-  const flags = ["--code", "--year", "--write", "--update", "--settings", "--doctor"];
-  const [code, year, folder, update, settings, doctor] = flags.map((n) => option(argv, n));
+  const flags = ["--code", "--year", "--write", "--update", "--settings", "--doctor", "--report"];
+  const [code, year, folder, update, settings, doctor, report] = flags.map((n) => option(argv, n));
+  if (report !== undefined) return reportRepo(report);
   if (doctor !== undefined) return doctorRepo(doctor);
   if (update !== undefined) return updateRepo(update);
   if (settings !== undefined) return runSettings(settings, process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));
@@ -47,6 +49,17 @@ async function run(argv) {
   const bound = await bind(answers, { readFile, coreFiles, year: year === undefined ? undefined : Number(year), version });
   const files = [...bound.entries()];
   return folder === undefined ? { files } : applyFiles(files, folder, { adopt });
+}
+
+// A scrubbed bug report for the repo at `folder`, from { title, command, error, expected } on stdin.
+function reportRepo(folder) {
+  const what = JSON.parse(readFileSync(0, "utf8"));
+  const pluginVersion = readFileSync(join(root, "VERSION"), "utf8").trim().replace(/^v+/, "");
+  const config = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+  const cliVersion = cliVersionFrom(process.env.AI_AGENT);
+  const facts = { pluginVersion, cliVersion, os: process.platform, engine: "node" };
+  const who = { repo: resolve(folder), home: homedir(), user: process.env.USERNAME || process.env.USER || "" };
+  return draftReport(folder, config, what, facts, who);
 }
 
 // The doctor, for the CLI this session runs (its AI_AGENT) and this plugin's VERSION.

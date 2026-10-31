@@ -20,4 +20,4 @@ A read-only health check. It runs the engine's checks and the review gate's own 
 - Otherwise, one short line per problem: what is wrong (`say`) and what to do (`fix`), most serious first: the setup files, then the guards, then the rest. Leave out the checks that passed.
 - Offer to run each fix that is a command or a skill, one at a time, and only on a yes.
 
-When a problem looks like a bug in Bindwright itself rather than in this repo (an engine error, a check that contradicts what the user sees), say so and point the user at https://github.com/starfoxcom/claude-code-templates/issues to report it.
+When a problem looks like a bug in Bindwright itself rather than in this repo (an engine error, a check that contradicts what the user sees), offer `/bindwright:report`.
