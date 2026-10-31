@@ -8,6 +8,7 @@ Earlier conversational `v17` and `v18` mentions never shipped as standalone arti
 
 ### Added
 
+- **Setup reads the CLI version the session runs** (#422). Before offering the mods, `/bindwright:setup` and `/bindwright:join` take the version from the session's `AI_AGENT` variable instead of `claude --version`, since the desktop app runs its own copy of the CLI, which can be older than the one on the PATH. Skipped mods come with a one-line reason, and setup says in one line why the built-in "You should know" mod stays off.
 - **A Bindwright marketplace, served from GitHub releases** (#421, part 1). `tools/pack_plugin.py --zip FILE` builds the plugin's release zip from the files git stores at a ref, not from the working tree, so every machine gets the same bytes whatever its line endings, and `--marketplace` writes `.claude-plugin/marketplace.json`: one `bindwright` entry whose `archive` source is that release's zip, pinned by its SHA-256. The plugin folder gains the `README.md` the plugin directory asks for. Users add the marketplace with `/plugin marketplace add starfoxcom/claude-code-templates` once the first release carries it.
 
 - **The daily notice reports setup drift** (#419, part 3). When the repo's shared setup rates an extra `required` or `recommended` that this machine lacks and nobody declined, the once-a-day notice names it and points at `/bindwright:join`. The packed engine's `runSettings` decides, so the notice and join never disagree; any error leaves the line out.
