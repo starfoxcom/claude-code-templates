@@ -38,12 +38,17 @@ test("both engines draft the same scrubbed report, and file nothing", needsPytho
   try {
     const repo = join(root, "repo");
     mkdirSync(repo);
-    const what = { command: `node cli.js --update ${repo}`, error: `boom at ${join(homedir(), "x")} ghp_abcdefghijklmnopqrstuvwxyz0123` };
-    const env = { ...process.env, CLAUDE_CONFIG_DIR: join(root, "config"), AI_AGENT: "claude-code_2-1-316_agent" };
-    const run = (cmd, args) => spawnSync(cmd, [...args, "--report", repo], { env, input: JSON.stringify(what), encoding: "utf8" });
+    const error = `boom at ${join(homedir(), "x")} ghp_abcdefghijklmnopqrstuvwxyz0123`;
+    const what = { command: `node cli.js --update ${repo}`, error };
+    const config = join(root, "config");
+    const env = { ...process.env, CLAUDE_CONFIG_DIR: config, AI_AGENT: "claude-code_2-1-316_agent" };
+    const options = { env, input: JSON.stringify(what), encoding: "utf8" };
+    const run = (cmd, args) => spawnSync(cmd, [...args, "--report", repo], options);
     const js = JSON.parse(run(process.execPath, [join(engine, "cli.js")]).stdout);
     const py = JSON.parse(run(python, ["-I", join(engine, "bind.py")]).stdout);
-    const same = (r) => ({ ...r, body: r.body.replace(/- Engine: \w+/, ""), url: r.url.replace(/Engine%3A%20\w+/, "") });
+    const same = (r) => ({
+      ...r, body: r.body.replace(/- Engine: \w+/, ""), url: r.url.replace(/Engine%3A%20\w+/, ""),
+    });
     assert.deepEqual(same(py), same(js));
     assert.ok(!js.body.includes(repo) && !js.body.includes(homedir()) && !js.body.includes("ghp_"), js.body);
     assert.match(js.body, /This repo is not set up with Bindwright\. \(state\)/);
