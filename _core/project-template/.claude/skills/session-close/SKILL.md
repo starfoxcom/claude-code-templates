@@ -63,6 +63,8 @@ Update `README.md` or `CLAUDE.md` when this session changed what they describe, 
 Update `README.md` or `CLAUDE.md` when this session changed what they describe, and say which sections changed.
 <!-- TOGGLE:tracker:github END -->
 
+Then check the living docs are still current: for each behaviour, name, path, command or number the session's diff changed, search `README.md`, `CLAUDE.md`, `docs/` and `.claude/rules/` for the old wording, and fix every claim that no longer holds. Dated records (released changelog entries, dated notes) stay as written. `docs/docs-audit.md` covers a full sweep.
+
 <!-- TOGGLE:code_research_first START -->
 ## Code-research count
 
