@@ -39,6 +39,13 @@ export const HOOK_LOCATIONS = ["repo", "home"];
 // direct pushes to the protected branches, interactive rebase and admin
 // merges; "strict" also stops local history wipes and destructive gh calls.
 export const DENY_PROFILES = ["standard", "strict"];
+// Where the work state lives between sessions: GitHub issues (with a Projects
+// board when trackerProject names one), or the repo's hand-off file and
+// ROADMAP.md.
+export const TRACKERS = ["github", "file"];
+// "<owner>/<number>" of a GitHub Projects board. The owner lands in gh
+// command lines, so it is held to GitHub's own name rule.
+const TRACKER_PROJECT = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\/[1-9][0-9]{0,5}$/;
 export const LICENSES = { MIT: "MIT.txt", "Apache-2.0": "Apache-2.0.txt", "BSD-3-Clause": "BSD-3-Clause.txt", Proprietary: "Proprietary.txt" };
 
 // Filled later by the tailoring step, which reads the user's repo.
@@ -72,6 +79,10 @@ export function defaults({ team = false, client = false } = {}) {
       denyProfile: "standard",
       // Files the writing rule checks. null keeps the rule's own list.
       shippedTextPaths: null,
+      tracker: "github",
+      // "<owner>/<number>" when tracker is "github" and the project has a
+      // board; null keeps project status in a pinned issue instead.
+      trackerProject: null,
     },
   };
 }
@@ -120,6 +131,13 @@ export function validate(a) {
   check(adv.shippedTextPaths === null || (Array.isArray(adv.shippedTextPaths) && adv.shippedTextPaths.length > 0 &&
     adv.shippedTextPaths.every((g) => typeof g === "string" && /^[^"\\\x00-\x1f\x7f]{1,200}$/.test(g) && g.trim() === g)),
   "shippedTextPaths must be null or a non-empty list of globs without quotes, backslashes, line breaks or outer spaces");
+  check(TRACKERS.includes(adv.tracker), `unknown tracker "${adv.tracker}"`);
+  if (adv.tracker === "github") {
+    check(adv.trackerProject === null || (typeof adv.trackerProject === "string" && TRACKER_PROJECT.test(adv.trackerProject)),
+      'trackerProject must be null or "<owner>/<number>": a GitHub user or organization name and the board\'s number');
+  } else {
+    check(adv.trackerProject === null || adv.trackerProject === undefined, 'trackerProject is only for tracker "github"');
+  }
   return a;
 }
 
@@ -143,7 +161,6 @@ export function flagsFor(a) {
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,
-    context_refresh_files: true,
     lazy_rules_folder: true,
     memory_system: true,
   };
@@ -155,10 +172,12 @@ export const CHOICE_OPTIONS = {
   code_research: Object.keys(CODE_RESEARCH_TOOLS),
   precommit: ["none", ...PRECOMMIT_MANAGERS],
   merge_style: MERGE_STYLES,
+  tracker: TRACKERS,
 };
 
 export function choicesFor(a) {
-  return { code_research: a.advanced.codeResearch, precommit: a.advanced.precommit, merge_style: a.advanced.mergeStyle };
+  const adv = a.advanced;
+  return { code_research: adv.codeResearch, precommit: adv.precommit, merge_style: adv.mergeStyle, tracker: adv.tracker };
 }
 
 function upperSnake(s) {

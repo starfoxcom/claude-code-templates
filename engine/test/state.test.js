@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { bind, ANSWERS, PRISTINE, STAGING, GLOBAL } from "../bind.js";
+import { bind, ANSWERS, PRISTINE, STAGING } from "../bind.js";
 import { defaults } from "../model.js";
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -34,11 +34,13 @@ test("the pristine render holds every repo file where it belongs", async () => {
   assert.equal(pristine.year, 2026);
 
   const expected = [...files]
-    .filter(([p]) => !p.startsWith(GLOBAL) && p !== ANSWERS && p !== PRISTINE)
+    .filter(([p]) => p.startsWith(STAGING) || !p.startsWith(".bindwright/"))
     .map(([p, text]) => [p.startsWith(STAGING) ? p.slice(STAGING.length) : p, text])
     .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
   assert.deepEqual(Object.entries(pristine.files), expected);
-  // A staged file is recorded under its own path, and nothing of .bindwright/ is.
+  // A staged file is recorded under its own path, and nothing of .bindwright/
+  // is, not even the session steps the bind writes there.
+  assert.ok(files.has(".bindwright/session-steps.md"));
   assert.ok(files.has(`${STAGING}CLAUDE.md`));
   assert.equal(pristine.files["CLAUDE.md"], files.get(`${STAGING}CLAUDE.md`));
   assert.deepEqual(Object.keys(pristine.files).filter((p) => p.startsWith(".bindwright/")), []);
