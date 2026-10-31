@@ -128,6 +128,35 @@ test("a damaged cache is replaced instead of breaking the notice", async () => {
   }
 });
 
+test("only the plain x.y.z form of a version reaches the text", async () => {
+  const s = scene(`vvv0.1.0${"\n".repeat(50)}`);
+  try {
+    const text = await s.ask("2026-10-31", latest(null));
+    assert.match(text, /come from 0\.1\.0 and the plugin/);
+    assert.ok(!text.includes("v0.1.0") && !text.includes("\n\n"));
+  } finally {
+    rmSync(s.root, { recursive: true, force: true });
+  }
+});
+
+test("a session starting meanwhile keeps the mark it saved", async () => {
+  const s = scene("1.3.0");
+  try {
+    // Another session marks its repo while this one waits on the network.
+    const slow = async () => {
+      mkdirSync(dirname(s.cacheFile), { recursive: true });
+      const theirs = { checked: "2026-10-31", latest: "1.4.0", shown: { other: "2026-10-31" } };
+      writeFileSync(s.cacheFile, JSON.stringify(theirs));
+      return "1.4.0";
+    };
+    assert.match(await s.ask("2026-10-31", slow), /\/bindwright:update/);
+    const shown = JSON.parse(readFileSync(s.cacheFile, "utf8")).shown;
+    assert.deepEqual(shown, { [s.repo]: "2026-10-31", other: "2026-10-31" });
+  } finally {
+    rmSync(s.root, { recursive: true, force: true });
+  }
+});
+
 const bash = spawnSync("bash", ["-c", "true"]).status === 0;
 
 const needs = { skip: !(python && bash) && "needs Python 3.8+ and bash" };

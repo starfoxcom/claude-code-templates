@@ -4,7 +4,7 @@
 // a day, with a short timeout, and says nothing when offline, when nothing is
 // behind, or on any error. Node 18+; the hook skips it where Node is missing.
 
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,9 @@ function parse(version) {
   const m = /^v*(\d+)\.(\d+)\.(\d+)$/.exec(String(version).trim());
   return m ? m.slice(1).map(Number) : null;
 }
+
+// The version as plain "x.y.z", or null: only this form reaches the text.
+const clean = (version) => parse(version)?.join(".") ?? null;
 
 // True when version `a` comes before `b`; false when either is unreadable.
 export function older(a, b) {
@@ -43,13 +46,25 @@ function readJson(path) {
   }
 }
 
+// Today's entries only, which also clears a damaged cache.
+const todays = (shown, today) => Object.entries(shown ?? {}).filter(([, day]) => day === today);
+
+// Writes the cache, keeping today's entries another session saved meanwhile,
+// through a temporary file so no reader sees it half written.
+function save(cacheFile, cache, today) {
+  for (const [key, day] of todays(readJson(cacheFile)?.shown, today)) cache.shown[key] ??= day;
+  mkdirSync(dirname(cacheFile), { recursive: true });
+  const temp = `${cacheFile}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify(cache)}\n`);
+  renameSync(temp, cacheFile);
+}
+
 // The notice text, or null. `fetchLatest()` gives the released version or
 // null; `cacheFile` remembers the day of the last check, what it found, and
 // the day each repo last saw a notice.
 export async function notice({ cwd, today, cacheFile, pluginVersion, fetchLatest }) {
   const cache = { checked: null, latest: null, ...readJson(cacheFile) };
-  // Only today's entries matter, which also clears a damaged cache.
-  cache.shown = Object.fromEntries(Object.entries(cache.shown ?? {}).filter(([, day]) => day === today));
+  cache.shown = Object.fromEntries(todays(cache.shown, today));
   const repo = findRepo(cwd);
   const key = repo ?? "";
   if (cache.shown[key] === today) return null;
@@ -61,10 +76,11 @@ export async function notice({ cwd, today, cacheFile, pluginVersion, fetchLatest
     dirty = true;
   }
   const lines = [];
-  if (older(pluginVersion, cache.latest)) {
-    lines.push(`Bindwright ${cache.latest} is out; this machine has ${pluginVersion}. Update the plugin with /plugin.`);
+  const latest = clean(cache.latest);
+  if (older(pluginVersion, latest)) {
+    lines.push(`Bindwright ${latest} is out; this machine has ${pluginVersion}. Update the plugin with /plugin.`);
   }
-  const repoVersion = repo && readJson(join(repo, PRISTINE))?.version;
+  const repoVersion = repo && clean(readJson(join(repo, PRISTINE))?.version);
   if (older(repoVersion, pluginVersion)) {
     lines.push(`This repo's Bindwright files come from ${repoVersion} and the plugin is ${pluginVersion}: `
       + "/bindwright:update brings them up to date and keeps the repo's own edits.");
@@ -73,10 +89,7 @@ export async function notice({ cwd, today, cacheFile, pluginVersion, fetchLatest
     cache.shown[key] = today;
     dirty = true;
   }
-  if (dirty) {
-    mkdirSync(dirname(cacheFile), { recursive: true });
-    writeFileSync(cacheFile, `${JSON.stringify(cache)}\n`);
-  }
+  if (dirty) save(cacheFile, cache, today);
   return lines.length ? lines.join("\n") : null;
 }
 
