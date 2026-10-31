@@ -72,6 +72,8 @@ export function defaults({ team = false, client = false } = {}) {
       denyProfile: "standard",
       // Files the writing rule checks. null keeps the rule's own list.
       shippedTextPaths: null,
+      // Add-on: a CI check that fails on any new code-size breach.
+      codeSizeCheck: false,
     },
   };
 }
@@ -91,7 +93,8 @@ export function validate(a) {
   check(isObject(a) && isObject(a.project) && isObject(a.advanced), "the answers must hold project and advanced objects");
   const adv = a.advanced;
   check(typeof a.team === "boolean" && typeof a.client === "boolean", "team and client must be true or false");
-  for (const key of ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting"]) {
+  const switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck"];
+  for (const key of switches) {
     check(typeof adv[key] === "boolean", `${key} must be true or false`);
   }
   check(typeof a.project.name === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(a.project.name), "project name must be 1-64 letters, digits, dot, dash or underscore");
@@ -140,6 +143,7 @@ export function flagsFor(a) {
     guard_hooks_repo: adv.hookLocation === "repo",
     attribution_guard: adv.attributionGuard,
     deny_list_strict: adv.denyProfile === "strict",
+    code_size_check: adv.codeSizeCheck,
     contributing_md: a.team,
     audit_trail_commits: a.client,
     definition_of_done_verification: true,

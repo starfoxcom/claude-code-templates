@@ -108,6 +108,8 @@ def defaults(team=False, client=False):
             "denyProfile": "standard",
             # Files the writing rule checks. None keeps the rule's own list.
             "shippedTextPaths": None,
+            # Add-on: a CI check that fails on any new code-size breach.
+            "codeSizeCheck": False,
         },
     }
 
@@ -157,7 +159,8 @@ def validate(a):
     project = a["project"]
     get = lambda d, k: d.get(k, UNDEFINED)
     _check(_is_bool(get(a, "team")) and _is_bool(get(a, "client")), "team and client must be true or false")
-    for key in ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting"]:
+    switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "codeSizeCheck"]
+    for key in switches:
         _check(_is_bool(get(adv, key)), key + " must be true or false")
     name = get(project, "name")
     _check(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", name) is not None,
@@ -207,6 +210,7 @@ def flags_for(a):
         "guard_hooks_repo": adv["hookLocation"] == "repo",
         "attribution_guard": adv["attributionGuard"],
         "deny_list_strict": adv["denyProfile"] == "strict",
+        "code_size_check": adv["codeSizeCheck"],
         "contributing_md": a["team"],
         "audit_trail_commits": a["client"],
         "definition_of_done_verification": True,

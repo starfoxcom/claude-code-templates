@@ -35,7 +35,10 @@ function oneAtATime() {
     codeResearch: Object.keys(CODE_RESEARCH_TOOLS), precommit: ["none", ...PRECOMMIT_MANAGERS], architecture: ARCHITECTURES,
     branching: ["gitflow", "trunk"], mergeStyle: MERGE_STYLES, hookLocation: HOOK_LOCATIONS, denyProfile: DENY_PROFILES,
   };
-  const switches = ["aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting", "devIsDefault", "attributionGuard"];
+  const switches = [
+    "aiReview", "deepEscalation", "uiRule", "confidentiality", "cleanRoom", "plainWriting",
+    "devIsDefault", "attributionGuard", "codeSizeCheck",
+  ];
   const cases = [];
   for (const team of [false, true]) {
     for (const client of [false, true]) {
@@ -84,7 +87,7 @@ function seeded(count) {
     a.project.license = pick(Object.keys(LICENSES));
     Object.assign(a.advanced, {
       aiReview: bool(), deepEscalation: bool(), uiRule: bool(), confidentiality: bool(), cleanRoom: bool(), plainWriting: bool(),
-      devIsDefault: bool(), attributionGuard: bool(),
+      devIsDefault: bool(), attributionGuard: bool(), codeSizeCheck: bool(),
       codeResearch: pick(Object.keys(CODE_RESEARCH_TOOLS)), precommit: pick(["none", ...PRECOMMIT_MANAGERS]),
       architecture: pick(ARCHITECTURES), branching: pick(["gitflow", "trunk"]), mergeStyle: pick(MERGE_STYLES),
       hookLocation: pick(HOOK_LOCATIONS), denyProfile: pick(DENY_PROFILES),
@@ -134,6 +137,8 @@ function refused() {
     (a) => { a.advanced.devIsDefault = "false"; },
     (a) => { a.advanced.hookLocation = 2.5; },
     (a) => { a.advanced.attributionGuard = null; },
+    (a) => { a.advanced.codeSizeCheck = "on"; },
+    (a) => { delete a.advanced.codeSizeCheck; },
     (a) => { a.advanced.denyProfile = "paranoid"; },
     (a) => { a.advanced.shippedTextPaths = []; },
     (a) => { a.advanced.shippedTextPaths = ["﻿docs/**"]; },
