@@ -15,7 +15,7 @@ Planning only. Change no files and create no branches in this turn.
 - Ask of that status update: is its colour still true, given the board and what this session finds? If not, the colour has changed: say so in the report, and post the new update once the plan is approved.
 <!-- TOGGLE:tracker:github END -->
 <!-- TOGGLE:handoff_file START -->
-- `.bindwright/handoff.md`, if it exists: the last session's pointers on this machine. Read it first, then the issues it names; where they disagree, the issues win.
+- `.bindwright/handoff.md`, if it exists: the last session's pointers in this checkout. Read it first, then the issues it names; where they disagree, the issues win.
 <!-- TOGGLE:handoff_file END -->
 <!-- TOGGLE:tracker:file START -->
 - The single `{{PROJECT_NAME_UPPER}}-CONTEXT_*.md` at the repo root: the last session's hand-off. It outranks anything re-derived from git. If there are none or several, say so first.
