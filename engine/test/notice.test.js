@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -141,21 +141,27 @@ test("the hook's own command, run from a pack, tells the user and then stays qui
     assert.equal(packed.status, 0, packed.stderr);
     const hooks = JSON.parse(readFileSync(join(plugin, "hooks", "hooks.json"), "utf8")).hooks;
     const { command } = hooks.SessionStart[0].hooks[0];
-    const env = {
-      ...process.env, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_CONFIG_DIR: join(s.root, "config"),
-      BINDWRIGHT_LATEST_URL: "http://127.0.0.1:9/VERSION", // nothing listens there: offline
-    };
-    const input = JSON.stringify({ cwd: s.repo });
-    const run = () => spawnSync("bash", ["-c", command], { env, input, encoding: "utf8" });
-    const first = run();
-    assert.equal(first.status, 0, first.stderr);
-    const out = JSON.parse(first.stdout);
-    assert.match(out.systemMessage, /from 0\.1\.0 .*\/bindwright:update/);
-    assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
-    assert.equal(out.hookSpecificOutput.additionalContext, out.systemMessage);
-    const second = run();
-    assert.equal(second.status, 0, second.stderr);
-    assert.equal(second.stdout, "");
+    // The plugin folder reached through a link too, as a linked ~/.claude does.
+    const linked = join(s.root, "linked");
+    symlinkSync(plugin, linked, "junction");
+    for (const root of [plugin, linked]) {
+      const env = {
+        ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_CONFIG_DIR: join(s.root, `config-${root === plugin}`),
+        BINDWRIGHT_LATEST_URL: "http://127.0.0.1:9/VERSION", // nothing listens there: offline
+      };
+      const input = JSON.stringify({ cwd: s.repo });
+      const run = () => spawnSync("bash", ["-c", command], { env, input, encoding: "utf8" });
+      const first = run();
+      assert.equal(first.status, 0, first.stderr);
+      assert.notEqual(first.stdout, "", root);
+      const out = JSON.parse(first.stdout);
+      assert.match(out.systemMessage, /from 0\.1\.0 .*\/bindwright:update/);
+      assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
+      assert.equal(out.hookSpecificOutput.additionalContext, out.systemMessage);
+      const second = run();
+      assert.equal(second.status, 0, second.stderr);
+      assert.equal(second.stdout, "");
+    }
   } finally {
     rmSync(s.root, { recursive: true, force: true });
   }

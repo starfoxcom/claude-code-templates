@@ -4,7 +4,7 @@
 // a day, with a short timeout, and says nothing when offline, when nothing is
 // behind, or on any error. Node 18+; the hook skips it where Node is missing.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -107,6 +107,16 @@ async function main() {
   process.stdout.write(JSON.stringify({ systemMessage: text, hookSpecificOutput }));
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Run as the hook, not when a test imports it. The loader names this module
+// by its real path, so the command's path is compared after following links.
+function isEntry() {
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (process.argv[1] && isEntry()) {
   main().catch(() => {});
 }
